@@ -15,23 +15,20 @@ use helix_common::{
 };
 use helix_types::{
     BidAdjustmentData, BlockMergingData, BlsPublicKey, BlsPublicKeyBytes, DehydratedBidSubmission,
-    DehydratedBidSubmissionFuluWithAdjustments, ExecPayload, MergeableOrdersWithPref, SigError,
-    SignedBidSubmission, SignedBidSubmissionFuluWithAdjustments,
+    DehydratedBidSubmissionFuluWithAdjustments, ExecPayload, MergeType, MergeableOrdersWithPref,
+    SigError, SignedBidSubmission, SignedBidSubmissionFuluWithAdjustments,
     SignedBidSubmissionWithMergingData, SignedBlindedBeaconBlock, SignedValidatorRegistration,
     SubmissionVersion,
 };
-use http::HeaderValue;
 use tracing::{error, trace};
 
 use crate::{
     HelixSpine,
-    api::{
-        HEADER_API_KEY, HEADER_HYDRATE, HEADER_IS_MERGEABLE, HEADER_SEQUENCE,
-        HEADER_WITH_ADJUSTMENTS, builder::error::BuilderApiError, proposer::ProposerApiError,
-    },
+    api::{builder::error::BuilderApiError, proposer::ProposerApiError},
     auctioneer::{
+        InternalBidSubmissionHeader,
         block_merger::get_mergeable_orders,
-        decoder::{MergeType, SubmissionDecoder, SubmissionType},
+        decoder::SubmissionDecoder,
         types::{Event, RegWorkerJob, SubWorkerJob, Submission, SubmissionData},
     },
 };
@@ -118,11 +115,20 @@ impl SubWorker {
 
     fn _handle_task(&self, task: SubWorkerJob) {
         match task {
-            SubWorkerJob::BlockSubmission { headers, body, mut trace, res_tx, span, sent_at } => {
+            SubWorkerJob::BlockSubmission {
+                submission_ref,
+                header,
+                body,
+                mut trace,
+                res_tx,
+                span,
+                sent_at,
+                expected_pubkey,
+            } => {
                 record_submission_step("worker_recv", sent_at.elapsed());
                 let guard = span.enter();
                 trace!("received by worker");
-                match self.handle_block_submission(headers, body, &mut trace) {
+                match self.handle_block_submission(header, expected_pubkey, body, &mut trace) {
                     Ok((
                         submission,
                         withdrawals_root,
@@ -166,6 +172,7 @@ impl SubWorker {
                         };
 
                         let submission_data = SubmissionData {
+                            submission_ref,
                             submission,
                             version,
                             merging_data,
@@ -187,7 +194,7 @@ impl SubWorker {
                     }
 
                     Err(err) => {
-                        let _ = res_tx.send(Err(err));
+                        res_tx.try_send((submission_ref, Err(err)));
                     }
                 }
             }
@@ -231,72 +238,61 @@ impl SubWorker {
     #[allow(clippy::type_complexity)]
     fn handle_block_submission(
         &self,
-        headers: http::HeaderMap,
+        header: InternalBidSubmissionHeader,
+        expected_pubkey: Option<BlsPublicKeyBytes>,
         body: bytes::Bytes,
         trace: &mut SubmissionTrace,
     ) -> Result<
         (Submission, B256, SubmissionVersion, Option<BlockMergingData>, Option<BidAdjustmentData>),
         BuilderApiError,
     > {
-        let mut decoder = SubmissionDecoder::from_headers(&headers);
+        let mut decoder = SubmissionDecoder::new(header.compression, header.encoding);
         let body = decoder.decompress(body)?;
-        let submission_type = SubmissionType::from_headers(&headers);
-        let merge_type = MergeType::from_headers(&headers);
-        let has_mergeable_data = matches!(headers.get(HEADER_IS_MERGEABLE), Some(header) if header == HeaderValue::from_static("true"));
-        let builder_pubkey = decoder.extract_builder_pubkey(body.as_ref(), has_mergeable_data)?;
-        let with_adjustments = matches!(headers.get(HEADER_WITH_ADJUSTMENTS), Some(header) if header == HeaderValue::from_static("true"));
 
-        let skip_sigverify = headers
-            .get(HEADER_API_KEY)
-            .is_some_and(|key| self.cache.validate_api_key(key, &builder_pubkey));
-        let should_hydrate = headers.get(HEADER_HYDRATE).is_some();
-        let sequence = headers
-            .get(HEADER_SEQUENCE)
-            .and_then(|seq| seq.to_str().ok())
-            .and_then(|seq| seq.parse::<u64>().ok());
+        let with_mergeable_data = header.merge_type.is_some();
+        let with_adjustments = header.flags.with_adjustments();
+        let is_dehydrated = header.flags.is_dehydrated();
+
+        let builder_pubkey = decoder.extract_builder_pubkey(body.as_ref(), with_mergeable_data)?;
+        let skip_sigverify = if let Some(expected_pubkey) = expected_pubkey {
+            if builder_pubkey != expected_pubkey {
+                return Err(BuilderApiError::InvalidBuilderPubkey(expected_pubkey, builder_pubkey));
+            }
+
+            true
+        } else {
+            header
+                .api_key
+                .is_some_and(|api_key| self.cache.validate_api_key(&api_key, &builder_pubkey))
+        };
 
         trace!(
-            ?sequence,
-            should_hydrate,
+            ?header.sequence_number,
+            is_dehydrated,
             skip_sigverify,
-            has_mergeable_data,
+            with_mergeable_data,
             with_adjustments,
             "processing payload"
         );
 
         let flags = DecodeFlags {
             skip_sigverify,
-            merge_type,
-            with_adjustment: with_adjustments,
+            merge_type: header.merge_type,
+            with_adjustments,
             block_merging_dry_run: self.config.block_merging_config.is_dry_run,
         };
 
-        let (submission, merging_data, bid_adjustment_data) = match submission_type {
-            Some(SubmissionType::Default) => {
-                decode_default(&mut decoder, body, trace, &self.chain_info, &flags)?
-            }
-            Some(SubmissionType::Merge) => {
-                decode_merge(&mut decoder, body, trace, &self.chain_info, &flags)?
-            }
-            Some(SubmissionType::Dehydrated) => {
-                decode_dehydrated(&mut decoder, body, trace, &self.chain_info, &flags)?
-            }
-            None => {
-                if should_hydrate {
-                    decode_dehydrated(&mut decoder, body, trace, &self.chain_info, &flags)?
-                } else if has_mergeable_data {
-                    decode_merge(&mut decoder, body, trace, &self.chain_info, &flags)?
-                } else {
-                    decode_default(&mut decoder, body, trace, &self.chain_info, &flags)?
-                }
-            }
+        let (submission, merging_data, bid_adjustment_data) = if is_dehydrated {
+            decode_dehydrated(&mut decoder, body, trace, &self.chain_info, &flags)?
+        } else if with_mergeable_data {
+            decode_merge(&mut decoder, body, trace, &self.chain_info, &flags)?
+        } else {
+            decode_default(&mut decoder, body, trace, &self.chain_info, &flags)?
         };
 
-        trace!("computing withdrawals root");
         let withdrawals_root = submission.withdrawal_root();
-        trace!("withdrawals root done");
 
-        let version = SubmissionVersion::new(trace.receive, sequence);
+        let version = SubmissionVersion::new(trace.receive, header.sequence_number);
         Ok((submission, withdrawals_root, version, merging_data, bid_adjustment_data))
     }
 
@@ -423,8 +419,8 @@ impl Tile<HelixSpine> for RegWorker {
 
 struct DecodeFlags {
     skip_sigverify: bool,
-    merge_type: Option<MergeType>,
-    with_adjustment: bool,
+    merge_type: MergeType,
+    with_adjustments: bool,
     block_merging_dry_run: bool,
 }
 
@@ -439,7 +435,7 @@ fn decode_dehydrated(
         return Err(BuilderApiError::UntrustedBuilderOnDehydratedPayload);
     }
 
-    let (submission, bid_adjustment) = if flags.with_adjustment {
+    let (submission, bid_adjustment) = if flags.with_adjustments {
         let sub_with_adjustment: DehydratedBidSubmissionFuluWithAdjustments =
             decoder.decode_by_fork(body, chain_info.current_fork_name())?;
         let (sub, adjustment_data) = sub_with_adjustment.split();
@@ -455,15 +451,13 @@ fn decode_dehydrated(
     trace.decoded = utcnow_ns();
 
     let merging_data = match flags.merge_type {
-        Some(MergeType::Mergeable) => {
+        MergeType::Mergeable => {
             //Should this return an error instead?
             error!("mergeable dehydrated submissions are not supported");
             None
         }
-        Some(MergeType::AppendOnly) => {
-            Some(BlockMergingData::append_only(submission.fee_recipient()))
-        }
-        None => {
+        MergeType::AppendOnly => Some(BlockMergingData::append_only(submission.fee_recipient())),
+        MergeType::None => {
             if flags.block_merging_dry_run {
                 Some(BlockMergingData::append_only(submission.fee_recipient()))
             } else {
@@ -486,17 +480,17 @@ fn decode_merge(
     let mut upgraded = sub_with_merging.maybe_upgrade_to_fulu(chain_info.current_fork_name());
     trace.decoded = utcnow_ns();
     let merging_data = match flags.merge_type {
-        Some(MergeType::Mergeable) => Some(upgraded.merging_data),
+        MergeType::Mergeable => Some(upgraded.merging_data),
         //Handle append-only by creating empty mergeable orders
         //this allows builder to switch between append-only and mergeable without changing
         // submission alternatively we could reject or ignore append-only here if the
         // submission is mergeable?
-        Some(MergeType::AppendOnly) => Some(BlockMergingData {
+        MergeType::AppendOnly => Some(BlockMergingData {
             allow_appending: upgraded.merging_data.allow_appending,
             builder_address: upgraded.merging_data.builder_address,
             merge_orders: vec![],
         }),
-        None => Some(upgraded.merging_data),
+        MergeType::None => Some(upgraded.merging_data),
     };
     verify_and_validate(&mut upgraded.submission, flags.skip_sigverify, chain_info)?;
     Ok((Submission::Full(upgraded.submission), merging_data, None))
@@ -509,7 +503,7 @@ fn decode_default(
     chain_info: &ChainInfo,
     flags: &DecodeFlags,
 ) -> Result<(Submission, Option<BlockMergingData>, Option<BidAdjustmentData>), BuilderApiError> {
-    let (submission, bid_adjustment) = if flags.with_adjustment {
+    let (submission, bid_adjustment) = if flags.with_adjustments {
         let sub_with_adjustment: SignedBidSubmissionFuluWithAdjustments = decoder.decode(body)?;
         let (sub, adjustment_data) = sub_with_adjustment.split();
 
@@ -523,15 +517,13 @@ fn decode_default(
     let mut upgraded = submission.maybe_upgrade_to_fulu(chain_info.current_fork_name());
     trace.decoded = utcnow_ns();
     let merging_data = match flags.merge_type {
-        Some(MergeType::Mergeable) => {
+        MergeType::Mergeable => {
             //Should this return an error instead?
             error!("mergeable dehydrated submissions are not supported");
             None
         }
-        Some(MergeType::AppendOnly) => {
-            Some(BlockMergingData::append_only(upgraded.fee_recipient()))
-        }
-        None => {
+        MergeType::AppendOnly => Some(BlockMergingData::append_only(upgraded.fee_recipient())),
+        MergeType::None => {
             if flags.block_merging_dry_run {
                 Some(BlockMergingData::allow_all(upgraded.fee_recipient(), upgraded.num_txs()))
             } else {

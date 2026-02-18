@@ -10,11 +10,8 @@ use helix_common::metrics::{
     SUBMISSION_BY_COMPRESSION, SUBMISSION_BY_ENCODING, SUBMISSION_COMPRESSED_BYTES,
     SUBMISSION_DECOMPRESSED_BYTES,
 };
-use helix_types::{BlsPublicKeyBytes, ForkName, ForkVersionDecode};
-use http::{
-    HeaderMap, HeaderValue,
-    header::{CONTENT_ENCODING, CONTENT_TYPE},
-};
+use helix_types::{BlsPublicKeyBytes, Compression, ForkName, ForkVersionDecode};
+use http::HeaderMap;
 use serde::de::DeserializeOwned;
 use ssz::Decode;
 use strum::{AsRefStr, EnumString};
@@ -25,7 +22,7 @@ use zstd::{
 };
 
 use crate::api::{
-    HEADER_MERGE_TYPE, HEADER_SUBMISSION_TYPE,
+    HEADER_SUBMISSION_TYPE,
     builder::{api::MAX_PAYLOAD_LENGTH, error::BuilderApiError},
 };
 
@@ -44,29 +41,8 @@ impl SubmissionType {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString, AsRefStr)]
-#[strum(serialize_all = "snake_case", ascii_case_insensitive)]
-pub enum MergeType {
-    Mergeable,
-    AppendOnly,
-}
-
-impl MergeType {
-    pub fn from_headers(header_map: &HeaderMap) -> Option<Self> {
-        let merge_type = header_map.get(HEADER_MERGE_TYPE)?.to_str().ok()?;
-        merge_type.parse().ok()
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum Compression {
-    None,
-    Gzip,
-    Zstd,
-}
-
 #[derive(Clone, Copy, Debug)]
-enum Encoding {
+pub enum Encoding {
     Json,
     Ssz,
 }
@@ -85,23 +61,7 @@ pub struct SubmissionDecoder {
 }
 
 impl SubmissionDecoder {
-    pub fn from_headers(header_map: &HeaderMap) -> Self {
-        const GZIP_HEADER: HeaderValue = HeaderValue::from_static("gzip");
-        const ZSTD_HEADER: HeaderValue = HeaderValue::from_static("zstd");
-
-        let compression = match header_map.get(CONTENT_ENCODING) {
-            Some(header) if header == GZIP_HEADER => Compression::Gzip,
-            Some(header) if header == ZSTD_HEADER => Compression::Zstd,
-            _ => Compression::None,
-        };
-
-        const SSZ_HEADER: HeaderValue = HeaderValue::from_static("application/octet-stream");
-
-        let encoding = match header_map.get(CONTENT_TYPE) {
-            Some(header) if header == SSZ_HEADER => Encoding::Ssz,
-            _ => Encoding::Json,
-        };
-
+    pub fn new(compression: Compression, encoding: Encoding) -> Self {
         Self {
             compression,
             encoding,
@@ -233,11 +193,7 @@ impl SubmissionDecoder {
     }
 
     fn record_metrics(&self) {
-        let compression_label = match self.compression {
-            Compression::None => "none",
-            Compression::Gzip => "gzip",
-            Compression::Zstd => "zstd",
-        };
+        let compression_label = self.compression.as_str();
         SUBMISSION_BY_COMPRESSION.with_label_values(&[compression_label]).inc();
 
         if self.compression != Compression::None {
@@ -260,7 +216,7 @@ impl SubmissionDecoder {
                     .observe(error)
             }
         }
-        // Record encoding type
+
         let encoding_label = match self.encoding {
             Encoding::Json => "json",
             Encoding::Ssz => "ssz",
@@ -303,8 +259,8 @@ fn gzip_size_hint(buf: &[u8]) -> Option<usize> {
 mod tests {
     use alloy_primitives::hex::FromHex;
     use helix_types::{
-        SignedBidSubmission, SignedBidSubmissionElectra, SignedBidSubmissionWithMergingData,
-        TestRandomSeed,
+        MergeType, SignedBidSubmission, SignedBidSubmissionElectra,
+        SignedBidSubmissionWithMergingData, TestRandomSeed,
     };
     use ssz::Encode;
 

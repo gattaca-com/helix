@@ -44,6 +44,7 @@ pub use crate::auctioneer::{
     bid_sorter::BidSorter,
     context::Context,
     simulator::{SimulatorRequest, client::SimulatorClient, manager::SimulatorManager},
+    types::{InternalBidSubmissionHeader, SubmissionRef, SubmissionResult, SubmissionResultSender}, /* move to types? */
 };
 use crate::{
     HelixSpine, PostgresDatabaseService,
@@ -418,10 +419,13 @@ impl State {
                 State::Broadcasting { slot_data: slot_ctx, .. },
                 Event::Submission { submission_data, res_tx, .. },
             ) => {
-                let _ = res_tx.send(Err(BuilderApiError::DeliveringPayload {
-                    bid_slot: submission_data.bid_slot(),
-                    delivering: slot_ctx.bid_slot.as_u64(),
-                }));
+                res_tx.try_send((
+                    submission_data.submission_ref,
+                    Err(BuilderApiError::DeliveringPayload {
+                        bid_slot: submission_data.bid_slot(),
+                        delivering: slot_ctx.bid_slot.as_u64(),
+                    }),
+                ));
             }
 
             // late get_header
@@ -467,14 +471,20 @@ impl State {
             (State::Slot { bid_slot, .. }, Event::Submission { res_tx, submission_data, .. }) => {
                 if submission_data.bid_slot() == bid_slot.as_u64() {
                     // either not registered or waiting for full data from housekepper
-                    let _ = res_tx.send(Err(BuilderApiError::ProposerDutyNotFound));
+                    res_tx.try_send((
+                        submission_data.submission_ref,
+                        Err(BuilderApiError::ProposerDutyNotFound),
+                    ));
                 } else {
-                    let _ = res_tx.send(Err(BuilderApiError::BidValidation(
-                        helix_types::BlockValidationError::SubmissionForWrongSlot {
-                            expected: *bid_slot,
-                            got: submission_data.bid_slot().into(),
-                        },
-                    )));
+                    res_tx.try_send((
+                        submission_data.submission_ref,
+                        Err(BuilderApiError::BidValidation(
+                            helix_types::BlockValidationError::SubmissionForWrongSlot {
+                                expected: *bid_slot,
+                                got: submission_data.bid_slot().into(),
+                            },
+                        )),
+                    ));
                 }
             }
 

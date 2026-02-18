@@ -696,11 +696,11 @@ impl SignedBidSubmissionFuluWithAdjustments {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct SubmissionVersion {
     on_receive_ns: u64,
-    sequence: Option<u64>,
+    sequence: Option<u32>,
 }
 
 impl SubmissionVersion {
-    pub fn new(on_receive_ns: u64, sequence: Option<u64>) -> Self {
+    pub fn new(on_receive_ns: u64, sequence: Option<u32>) -> Self {
         Self { on_receive_ns, sequence }
     }
 

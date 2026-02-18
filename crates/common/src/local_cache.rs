@@ -10,7 +10,6 @@ use axum::{
 };
 use dashmap::{DashMap, DashSet};
 use helix_types::{BlsPublicKeyBytes, CryptoError, MergedBlock};
-use http::HeaderValue;
 use parking_lot::RwLock;
 use tracing::error;
 
@@ -89,7 +88,7 @@ pub struct LocalCache {
     pub inclusion_list: Arc<RwLock<Option<InclusionListWithKey>>>,
     builder_info_cache: Arc<DashMap<BlsPublicKeyBytes, BuilderInfo>>,
     /// Api key -> builder pubkey
-    api_key_cache: Arc<DashMap<HeaderValue, Vec<BlsPublicKeyBytes>>>,
+    pub api_key_cache: Arc<DashMap<String, Vec<BlsPublicKeyBytes>>>,
     trusted_proposers: Arc<DashMap<BlsPublicKeyBytes, ProposerInfo>>,
     primev_proposers: Arc<DashSet<BlsPublicKeyBytes>>,
     kill_switch: Arc<AtomicBool>,
@@ -119,16 +118,6 @@ impl LocalCache {
             merged_blocks,
         }
     }
-
-    pub fn new_test() -> Self {
-        Self::new()
-    }
-}
-
-impl Default for LocalCache {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 impl LocalCache {
@@ -136,11 +125,11 @@ impl LocalCache {
         Some(self.builder_info_cache.get(builder_pub_key)?.clone())
     }
 
-    pub fn contains_api_key(&self, api_key: &HeaderValue) -> bool {
+    pub fn contains_api_key(&self, api_key: &str) -> bool {
         self.api_key_cache.contains_key(api_key)
     }
 
-    pub fn validate_api_key(&self, api_key: &HeaderValue, pubkey: &BlsPublicKeyBytes) -> bool {
+    pub fn validate_api_key(&self, api_key: &str, pubkey: &BlsPublicKeyBytes) -> bool {
         self.api_key_cache.get(api_key).is_some_and(|p| p.value().contains(pubkey))
     }
 
@@ -167,10 +156,7 @@ impl LocalCache {
 
         for builder_info in builder_infos {
             if let Some(api_key) = builder_info.builder_info.api_key.as_ref() {
-                self.api_key_cache
-                    .entry(HeaderValue::from_str(api_key).unwrap())
-                    .or_default()
-                    .push(builder_info.pub_key);
+                self.api_key_cache.entry(api_key.clone()).or_default().push(builder_info.pub_key);
             }
 
             self.builder_info_cache.insert(builder_info.pub_key, builder_info.builder_info.clone());

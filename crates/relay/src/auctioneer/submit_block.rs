@@ -11,16 +11,18 @@ use helix_types::{
     BidAdjustmentData, BlockValidationError, MergeableOrdersWithPref, SignedBidSubmission,
     SubmissionVersion,
 };
-use tokio::sync::oneshot;
 use tracing::{error, trace};
 
 use crate::{
     api::builder::error::BuilderApiError,
     auctioneer::{
+        SubmissionResultSender,
         bid_adjustor::BidAdjustor,
         context::Context,
         simulator::{BlockSimRequest, SimulatorRequest, manager::SimulationResult},
-        types::{PayloadEntry, SlotData, Submission, SubmissionData, SubmissionResult},
+        types::{
+            PayloadEntry, SlotData, Submission, SubmissionData, SubmissionRef, SubmissionResult,
+        },
     },
     housekeeper::PayloadAttributesUpdate,
 };
@@ -29,13 +31,14 @@ impl<B: BidAdjustor> Context<B> {
     pub(super) fn handle_submission(
         &mut self,
         submission_data: SubmissionData,
-        res_tx: oneshot::Sender<SubmissionResult>,
+        res_tx: SubmissionResultSender<SubmissionResult>,
         slot_data: &SlotData,
     ) {
+        let submission_ref = submission_data.submission_ref;
         match self.validate_and_sort(submission_data, slot_data) {
             Ok((validated, optimistic_version, merging_data)) => {
                 let res_tx = if optimistic_version.is_optimistic() {
-                    let _ = res_tx.send(Ok(()));
+                    res_tx.try_send((submission_ref, Ok(())));
                     None
                 } else {
                     Some(res_tx)
@@ -77,7 +80,7 @@ impl<B: BidAdjustor> Context<B> {
             }
 
             Err(err) => {
-                let _ = res_tx.send(Err(err));
+                res_tx.try_send((submission_ref, Err(err)));
             }
         }
     }
@@ -94,7 +97,10 @@ impl<B: BidAdjustor> Context<B> {
             Err(err) if err.is_demotable() => {
                 self.bid_sorter.demote(*result.submission.builder_public_key());
                 if let Some(res_tx) = res_tx {
-                    let _ = res_tx.send(Err(BuilderApiError::BlockSimulation(err.clone())));
+                    res_tx.try_send((
+                        result.submission_ref,
+                        Err(BuilderApiError::BlockSimulation(err.clone())),
+                    ));
                 };
             }
 
@@ -111,7 +117,7 @@ impl<B: BidAdjustor> Context<B> {
                     }
                     self.request_merged_block();
 
-                    let _ = res_tx.send(Ok(()));
+                    res_tx.try_send((result.submission_ref, Ok(())));
                 };
             }
         }
@@ -204,6 +210,7 @@ impl<B: BidAdjustor> Context<B> {
         });
 
         let validated = ValidatedData {
+            submission_ref: submission_data.submission_ref,
             submission,
             tx_root: maybe_tx_root,
             payload_attributes,
@@ -219,7 +226,7 @@ impl<B: BidAdjustor> Context<B> {
     fn prep_data_to_store_and_sim(
         &mut self,
         validated: ValidatedData,
-        res_tx: Option<oneshot::Sender<SubmissionResult>>,
+        res_tx: Option<SubmissionResultSender<SubmissionResult>>,
         slot_data: &SlotData,
     ) -> (SimulatorRequest, PayloadEntry) {
         let request = BlockSimRequest::new(
@@ -231,6 +238,7 @@ impl<B: BidAdjustor> Context<B> {
         );
 
         let req = SimulatorRequest {
+            submission_ref: validated.submission_ref,
             request,
             is_top_bid: validated.is_top_bid,
             res_tx,
@@ -310,6 +318,7 @@ impl<B: BidAdjustor> Context<B> {
 }
 
 pub struct ValidatedData<'a> {
+    pub submission_ref: Option<SubmissionRef>,
     pub submission: SignedBidSubmission,
     pub tx_root: Option<B256>,
     pub payload_attributes: &'a PayloadAttributesUpdate,

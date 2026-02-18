@@ -1,6 +1,6 @@
 [workspace]
 default-members = ["crates/relay"]
-members = ["crates/common", "crates/relay", "crates/simulator", "crates/types"]
+members = ["crates/common", "crates/relay", "crates/simulator", "crates/tcp-types", "crates/types"]
 resolver = "2"
 
 [workspace.package]
@@ -24,6 +24,7 @@ askama = "0.12.0"
 async-trait = "0.1"
 axum = { version = "0.8", features = ["matched-path", "ws"] }
 backtrace = "0.3.69"
+bitflags = "2.10.0"
 blst = { version = "0.3.16", features = ["no-threads"] }
 bytes = "1.10"
 chrono = { features = ["serde"], version = "0.4.38" }
@@ -40,10 +41,16 @@ ethereum_ssz_derive = "0.9"
 ethers = "2.0.14"
 eyre = "0.6.12"
 flate2 = "1.0"
-flux = { git = "https://github.com/gattaca-com/flux" }
+
+flux = { git = "https://github.com/gattaca-com/flux", rev = "15dfc44b360c3ec55abdf8e506f2dca60ac72e13"}
+flux-network = { package = "flux-network", git = "https://github.com/gattaca-com/flux", rev = "15dfc44b360c3ec55abdf8e506f2dca60ac72e13"}
+flux-type-hash = { package = "type-hash", git = "https://github.com/gattaca-com/flux", rev = "15dfc44b360c3ec55abdf8e506f2dca60ac72e13"}
+flux-type-hash-derive = { package = "type-hash-derive", git = "https://github.com/gattaca-com/flux", rev = "15dfc44b360c3ec55abdf8e506f2dca60ac72e13"}
+
 futures = "0.3"
 futures-util = { version = "0.3", features = ["compat"] }
 helix-common = { path = "crates/common" }
+helix-tcp-types = { path = "./crates/tcp-types" }
 helix-types = { path = "./crates/types" }
 http = "1.0"
 http-body = "1.0"

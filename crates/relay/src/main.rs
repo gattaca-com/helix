@@ -1,4 +1,5 @@
 use std::{
+    net::{Ipv4Addr, SocketAddr, SocketAddrV4},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -22,10 +23,10 @@ use helix_common::{
     utils::{init_panic_hook, init_tracing_log},
 };
 use helix_relay::{
-    Api, Auctioneer, AuctioneerHandle, BidSorter, DefaultBidAdjustor, HelixSpine,
-    PostgresDatabaseService, RegWorker, RegWorkerHandle, RelayNetworkManager, SubWorker,
-    WebsiteService, start_admin_service, start_api_service, start_beacon_client, start_db_service,
-    start_housekeeper,
+    Api, Auctioneer, AuctioneerHandle, BidSorter, BidSubmissionTcpListener, DefaultBidAdjustor,
+    HelixSpine, PostgresDatabaseService, RegWorker, RegWorkerHandle, RelayNetworkManager,
+    SubWorker, WebsiteService, start_admin_service, start_api_service, start_beacon_client,
+    start_db_service, start_housekeeper,
 };
 use helix_types::BlsKeypair;
 use tikv_jemallocator::Jemalloc;
@@ -118,10 +119,10 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
     .map_err(|e| eyre!("housekeeper init: {e}"))?;
 
     let terminating = Arc::new(AtomicBool::default());
-    let termination_grace_period = config.router_config.shutdown_delay_ms;
+    let termination_grace_period = Duration::from_millis(config.router_config.shutdown_delay_ms);
 
     let spine = HelixSpine::new(None);
-    spine.start(None, |spine| {
+    spine.start(None, Some(termination_grace_period), |spine| {
         start_admin_service(local_cache.clone(), expect_env_var(ADMIN_TOKEN_ENV_VAR));
 
         let auctioneer_handle = AuctioneerHandle::new(sub_worker_tx, event_tx.clone());
@@ -142,7 +143,7 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
             terminating.clone(),
             top_bid_tx.clone(),
             relay_network_api.api(),
-            auctioneer_handle,
+            auctioneer_handle.clone(),
             registrations_handle,
         );
 
@@ -174,6 +175,23 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
             }
 
             let auctioneer_core = config.cores.auctioneer;
+            let sock_addr =
+                SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, config.tcp_port));
+            let block_submission_tcp_listener = BidSubmissionTcpListener::new(
+                sock_addr,
+                auctioneer_handle,
+                local_cache.api_key_cache.clone(),
+                config.tcp_max_connections,
+            );
+            attach_tile(
+                block_submission_tcp_listener,
+                spine,
+                TileConfig::new(
+                    config.cores.tcp_bid_submissions_tile,
+                    flux::utils::ThreadPriority::High,
+                ),
+            );
+
             let auctioneer = Auctioneer::new(
                 chain_info.as_ref().clone(),
                 config,
@@ -202,10 +220,10 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
 
     terminating.store(true, Ordering::Relaxed);
 
-    if termination_grace_period != 0 {
-        tracing::info!("Pausing for {termination_grace_period}ms before exit");
+    if !termination_grace_period.is_zero() {
+        tracing::info!("Pausing for {}ms before exit", termination_grace_period.as_millis());
 
-        tokio::time::sleep(Duration::from_millis(termination_grace_period)).await;
+        tokio::time::sleep(termination_grace_period).await;
     }
 
     Ok(())
