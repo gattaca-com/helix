@@ -317,7 +317,10 @@ impl RelayNetworkPeerConfig {
         if let Some(url) = &self.url {
             let has_ws_scheme = ["ws", "wss"].contains(&url.scheme());
             let has_port = url.port().is_some();
-            assert!(has_ws_scheme || has_port, "peer URL must have ws/wss scheme or a specific port");
+            assert!(
+                has_ws_scheme || has_port,
+                "peer URL must have ws/wss scheme or a specific port"
+            );
         }
     }
 }

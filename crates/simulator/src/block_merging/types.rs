@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use alloy_eips::{Decodable2718, eip2718::Eip2718Error};
 use alloy_primitives::{Address, B256, Bytes, U256};
 use alloy_rpc_types::{beacon::requests::ExecutionRequestsV4, engine::ExecutionPayloadV3};
-use helix_types::BuilderInclusionResult;
+use helix_types::{BuilderInclusionResult, MergedBlockTrace};
 use reth_ethereum::{evm::EthEvmConfig, primitives::SignedTransaction, provider::ProviderError};
 use reth_node_builder::ConfigureEvm;
 use reth_primitives::{NodePrimitives, Recovered};
@@ -256,6 +256,7 @@ pub struct BlockMergeRequestV1 {
     pub execution_payload: ExecutionPayloadV3,
     pub parent_beacon_block_root: B256,
     pub merging_data: Vec<MergeableOrderBytes>,
+    pub trace: MergedBlockTrace,
 }
 
 #[serde_as]
@@ -270,6 +271,7 @@ pub struct BlockMergeResponseV1 {
     /// Total value for the proposer
     pub proposer_value: U256,
     pub builder_inclusions: HashMap<Address, BuilderInclusionResult>,
+    pub trace: MergedBlockTrace,
 }
 
 #[cfg(test)]

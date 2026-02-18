@@ -240,6 +240,7 @@ pub struct MergedBlock {
     pub original_blob_count: usize,
     pub merged_blob_count: usize,
     pub builder_inclusions: HashMap<Address, BuilderInclusionResult>,
+    pub trace: MergedBlockTrace,
 }
 
 impl MergedBlock {
@@ -279,6 +280,14 @@ impl MergedBlock {
             builder_inclusions
         )
     }
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MergedBlockTrace {
+    pub request_time_ns: u64,
+    pub sim_start_time_ns: u64,
+    pub sim_end_time_ns: u64,
+    pub finalize_time_ns: u64,
 }
 
 #[cfg(test)]
