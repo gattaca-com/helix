@@ -14,11 +14,11 @@ use helix_common::{
     utils::{utcnow_ns, utcnow_sec},
 };
 use helix_types::{
-    BidAdjustmentData, BlockMergingData, BlsPublicKey, BlsPublicKeyBytes, Compression,
-    DehydratedBidSubmission, DehydratedBidSubmissionFuluWithAdjustments, ExecPayload, MergeType,
-    MergeableOrdersWithPref, SeqNum, SigError, SignedBidSubmission,
-    SignedBidSubmissionFuluWithAdjustments, SignedBidSubmissionWithMergingData,
-    SignedBlindedBeaconBlock, SignedValidatorRegistration, SubmissionVersion,
+    BidAdjustmentData, BlockMergingData, BlsPublicKey, BlsPublicKeyBytes, DehydratedBidSubmission,
+    DehydratedBidSubmissionFuluWithAdjustments, ExecPayload, MergeType, MergeableOrdersWithPref,
+    SigError, SignedBidSubmission, SignedBidSubmissionFuluWithAdjustments,
+    SignedBidSubmissionWithMergingData, SignedBlindedBeaconBlock, SignedValidatorRegistration,
+    SubmissionVersion,
 };
 use tracing::{error, trace};
 
@@ -26,11 +26,11 @@ use crate::{
     HelixSpine,
     api::{builder::error::BuilderApiError, proposer::ProposerApiError},
     auctioneer::{
+        InternalBidSubmissionHeader,
         block_merger::get_mergeable_orders,
-        decoder::{Encoding, SubmissionDecoder},
+        decoder::SubmissionDecoder,
         types::{Event, RegWorkerJob, SubWorkerJob, Submission, SubmissionData},
     },
-    tcp_bid_recv::BidSubmissionHeader,
 };
 
 pub struct Telemetry {
@@ -116,11 +116,7 @@ impl SubWorker {
     fn _handle_task(&self, task: SubWorkerJob) {
         match task {
             SubWorkerJob::BlockSubmission {
-                submission_ref,
                 header,
-                encoding,
-                compression,
-                api_key,
                 body,
                 mut trace,
                 res_tx,
@@ -128,19 +124,11 @@ impl SubWorker {
                 sent_at,
                 expected_pubkey,
             } => {
+                let submission_id = header.id;
                 record_submission_step("worker_recv", sent_at.elapsed());
                 let guard = span.enter();
                 trace!("received by worker");
-                match self.handle_block_submission(
-                    header,
-                    submission_ref.seq_num,
-                    api_key,
-                    encoding,
-                    compression,
-                    expected_pubkey,
-                    body,
-                    &mut trace,
-                ) {
+                match self.handle_block_submission(header, expected_pubkey, body, &mut trace) {
                     Ok((
                         submission,
                         withdrawals_root,
@@ -184,7 +172,7 @@ impl SubWorker {
                         };
 
                         let submission_data = SubmissionData {
-                            submission_ref,
+                            submission_id,
                             submission,
                             version,
                             merging_data,
@@ -206,7 +194,7 @@ impl SubWorker {
                     }
 
                     Err(err) => {
-                        res_tx.try_send((submission_ref, Err(err)));
+                        res_tx.try_send((submission_id, Err(err)));
                     }
                 }
             }
@@ -250,11 +238,7 @@ impl SubWorker {
     #[allow(clippy::type_complexity)]
     fn handle_block_submission(
         &self,
-        header: BidSubmissionHeader,
-        sequence: Option<SeqNum>,
-        api_key: Option<String>,
-        encoding: Encoding,
-        compression: Compression,
+        header: InternalBidSubmissionHeader,
         expected_pubkey: Option<BlsPublicKeyBytes>,
         body: bytes::Bytes,
         trace: &mut SubmissionTrace,
@@ -262,7 +246,7 @@ impl SubWorker {
         (Submission, B256, SubmissionVersion, Option<BlockMergingData>, Option<BidAdjustmentData>),
         BuilderApiError,
     > {
-        let mut decoder = SubmissionDecoder::new(compression, encoding);
+        let mut decoder = SubmissionDecoder::new(header.compression, header.encoding);
         let body = decoder.decompress(body)?;
 
         let with_mergeable_data = header.merge_type.is_some();
@@ -277,11 +261,13 @@ impl SubWorker {
 
             true
         } else {
-            api_key.is_some_and(|api_key| self.cache.validate_api_key(&api_key, &builder_pubkey))
+            header
+                .api_key
+                .is_some_and(|api_key| self.cache.validate_api_key(&api_key, &builder_pubkey))
         };
 
         trace!(
-            ?sequence,
+            ?header.sequence_number,
             is_dehydrated,
             skip_sigverify,
             with_mergeable_data,
@@ -306,7 +292,7 @@ impl SubWorker {
 
         let withdrawals_root = submission.withdrawal_root();
 
-        let version = SubmissionVersion::new(trace.receive, sequence);
+        let version = SubmissionVersion::new(trace.receive, header.sequence_number);
         Ok((submission, withdrawals_root, version, merging_data, bid_adjustment_data))
     }
 

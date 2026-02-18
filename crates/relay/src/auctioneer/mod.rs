@@ -43,9 +43,8 @@ pub use crate::auctioneer::{
     bid_adjustor::{BidAdjustor, DefaultBidAdjustor},
     bid_sorter::BidSorter,
     context::Context,
-    decoder::{Encoding, headers_map_to_bid_submission_header},
     simulator::{SimulatorRequest, client::SimulatorClient, manager::SimulatorManager},
-    types::{BlockSubResultSender, SubmissionRef, SubmissionResult}, // move to types?
+    types::{InternalBidSubmissionHeader, SubmissionResult, SubmissionResultSender}, /* move to types? */
 };
 use crate::{
     HelixSpine, PostgresDatabaseService,
@@ -421,7 +420,7 @@ impl State {
                 Event::Submission { submission_data, res_tx, .. },
             ) => {
                 res_tx.try_send((
-                    submission_data.submission_ref,
+                    submission_data.submission_id,
                     Err(BuilderApiError::DeliveringPayload {
                         bid_slot: submission_data.bid_slot(),
                         delivering: slot_ctx.bid_slot.as_u64(),
@@ -473,12 +472,12 @@ impl State {
                 if submission_data.bid_slot() == bid_slot.as_u64() {
                     // either not registered or waiting for full data from housekepper
                     res_tx.try_send((
-                        submission_data.submission_ref,
+                        submission_data.submission_id,
                         Err(BuilderApiError::ProposerDutyNotFound),
                     ));
                 } else {
                     res_tx.try_send((
-                        submission_data.submission_ref,
+                        submission_data.submission_id,
                         Err(BuilderApiError::BidValidation(
                             helix_types::BlockValidationError::SubmissionForWrongSlot {
                                 expected: *bid_slot,

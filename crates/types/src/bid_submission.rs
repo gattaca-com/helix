@@ -10,8 +10,8 @@ use tree_hash_derive::TreeHash;
 
 use crate::{
     BlobsBundle, BlobsBundleV1, BlobsBundleV2, BlobsError, Bloom, BlsPublicKey, BlsPublicKeyBytes,
-    BlsSignature, BlsSignatureBytes, ExecutionPayload, ExtraData, PayloadAndBlobs, SeqNum,
-    SszError, bid_adjustment_data::BidAdjustmentData, error::SigError, fields::ExecutionRequests,
+    BlsSignature, BlsSignatureBytes, ExecutionPayload, ExtraData, PayloadAndBlobs, SszError,
+    bid_adjustment_data::BidAdjustmentData, error::SigError, fields::ExecutionRequests,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, TreeHash)]
@@ -696,11 +696,11 @@ impl SignedBidSubmissionFuluWithAdjustments {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct SubmissionVersion {
     on_receive_ns: u64,
-    sequence: Option<SeqNum>,
+    sequence: Option<u32>,
 }
 
 impl SubmissionVersion {
-    pub fn new(on_receive_ns: u64, sequence: Option<SeqNum>) -> Self {
+    pub fn new(on_receive_ns: u64, sequence: Option<u32>) -> Self {
         Self { on_receive_ns, sequence }
     }
 

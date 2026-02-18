@@ -10,11 +10,8 @@ use helix_common::metrics::{
     SUBMISSION_BY_COMPRESSION, SUBMISSION_BY_ENCODING, SUBMISSION_COMPRESSED_BYTES,
     SUBMISSION_DECOMPRESSED_BYTES,
 };
-use helix_types::{BlsPublicKeyBytes, Compression, ForkName, ForkVersionDecode, MergeType};
-use http::{
-    HeaderMap, HeaderValue,
-    header::{CONTENT_ENCODING, CONTENT_TYPE},
-};
+use helix_types::{BlsPublicKeyBytes, Compression, ForkName, ForkVersionDecode};
+use http::HeaderMap;
 use serde::de::DeserializeOwned;
 use ssz::Decode;
 use strum::{AsRefStr, EnumString};
@@ -24,14 +21,9 @@ use zstd::{
     zstd_safe::{CONTENTSIZE_ERROR, CONTENTSIZE_UNKNOWN, get_frame_content_size},
 };
 
-use crate::{
-    api::{
-        HEADER_API_KEY, HEADER_API_TOKEN, HEADER_HYDRATE, HEADER_IS_MERGEABLE, HEADER_MERGE_TYPE,
-        HEADER_SEQUENCE, HEADER_SUBMISSION_TYPE, HEADER_WITH_ADJUSTMENTS,
-        builder::{api::MAX_PAYLOAD_LENGTH, error::BuilderApiError},
-    },
-    auctioneer::SubmissionRef,
-    tcp_bid_recv::{BidSubmissionFlags, BidSubmissionHeader},
+use crate::api::{
+    HEADER_SUBMISSION_TYPE,
+    builder::{api::MAX_PAYLOAD_LENGTH, error::BuilderApiError},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString, AsRefStr)]
@@ -46,26 +38,6 @@ impl SubmissionType {
     pub fn from_headers(header_map: &HeaderMap) -> Option<Self> {
         let submission_type = header_map.get(HEADER_SUBMISSION_TYPE)?.to_str().ok()?;
         submission_type.parse().ok()
-    }
-}
-
-pub fn merge_type_from_headers(
-    header_map: &HeaderMap,
-    sub_type: Option<SubmissionType>,
-) -> MergeType {
-    match header_map.get(HEADER_MERGE_TYPE) {
-        None => {
-            if sub_type.is_some_and(|sub_type| sub_type == SubmissionType::Merge) ||
-                matches!(header_map.get(HEADER_IS_MERGEABLE), Some(header) if header == HeaderValue::from_static("true"))
-            {
-                MergeType::Mergeable
-            } else {
-                MergeType::None
-            }
-        }
-        Some(merge_type) => {
-            merge_type.to_str().ok().and_then(|t| t.parse().ok()).unwrap_or_default()
-        }
     }
 }
 
@@ -283,66 +255,12 @@ fn gzip_size_hint(buf: &[u8]) -> Option<usize> {
     }
 }
 
-pub fn headers_map_to_bid_submission_header(
-    headers: http::header::HeaderMap,
-) -> (BidSubmissionHeader, SubmissionRef, Encoding, Compression, Option<String>) {
-    let mut flags = BidSubmissionFlags::default();
-
-    if matches!(headers.get(HEADER_WITH_ADJUSTMENTS), Some(header) if header == HeaderValue::from_static("true"))
-    {
-        flags.set(BidSubmissionFlags::WITH_ADJUSTMENTS, true);
-    }
-    if headers.get(HEADER_HYDRATE).is_some() {
-        flags.set(BidSubmissionFlags::IS_DEHYDRATED, true);
-    }
-
-    let submission_type = SubmissionType::from_headers(&headers);
-    if submission_type.is_some_and(|sub_type| sub_type == SubmissionType::Dehydrated) {
-        flags.set(BidSubmissionFlags::IS_DEHYDRATED, true);
-    }
-
-    let seq_num = headers
-        .get(HEADER_SEQUENCE)
-        .and_then(|seq| seq.to_str().ok())
-        .and_then(|seq| seq.parse::<u128>().ok());
-
-    const GZIP_HEADER: HeaderValue = HeaderValue::from_static("gzip");
-    const ZSTD_HEADER: HeaderValue = HeaderValue::from_static("zstd");
-
-    let compression = match headers.get(CONTENT_ENCODING) {
-        Some(header) if header == GZIP_HEADER => Compression::Gzip,
-        Some(header) if header == ZSTD_HEADER => Compression::Zstd,
-        _ => Compression::None,
-    };
-
-    const SSZ_HEADER: HeaderValue = HeaderValue::from_static("application/octet-stream");
-
-    let encoding = match headers.get(CONTENT_TYPE) {
-        Some(header) if header == SSZ_HEADER => Encoding::Ssz,
-        _ => Encoding::Json,
-    };
-
-    let merge_type = merge_type_from_headers(&headers, submission_type);
-
-    let api_key = headers
-        .get(HEADER_API_KEY)
-        .or(headers.get(HEADER_API_TOKEN))
-        .and_then(|key| key.to_str().map(|key| key.to_owned()).ok());
-
-    let header =
-        BidSubmissionHeader { sequence_number: seq_num.unwrap_or_default(), merge_type, flags };
-
-    let submission_ref = SubmissionRef { seq_num, token: None };
-
-    (header, submission_ref, encoding, compression, api_key)
-}
-
 #[cfg(test)]
 mod tests {
     use alloy_primitives::hex::FromHex;
     use helix_types::{
-        SignedBidSubmission, SignedBidSubmissionElectra, SignedBidSubmissionWithMergingData,
-        TestRandomSeed,
+        MergeType, SignedBidSubmission, SignedBidSubmissionElectra,
+        SignedBidSubmissionWithMergingData, TestRandomSeed,
     };
     use ssz::Encode;
 

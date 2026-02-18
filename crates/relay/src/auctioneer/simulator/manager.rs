@@ -13,13 +13,14 @@ use helix_common::{
 };
 use helix_types::{BlsPublicKeyBytes, SignedBidSubmission, SubmissionVersion};
 use tracing::{debug, error, info, warn};
+use uuid::Uuid;
 
 use crate::{
     api::service::SIMULATOR_REQUEST_TIMEOUT,
     auctioneer::{
-        BlockSubResultSender,
+        SubmissionResultSender,
         simulator::{BlockMergeRequest, SimulatorRequest, client::SimulatorClient},
-        types::{Event, SubmissionRef, SubmissionResult},
+        types::{Event, SubmissionResult},
     },
 };
 
@@ -41,9 +42,9 @@ struct LocalTelemetry {
 pub type SimulationResult = (usize, Option<SimulationResultInner>);
 pub struct SimulationResultInner {
     pub result: Result<(), BlockSimError>,
-    pub submission_ref: SubmissionRef,
+    pub submission_id: Uuid,
     // Some if not optimistic
-    pub res_tx: Option<BlockSubResultSender<SubmissionResult>>,
+    pub res_tx: Option<SubmissionResultSender<SubmissionResult>>,
     // TODO: move up
     pub paused_until: Option<Instant>,
     pub submission: SignedBidSubmission,
@@ -231,7 +232,7 @@ impl SimulatorManager {
             let result = (
                 id,
                 Some(SimulationResultInner {
-                    submission_ref: req.submission_ref,
+                    submission_id: req.submission_id,
                     result: res,
                     paused_until,
                     res_tx: req.res_tx,

@@ -5,8 +5,6 @@ use flux_type_hash_derive::TypeHash;
 use serde::{Deserialize, Serialize};
 use strum::{AsRefStr, EnumString};
 
-pub type SeqNum = u128;
-
 #[repr(u8)]
 #[derive(
     Debug, Default, Clone, Copy, PartialEq, Eq, EnumString, AsRefStr, Serialize, Deserialize,
@@ -93,6 +91,8 @@ pub enum ParseError {
     InvalidMergeType(u8),
     #[error("SubmissionTooShort")]
     SubmissionTooShort,
+    #[error("DuplicateSequenceNumber {0}")]
+    DuplicateSequenceNumber(u32),
 }
 
 #[derive(Debug, Clone)]
@@ -101,7 +101,7 @@ pub struct BidSubmission {
     pub data: Bytes,
 }
 
-const BID_SUB_HEADER_SIZE: usize = 18;
+const BID_SUB_HEADER_SIZE: usize = 6;
 
 impl TryFrom<&[u8]> for BidSubmission {
     type Error = ParseError;
@@ -121,13 +121,13 @@ impl TryFrom<&[u8]> for BidSubmission {
 }
 
 /// Wire header for bid submission. Manually encoded as
-/// `[16B BE seq_number][1B merge_type][1B flags]` (18 bytes total).
-/// The sequence_number is used as a unique identifier of the submission on both sides.
-/// Unlike HTTP the api key is not sent, because it is validated on receipt of the registration
-/// message.
+/// `[4B BE seq_number][1B merge_type][1B flags]` (6 bytes total).
+/// The sequence_number is used as a unique identifier of the submission on the client side per
+/// slot. Unlike HTTP the api key is not sent, because it is validated on receipt of the
+/// registration message.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct BidSubmissionHeader {
-    pub sequence_number: SeqNum,
+    pub sequence_number: u32,
     pub merge_type: MergeType,
     pub flags: BidSubmissionFlags,
 }
@@ -136,10 +136,10 @@ impl TryFrom<&[u8]> for BidSubmissionHeader {
     type Error = ParseError;
 
     fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
-        let sequence_number = u128::from_be_bytes(value[..16].try_into().unwrap());
+        let sequence_number = u32::from_be_bytes(value[..4].try_into().unwrap());
         let merge_type =
-            MergeType::try_from(value[16]).map_err(|_| ParseError::InvalidMergeType(value[16]))?;
-        let flags = BidSubmissionFlags::from_bits_retain(value[17]);
+            MergeType::try_from(value[4]).map_err(|_| ParseError::InvalidMergeType(value[4]))?;
+        let flags = BidSubmissionFlags::from_bits_retain(value[5]);
 
         Ok(Self { sequence_number, merge_type, flags })
     }
@@ -225,7 +225,8 @@ impl Status {
 #[repr(C)]
 #[derive(Debug, Clone, ssz_derive::Encode, ssz_derive::Decode)]
 pub struct BidSubmissionResponse {
-    pub sequence_number: SeqNum,
+    pub sequence_number: u32,
+    pub request_id: [u8; 16], // UUID
     pub status: Status,
     pub error_msg: Vec<u8>,
 }
@@ -237,7 +238,7 @@ mod tests {
     #[test]
     fn test_bid_submission_header() {
         let header = BidSubmissionHeader {
-            sequence_number: 1913u128,
+            sequence_number: 1913,
             merge_type: MergeType::Mergeable,
             flags: BidSubmissionFlags::all(),
         };

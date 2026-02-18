@@ -10,7 +10,7 @@ use tracing::{error, trace};
 use super::api::BuilderApi;
 use crate::{
     api::{Api, builder::error::BuilderApiError},
-    auctioneer::{BlockSubResultSender, headers_map_to_bid_submission_header},
+    auctioneer::{InternalBidSubmissionHeader, SubmissionResultSender},
 };
 
 impl<A: Api> BuilderApi<A> {
@@ -38,22 +38,11 @@ impl<A: Api> BuilderApi<A> {
         let mut trace = SubmissionTrace::init_from_timings(timings);
         trace.metadata = api.api_provider.get_metadata(&headers);
 
-        let (header, submission_ref, encoding, compression, api_key) =
-            headers_map_to_bid_submission_header(headers);
+        let header = InternalBidSubmissionHeader::from_http_headers(request_id, headers);
         let (tx, rx) = tokio::sync::oneshot::channel();
         if api
             .auctioneer_handle
-            .block_submission(
-                submission_ref,
-                header,
-                encoding,
-                compression,
-                api_key,
-                body,
-                trace,
-                BlockSubResultSender::OneShot(tx),
-                None,
-            )
+            .block_submission(header, body, trace, SubmissionResultSender::OneShot(tx), None)
             .is_err()
         {
             error!("failed sending request to worker");

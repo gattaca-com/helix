@@ -10,11 +10,9 @@ use helix_types::{
     ExecutionPayload, ExecutionRequests, MergeableOrderWithOrigin, SignedBidSubmission,
     SubmissionVersion,
 };
+use uuid::Uuid;
 
-use crate::auctioneer::{
-    BlockSubResultSender,
-    types::{SubmissionRef, SubmissionResult},
-};
+use crate::auctioneer::{SubmissionResultSender, types::SubmissionResult};
 
 pub mod client;
 pub mod manager;
@@ -113,9 +111,9 @@ pub struct SimulatorRequest {
     pub is_top_bid: bool,
     pub version: SubmissionVersion,
     pub submission: SignedBidSubmission,
-    pub submission_ref: SubmissionRef,
+    pub submission_id: Uuid,
     /// None if optimistic
-    pub res_tx: Option<BlockSubResultSender<SubmissionResult>>,
+    pub res_tx: Option<SubmissionResultSender<SubmissionResult>>,
     pub trace: SubmissionTrace,
     // only Some for dehydrated submissions
     pub tx_root: Option<B256>,

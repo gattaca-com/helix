@@ -1,22 +1,16 @@
 use std::{ops::Range, sync::Arc, time::Instant};
 
 use helix_common::{GetPayloadTrace, SubmissionTrace, api::proposer_api::GetHeaderParams};
-use helix_types::{
-    BlsPublicKeyBytes, Compression, SignedBlindedBeaconBlock, SignedValidatorRegistration,
-};
+use helix_types::{BlsPublicKeyBytes, SignedBlindedBeaconBlock, SignedValidatorRegistration};
 use tokio::sync::oneshot;
 use tracing::trace;
 
 use crate::{
-    auctioneer::{
-        decoder::Encoding,
-        types::{
-            BlockSubResultSender, Event, GetHeaderResult, GetPayloadResult, RegWorkerJob,
-            SubWorkerJob, SubmissionRef, SubmissionResult,
-        },
+    auctioneer::types::{
+        Event, GetHeaderResult, GetPayloadResult, InternalBidSubmissionHeader, RegWorkerJob,
+        SubWorkerJob, SubmissionResult, SubmissionResultSender,
     },
     gossip::BroadcastPayloadParams,
-    tcp_bid_recv::BidSubmissionHeader,
 };
 
 #[derive(Clone)]
@@ -35,24 +29,16 @@ impl AuctioneerHandle {
 
     pub fn block_submission(
         &self,
-        submission_ref: SubmissionRef,
-        header: BidSubmissionHeader,
-        encoding: Encoding,
-        compression: Compression,
-        api_key: Option<String>,
+        header: InternalBidSubmissionHeader,
         body: bytes::Bytes,
         trace: SubmissionTrace,
-        res_tx: BlockSubResultSender<SubmissionResult>,
+        res_tx: SubmissionResultSender<SubmissionResult>,
         expected_pubkey: Option<BlsPublicKeyBytes>,
     ) -> Result<(), ChannelFull> {
         trace!("sending to worker");
         self.worker
             .try_send(SubWorkerJob::BlockSubmission {
-                submission_ref,
                 header,
-                encoding,
-                compression,
-                api_key,
                 body,
                 trace,
                 res_tx,

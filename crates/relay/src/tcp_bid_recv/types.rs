@@ -1,4 +1,5 @@
-use helix_tcp_types::{BidSubmissionResponse, ParseError, SeqNum, Status};
+use helix_tcp_types::{BidSubmissionResponse, ParseError, Status};
+use uuid::Uuid;
 
 use crate::api::builder::error::BuilderApiError;
 
@@ -34,17 +35,20 @@ impl From<&BidSubmissionError> for Status {
 }
 
 pub fn response_from_builder_api_error(
-    request_id: SeqNum,
+    seq_num: u32,
+    request_id: Uuid,
     result: &Result<(), BuilderApiError>,
 ) -> BidSubmissionResponse {
     match result {
         Ok(()) => BidSubmissionResponse {
-            sequence_number: request_id,
+            sequence_number: seq_num,
+            request_id: request_id.into_bytes(),
             status: Status::Okay,
             error_msg: Default::default(),
         },
         Err(e) => BidSubmissionResponse {
-            sequence_number: request_id,
+            sequence_number: seq_num,
+            request_id: request_id.into_bytes(),
             status: Status::from(e),
             error_msg: e.to_string().into_bytes(),
         },
@@ -52,11 +56,13 @@ pub fn response_from_builder_api_error(
 }
 
 pub fn response_from_bid_submission_error(
-    request_id: &Option<SeqNum>,
+    seq_num: Option<u32>,
+    request_id: Option<Uuid>,
     e: &BidSubmissionError,
 ) -> BidSubmissionResponse {
     BidSubmissionResponse {
-        sequence_number: request_id.unwrap_or_default(),
+        sequence_number: seq_num.unwrap_or_default(),
+        request_id: request_id.map(Uuid::into_bytes).unwrap_or_default(),
         status: Status::from(e),
         error_msg: e.to_string().into_bytes(),
     }

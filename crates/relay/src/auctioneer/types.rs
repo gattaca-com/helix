@@ -5,7 +5,6 @@ use std::{
 };
 
 use alloy_primitives::{B256, U256};
-use flux_network::Token;
 use helix_common::{
     GetPayloadTrace, SubmissionTrace,
     api::{
@@ -14,43 +13,140 @@ use helix_common::{
     },
     metrics::BID_CREATION_LATENCY,
 };
+use helix_tcp_types::{BidSubmissionFlags, BidSubmissionHeader};
 use helix_types::{
     BidAdjustmentData, BlsPublicKeyBytes, BuilderBid, Compression, DehydratedBidSubmission,
-    ExecutionPayload, ExecutionRequests, ForkName, GetPayloadResponse, MergeableOrdersWithPref,
-    PayloadAndBlobs, SeqNum, SignedBidSubmission, SignedBlindedBeaconBlock,
+    ExecutionPayload, ExecutionRequests, ForkName, GetPayloadResponse, MergeType,
+    MergeableOrdersWithPref, PayloadAndBlobs, SignedBidSubmission, SignedBlindedBeaconBlock,
     SignedValidatorRegistration, Slot, SubmissionVersion, VersionedSignedProposal,
     mock_public_key_bytes,
+};
+use http::{
+    HeaderMap, HeaderValue,
+    header::{CONTENT_ENCODING, CONTENT_TYPE},
 };
 use rustc_hash::FxHashMap;
 use serde::Serialize;
 use ssz_derive::{Decode, Encode};
 use tokio::sync::oneshot;
 use tracing::debug;
+use uuid::Uuid;
 
 use crate::{
-    api::{builder::error::BuilderApiError, proposer::ProposerApiError},
-    auctioneer::{BlockMergeResult, decoder::Encoding, simulator::manager::SimulationResult},
+    api::{
+        HEADER_API_KEY, HEADER_API_TOKEN, HEADER_HYDRATE, HEADER_IS_MERGEABLE, HEADER_MERGE_TYPE,
+        HEADER_SEQUENCE, HEADER_WITH_ADJUSTMENTS, builder::error::BuilderApiError,
+        proposer::ProposerApiError,
+    },
+    auctioneer::{
+        BlockMergeResult,
+        decoder::{Encoding, SubmissionType},
+        simulator::manager::SimulationResult,
+    },
     gossip::BroadcastPayloadParams,
     housekeeper::PayloadAttributesUpdate,
-    tcp_bid_recv::BidSubmissionHeader,
 };
 
-#[derive(Clone, Copy, Debug)]
-pub struct SubmissionRef {
-    pub seq_num: Option<SeqNum>,
-    pub token: Option<Token>,
-}
-
-pub type SubmissionResult = (SubmissionRef, Result<(), BuilderApiError>);
+pub type SubmissionResult = (Uuid, Result<(), BuilderApiError>);
 pub type GetHeaderResult = Result<PayloadEntry, ProposerApiError>;
 pub type GetPayloadResult = Result<GetPayloadResultData, ProposerApiError>;
 
-pub enum BlockSubResultSender<T> {
+pub struct InternalBidSubmissionHeader {
+    pub id: Uuid,
+    pub sequence_number: Option<u32>,
+    pub merge_type: MergeType,
+    pub flags: BidSubmissionFlags,
+    pub encoding: Encoding,
+    pub compression: Compression,
+    pub api_key: Option<String>,
+}
+
+impl InternalBidSubmissionHeader {
+    pub fn from_http_headers(request_id: Uuid, headers: http::header::HeaderMap) -> Self {
+        let mut flags = BidSubmissionFlags::default();
+        if matches!(headers.get(HEADER_WITH_ADJUSTMENTS), Some(header) if header == HeaderValue::from_static("true"))
+        {
+            flags.set(BidSubmissionFlags::WITH_ADJUSTMENTS, true);
+        }
+        if headers.get(HEADER_HYDRATE).is_some() {
+            flags.set(BidSubmissionFlags::IS_DEHYDRATED, true);
+        }
+
+        let submission_type = SubmissionType::from_headers(&headers);
+        if submission_type.is_some_and(|sub_type| sub_type == SubmissionType::Dehydrated) {
+            flags.set(BidSubmissionFlags::IS_DEHYDRATED, true);
+        }
+
+        let sequence_number = headers
+            .get(HEADER_SEQUENCE)
+            .and_then(|seq| seq.to_str().ok())
+            .and_then(|seq| seq.parse::<u32>().ok());
+
+        const GZIP_HEADER: HeaderValue = HeaderValue::from_static("gzip");
+        const ZSTD_HEADER: HeaderValue = HeaderValue::from_static("zstd");
+
+        let compression = match headers.get(CONTENT_ENCODING) {
+            Some(header) if header == GZIP_HEADER => Compression::Gzip,
+            Some(header) if header == ZSTD_HEADER => Compression::Zstd,
+            _ => Compression::None,
+        };
+
+        const SSZ_HEADER: HeaderValue = HeaderValue::from_static("application/octet-stream");
+
+        let encoding = match headers.get(CONTENT_TYPE) {
+            Some(header) if header == SSZ_HEADER => Encoding::Ssz,
+            _ => Encoding::Json,
+        };
+
+        let merge_type = Self::merge_type_from_headers(&headers, submission_type);
+
+        let api_key = headers
+            .get(HEADER_API_KEY)
+            .or(headers.get(HEADER_API_TOKEN))
+            .and_then(|key| key.to_str().map(|key| key.to_owned()).ok());
+
+        Self { id: request_id, sequence_number, merge_type, flags, encoding, compression, api_key }
+    }
+
+    fn merge_type_from_headers(
+        header_map: &HeaderMap,
+        sub_type: Option<SubmissionType>,
+    ) -> MergeType {
+        match header_map.get(HEADER_MERGE_TYPE) {
+            None => {
+                if sub_type.is_some_and(|sub_type| sub_type == SubmissionType::Merge) ||
+                    matches!(header_map.get(HEADER_IS_MERGEABLE), Some(header) if header == HeaderValue::from_static("true"))
+                {
+                    MergeType::Mergeable
+                } else {
+                    MergeType::None
+                }
+            }
+            Some(merge_type) => {
+                merge_type.to_str().ok().and_then(|t| t.parse().ok()).unwrap_or_default()
+            }
+        }
+    }
+
+    pub fn from_tcp_header(request_id: Uuid, header: BidSubmissionHeader) -> Self {
+        Self {
+            id: request_id,
+            sequence_number: Some(header.sequence_number),
+            merge_type: header.merge_type,
+            flags: header.flags,
+            encoding: Encoding::Ssz,
+            compression: header.compression(),
+            api_key: None,
+        }
+    }
+}
+
+pub enum SubmissionResultSender<T> {
     OneShot(oneshot::Sender<T>),
     Shared(crossbeam_channel::Sender<T>),
 }
 
-impl<T> BlockSubResultSender<T> {
+impl<T> SubmissionResultSender<T> {
     pub fn try_send(self, data: T) {
         match self {
             Self::OneShot(tx) => {
@@ -82,7 +178,7 @@ pub struct GetPayloadResultData {
 
 #[derive(Clone, Debug)]
 pub struct SubmissionData {
-    pub submission_ref: SubmissionRef,
+    pub submission_id: Uuid,
     pub submission: Submission,
     pub merging_data: Option<MergeableOrdersWithPref>,
     pub bid_adjustment_data: Option<BidAdjustmentData>,
@@ -335,14 +431,10 @@ impl PayloadBidDataRef<'_> {
 
 pub enum SubWorkerJob {
     BlockSubmission {
-        submission_ref: SubmissionRef,
-        header: BidSubmissionHeader,
-        encoding: Encoding,
-        api_key: Option<String>,
-        compression: Compression,
+        header: InternalBidSubmissionHeader,
         body: bytes::Bytes,
         trace: SubmissionTrace, // TODO: replace this with better tracing
-        res_tx: BlockSubResultSender<SubmissionResult>,
+        res_tx: SubmissionResultSender<SubmissionResult>,
         span: tracing::Span,
         sent_at: Instant,
         expected_pubkey: Option<BlsPublicKeyBytes>,
@@ -410,7 +502,7 @@ pub enum Event {
     },
     Submission {
         submission_data: SubmissionData,
-        res_tx: BlockSubResultSender<SubmissionResult>,
+        res_tx: SubmissionResultSender<SubmissionResult>,
         span: tracing::Span,
         sent_at: Instant,
     },
