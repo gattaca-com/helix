@@ -12,7 +12,6 @@ use helix_types::{
     SubmissionVersion,
 };
 use tracing::{error, trace};
-use uuid::Uuid;
 
 use crate::{
     api::builder::error::BuilderApiError,
@@ -21,7 +20,9 @@ use crate::{
         bid_adjustor::BidAdjustor,
         context::Context,
         simulator::{BlockSimRequest, SimulatorRequest, manager::SimulationResult},
-        types::{PayloadEntry, SlotData, Submission, SubmissionData, SubmissionResult},
+        types::{
+            PayloadEntry, SlotData, Submission, SubmissionData, SubmissionRef, SubmissionResult,
+        },
     },
     housekeeper::PayloadAttributesUpdate,
 };
@@ -33,11 +34,11 @@ impl<B: BidAdjustor> Context<B> {
         res_tx: SubmissionResultSender<SubmissionResult>,
         slot_data: &SlotData,
     ) {
-        let submission_id = submission_data.submission_id;
+        let submission_ref = submission_data.submission_ref;
         match self.validate_and_sort(submission_data, slot_data) {
             Ok((validated, optimistic_version, merging_data)) => {
                 let res_tx = if optimistic_version.is_optimistic() {
-                    res_tx.try_send((submission_id, Ok(())));
+                    res_tx.try_send((submission_ref, Ok(())));
                     None
                 } else {
                     Some(res_tx)
@@ -79,7 +80,7 @@ impl<B: BidAdjustor> Context<B> {
             }
 
             Err(err) => {
-                res_tx.try_send((submission_id, Err(err)));
+                res_tx.try_send((submission_ref, Err(err)));
             }
         }
     }
@@ -97,7 +98,7 @@ impl<B: BidAdjustor> Context<B> {
                 self.bid_sorter.demote(*result.submission.builder_public_key());
                 if let Some(res_tx) = res_tx {
                     res_tx.try_send((
-                        result.submission_id,
+                        result.submission_ref,
                         Err(BuilderApiError::BlockSimulation(err.clone())),
                     ));
                 };
@@ -116,7 +117,7 @@ impl<B: BidAdjustor> Context<B> {
                     }
                     self.request_merged_block();
 
-                    res_tx.try_send((result.submission_id, Ok(())));
+                    res_tx.try_send((result.submission_ref, Ok(())));
                 };
             }
         }
@@ -209,7 +210,7 @@ impl<B: BidAdjustor> Context<B> {
         });
 
         let validated = ValidatedData {
-            submission_id: submission_data.submission_id,
+            submission_ref: submission_data.submission_ref,
             submission,
             tx_root: maybe_tx_root,
             payload_attributes,
@@ -237,7 +238,7 @@ impl<B: BidAdjustor> Context<B> {
         );
 
         let req = SimulatorRequest {
-            submission_id: validated.submission_id,
+            submission_ref: validated.submission_ref,
             request,
             is_top_bid: validated.is_top_bid,
             res_tx,
@@ -317,7 +318,7 @@ impl<B: BidAdjustor> Context<B> {
 }
 
 pub struct ValidatedData<'a> {
-    pub submission_id: Uuid,
+    pub submission_ref: Option<SubmissionRef>,
     pub submission: SignedBidSubmission,
     pub tx_root: Option<B256>,
     pub payload_attributes: &'a PayloadAttributesUpdate,

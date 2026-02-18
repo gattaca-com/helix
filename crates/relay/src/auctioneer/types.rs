@@ -5,6 +5,7 @@ use std::{
 };
 
 use alloy_primitives::{B256, U256};
+use flux_network::Token;
 use helix_common::{
     GetPayloadTrace, SubmissionTrace,
     api::{
@@ -47,7 +48,14 @@ use crate::{
     housekeeper::PayloadAttributesUpdate,
 };
 
-pub type SubmissionResult = (Uuid, Result<(), BuilderApiError>);
+#[derive(Clone, Copy, Debug)]
+pub struct SubmissionRef {
+    pub id: Uuid,
+    pub token: Token,
+    pub seq_num: u32,
+}
+
+pub type SubmissionResult = (Option<SubmissionRef>, Result<(), BuilderApiError>);
 pub type GetHeaderResult = Result<PayloadEntry, ProposerApiError>;
 pub type GetPayloadResult = Result<GetPayloadResultData, ProposerApiError>;
 
@@ -178,7 +186,7 @@ pub struct GetPayloadResultData {
 
 #[derive(Clone, Debug)]
 pub struct SubmissionData {
-    pub submission_id: Uuid,
+    pub submission_ref: Option<SubmissionRef>,
     pub submission: Submission,
     pub merging_data: Option<MergeableOrdersWithPref>,
     pub bid_adjustment_data: Option<BidAdjustmentData>,
@@ -431,6 +439,7 @@ impl PayloadBidDataRef<'_> {
 
 pub enum SubWorkerJob {
     BlockSubmission {
+        submission_ref: Option<SubmissionRef>,
         header: InternalBidSubmissionHeader,
         body: bytes::Bytes,
         trace: SubmissionTrace, // TODO: replace this with better tracing

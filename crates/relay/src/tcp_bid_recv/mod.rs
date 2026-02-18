@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use crate::{
     AuctioneerHandle, HelixSpine, SubmissionResult,
-    auctioneer::{InternalBidSubmissionHeader, SubmissionResultSender},
+    auctioneer::{InternalBidSubmissionHeader, SubmissionRef, SubmissionResultSender},
 };
 
 pub mod types;
@@ -27,8 +27,6 @@ pub use helix_tcp_types::{
 pub use crate::tcp_bid_recv::types::{
     BidSubmissionError, response_from_bid_submission_error, response_from_builder_api_error,
 };
-
-const SUBMISSIONS_PER_SLOT: usize = 5000usize;
 
 type SubmissionError = (Token, Option<u32>, Option<Uuid>, BidSubmissionError);
 
@@ -43,7 +41,6 @@ pub struct BidSubmissionTcpListener {
 
     to_disconnect: Vec<Token>,
     registered: HashMap<Token, BlsPublicKeyBytes>,
-    in_flight: HashMap<Uuid, (Token, u32)>,
     submission_errors: Vec<SubmissionError>,
 }
 
@@ -70,21 +67,20 @@ impl BidSubmissionTcpListener {
             tx,
             to_disconnect: Vec::with_capacity(max_connections),
             registered: HashMap::with_capacity(max_connections),
-            in_flight: HashMap::with_capacity(max_connections * SUBMISSIONS_PER_SLOT),
             submission_errors: Vec::with_capacity(max_connections),
         }
     }
 
     #[tracing::instrument(skip_all,
         fields(
-        id =% request_id,
+        id =% submission_ref.id,
         slot = tracing::field::Empty,
         builder_pubkey = tracing::field::Empty,
         builder_id = tracing::field::Empty,
         block_hash = tracing::field::Empty,
     ))]
     fn accept_bid_submission(
-        request_id: Uuid,
+        submission_ref: SubmissionRef,
         tx: Sender<SubmissionResult>,
         auctioneer_handle: &AuctioneerHandle,
         bid: BidSubmission,
@@ -92,10 +88,11 @@ impl BidSubmissionTcpListener {
     ) -> Result<(), BidSubmissionError> {
         let now = utcnow_ns();
         let trace = SubmissionTrace { receive: now, read_body: now, ..Default::default() };
-        let header = InternalBidSubmissionHeader::from_tcp_header(request_id, bid.header);
+        let header = InternalBidSubmissionHeader::from_tcp_header(submission_ref.id, bid.header);
 
         auctioneer_handle
             .block_submission(
+                Some(submission_ref),
                 header,
                 bid.data,
                 trace,
@@ -119,25 +116,25 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                 if let Some(expected_pubkey) = self.registered.get(&token) {
                     match BidSubmission::try_from(payload).map_err(BidSubmissionError::from) {
                         Ok(bid) => {
-                            let request_id = Uuid::new_v4();
-                            let seq_num = bid.header.sequence_number;
-                            match Self::accept_bid_submission(
-                                request_id,
+                            let submission_ref = SubmissionRef {
+                                id: Uuid::new_v4(),
+                                token,
+                                seq_num: bid.header.sequence_number,
+                            };
+                            if let Err(e) = Self::accept_bid_submission(
+                                submission_ref,
                                 self.tx.clone(),
                                 &self.auctioneer_handle,
                                 bid,
                                 *expected_pubkey,
                             ) {
-                                Ok(()) => {self.in_flight.insert(request_id, (token, seq_num));},
-                                Err(e) => {
-                                    tracing::error!(err=%e, id=%request_id, "failed to send bid submission to worker");
-                                    self.submission_errors.push((
-                                        token,
-                                        Some(seq_num),
-                                        Some(request_id),
-                                        e,
-                                    ));
-                                }
+                                tracing::error!(err=%e, id=%submission_ref.id, "failed to send bid submission to worker");
+                                self.submission_errors.push((
+                                    submission_ref.token,
+                                    Some(submission_ref.seq_num),
+                                    Some(submission_ref.id),
+                                    e,
+                                ));
                             }
                         }
                         Err(e) => {
@@ -185,14 +182,14 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
             });
         }
 
-        for (request_id, result) in self.rx.try_iter() {
-            if let Some((token, seq_num)) = self.in_flight.remove(&request_id) {
-                let response = response_from_builder_api_error(seq_num, request_id, &result);
-                self.listener.write_or_enqueue_with(SendBehavior::Single(token), |buffer| {
+        for (submission_ref, result) in self.rx.try_iter() {
+            if let Some(r) = submission_ref {
+                let response = response_from_builder_api_error(r.seq_num, r.id, &result);
+                self.listener.write_or_enqueue_with(SendBehavior::Single(r.token), |buffer| {
                     response.ssz_append(buffer);
                 });
             } else {
-                tracing::error!("no in-flight entry for request_id on submission result");
+                tracing::error!("submission result has no SubmissionRef");
             }
         }
     }

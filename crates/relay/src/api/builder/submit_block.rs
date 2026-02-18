@@ -42,7 +42,7 @@ impl<A: Api> BuilderApi<A> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         if api
             .auctioneer_handle
-            .block_submission(header, body, trace, SubmissionResultSender::OneShot(tx), None)
+            .block_submission(None, header, body, trace, SubmissionResultSender::OneShot(tx), None)
             .is_err()
         {
             error!("failed sending request to worker");

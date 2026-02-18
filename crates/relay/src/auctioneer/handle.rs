@@ -8,7 +8,7 @@ use tracing::trace;
 use crate::{
     auctioneer::types::{
         Event, GetHeaderResult, GetPayloadResult, InternalBidSubmissionHeader, RegWorkerJob,
-        SubWorkerJob, SubmissionResult, SubmissionResultSender,
+        SubWorkerJob, SubmissionRef, SubmissionResult, SubmissionResultSender,
     },
     gossip::BroadcastPayloadParams,
 };
@@ -29,6 +29,7 @@ impl AuctioneerHandle {
 
     pub fn block_submission(
         &self,
+        submission_ref: Option<SubmissionRef>,
         header: InternalBidSubmissionHeader,
         body: bytes::Bytes,
         trace: SubmissionTrace,
@@ -38,6 +39,7 @@ impl AuctioneerHandle {
         trace!("sending to worker");
         self.worker
             .try_send(SubWorkerJob::BlockSubmission {
+                submission_ref,
                 header,
                 body,
                 trace,
