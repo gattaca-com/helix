@@ -174,7 +174,6 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
                 attach_tile(worker, spine, TileConfig::new(core, ThreadPriority::OSDefault));
             }
 
-            let auctioneer_core = config.cores.auctioneer;
             let sock_addr =
                 SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, config.tcp_port));
             let block_submission_tcp_listener = BidSubmissionTcpListener::new(
@@ -192,6 +191,7 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
                 ),
             );
 
+            let auctioneer_core = config.cores.auctioneer;
             let auctioneer = Auctioneer::new(
                 chain_info.as_ref().clone(),
                 config,
