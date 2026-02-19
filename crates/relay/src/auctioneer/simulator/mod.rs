@@ -125,7 +125,7 @@ pub struct SimulatorRequest {
 
 impl SimulatorRequest {
     pub fn on_receive_ns(&self) -> u64 {
-        self.trace.receive
+        self.trace.receive_ns
     }
 
     // TODO: use a "score" eg how close to top bid even if below

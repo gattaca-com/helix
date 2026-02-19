@@ -430,6 +430,14 @@ lazy_static! {
     )
     .unwrap();
 
+    pub static ref SUB_CLIENT_TO_SERVER_LATENCY: HistogramVec = register_histogram_vec_with_registry!(
+        "submission_client_to_server_latency_us",
+        "Latency of submission requests getting from client to server",
+        &["protocol"],
+        vec![1., 5., 10., 15., 25., 50., 100., 250., 500., 1_000., 5_000., 10_000., 25_000., 50_000., 100_000., 500_000., 1_000_000., 5_000_000., 10_000_000., 50_000_000., 100_000_000.,],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
 
     /// Submission trace metrics
     pub static ref GET_PAYLOAD_TRACE_LATENCY: HistogramVec = register_histogram_vec_with_registry!(
