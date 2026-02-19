@@ -11,8 +11,7 @@ use helix_common::{
 };
 use helix_types::{
     BlsPublicKeyBytes, ExecPayload, ForkName, GetPayloadResponse, PayloadAndBlobs,
-    SignedBlindedBeaconBlock, SignedBlindedBeaconBlockElectra, SignedBlindedBeaconBlockFulu, Slot,
-    SlotClockTrait,
+    SignedBlindedBeaconBlock, SignedBlindedBeaconBlockFulu, Slot, SlotClockTrait,
 };
 use http::StatusCode;
 use tokio::time::sleep;
@@ -72,12 +71,6 @@ impl<A: Api> ProposerApi<A> {
 
         // TODO: move decoding to worker
         let signed_blinded_block: SignedBlindedBeaconBlock = match fork {
-            ForkName::Electra => {
-                let signed_blinded_block_electra: SignedBlindedBeaconBlockElectra =
-                    serde_json::from_slice(&body)
-                        .inspect_err(|err| warn!(%err, "failed to deserialize signed block"))?;
-                signed_blinded_block_electra.into()
-            }
             ForkName::Fulu => {
                 let signed_blinded_block_fulu: SignedBlindedBeaconBlockFulu =
                     serde_json::from_slice(&body)
@@ -173,12 +166,6 @@ impl<A: Api> ProposerApi<A> {
 
         // TODO: move decoding to worker
         let signed_blinded_block: SignedBlindedBeaconBlock = match fork {
-            ForkName::Electra => {
-                let signed_blinded_block_electra: SignedBlindedBeaconBlockElectra =
-                    serde_json::from_slice(&body)
-                        .inspect_err(|err| warn!(%err, "failed to deserialize signed block"))?;
-                signed_blinded_block_electra.into()
-            }
             ForkName::Fulu => {
                 let signed_blinded_block_fulu: SignedBlindedBeaconBlockFulu =
                     serde_json::from_slice(&body)
@@ -419,8 +406,8 @@ impl<A: Api> ProposerApi<A> {
         if let Some(until_slot_start) = until_slot_start {
             info!("waiting until slot start t=0: {} ms", until_slot_start.as_millis());
             sleep(until_slot_start).await;
-        } else if let Some(since_slot_start) = since_slot_start &&
-            since_slot_start.as_millis() > GET_PAYLOAD_REQUEST_CUTOFF_MS as u128
+        } else if let Some(since_slot_start) = since_slot_start
+            && since_slot_start.as_millis() > GET_PAYLOAD_REQUEST_CUTOFF_MS as u128
         {
             return Err(ProposerApiError::GetPayloadRequestTooLate {
                 cutoff: GET_PAYLOAD_REQUEST_CUTOFF_MS as u64,

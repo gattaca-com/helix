@@ -132,30 +132,6 @@ impl ExecutionPayload {
         self.withdrawals.tree_hash_root()
     }
 
-    pub fn to_lighthouse_electra_payload(
-        &self,
-    ) -> Result<lh_types::ExecutionPayloadElectra<MainnetEthSpec>, SszError> {
-        Ok(lh_types::ExecutionPayloadElectra {
-            parent_hash: self.parent_hash.into(),
-            fee_recipient: self.fee_recipient,
-            state_root: self.state_root,
-            receipts_root: self.receipts_root,
-            logs_bloom: convert_bloom_to_lighthouse(&self.logs_bloom),
-            prev_randao: self.prev_randao,
-            block_number: self.block_number,
-            gas_limit: self.gas_limit,
-            gas_used: self.gas_used,
-            timestamp: self.timestamp,
-            extra_data: self.extra_data.to_ssz_type()?,
-            base_fee_per_gas: self.base_fee_per_gas,
-            block_hash: self.block_hash.into(),
-            transactions: convert_transactions_to_lighthouse(&self.transactions)?,
-            withdrawals: self.withdrawals.clone(),
-            blob_gas_used: self.blob_gas_used,
-            excess_blob_gas: self.excess_blob_gas,
-        })
-    }
-
     pub fn to_lighthouse_fulu_payload(
         &self,
     ) -> Result<lh_types::ExecutionPayloadFulu<MainnetEthSpec>, SszError> {
@@ -179,51 +155,18 @@ impl ExecutionPayload {
             excess_blob_gas: self.excess_blob_gas,
         })
     }
-
-    // only used for testing
-    pub fn from_lighthouse_electra_payload_unsafe(
-        value: lh_types::ExecutionPayloadElectra<MainnetEthSpec>,
-    ) -> Self {
-        let bloom: [u8; 256] = value.logs_bloom.to_vec().try_into().unwrap();
-        Self {
-            parent_hash: value.parent_hash.0,
-            fee_recipient: value.fee_recipient,
-            state_root: value.state_root,
-            receipts_root: value.receipts_root,
-            logs_bloom: Bloom::from(bloom),
-            prev_randao: value.prev_randao,
-            block_number: value.block_number,
-            gas_limit: value.gas_limit,
-            gas_used: value.gas_used,
-            timestamp: value.timestamp,
-            extra_data: ExtraData(value.extra_data.to_vec().into()),
-            base_fee_per_gas: value.base_fee_per_gas,
-            block_hash: value.block_hash.0,
-            transactions: Transactions::new(
-                value
-                    .transactions
-                    .into_iter()
-                    .map(|t| crate::Transaction(t.to_vec().into()))
-                    .collect(),
-            )
-            .unwrap(),
-            withdrawals: value.withdrawals,
-            blob_gas_used: value.blob_gas_used,
-            excess_blob_gas: value.excess_blob_gas,
-        }
-    }
 }
 
 impl ForkVersionDecode for ExecutionPayload {
     /// SSZ decode with explicit fork variant.
     fn from_ssz_bytes_by_fork(bytes: &[u8], fork_name: ForkName) -> Result<Self, ssz::DecodeError> {
         let builder_bid = match fork_name {
-            ForkName::Altair |
-            ForkName::Base |
-            ForkName::Bellatrix |
-            ForkName::Capella |
-            ForkName::Deneb |
-            ForkName::Gloas => {
+            ForkName::Altair
+            | ForkName::Base
+            | ForkName::Bellatrix
+            | ForkName::Capella
+            | ForkName::Deneb
+            | ForkName::Gloas => {
                 return Err(ssz::DecodeError::BytesInvalid(format!(
                     "unsupported fork for ExecutionPayloadHeader: {fork_name}",
                 )));
@@ -277,30 +220,6 @@ impl ExecutionPayloadHeader {
         }
 
         Ok(())
-    }
-
-    pub fn to_lighthouse_electra_header(
-        &self,
-    ) -> Result<lh_types::ExecutionPayloadHeaderElectra<MainnetEthSpec>, SszError> {
-        Ok(lh_types::ExecutionPayloadHeaderElectra {
-            parent_hash: self.parent_hash.into(),
-            fee_recipient: self.fee_recipient,
-            state_root: self.state_root,
-            receipts_root: self.receipts_root,
-            logs_bloom: convert_bloom_to_lighthouse(&self.logs_bloom),
-            prev_randao: self.prev_randao,
-            block_number: self.block_number,
-            gas_limit: self.gas_limit,
-            gas_used: self.gas_used,
-            timestamp: self.timestamp,
-            extra_data: self.extra_data.to_ssz_type()?,
-            base_fee_per_gas: self.base_fee_per_gas,
-            block_hash: self.block_hash.into(),
-            transactions_root: self.transactions_root,
-            withdrawals_root: self.withdrawals_root,
-            blob_gas_used: self.blob_gas_used,
-            excess_blob_gas: self.excess_blob_gas,
-        })
     }
 
     pub fn to_lighthouse_fulu_header(
@@ -389,7 +308,6 @@ mod tests {
 
     #[test]
     fn test_execution_payload() {
-        test_execution_payload_variant(ForkName::Electra);
         test_execution_payload_variant(ForkName::Fulu);
     }
 
@@ -411,7 +329,6 @@ mod tests {
 
     #[test]
     fn test_execution_payload_header() {
-        test_execution_payload_header_variant(ForkName::Electra);
         test_execution_payload_header_variant(ForkName::Fulu);
     }
 
@@ -434,13 +351,13 @@ mod tests {
     #[test]
     fn test_payload_to_header_conversion() {
         type LhExecutionPayload = lh_types::ExecutionPayload<MainnetEthSpec>;
-        type LhExecutionPayloadHeader = lh_types::ExecutionPayloadHeaderElectra<MainnetEthSpec>;
+        type LhExecutionPayloadHeader = lh_types::ExecutionPayloadHeaderFulu<MainnetEthSpec>;
 
         let our_payload = ExecutionPayload::test_random();
         let ssz_bytes = our_payload.as_ssz_bytes();
         let lh_decode =
-            LhExecutionPayload::from_ssz_bytes_by_fork(&ssz_bytes, ForkName::Electra).unwrap();
-        let lh_decode = lh_decode.as_electra().unwrap();
+            LhExecutionPayload::from_ssz_bytes_by_fork(&ssz_bytes, ForkName::Fulu).unwrap();
+        let lh_decode = lh_decode.as_fulu().unwrap();
 
         let header = our_payload.to_header(None, None);
         let lh_header = LhExecutionPayloadHeader::from(lh_decode);

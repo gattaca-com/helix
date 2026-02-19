@@ -456,14 +456,13 @@ mod tests {
 
     #[test]
     fn test_payload_and_blobs_equivalence() {
-        let data_json = include_str!("testdata/signed-bid-submission-electra.json");
+        let data_json = include_str!("testdata/signed-bid-submission-fulu.json");
         let signed_bid = test_encode_decode_json::<SignedBidSubmission>(data_json);
         let ex = signed_bid.payload_and_blobs();
 
         let data_ssz = ex.as_ssz_bytes();
 
-        let ex_test =
-            PayloadAndBlobs::from_ssz_bytes_by_fork(&data_ssz, ForkName::Electra).unwrap();
+        let ex_test = PayloadAndBlobs::from_ssz_bytes_by_fork(&data_ssz, ForkName::Fulu).unwrap();
 
         assert_eq!(ex, ex_test)
     }

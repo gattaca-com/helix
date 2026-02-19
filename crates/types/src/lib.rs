@@ -56,15 +56,10 @@ pub type BlobsBundle = crate::blobs::BlobsBundle;
 // Publish block
 pub type VersionedSignedProposal = SignedBlockContents;
 pub type SignedBeaconBlock = lh_types::signed_beacon_block::SignedBeaconBlock<MainnetEthSpec>;
-pub type SignedBeaconBlockElectra =
-    lh_types::signed_beacon_block::SignedBeaconBlockElectra<MainnetEthSpec>;
 pub type SignedBeaconBlockFulu =
     lh_types::signed_beacon_block::SignedBeaconBlockFulu<MainnetEthSpec>;
 
 // Beacon block
-pub type BeaconBlockElectra = lh_types::beacon_block::BeaconBlockElectra<MainnetEthSpec>;
-pub type BeaconBlockBodyElectra =
-    lh_types::beacon_block_body::BeaconBlockBodyElectra<MainnetEthSpec>;
 pub type BeaconBlockFulu = lh_types::beacon_block::BeaconBlockFulu<MainnetEthSpec>;
 pub type BeaconBlockBodyFulu = lh_types::beacon_block_body::BeaconBlockBodyFulu<MainnetEthSpec>;
 
@@ -77,11 +72,8 @@ pub type GetHeaderResponse = lh_types::ForkVersionedResponse<SignedBuilderBid>;
 /// Request object of POST `/eth/v1/builder/blinded_blocks`
 pub type SignedBlindedBeaconBlock =
     lh_types::signed_beacon_block::SignedBlindedBeaconBlock<MainnetEthSpec>; // TODO: maybe re implement this to avoid trait
-pub type SignedBlindedBeaconBlockElectra =
-    lh_types::signed_beacon_block::SignedBeaconBlockElectra<MainnetEthSpec, BlindedPayload>;
 pub type SignedBlindedBeaconBlockFulu =
     lh_types::signed_beacon_block::SignedBeaconBlockFulu<MainnetEthSpec, BlindedPayload>;
-pub type BlindedPayloadElectra = lh_types::payload::BlindedPayloadElectra<MainnetEthSpec>;
 pub type BlindedPayload = lh_types::payload::BlindedPayload<MainnetEthSpec>;
 pub type BlindedPayloadRef<'a> = lh_types::payload::BlindedPayloadRef<'a, MainnetEthSpec>;
 
