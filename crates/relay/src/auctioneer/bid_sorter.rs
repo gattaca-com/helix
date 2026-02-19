@@ -129,13 +129,13 @@ impl ForkState {
         if let Some(trace) = trace {
             if is_optimistic {
                 // this is our "tick to trade" but may be confounded if builder is sending slowly
-                record_submission_step_ns("recv_top_bid", trace.receive, now_ns);
-                record_submission_step_ns("read_body_top_bid", trace.read_body, now_ns);
-                record_submission_step_ns("decode_top_bid", trace.decoded, now_ns);
+                record_submission_step_ns("recv_top_bid", trace.receive_ns, now_ns);
+                record_submission_step_ns("read_body_top_bid", trace.read_body_ns, now_ns);
+                record_submission_step_ns("decode_top_bid", trace.decoded_ns, now_ns);
             } else {
-                record_submission_step_ns("recv_top_bid_slow", trace.receive, now_ns);
-                record_submission_step_ns("read_body_top_bid_slow", trace.read_body, now_ns);
-                record_submission_step_ns("decode_top_bid_slow", trace.decoded, now_ns);
+                record_submission_step_ns("recv_top_bid_slow", trace.receive_ns, now_ns);
+                record_submission_step_ns("read_body_top_bid_slow", trace.read_body_ns, now_ns);
+                record_submission_step_ns("decode_top_bid_slow", trace.decoded_ns, now_ns);
             }
         }
 

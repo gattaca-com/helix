@@ -7,7 +7,7 @@ use flux_network::{
     Token,
     tcp::{PollEvent, SendBehavior, TcpConnector, TcpTelemetry},
 };
-use helix_common::{SubmissionTrace, utils::utcnow_ns};
+use helix_common::{SubmissionTrace, metrics::SUB_CLIENT_TO_SERVER_LATENCY, utils::utcnow_ns};
 use helix_tcp_types::BidSubmission;
 use helix_types::BlsPublicKeyBytes;
 use ssz::{Decode, Encode};
@@ -85,9 +85,8 @@ impl BidSubmissionTcpListener {
         auctioneer_handle: &AuctioneerHandle,
         bid: BidSubmission,
         expected_pubkey: BlsPublicKeyBytes,
+        trace: SubmissionTrace,
     ) -> Result<(), BidSubmissionError> {
-        let now = utcnow_ns();
-        let trace = SubmissionTrace { receive: now, read_body: now, ..Default::default() };
         let header = InternalBidSubmissionHeader::from_tcp_header(submission_ref.id, bid.header);
 
         auctioneer_handle
@@ -116,7 +115,7 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                 tracing::trace!("disconnected from peer with token {:?}", token);
                 self.registered.remove(&token);
             }
-            PollEvent::Message { token, payload, .. } => {
+            PollEvent::Message { token, payload, send_ts } => {
                 if let Some(expected_pubkey) = self.registered.get(&token) {
                     match BidSubmission::try_from(payload).map_err(BidSubmissionError::from) {
                         Ok(bid) => {
@@ -125,12 +124,21 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                                 token,
                                 seq_num: bid.header.sequence_number,
                             };
+
+                            let now = utcnow_ns();
+                            SUB_CLIENT_TO_SERVER_LATENCY.with_label_values(&["tcp"]).observe(
+                                ((now - send_ts.0) / 1000) as f64
+                            );
+
+                            let trace = SubmissionTrace { receive_ns: now, read_body_ns: now, ..Default::default() };
+
                             if let Err(e) = Self::accept_bid_submission(
                                 submission_ref,
                                 self.tx.clone(),
                                 &self.auctioneer_handle,
                                 bid,
                                 *expected_pubkey,
+                                trace,
                             ) {
                                 tracing::error!(err=%e, id=%submission_ref.id, "failed to send bid submission to worker");
                                 self.submission_errors.push((

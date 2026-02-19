@@ -8,11 +8,11 @@ use crate::{RequestTimings, metrics::SUB_TRACE_LATENCY, utils::utcnow_ns};
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SubmissionTrace {
     // first packet
-    pub receive: u64,
+    pub receive_ns: u64,
     // when body finished being read
-    pub read_body: u64,
+    pub read_body_ns: u64,
     // when body finished being decoded
-    pub decoded: u64,
+    pub decoded_ns: u64,
     pub metadata: Option<String>,
 }
 
@@ -20,7 +20,7 @@ impl SubmissionTrace {
     pub fn init_from_timings(timings: RequestTimings) -> Self {
         let read_body = timings.stats.finish_ns.load(Ordering::Relaxed);
         record_submission_step_ns("start_handler", read_body, utcnow_ns());
-        Self { receive: timings.on_receive_ns, read_body, ..Default::default() }
+        Self { receive_ns: timings.on_receive_ns, read_body_ns: read_body, ..Default::default() }
     }
 }
 
