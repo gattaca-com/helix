@@ -197,6 +197,7 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
         for (submission_ref, result) in self.rx.try_iter() {
             if let Some(r) = submission_ref {
                 let response = response_from_builder_api_error(r.seq_num, r.id, &result);
+                tracing::trace!("submission result: {:?}", response);
                 self.listener.write_or_enqueue_with(SendBehavior::Single(r.token), |buffer| {
                     response.ssz_append(buffer);
                 });
