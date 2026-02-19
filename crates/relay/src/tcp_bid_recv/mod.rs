@@ -127,7 +127,7 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
 
                             let now = utcnow_ns();
                             SUB_CLIENT_TO_SERVER_LATENCY.with_label_values(&["tcp"]).observe(
-                                ((now - send_ts.0) / 1000) as f64
+                                (now.saturating_sub(send_ts.0) / 1000) as f64
                             );
 
                             let trace = SubmissionTrace { receive_ns: now, read_body_ns: now, ..Default::default() };

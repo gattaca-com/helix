@@ -75,7 +75,7 @@ fn observe_client_to_server_latency(headers: &HeaderMap, receive_ns: u64) {
         if let Some(send_ts) = send_ts.to_str().ok().and_then(Nanos::from_rfc3339) {
             SUB_CLIENT_TO_SERVER_LATENCY
                 .with_label_values(&["http"])
-                .observe(((receive_ns - send_ts.0) / 1000) as f64);
+                .observe((receive_ns.saturating_sub(send_ts.0) / 1000) as f64);
         }
     }
 }
