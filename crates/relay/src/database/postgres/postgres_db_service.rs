@@ -560,7 +560,7 @@ impl PostgresDatabaseService {
                     value: PostgresNumeric::from(*item.submission.value()),
                     num_txs: item.submission.num_txs() as i32,
                     timestamp: item.submission.timestamp() as i64,
-                    first_seen: item.trace.receive as i64,
+                    first_seen: item.trace.receive_ns as i64,
                     region_id: self.region,
                     optimistic_version: item.optimistic_version as i16,
                     metadata: item.trace.metadata.as_deref(),
