@@ -523,8 +523,10 @@ pub enum Route {
     GetPayload,
     GetPayloadV2,
     ProposerPayloadDelivered,
+    ProposerPayloadDeliveredV2,
     ProposerHeaderDelivered,
     BuilderBidsReceived,
+    BuilderBidsReceivedV2,
     ValidatorRegistration,
     GetInclusionList,
     RelayNetwork,
@@ -547,10 +549,16 @@ impl Route {
             Route::ProposerPayloadDelivered => {
                 format!("{PATH_DATA_API}{PATH_PROPOSER_PAYLOAD_DELIVERED}")
             }
+            Route::ProposerPayloadDeliveredV2 => {
+                format!("{PATH_DATA_API_V2}{PATH_PROPOSER_PAYLOAD_DELIVERED}")
+            }
             Route::ProposerHeaderDelivered => {
                 format!("{PATH_DATA_API}{PATH_PROPOSER_HEADER_DELIVERED}")
             }
             Route::BuilderBidsReceived => format!("{PATH_DATA_API}{PATH_BUILDER_BIDS_RECEIVED}"),
+            Route::BuilderBidsReceivedV2 => {
+                format!("{PATH_DATA_API_V2}{PATH_BUILDER_BIDS_RECEIVED}")
+            }
             Route::ValidatorRegistration => format!("{PATH_DATA_API}{PATH_VALIDATOR_REGISTRATION}"),
             Route::DataAdjustments => format!("{PATH_DATA_API}{PATH_DATA_ADJUSTMENTS}"),
             Route::MergedBlocks => format!("{PATH_DATA_API}{PATH_MERGED_BLOCKS}"),

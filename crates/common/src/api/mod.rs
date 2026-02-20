@@ -20,6 +20,7 @@ pub const PATH_GET_HEADER: &str = "/header/{slot}/{parent_hash}/{pubkey}";
 pub const PATH_GET_PAYLOAD: &str = "/blinded_blocks";
 
 pub const PATH_DATA_API: &str = "/relay/v1/data";
+pub const PATH_DATA_API_V2: &str = "/relay/v2/data";
 
 pub const PATH_PROPOSER_PAYLOAD_DELIVERED: &str = "/bidtraces/proposer_payload_delivered";
 pub const PATH_PROPOSER_HEADER_DELIVERED: &str = "/bidtraces/proposer_header_delivered";
