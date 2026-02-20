@@ -259,8 +259,7 @@ fn gzip_size_hint(buf: &[u8]) -> Option<usize> {
 mod tests {
     use alloy_primitives::hex::FromHex;
     use helix_types::{
-        MergeType, SignedBidSubmission, SignedBidSubmissionElectra,
-        SignedBidSubmissionWithMergingData, TestRandomSeed,
+        MergeType, SignedBidSubmission, SignedBidSubmissionWithMergingData, TestRandomSeed,
     };
     use ssz::Encode;
 
@@ -268,10 +267,10 @@ mod tests {
 
     #[test]
     fn test_get_builder_pubkey() {
-        let expected = BlsPublicKeyBytes::from_hex("0xa1885d66bef164889a2e35845c3b626545d7b0e513efe335e97c3a45e534013fa3bc38c3b7e6143695aecc4872ac52c4").unwrap();
+        let expected = BlsPublicKeyBytes::from_hex("0x81f8ed149a60b16f4b22ba759f0a5420caa753768341bb41b27c15eb9b219afa5494f7d7b72d18c1a1b2904c66d2a30c").unwrap();
 
         let data_json =
-            include_bytes!("../../../types/src/testdata/signed-bid-submission-electra-2.json");
+            include_bytes!("../../../types/src/testdata/signed-bid-submission-fulu-2.json");
         let decoder = SubmissionDecoder {
             compression: Compression::Gzip,
             encoding: Encoding::Json,
@@ -285,8 +284,7 @@ mod tests {
         let pubkey = decoder.extract_builder_pubkey(data_json, false).unwrap();
         assert_eq!(pubkey, expected);
 
-        let data_ssz =
-            include_bytes!("../../../types/src/testdata/signed-bid-submission-electra-2.bin");
+        let data_ssz = include_bytes!("../../../types/src/testdata/signed-bid-submission-fulu.ssz");
         let decoder = SubmissionDecoder {
             compression: Compression::Gzip,
             encoding: Encoding::Ssz,
@@ -303,8 +301,7 @@ mod tests {
 
     #[test]
     fn test_get_builder_pubkey_merging() {
-        let sub = SignedBidSubmissionElectra::test_random();
-        let sub = SignedBidSubmission::Electra(sub);
+        let sub = SignedBidSubmission::test_random();
         let sub = SignedBidSubmissionWithMergingData {
             submission: sub,
             merging_data: Default::default(),

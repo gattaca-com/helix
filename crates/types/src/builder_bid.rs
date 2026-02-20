@@ -51,7 +51,6 @@ mod tests {
 
     #[test]
     fn test_execution_payload_header() {
-        test_execution_payload_header_variant(ForkName::Electra);
         test_execution_payload_header_variant(ForkName::Fulu);
     }
 
