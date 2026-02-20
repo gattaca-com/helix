@@ -42,10 +42,10 @@ ethers = "2.0.14"
 eyre = "0.6.12"
 flate2 = "1.0"
 
-flux = { git = "https://github.com/gattaca-com/flux", rev = "d230eeb8a47ebdaeebe48b63b899ea364ec3276e"}
-flux-network = { package = "flux-network", git = "https://github.com/gattaca-com/flux", rev = "d230eeb8a47ebdaeebe48b63b899ea364ec3276e"}
-flux-type-hash = { package = "type-hash", git = "https://github.com/gattaca-com/flux", rev = "d230eeb8a47ebdaeebe48b63b899ea364ec3276e"}
-flux-type-hash-derive = { package = "type-hash-derive", git = "https://github.com/gattaca-com/flux", rev = "d230eeb8a47ebdaeebe48b63b899ea364ec3276e"}
+flux = { git = "https://github.com/gattaca-com/flux", rev = "28d290c02c4e91aba3cc5283c26ea750faac8954"}
+flux-network = { package = "flux-network", git = "https://github.com/gattaca-com/flux", rev = "28d290c02c4e91aba3cc5283c26ea750faac8954"}
+flux-type-hash = { package = "type-hash", git = "https://github.com/gattaca-com/flux", rev = "28d290c02c4e91aba3cc5283c26ea750faac8954"}
+flux-type-hash-derive = { package = "type-hash-derive", git = "https://github.com/gattaca-com/flux", rev = "28d290c02c4e91aba3cc5283c26ea750faac8954"}
 
 futures = "0.3"
 futures-util = { version = "0.3", features = ["compat"] }
