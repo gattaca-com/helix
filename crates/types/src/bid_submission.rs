@@ -67,7 +67,7 @@ impl BidTrace {
 
 #[derive(Debug, Clone, Serialize, Encode)]
 #[serde(deny_unknown_fields)]
-pub struct SignedBidSubmissionFulu {
+pub struct SignedBidSubmission {
     pub message: BidTrace,
     pub execution_payload: Arc<ExecutionPayload>,
     pub blobs_bundle: Arc<BlobsBundle>,
@@ -75,7 +75,7 @@ pub struct SignedBidSubmissionFulu {
     pub signature: BlsSignatureBytes,
 }
 
-impl TestRandom for SignedBidSubmissionFulu {
+impl TestRandom for SignedBidSubmission {
     fn random_for_test(rng: &mut impl rand::RngCore) -> Self {
         Self {
             message: BidTrace::random_for_test(rng),
@@ -87,7 +87,7 @@ impl TestRandom for SignedBidSubmissionFulu {
     }
 }
 
-impl<'de> Deserialize<'de> for SignedBidSubmissionFulu {
+impl<'de> Deserialize<'de> for SignedBidSubmission {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -112,7 +112,7 @@ impl<'de> Deserialize<'de> for SignedBidSubmissionFulu {
     }
 }
 
-impl Decode for SignedBidSubmissionFulu {
+impl Decode for SignedBidSubmission {
     fn is_ssz_fixed_len() -> bool {
         false
     }
@@ -145,48 +145,26 @@ impl Decode for SignedBidSubmissionFulu {
     }
 }
 
-/// Request object of POST `/relay/v1/builder/blocks`
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
-#[ssz(enum_behaviour = "transparent")]
-#[serde(untagged)]
-pub enum SignedBidSubmission {
-    Fulu(SignedBidSubmissionFulu),
-}
-
-impl From<SignedBidSubmissionFulu> for SignedBidSubmission {
-    fn from(value: SignedBidSubmissionFulu) -> Self {
-        SignedBidSubmission::Fulu(value)
-    }
-}
-
 impl SignedBidSubmission {
     pub fn validate_payload_ssz_lengths(
         &self,
         max_blobs_per_block: usize,
     ) -> Result<(), BlockValidationError> {
-        match self {
-            SignedBidSubmission::Fulu(bid) => {
-                bid.execution_payload.validate_ssz_lengths()?;
-                bid.blobs_bundle.validate_ssz_lengths(max_blobs_per_block)?;
-            }
-        }
+        self.execution_payload.validate_ssz_lengths()?;
+        self.blobs_bundle.validate_ssz_lengths(max_blobs_per_block)?;
 
         Ok(())
     }
 
     pub fn verify_signature(&self, builder_domain: B256) -> Result<(), SigError> {
-        let valid = match self {
-            SignedBidSubmission::Fulu(bid) => {
-                let uncompressed_builder_pubkey =
-                    BlsPublicKey::deserialize(bid.message.builder_pubkey.as_slice())
-                        .map_err(|_| SigError::InvalidBlsPubkeyBytes)?;
-                let uncompressed_signature = BlsSignature::deserialize(bid.signature.as_slice())
-                    .map_err(|_| SigError::InvalidBlsSignatureBytes)?;
+        let uncompressed_builder_pubkey =
+            BlsPublicKey::deserialize(self.message.builder_pubkey.as_slice())
+                .map_err(|_| SigError::InvalidBlsPubkeyBytes)?;
+        let uncompressed_signature = BlsSignature::deserialize(self.signature.as_slice())
+            .map_err(|_| SigError::InvalidBlsSignatureBytes)?;
 
-                let message = bid.message.signing_root(builder_domain);
-                uncompressed_signature.verify(&uncompressed_builder_pubkey, message)
-            }
-        };
+        let message = self.message.signing_root(builder_domain);
+        let valid = uncompressed_signature.verify(&uncompressed_builder_pubkey, message);
 
         if !valid {
             return Err(SigError::InvalidBlsSignature);
@@ -196,232 +174,140 @@ impl SignedBidSubmission {
     }
 
     pub fn num_txs(&self) -> usize {
-        match self {
-            SignedBidSubmission::Fulu(signed_bid_submission) => {
-                signed_bid_submission.execution_payload.transactions.len()
-            }
-        }
+        self.execution_payload.transactions.len()
     }
 
     pub fn blobs_bundle(&self) -> Arc<BlobsBundle> {
-        match self {
-            SignedBidSubmission::Fulu(signed_bid_submission) => {
-                signed_bid_submission.blobs_bundle.clone()
-            }
-        }
+        self.blobs_bundle.clone()
     }
 
     pub fn message(&self) -> &BidTrace {
-        match self {
-            SignedBidSubmission::Fulu(signed_bid_submission) => &signed_bid_submission.message,
-        }
+        &self.message
     }
 
     pub fn message_mut(&mut self) -> &mut BidTrace {
-        match self {
-            SignedBidSubmission::Fulu(signed_bid_submission) => &mut signed_bid_submission.message,
-        }
+        &mut self.message
     }
 
     pub fn execution_payload_ref(&self) -> &ExecutionPayload {
-        match self {
-            SignedBidSubmission::Fulu(signed_bid_submission) => {
-                &signed_bid_submission.execution_payload
-            }
-        }
+        &self.execution_payload
     }
 
     pub fn execution_payload_make_mut(&mut self) -> &mut ExecutionPayload {
-        match self {
-            SignedBidSubmission::Fulu(signed_bid_submission) => {
-                Arc::make_mut(&mut signed_bid_submission.execution_payload)
-            }
-        }
+        Arc::make_mut(&mut self.execution_payload)
+    }
+
+    pub fn execution_payload_mut(&mut self) -> &mut ExecutionPayload {
+        self.execution_payload_make_mut()
     }
 
     pub fn payload_and_blobs(&self) -> PayloadAndBlobs {
-        match self {
-            SignedBidSubmission::Fulu(sub) => PayloadAndBlobs {
-                execution_payload: sub.execution_payload.clone(),
-                blobs_bundle: sub.blobs_bundle.clone(),
-            },
+        PayloadAndBlobs {
+            execution_payload: self.execution_payload.clone(),
+            blobs_bundle: self.blobs_bundle.clone(),
         }
     }
 
     pub fn execution_requests_ref(&self) -> &Arc<ExecutionRequests> {
-        match self {
-            SignedBidSubmission::Fulu(signed_bid_submission) => {
-                &signed_bid_submission.execution_requests
-            }
-        }
+        &self.execution_requests
     }
 }
 
 impl SignedBidSubmission {
     pub fn bid_trace(&self) -> &BidTrace {
-        match self {
-            SignedBidSubmission::Fulu(signed_bid_submission) => &signed_bid_submission.message,
-        }
+        &self.message
     }
 
     pub fn signature(&self) -> &BlsSignatureBytes {
-        match self {
-            SignedBidSubmission::Fulu(signed_bid_submission) => &signed_bid_submission.signature,
-        }
+        &self.signature
     }
 
     pub fn set_signature(&mut self, signature: BlsSignatureBytes) {
-        match self {
-            SignedBidSubmission::Fulu(signed_bid_submission) => {
-                signed_bid_submission.signature = signature;
-            }
-        }
+        self.signature = signature;
     }
 
     pub fn slot(&self) -> Slot {
-        match self {
-            SignedBidSubmission::Fulu(signed_bid_submission) => {
-                signed_bid_submission.message.slot()
-            }
-        }
+        self.message.slot()
     }
 
     pub fn parent_hash(&self) -> &B256 {
-        match self {
-            SignedBidSubmission::Fulu(signed_bid_submission) => {
-                &signed_bid_submission.message.parent_hash
-            }
-        }
+        &self.message.parent_hash
     }
 
     pub fn block_hash(&self) -> &B256 {
-        match self {
-            SignedBidSubmission::Fulu(signed_bid_submission) => {
-                &signed_bid_submission.message.block_hash
-            }
-        }
+        &self.message.block_hash
     }
 
     pub fn builder_public_key(&self) -> &BlsPublicKeyBytes {
-        match self {
-            SignedBidSubmission::Fulu(signed_bid_submission) => {
-                &signed_bid_submission.message.builder_pubkey
-            }
-        }
+        &self.message.builder_pubkey
     }
 
     pub fn set_builder_public_key(&mut self, builder_pubkey: BlsPublicKeyBytes) {
-        match self {
-            SignedBidSubmission::Fulu(signed_bid_submission) => {
-                signed_bid_submission.message.builder_pubkey = builder_pubkey;
-            }
-        }
+        self.message.builder_pubkey = builder_pubkey;
     }
 
     pub fn proposer_public_key(&self) -> &BlsPublicKeyBytes {
-        match self {
-            SignedBidSubmission::Fulu(signed_bid_submission) => {
-                &signed_bid_submission.message.proposer_pubkey
-            }
-        }
+        &self.message.proposer_pubkey
     }
 
     pub fn proposer_fee_recipient(&self) -> &Address {
-        match self {
-            SignedBidSubmission::Fulu(signed_bid_submission) => {
-                &signed_bid_submission.message.proposer_fee_recipient
-            }
-        }
+        &self.message.proposer_fee_recipient
     }
 
     pub fn gas_limit(&self) -> u64 {
-        match self {
-            SignedBidSubmission::Fulu(signed_bid_submission) => {
-                signed_bid_submission.message.gas_limit
-            }
-        }
+        self.message.gas_limit
     }
 
     pub fn gas_used(&self) -> u64 {
-        match self {
-            SignedBidSubmission::Fulu(signed_bid_submission) => {
-                signed_bid_submission.message.gas_used
-            }
-        }
+        self.message.gas_used
     }
 
     pub fn value(&self) -> &U256 {
-        match self {
-            SignedBidSubmission::Fulu(signed_bid_submission) => {
-                &signed_bid_submission.message.value
-            }
-        }
+        &self.message.value
     }
 
     pub fn fee_recipient(&self) -> Address {
-        match self {
-            SignedBidSubmission::Fulu(bid) => bid.execution_payload.fee_recipient,
-        }
+        self.execution_payload.fee_recipient
     }
 
     pub fn state_root(&self) -> &B256 {
-        match self {
-            SignedBidSubmission::Fulu(bid) => &bid.execution_payload.state_root,
-        }
+        &self.execution_payload.state_root
     }
 
     pub fn receipts_root(&self) -> &B256 {
-        match self {
-            SignedBidSubmission::Fulu(bid) => &bid.execution_payload.receipts_root,
-        }
+        &self.execution_payload.receipts_root
     }
 
     pub fn logs_bloom(&self) -> &Bloom {
-        match self {
-            SignedBidSubmission::Fulu(bid) => &bid.execution_payload.logs_bloom,
-        }
+        &self.execution_payload.logs_bloom
     }
 
     pub fn prev_randao(&self) -> &B256 {
-        match self {
-            SignedBidSubmission::Fulu(bid) => &bid.execution_payload.prev_randao,
-        }
+        &self.execution_payload.prev_randao
     }
 
     pub fn block_number(&self) -> u64 {
-        match self {
-            SignedBidSubmission::Fulu(bid) => bid.execution_payload.block_number,
-        }
+        self.execution_payload.block_number
     }
 
     pub fn timestamp(&self) -> u64 {
-        match self {
-            SignedBidSubmission::Fulu(bid) => bid.execution_payload.timestamp,
-        }
+        self.execution_payload.timestamp
     }
 
     pub fn extra_data(&self) -> &ExtraData {
-        match self {
-            SignedBidSubmission::Fulu(bid) => &bid.execution_payload.extra_data,
-        }
+        &self.execution_payload.extra_data
     }
 
     pub fn base_fee_per_gas(&self) -> U256 {
-        match self {
-            SignedBidSubmission::Fulu(bid) => bid.execution_payload.base_fee_per_gas,
-        }
+        self.execution_payload.base_fee_per_gas
     }
 
     pub fn withdrawals_root(&self) -> B256 {
-        match self {
-            SignedBidSubmission::Fulu(bid) => bid.execution_payload.withdrawals.tree_hash_root(),
-        }
+        self.execution_payload.withdrawals.tree_hash_root()
     }
 
     pub fn transactions_root(&self) -> B256 {
-        match self {
-            SignedBidSubmission::Fulu(bid) => bid.execution_payload.transaction_root(),
-        }
+        self.execution_payload.transaction_root()
     }
 
     pub fn validate(&self) -> Result<(), super::BlockValidationError> {
@@ -464,20 +350,16 @@ impl SignedBidSubmission {
     }
 
     pub fn fork_name(&self) -> ForkName {
-        match self {
-            SignedBidSubmission::Fulu(_) => ForkName::Fulu,
-        }
+        ForkName::Fulu
     }
 
     pub fn maybe_upgrade_to_fulu(self, _current_fork: ForkName) -> SignedBidSubmission {
-        match self {
-            SignedBidSubmission::Fulu(fulu) => SignedBidSubmission::Fulu(fulu),
-        }
+        self
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
-pub struct SignedBidSubmissionFuluWithAdjustments {
+pub struct SignedBidSubmissionWithAdjustments {
     pub message: BidTrace,
     pub execution_payload: Arc<ExecutionPayload>,
     pub blobs_bundle: Arc<BlobsBundle>,
@@ -486,16 +368,16 @@ pub struct SignedBidSubmissionFuluWithAdjustments {
     pub bid_adjustment_data: BidAdjustmentData,
 }
 
-impl SignedBidSubmissionFuluWithAdjustments {
+impl SignedBidSubmissionWithAdjustments {
     pub fn split(self) -> (SignedBidSubmission, BidAdjustmentData) {
         (
-            SignedBidSubmission::Fulu(SignedBidSubmissionFulu {
+            SignedBidSubmission {
                 message: self.message,
                 execution_payload: self.execution_payload,
                 blobs_bundle: self.blobs_bundle,
                 execution_requests: self.execution_requests,
                 signature: self.signature,
-            }),
+            },
             self.bid_adjustment_data,
         )
     }
@@ -617,10 +499,7 @@ mod tests {
     fn fulu_bid_submission() {
         let data_json = include_str!("testdata/signed-bid-submission-fulu.json");
         let s = test_encode_decode_json::<SignedBidSubmission>(data_json);
-        match &s {
-            SignedBidSubmission::Fulu(_) => println!("Got Fulu variant for JSON (wrong!)"),
-        }
-        assert!(matches!(s, SignedBidSubmission::Fulu(_)));
+        assert_eq!(s.fork_name(), ForkName::Fulu);
     }
 
     #[test]
@@ -629,46 +508,32 @@ mod tests {
         let data_json = include_str!("testdata/signed-bid-submission-fulu-2.json");
         let s = test_decode_json::<SignedBidSubmission>(data_json);
 
-        let blobs_empty = match &s {
-            SignedBidSubmission::Fulu(fulu) => fulu.blobs_bundle.blobs().is_empty(),
-        };
+        let blobs_empty = s.blobs_bundle().blobs().is_empty();
 
         if blobs_empty {
             // When blobs are empty, we can't distinguish variants reliably
             let s = s.maybe_upgrade_to_fulu(ForkName::Fulu);
-            assert!(matches!(s, SignedBidSubmission::Fulu(_)));
+            assert_eq!(s.fork_name(), ForkName::Fulu);
         } else {
-            match &s {
-                SignedBidSubmission::Fulu(_) => {
-                    println!("Got Fulu variant for JSON (may be wrong!)")
-                }
-            }
-            assert!(matches!(s, SignedBidSubmission::Fulu(_)));
+            assert_eq!(s.fork_name(), ForkName::Fulu);
         }
 
         let data_ssz = include_bytes!("testdata/signed-bid-submission-fulu.ssz");
         let mut s = test_encode_decode_ssz::<SignedBidSubmission>(data_ssz);
         if blobs_empty {
             s = s.maybe_upgrade_to_fulu(ForkName::Fulu);
-            assert!(matches!(s, SignedBidSubmission::Fulu(_)));
+            assert_eq!(s.fork_name(), ForkName::Fulu);
         } else {
-            match &s {
-                SignedBidSubmission::Fulu(_) => {
-                    println!("Got Fulu variant for JSON (may be wrong!)")
-                }
-            }
-            assert!(matches!(s, SignedBidSubmission::Fulu(_)));
+            assert_eq!(s.fork_name(), ForkName::Fulu);
         }
         assert_eq!(data_ssz, s.as_ssz_bytes().as_slice());
     }
 
     #[test]
     fn fulu_bid_submission_ssz() {
-        let data_ssz =
-            SignedBidSubmission::Fulu(SignedBidSubmissionFulu::random_for_test(&mut rand::rng()))
-                .as_ssz_bytes();
+        let data_ssz = SignedBidSubmission::random_for_test(&mut rand::rng()).as_ssz_bytes();
         let s = test_encode_decode_ssz::<SignedBidSubmission>(&data_ssz);
-        assert!(matches!(s, SignedBidSubmission::Fulu(_)));
         assert_eq!(data_ssz, s.as_ssz_bytes().as_slice());
+        assert_eq!(s.fork_name(), ForkName::Fulu);
     }
 }

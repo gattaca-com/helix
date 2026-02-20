@@ -14,9 +14,7 @@ fn benchmark_serde(c: &mut Criterion) {
 
     let data_json = include_bytes!("../src/testdata/signed-bid-submission-fulu-2.json");
     let submission: SignedBidSubmission = serde_json::from_slice(data_json).unwrap();
-    let payload = match submission {
-        SignedBidSubmission::Fulu(ref submission) => &submission.execution_payload,
-    };
+    let payload = &submission.execution_payload;
     let lh_payload = payload.to_lighthouse_fulu_payload().unwrap();
     let alloy_payload = AlloyExecutionPayload::from_ssz_bytes(&payload.as_ssz_bytes()).unwrap();
 
@@ -76,9 +74,7 @@ fn benchmark_ssz(c: &mut Criterion) {
 
     let data_json = include_bytes!("../src/testdata/signed-bid-submission-fulu-2.json");
     let submission: SignedBidSubmission = serde_json::from_slice(data_json).unwrap();
-    let payload = match submission {
-        SignedBidSubmission::Fulu(ref submission) => &submission.execution_payload,
-    };
+    let payload = &submission.execution_payload;
     let lh_payload = payload.to_lighthouse_fulu_payload().unwrap();
     let alloy_payload = AlloyExecutionPayload::from_ssz_bytes(&payload.as_ssz_bytes()).unwrap();
 
@@ -133,9 +129,7 @@ fn benchmark_transaction_root(c: &mut Criterion) {
 
     let data_json = include_bytes!("../src/testdata/signed-bid-submission-fulu-2.json");
     let submission: SignedBidSubmission = serde_json::from_slice(data_json).unwrap();
-    let payload = match submission {
-        SignedBidSubmission::Fulu(ref submission) => &submission.execution_payload,
-    };
+    let payload = &submission.execution_payload;
     let lh_payload = payload.to_lighthouse_fulu_payload().unwrap();
 
     group.bench_function("custom_transaction_root", |b| {

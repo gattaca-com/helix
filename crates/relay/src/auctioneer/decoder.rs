@@ -259,8 +259,7 @@ fn gzip_size_hint(buf: &[u8]) -> Option<usize> {
 mod tests {
     use alloy_primitives::hex::FromHex;
     use helix_types::{
-        MergeType, SignedBidSubmission, SignedBidSubmissionFulu,
-        SignedBidSubmissionWithMergingData, TestRandomSeed,
+        MergeType, SignedBidSubmission, SignedBidSubmissionWithMergingData, TestRandomSeed,
     };
     use ssz::Encode;
 
@@ -302,8 +301,7 @@ mod tests {
 
     #[test]
     fn test_get_builder_pubkey_merging() {
-        let sub = SignedBidSubmissionFulu::test_random();
-        let sub = SignedBidSubmission::Fulu(sub);
+        let sub = SignedBidSubmission::test_random();
         let sub = SignedBidSubmissionWithMergingData {
             submission: sub,
             merging_data: Default::default(),

@@ -166,13 +166,13 @@ impl ForkVersionDecode for ExecutionPayload {
             | ForkName::Bellatrix
             | ForkName::Capella
             | ForkName::Deneb
+            | ForkName::Electra
             | ForkName::Gloas => {
                 return Err(ssz::DecodeError::BytesInvalid(format!(
                     "unsupported fork for ExecutionPayloadHeader: {fork_name}",
                 )));
             }
-
-            ForkName::Electra | ForkName::Fulu => ExecutionPayload::from_ssz_bytes(bytes)?,
+            ForkName::Fulu => ExecutionPayload::from_ssz_bytes(bytes)?,
         };
         Ok(builder_bid)
     }

@@ -11,7 +11,7 @@ use tree_hash::TreeHash;
 
 use crate::{
     BidTrace, Blob, BlobsBundle, BlobsBundleV2, BlsPublicKeyBytes, BlsSignatureBytes,
-    ExecutionPayload, SignedBidSubmission, SignedBidSubmissionFulu,
+    ExecutionPayload, SignedBidSubmission,
     bid_adjustment_data::BidAdjustmentData,
     bid_submission,
     fields::{ExecutionRequests, KzgCommitment, KzgProof, Transaction},
@@ -142,8 +142,8 @@ impl ForkVersionDecode for DehydratedBidSubmissionFuluWithAdjustments {
             | ForkName::Capella
             | ForkName::Deneb
             | ForkName::Gloas
-            | ForkName::Electra
-            | ForkName::Fulu => DehydratedBidSubmissionFuluWithAdjustments::from_ssz_bytes(bytes),
+            | ForkName::Electra => Err(DecodeError::NoMatchingVariant),
+            ForkName::Fulu => DehydratedBidSubmissionFuluWithAdjustments::from_ssz_bytes(bytes),
         }
     }
 }
@@ -243,13 +243,13 @@ impl DehydratedBidSubmissionFulu {
 
         blob_cache_hits = blob_cache_hits.saturating_sub(new_blobs);
 
-        let submission = SignedBidSubmission::Fulu(SignedBidSubmissionFulu {
+        let submission = SignedBidSubmission {
             message: self.message,
             execution_payload: Arc::new(self.execution_payload),
             blobs_bundle: Arc::new(BlobsBundle::V2(sidecar)),
             execution_requests: self.execution_requests,
             signature: self.signature,
-        });
+        };
 
         Ok(HydratedData { submission, tx_cache_hits, blob_cache_hits, tx_root: self.tx_root })
     }

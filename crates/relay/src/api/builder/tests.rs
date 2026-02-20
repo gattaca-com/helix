@@ -174,15 +174,11 @@ fn resign_bid_submission(bid: &mut SignedBidSubmission) {
 
     assert_eq!(&kp.public_key(), bid.builder_public_key());
 
-    match bid {
-        SignedBidSubmission::Deneb(ref mut sub) => {
-            let domain = ChainSpec::mainnet().get_builder_domain();
-            let root = sub.message.signing_root(domain);
-            let sig = kp.sign(root);
+    let domain = ChainSpec::mainnet().get_builder_domain();
+    let root = bid.message.signing_root(domain);
+    let sig = kp.sign(root);
 
-            sub.signature = sig;
-        }
-    }
+    bid.signature = sig;
 }
 
 async fn start_api_server() -> (
@@ -368,9 +364,7 @@ async fn test_submit_block_invalid_signature() {
     signed_bid_submission.message_mut().proposer_pubkey =
         get_valid_payload_register_validator(None).entry.registration.message.pubkey;
 
-    match &mut signed_bid_submission {
-        SignedBidSubmission::Deneb(bid) => bid.signature = BlsSignature::test_random(),
-    }
+    signed_bid_submission.signature = BlsSignature::test_random();
 
     // Send JSON encoded request
     let resp =
@@ -746,13 +740,8 @@ async fn test_submit_block_zero_value() {
 
     let mut signed_bid_submission: SignedBidSubmission = load_bid_submission();
 
-    match signed_bid_submission {
-        SignedBidSubmission::Deneb(ref mut deneb_submission) => {
-            deneb_submission.execution_payload.transactions = Default::default();
-            deneb_submission.message.value = U256::ZERO;
-        }
-        _ => panic!("Invalid signed bid submission"),
-    }
+    signed_bid_submission.execution_payload_mut().transactions = Default::default();
+    signed_bid_submission.message.value = U256::ZERO;
 
     resign_bid_submission(&mut signed_bid_submission);
 
