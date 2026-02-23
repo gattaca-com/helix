@@ -15,7 +15,7 @@ use helix_common::{
     utils::{extract_request_id, utcnow_ms, utcnow_ns},
 };
 use helix_types::{BuilderBid, ForkName, GetHeaderResponse, SignedBuilderBid};
-use http::header::CONTENT_TYPE;
+use http::{HeaderValue, header::CONTENT_TYPE};
 use ssz::Encode;
 use tracing::{Instrument, debug, error, info, trace, warn};
 
@@ -178,8 +178,11 @@ impl<A: Api> ProposerApi<A> {
                 let mut response = signed_bid.data.as_ssz_bytes().into_response();
 
                 let headers = response.headers_mut();
-                headers.insert(CONTENT_TYPE, HEADER_SSZ.parse().unwrap());
-                headers.insert(CONSENSUS_VERSION_HEADER, format!("{}", fork).parse().unwrap());
+                headers.insert(CONTENT_TYPE, HeaderValue::from_str(HEADER_SSZ).unwrap());
+                headers.insert(
+                    CONSENSUS_VERSION_HEADER,
+                    HeaderValue::from_str(&fork.to_string()).unwrap(),
+                );
 
                 Ok(response)
             }

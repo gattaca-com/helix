@@ -44,9 +44,8 @@ impl SubmissionType {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub enum Encoding {
-    #[default]
     Json,
     Ssz,
 }

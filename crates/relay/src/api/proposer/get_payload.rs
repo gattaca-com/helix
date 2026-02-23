@@ -1,6 +1,6 @@
 use std::{str::FromStr, sync::Arc, time::Duration};
 
-use alloy_primitives::Address;
+use alloy_primitives::{Address, B256};
 use axum::{Extension, http::HeaderMap, response::IntoResponse};
 use helix_common::{
     Filtering, GetPayloadTrace, RequestTimings,
@@ -13,10 +13,11 @@ use helix_types::{
     BlsPublicKeyBytes, ExecPayload, ForkName, GetPayloadResponse, PayloadAndBlobs,
     SignedBlindedBeaconBlock, SignedBlindedBeaconBlockFulu, Slot, SlotClockTrait,
 };
-use http::{StatusCode, header::CONTENT_TYPE};
+use http::{HeaderValue, StatusCode, header::CONTENT_TYPE};
 use ssz::{Decode, Encode};
 use tokio::time::sleep;
 use tracing::{Instrument, error, info, warn};
+use uuid::Uuid;
 
 use super::ProposerApi;
 use crate::{
@@ -37,7 +38,77 @@ pub enum ProposerApiVersion {
     V2,
 }
 
+struct ParsedGetPayload {
+    signed_blinded_block: SignedBlindedBeaconBlock,
+    fork: ForkName,
+    block_hash: B256,
+    slot: Slot,
+    trace: GetPayloadTrace,
+    user_agent: Option<String>,
+    request_id: Uuid,
+}
+
 impl<A: Api> ProposerApi<A> {
+    fn parse_get_payload_request(
+        &self,
+        timings: RequestTimings,
+        headers: &HeaderMap,
+        body: &bytes::Bytes,
+    ) -> Result<ParsedGetPayload, ProposerApiError> {
+        let request_id = extract_request_id(headers);
+        tracing::Span::current().record("id", request_id.to_string());
+
+        let mut trace = GetPayloadTrace::init_from_timings(timings);
+        let user_agent = self.api_provider.get_metadata(headers);
+
+        let fork: ForkName = match fork_name_from_header(headers) {
+            Ok(Some(fork)) => fork,
+            err => {
+                let curr = self.chain_info.current_fork_name();
+                warn!(?err, "missing {CONSENSUS_VERSION_HEADER} header! using {curr:?}");
+                curr
+            }
+        };
+
+        let encoding = Encoding::from_content_type(headers);
+
+        // TODO: move decoding to worker
+        let signed_blinded_block: SignedBlindedBeaconBlock = match (fork, encoding) {
+            (ForkName::Fulu, Encoding::Json) => {
+                let b: SignedBlindedBeaconBlockFulu = serde_json::from_slice(body)
+                    .inspect_err(|err| warn!(%err, "failed to deserialize signed block"))?;
+                b.into()
+            }
+            (ForkName::Fulu, Encoding::Ssz) => SignedBlindedBeaconBlockFulu::from_ssz_bytes(body)
+                .inspect_err(|err| warn!(?err, "failed to deserialize signed block"))?
+                .into(),
+            (_, _) => return Err(ProposerApiError::InvalidFork),
+        };
+
+        tracing::Span::current().record("slot", signed_blinded_block.slot().as_u64());
+        trace.decode = utcnow_ns();
+
+        let block_hash = signed_blinded_block
+            .message()
+            .body()
+            .execution_payload()
+            .map_err(|_| ProposerApiError::InvalidFork)?
+            .block_hash()
+            .0;
+
+        let slot = signed_blinded_block.message().slot();
+
+        Ok(ParsedGetPayload {
+            signed_blinded_block,
+            fork,
+            block_hash,
+            slot,
+            trace,
+            user_agent,
+            request_id,
+        })
+    }
+
     /// Retrieves the execution payload for a given blinded beacon block.
     ///
     /// This function accepts a `SignedBlindedBeaconBlock` as input and performs several steps:
@@ -56,53 +127,15 @@ impl<A: Api> ProposerApi<A> {
         headers: HeaderMap,
         body: bytes::Bytes,
     ) -> Result<impl IntoResponse, ProposerApiError> {
-        let request_id = extract_request_id(&headers);
-        tracing::Span::current().record("id", request_id.to_string());
-
-        let mut trace = GetPayloadTrace::init_from_timings(timings);
-
-        let user_agent = proposer_api.api_provider.get_metadata(&headers);
-
-        let fork: ForkName = match fork_name_from_header(&headers) {
-            Ok(Some(fork)) => fork,
-            err => {
-                let curr = proposer_api.chain_info.current_fork_name();
-                warn!(?err, "missing {CONSENSUS_VERSION_HEADER} header! using {curr:?}");
-                curr
-            }
-        };
-
-        let encoding = Encoding::from_content_type(&headers);
-
-        // TODO: move decoding to worker
-        let signed_blinded_block: SignedBlindedBeaconBlock = match (fork, encoding) {
-            (ForkName::Fulu, Encoding::Json) => {
-                let signed_blinded_block_fulu: SignedBlindedBeaconBlockFulu =
-                    serde_json::from_slice(&body)
-                        .inspect_err(|err| warn!(%err, "failed to deserialize signed block"))?;
-                signed_blinded_block_fulu.into()
-            }
-            (ForkName::Fulu, Encoding::Ssz) => SignedBlindedBeaconBlockFulu::from_ssz_bytes(&body)
-                .inspect_err(|err| warn!(?err, "failed to deserialize signed block"))?
-                .into(),
-            (_, _) => {
-                return Err(ProposerApiError::InvalidFork);
-            }
-        };
-
-        tracing::Span::current().record("slot", signed_blinded_block.slot().as_u64());
-
-        trace.decode = utcnow_ns();
-
-        let block_hash = signed_blinded_block
-            .message()
-            .body()
-            .execution_payload()
-            .map_err(|_| ProposerApiError::InvalidFork)? // this should never happen as post altair there's always an execution payload
-            .block_hash()
-            .0;
-
-        let slot = signed_blinded_block.message().slot();
+        let ParsedGetPayload {
+            signed_blinded_block,
+            block_hash,
+            fork,
+            slot,
+            mut trace,
+            user_agent,
+            request_id,
+        } = proposer_api.parse_get_payload_request(timings, &headers, &body)?;
 
         let gossiper = proposer_api.gossiper.clone();
         let params = BroadcastGetPayloadParams {
@@ -127,16 +160,17 @@ impl<A: Api> ProposerApi<A> {
                 Encoding::Json => Ok(axum::Json(get_payload_response).into_response()),
                 Encoding::Ssz => {
                     let mut response = get_payload_response.data.as_ssz_bytes().into_response();
-
                     let headers = response.headers_mut();
-                    headers.insert(CONTENT_TYPE, HEADER_SSZ.parse().unwrap());
-                    headers.insert(CONSENSUS_VERSION_HEADER, format!("{}", fork).parse().unwrap());
+                    headers.insert(CONTENT_TYPE, HeaderValue::from_str(HEADER_SSZ).unwrap());
+                    headers.insert(
+                        CONSENSUS_VERSION_HEADER,
+                        HeaderValue::from_str(&fork.to_string()).unwrap(),
+                    );
 
                     Ok(response)
                 }
             },
             Err(err) => {
-                // Save error to DB
                 if let Err(err) = proposer_api
                     .db
                     .save_failed_get_payload(slot.into(), block_hash, err.to_string(), trace)
@@ -144,7 +178,6 @@ impl<A: Api> ProposerApi<A> {
                 {
                     error!(err = ?err, "error saving failed get payload");
                 }
-
                 Err(err)
             }
         }
@@ -168,55 +201,16 @@ impl<A: Api> ProposerApi<A> {
         headers: HeaderMap,
         body: bytes::Bytes,
     ) -> Result<StatusCode, ProposerApiError> {
-        let request_id = extract_request_id(&headers);
-        tracing::Span::current().record("id", request_id.to_string());
+        let ParsedGetPayload {
+            signed_blinded_block,
+            block_hash,
+            slot,
+            mut trace,
+            user_agent,
+            request_id,
+            ..
+        } = proposer_api.parse_get_payload_request(timings, &headers, &body)?;
 
-        let mut trace = GetPayloadTrace::init_from_timings(timings);
-
-        let user_agent = proposer_api.api_provider.get_metadata(&headers);
-
-        let fork: ForkName = match fork_name_from_header(&headers) {
-            Ok(Some(fork)) => fork,
-            err => {
-                let curr = proposer_api.chain_info.current_fork_name();
-                warn!(?err, "missing {CONSENSUS_VERSION_HEADER} header! using {curr:?}");
-                curr
-            }
-        };
-
-        let encoding = Encoding::from_content_type(&headers);
-
-        // TODO: move decoding to worker
-        let signed_blinded_block: SignedBlindedBeaconBlock = match (fork, encoding) {
-            (ForkName::Fulu, Encoding::Json) => {
-                let signed_blinded_block_fulu: SignedBlindedBeaconBlockFulu =
-                    serde_json::from_slice(&body)
-                        .inspect_err(|err| warn!(%err, "failed to deserialize signed block"))?;
-                signed_blinded_block_fulu.into()
-            }
-            (ForkName::Fulu, Encoding::Ssz) => SignedBlindedBeaconBlockFulu::from_ssz_bytes(&body)
-                .inspect_err(|err| warn!(?err, "failed to deserialize signed block"))?
-                .into(),
-            (_, _) => {
-                return Err(ProposerApiError::InvalidFork);
-            }
-        };
-
-        tracing::Span::current().record("slot", signed_blinded_block.slot().as_u64());
-
-        trace.decode = utcnow_ns();
-
-        let block_hash = signed_blinded_block
-            .message()
-            .body()
-            .execution_payload()
-            .map_err(|_| ProposerApiError::InvalidFork)? // this should never happen as post altair there's always an execution payload
-            .block_hash()
-            .0;
-
-        let slot = signed_blinded_block.message().slot();
-
-        // Broadcast get payload request
         proposer_api
             .gossiper
             .broadcast_get_payload(BroadcastGetPayloadParams {
@@ -229,9 +223,8 @@ impl<A: Api> ProposerApi<A> {
             ._get_payload(signed_blinded_block, &mut trace, user_agent, ProposerApiVersion::V2)
             .await
         {
-            Ok(_get_payload_response) => Ok(StatusCode::ACCEPTED),
+            Ok(_) => Ok(StatusCode::ACCEPTED),
             Err(err) => {
-                // Save error to DB
                 if let Err(err) = proposer_api
                     .db
                     .save_failed_get_payload(slot.into(), block_hash, err.to_string(), trace)
@@ -239,7 +232,6 @@ impl<A: Api> ProposerApi<A> {
                 {
                     error!(err = ?err, "error saving failed get payload");
                 }
-
                 Err(err)
             }
         }
