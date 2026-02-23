@@ -9,7 +9,7 @@ use tree_hash::TreeHash;
 use tree_hash_derive::TreeHash;
 
 use crate::{
-    BlobsBundle, BlobsBundleV2, BlobsError, Bloom, BlsPublicKey, BlsPublicKeyBytes, BlsSignature,
+    BlobsBundle, BlobsError, Bloom, BlsPublicKey, BlsPublicKeyBytes, BlsSignature,
     BlsSignatureBytes, ExecutionPayload, ExtraData, PayloadAndBlobs, SszError,
     bid_adjustment_data::BidAdjustmentData, error::SigError, fields::ExecutionRequests,
 };
@@ -80,7 +80,7 @@ impl TestRandom for SignedBidSubmission {
         Self {
             message: BidTrace::random_for_test(rng),
             execution_payload: ExecutionPayload::random_for_test(rng).into(),
-            blobs_bundle: BlobsBundle::V2(BlobsBundleV2::random_for_test(rng)).into(),
+            blobs_bundle: BlobsBundle::random_for_test(rng).into(),
             execution_requests: ExecutionRequests::random_for_test(rng).into(),
             signature: BlsSignatureBytes::random(),
         }
@@ -96,7 +96,7 @@ impl<'de> Deserialize<'de> for SignedBidSubmission {
         struct Raw {
             message: BidTrace,
             execution_payload: Arc<ExecutionPayload>,
-            blobs_bundle: BlobsBundleV2,
+            blobs_bundle: BlobsBundle,
             execution_requests: Arc<ExecutionRequests>,
             signature: BlsSignatureBytes,
         }
@@ -105,7 +105,7 @@ impl<'de> Deserialize<'de> for SignedBidSubmission {
         Ok(Self {
             message: raw.message,
             execution_payload: raw.execution_payload,
-            blobs_bundle: Arc::new(BlobsBundle::V2(raw.blobs_bundle)),
+            blobs_bundle: Arc::new(raw.blobs_bundle),
             execution_requests: raw.execution_requests,
             signature: raw.signature,
         })
@@ -123,7 +123,7 @@ impl Decode for SignedBidSubmission {
         let mut builder = SszDecoderBuilder::new(bytes);
         builder.register_type::<BidTrace>()?;
         builder.register_anonymous_variable_length_item()?; // execution_payload
-        builder.register_type::<BlobsBundleV2>()?; // blobs_bundle as V2
+        builder.register_type::<BlobsBundle>()?; // blobs_bundle
         builder.register_anonymous_variable_length_item()?; // execution_requests
         builder.register_type::<BlsSignatureBytes>()?; // signature
 
@@ -131,14 +131,14 @@ impl Decode for SignedBidSubmission {
 
         let message = decoder.decode_next::<BidTrace>()?;
         let execution_payload = decoder.decode_next::<Arc<ExecutionPayload>>()?;
-        let blobs_bundle_v2 = decoder.decode_next::<BlobsBundleV2>()?;
+        let blobs_bundle_v2 = decoder.decode_next::<BlobsBundle>()?;
         let execution_requests = decoder.decode_next::<Arc<ExecutionRequests>>()?;
         let signature = decoder.decode_next::<BlsSignatureBytes>()?;
 
         Ok(Self {
             message,
             execution_payload,
-            blobs_bundle: Arc::new(BlobsBundle::V2(blobs_bundle_v2)),
+            blobs_bundle: Arc::new(blobs_bundle_v2),
             execution_requests,
             signature,
         })
@@ -508,7 +508,7 @@ mod tests {
         let data_json = include_str!("testdata/signed-bid-submission-fulu-2.json");
         let s = test_decode_json::<SignedBidSubmission>(data_json);
 
-        let blobs_empty = s.blobs_bundle().blobs().is_empty();
+        let blobs_empty = s.blobs_bundle().blobs.is_empty();
 
         if blobs_empty {
             // When blobs are empty, we can't distinguish variants reliably

@@ -16,10 +16,10 @@ use helix_common::{
     utils::{utcnow_ms, utcnow_ns},
 };
 use helix_types::{
-    BlobWithMetadata, BlobWithMetadataV1, BlobWithMetadataV2, BlobsBundle, BlobsBundleVersion,
-    BlockMergingData, BlsPublicKeyBytes, BundleOrder, KzgCommitment, MergeableBundle,
-    MergeableOrder, MergeableOrderWithOrigin, MergeableOrders, MergeableTransaction, MergedBlock,
-    MergedBlockTrace, Order, PayloadAndBlobs, SignedBidSubmission, Transactions,
+    BlobWithMetadata, BlobsBundle, BlockMergingData, BlsPublicKeyBytes, BundleOrder, KzgCommitment,
+    MergeableBundle, MergeableOrder, MergeableOrderWithOrigin, MergeableOrders,
+    MergeableTransaction, MergedBlock, MergedBlockTrace, Order, PayloadAndBlobs,
+    SignedBidSubmission, Transactions,
 };
 use rustc_hash::{FxBuildHasher, FxHashSet};
 use serde_json::json;
@@ -359,9 +359,9 @@ impl BlockMerger {
             merged_value: response.proposer_value,
             original_tx_count: original_payload.execution_payload.transactions.len(),
             merged_tx_count: response.execution_payload.transactions.len(),
-            original_blob_count: original_payload.blobs_bundle.blobs().len(),
-            merged_blob_count: original_payload.blobs_bundle.blobs().len() +
-                response.appended_blobs.len(),
+            original_blob_count: original_payload.blobs_bundle.blobs.len(),
+            merged_blob_count: original_payload.blobs_bundle.blobs.len()
+                + response.appended_blobs.len(),
             builder_inclusions: response.builder_inclusions,
             trace,
         });
@@ -411,13 +411,13 @@ impl BlockMerger {
 
     fn should_request_merge(&self) -> bool {
         let start_time = Instant::now();
-        let has_new_data = self.best_mergeable_orders.has_new_orders() ||
-            (self.best_mergeable_orders.has_orders() && self.has_new_base_block);
+        let has_new_data = self.best_mergeable_orders.has_new_orders()
+            || (self.best_mergeable_orders.has_orders() && self.has_new_base_block);
         if !has_new_data {
             return false;
         }
-        let res = utcnow_ms().saturating_sub(self.last_merge_request_time_ms) >=
-            MERGE_REQUEST_INTERVAL_MS;
+        let res = utcnow_ms().saturating_sub(self.last_merge_request_time_ms)
+            >= MERGE_REQUEST_INTERVAL_MS;
         record_step("should_request_merge", start_time.elapsed());
         res
     }
@@ -560,7 +560,7 @@ pub fn get_mergeable_orders(
     let execution_payload = payload.execution_payload_ref();
     let block_blobs_bundles = payload.blobs_bundle();
     let blob_versioned_hashes: Vec<_> =
-        block_blobs_bundles.commitments().iter().map(|c| calculate_versioned_hash(*c)).collect();
+        block_blobs_bundles.commitments.iter().map(|c| calculate_versioned_hash(*c)).collect();
     let txs = &execution_payload.transactions;
 
     // Expand all orders to include the tx's bytes, checking for missing blobs.
@@ -675,27 +675,18 @@ fn blobs_bundle_to_hashmap(
     blob_versioned_hashes: Vec<B256>,
     bundle: &BlobsBundle,
 ) -> HashMap<B256, BlobWithMetadata> {
-    let version = bundle.version();
     blob_versioned_hashes
         .into_iter()
         .zip(bundle.iter_blobs())
-        .map(|(versioned_hash, (blob, commitment, proofs))| match version {
-            BlobsBundleVersion::V1 => (
+        .map(|(versioned_hash, (blob, commitment, proofs))| {
+            (
                 versioned_hash,
-                BlobWithMetadata::V1(BlobWithMetadataV1 {
-                    commitment: *commitment,
-                    proof: proofs[0],
-                    blob: blob.clone(),
-                }),
-            ),
-            BlobsBundleVersion::V2 => (
-                versioned_hash,
-                BlobWithMetadata::V2(BlobWithMetadataV2 {
+                BlobWithMetadata {
                     commitment: *commitment,
                     proofs: proofs.to_vec(),
                     blob: blob.clone(),
-                }),
-            ),
+                },
+            )
         })
         .collect()
 }
@@ -736,28 +727,14 @@ fn append_merged_blobs(
 ) -> Result<(), PayloadMergingError> {
     for vh in appended_blobs {
         let blob_data = blobs.get(vh).ok_or(PayloadMergingError::BlobNotFound)?;
-        match blob_data {
-            BlobWithMetadata::V1(data) => {
-                original_blobs_bundle
-                    .push_blob(
-                        data.commitment,
-                        &[data.proof],
-                        data.blob.clone(),
-                        max_blobs_per_block,
-                    )
-                    .map_err(|_| PayloadMergingError::MaxBlobCountReached)?;
-            }
-            BlobWithMetadata::V2(data) => {
-                original_blobs_bundle
-                    .push_blob(
-                        data.commitment,
-                        &data.proofs,
-                        data.blob.clone(),
-                        max_blobs_per_block,
-                    )
-                    .map_err(|_| PayloadMergingError::MaxBlobCountReached)?;
-            }
-        }
+        original_blobs_bundle
+            .push_blob(
+                blob_data.commitment,
+                &blob_data.proofs,
+                blob_data.blob.clone(),
+                max_blobs_per_block,
+            )
+            .map_err(|_| PayloadMergingError::MaxBlobCountReached)?;
     }
 
     Ok(())

@@ -15,19 +15,14 @@ use crate::{
 pub type Blob = Arc<alloy_consensus::Blob>;
 pub type Blobs = Vec<Arc<alloy_consensus::Blob>>;
 
-pub enum BlobsBundleVersion {
-    V1,
-    V2,
-}
-
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, ssz_derive::Encode)]
-pub struct BlobsBundleV2 {
+pub struct BlobsBundle {
     pub commitments: KzgCommitments,
     pub proofs: KzgProofs,
     pub blobs: Blobs,
 }
 
-impl<'de> serde::Deserialize<'de> for BlobsBundleV2 {
+impl<'de> serde::Deserialize<'de> for BlobsBundle {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -48,7 +43,7 @@ impl<'de> serde::Deserialize<'de> for BlobsBundleV2 {
             Ok(Self { commitments: raw.commitments, proofs: raw.proofs, blobs: raw.blobs })
         } else {
             Err(serde::de::Error::custom(format!(
-                "BlobsBundleV2 validation failed: expected {} proofs for {} blobs, got {}",
+                "BlobsBundle validation failed: expected {} proofs for {} blobs, got {}",
                 expected_proofs,
                 raw.blobs.len(),
                 raw.proofs.len()
@@ -57,7 +52,7 @@ impl<'de> serde::Deserialize<'de> for BlobsBundleV2 {
     }
 }
 
-impl ssz::Decode for BlobsBundleV2 {
+impl ssz::Decode for BlobsBundle {
     fn is_ssz_fixed_len() -> bool {
         false
     }
@@ -78,7 +73,7 @@ impl ssz::Decode for BlobsBundleV2 {
             Ok(Self { commitments: raw.commitments, proofs: raw.proofs, blobs: raw.blobs })
         } else {
             Err(ssz::DecodeError::BytesInvalid(format!(
-                "Invalid BlobsBundleV2: expected {} proofs and {} commitments for {} blobs, got {} proofs and {} commitments",
+                "Invalid BlobsBundle: expected {} proofs and {} commitments for {} blobs, got {} proofs and {} commitments",
                 raw.blobs.len() * CELLS_PER_EXT_BLOB,
                 raw.blobs.len(),
                 raw.blobs.len(),
@@ -89,7 +84,7 @@ impl ssz::Decode for BlobsBundleV2 {
     }
 }
 
-impl TestRandom for BlobsBundleV2 {
+impl TestRandom for BlobsBundle {
     fn random_for_test(rng: &mut impl rand::RngCore) -> Self {
         let n = rng.random_range(0..=6) as usize;
 
@@ -105,7 +100,7 @@ impl TestRandom for BlobsBundleV2 {
     }
 }
 
-impl BlobsBundleV2 {
+impl BlobsBundle {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             commitments: KzgCommitments::new(Vec::with_capacity(capacity)).unwrap(),
@@ -137,33 +132,6 @@ impl BlobsBundleV2 {
 
         Ok(())
     }
-}
-
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    serde::Serialize,
-    serde::Deserialize,
-    ssz_derive::Encode,
-    ssz_derive::Decode,
-)]
-#[ssz(enum_behaviour = "transparent")]
-#[serde(untagged)]
-pub enum BlobsBundle {
-    V2(BlobsBundleV2),
-}
-
-impl BlobsBundle {
-    pub fn validate_ssz_lengths(
-        &self,
-        max_blobs_per_block: usize,
-    ) -> Result<(), BlockValidationError> {
-        match self {
-            BlobsBundle::V2(bundle) => bundle.validate_ssz_lengths(max_blobs_per_block),
-        }
-    }
-
     pub fn push_blob(
         &mut self,
         commitment: KzgCommitment,
@@ -171,65 +139,27 @@ impl BlobsBundle {
         blob: Blob,
         max_blobs_per_block: usize,
     ) -> Result<(), BlobsError> {
-        match self {
-            BlobsBundle::V2(bundle) => {
-                bundle.commitments.push(commitment).map_err(|_| BlobsError::BundleTooLarge {
-                    got: bundle.blobs.len() + 1,
-                    max: max_blobs_per_block,
-                })?;
-                bundle.proofs.extend_from_slice(proofs);
-                bundle.blobs.push(blob);
-                Ok(())
-            }
-        }
-    }
-
-    pub fn commitments(&self) -> &KzgCommitments {
-        match self {
-            BlobsBundle::V2(bundle) => &bundle.commitments,
-        }
-    }
-
-    pub fn proofs(&self) -> &KzgProofs {
-        match self {
-            BlobsBundle::V2(bundle) => &bundle.proofs,
-        }
-    }
-
-    pub fn blobs(&self) -> &Blobs {
-        match self {
-            BlobsBundle::V2(bundle) => &bundle.blobs,
-        }
+        self.commitments.push(commitment).map_err(|_| BlobsError::BundleTooLarge {
+            got: self.blobs.len() + 1,
+            max: max_blobs_per_block,
+        })?;
+        self.proofs.extend_from_slice(proofs);
+        self.blobs.push(blob);
+        Ok(())
     }
 
     pub fn iter_blobs(
         &self,
     ) -> Box<dyn Iterator<Item = (&Blob, &KzgCommitment, &[KzgProof])> + '_> {
-        match self {
-            BlobsBundle::V2(bundle) => {
-                // V2: 128 proofs per blob
-                Box::new(bundle.blobs.iter().zip(bundle.commitments.iter()).enumerate().map(
-                    |(i, (blob, commitment))| {
-                        let start = i * CELLS_PER_EXT_BLOB;
-                        let end = start + CELLS_PER_EXT_BLOB;
-                        let proofs_slice = &bundle.proofs[start..end];
-                        (blob, commitment, proofs_slice)
-                    },
-                ))
-            }
-        }
-    }
-
-    pub fn version(&self) -> BlobsBundleVersion {
-        match self {
-            BlobsBundle::V2(_) => BlobsBundleVersion::V2,
-        }
-    }
-}
-
-impl Default for BlobsBundle {
-    fn default() -> Self {
-        Self::V2(BlobsBundleV2::default())
+        // V2: 128 proofs per blob
+        Box::new(self.blobs.iter().zip(self.commitments.iter()).enumerate().map(
+            |(i, (blob, commitment))| {
+                let start = i * CELLS_PER_EXT_BLOB;
+                let end = start + CELLS_PER_EXT_BLOB;
+                let proofs_slice = &self.proofs[start..end];
+                (blob, commitment, proofs_slice)
+            },
+        ))
     }
 }
 
@@ -245,7 +175,7 @@ impl ForkVersionDecode for PayloadAndBlobs {
     fn from_ssz_bytes_by_fork(bytes: &[u8], fork_name: ForkName) -> Result<Self, DecodeError> {
         let mut builder = ssz::SszDecoderBuilder::new(bytes);
         builder.register_anonymous_variable_length_item()?;
-        builder.register_type::<BlobsBundleV2>()?;
+        builder.register_type::<BlobsBundle>()?;
         let mut decoder = builder.build()?;
 
         if fork_name.deneb_enabled() {
@@ -287,7 +217,7 @@ mod tests {
     fn test_blobs_bundle_() {
         let mut rng = XorShiftRng::from_seed([42; 16]);
 
-        let our_bundle = BlobsBundleV2::random_for_test(&mut rng);
+        let our_bundle = BlobsBundle::random_for_test(&mut rng);
 
         let mut lh_bundle = LhBlobsBundle::<MainnetEthSpec>::default();
 

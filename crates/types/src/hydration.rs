@@ -10,8 +10,8 @@ use tracing::trace;
 use tree_hash::TreeHash;
 
 use crate::{
-    BidTrace, Blob, BlobsBundle, BlobsBundleV2, BlsPublicKeyBytes, BlsSignatureBytes,
-    ExecutionPayload, SignedBidSubmission,
+    BidTrace, Blob, BlobsBundle, BlsPublicKeyBytes, BlsSignatureBytes, ExecutionPayload,
+    SignedBidSubmission,
     bid_adjustment_data::BidAdjustmentData,
     bid_submission,
     fields::{ExecutionRequests, KzgCommitment, KzgProof, Transaction},
@@ -226,7 +226,7 @@ impl DehydratedBidSubmissionFulu {
 
         last_err?;
 
-        let mut sidecar = BlobsBundleV2::with_capacity(self.blobs_bundle.commitments.len());
+        let mut sidecar = BlobsBundle::with_capacity(self.blobs_bundle.commitments.len());
         for (index, commitment) in self.blobs_bundle.commitments.into_iter().enumerate() {
             let Some((proofs, blob)) = order_cache.blobs_fulu.get(&commitment) else {
                 return Err(HydrationError::UnknownBlobHashFulu { commitment, index });
@@ -246,7 +246,7 @@ impl DehydratedBidSubmissionFulu {
         let submission = SignedBidSubmission {
             message: self.message,
             execution_payload: Arc::new(self.execution_payload),
-            blobs_bundle: Arc::new(BlobsBundle::V2(sidecar)),
+            blobs_bundle: Arc::new(sidecar),
             execution_requests: self.execution_requests,
             signature: self.signature,
         };
