@@ -5,6 +5,7 @@ use axum::{
 use helix_common::local_cache::AuctioneerError;
 use helix_types::{SigError, Slot, SszError};
 use hyper::StatusCode;
+use ssz::DecodeError;
 use thiserror::Error;
 
 use crate::{beacon::error::BeaconClientError, database::error::DatabaseError};
@@ -117,6 +118,15 @@ pub enum ProposerApiError {
 
     #[error("{0}")]
     InvalidGetHeader(&'static str),
+
+    #[error("SszDecodeError {0:?}")]
+    SszDecodeError(DecodeError),
+}
+
+impl From<DecodeError> for ProposerApiError {
+    fn from(value: DecodeError) -> Self {
+        Self::SszDecodeError(value)
+    }
 }
 
 impl IntoResponse for ProposerApiError {
@@ -150,6 +160,7 @@ impl IntoResponse for ProposerApiError {
                 ProposerApiError::InvalidBlindedBlockSlot { .. } |
                 ProposerApiError::BlobKzgCommitmentsMismatch |
                 ProposerApiError::SszError(_) |
+                ProposerApiError::SszDecodeError(_) |
                 ProposerApiError::SigError(_) |
                 ProposerApiError::DeliveringPayload |
                 ProposerApiError::GetPayloadAlreadyReceived |

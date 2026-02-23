@@ -11,10 +11,7 @@ use helix_types::{
     SignedBidSubmission, SubmissionVersion,
 };
 
-use crate::auctioneer::{
-    SubmissionResultSender,
-    types::{SubmissionRef, SubmissionResult},
-};
+use crate::auctioneer::types::{SubmissionRef, SubmissionResult, SubmissionResultSender};
 
 pub mod client;
 pub mod manager;

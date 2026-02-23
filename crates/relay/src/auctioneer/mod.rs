@@ -43,6 +43,7 @@ pub use crate::auctioneer::{
     bid_adjustor::{BidAdjustor, DefaultBidAdjustor},
     bid_sorter::BidSorter,
     context::Context,
+    decoder::Encoding,
     simulator::{
         BlockSimRequest, SimulatorRequest, client::SimulatorClient, manager::SimulatorManager,
     },

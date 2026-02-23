@@ -122,8 +122,8 @@ impl InternalBidSubmissionHeader {
     ) -> MergeType {
         match header_map.get(HEADER_MERGE_TYPE) {
             None => {
-                if sub_type.is_some_and(|sub_type| sub_type == SubmissionType::Merge)
-                    || matches!(header_map.get(HEADER_IS_MERGEABLE), Some(header) if header == HeaderValue::from_static("true"))
+                if sub_type.is_some_and(|sub_type| sub_type == SubmissionType::Merge) ||
+                    matches!(header_map.get(HEADER_IS_MERGEABLE), Some(header) if header == HeaderValue::from_static("true"))
                 {
                     MergeType::Mergeable
                 } else {

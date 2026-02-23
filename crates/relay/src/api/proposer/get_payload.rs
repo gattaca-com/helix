@@ -14,13 +14,14 @@ use helix_types::{
     SignedBlindedBeaconBlock, SignedBlindedBeaconBlockFulu, Slot, SlotClockTrait,
 };
 use http::StatusCode;
+use ssz::{Decode, Encode};
 use tokio::time::sleep;
 use tracing::{Instrument, error, info, warn};
 
 use super::ProposerApi;
 use crate::{
     api::{Api, proposer::error::ProposerApiError},
-    auctioneer::{GetPayloadResultData, PayloadBidData},
+    auctioneer::{Encoding, GetPayloadResultData, PayloadBidData},
     beacon::types::BroadcastValidation,
     database::SavePayloadParams,
     gossip::{BroadcastGetPayloadParams, BroadcastPayloadParams},
@@ -69,15 +70,20 @@ impl<A: Api> ProposerApi<A> {
             }
         };
 
+        let encoding = Encoding::from_content_type(&headers);
+
         // TODO: move decoding to worker
-        let signed_blinded_block: SignedBlindedBeaconBlock = match fork {
-            ForkName::Fulu => {
+        let signed_blinded_block: SignedBlindedBeaconBlock = match (fork, encoding) {
+            (ForkName::Fulu, Encoding::Json) => {
                 let signed_blinded_block_fulu: SignedBlindedBeaconBlockFulu =
                     serde_json::from_slice(&body)
                         .inspect_err(|err| warn!(%err, "failed to deserialize signed block"))?;
                 signed_blinded_block_fulu.into()
             }
-            _ => {
+            (ForkName::Fulu, Encoding::Ssz) => SignedBlindedBeaconBlockFulu::from_ssz_bytes(&body)
+                .inspect_err(|err| warn!(?err, "failed to deserialize signed block"))?
+                .into(),
+            (_, _) => {
                 return Err(ProposerApiError::InvalidFork);
             }
         };
@@ -110,11 +116,15 @@ impl<A: Api> ProposerApi<A> {
             .in_current_span()
         );
 
+        let response_encoding = Encoding::from_accept(&headers).unwrap_or(encoding);
         match proposer_api
             ._get_payload(signed_blinded_block, &mut trace, user_agent, ProposerApiVersion::V1)
             .await
         {
-            Ok(get_payload_response) => Ok(axum::Json(get_payload_response)),
+            Ok(get_payload_response) => match response_encoding {
+                Encoding::Json => Ok(axum::Json(get_payload_response).into_response()),
+                Encoding::Ssz => Ok(get_payload_response.data.as_ssz_bytes().into_response()),
+            },
             Err(err) => {
                 // Save error to DB
                 if let Err(err) = proposer_api
@@ -164,15 +174,20 @@ impl<A: Api> ProposerApi<A> {
             }
         };
 
+        let encoding = Encoding::from_content_type(&headers);
+
         // TODO: move decoding to worker
-        let signed_blinded_block: SignedBlindedBeaconBlock = match fork {
-            ForkName::Fulu => {
+        let signed_blinded_block: SignedBlindedBeaconBlock = match (fork, encoding) {
+            (ForkName::Fulu, Encoding::Json) => {
                 let signed_blinded_block_fulu: SignedBlindedBeaconBlockFulu =
                     serde_json::from_slice(&body)
                         .inspect_err(|err| warn!(%err, "failed to deserialize signed block"))?;
                 signed_blinded_block_fulu.into()
             }
-            _ => {
+            (ForkName::Fulu, Encoding::Ssz) => SignedBlindedBeaconBlockFulu::from_ssz_bytes(&body)
+                .inspect_err(|err| warn!(?err, "failed to deserialize signed block"))?
+                .into(),
+            (_, _) => {
                 return Err(ProposerApiError::InvalidFork);
             }
         };
@@ -406,8 +421,8 @@ impl<A: Api> ProposerApi<A> {
         if let Some(until_slot_start) = until_slot_start {
             info!("waiting until slot start t=0: {} ms", until_slot_start.as_millis());
             sleep(until_slot_start).await;
-        } else if let Some(since_slot_start) = since_slot_start
-            && since_slot_start.as_millis() > GET_PAYLOAD_REQUEST_CUTOFF_MS as u128
+        } else if let Some(since_slot_start) = since_slot_start &&
+            since_slot_start.as_millis() > GET_PAYLOAD_REQUEST_CUTOFF_MS as u128
         {
             return Err(ProposerApiError::GetPayloadRequestTooLate {
                 cutoff: GET_PAYLOAD_REQUEST_CUTOFF_MS as u64,

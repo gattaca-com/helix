@@ -15,13 +15,17 @@ use helix_common::{
     utils::{extract_request_id, utcnow_ms, utcnow_ns},
 };
 use helix_types::{BuilderBid, ForkName, GetHeaderResponse, SignedBuilderBid};
+use ssz::Encode;
 use tracing::{Instrument, debug, error, info, trace, warn};
 
 use super::ProposerApi;
-use crate::api::{
-    Api,
-    proposer::{GET_HEADER_REQUEST_CUTOFF_MS, error::ProposerApiError},
-    router::Terminating,
+use crate::{
+    api::{
+        Api,
+        proposer::{GET_HEADER_REQUEST_CUTOFF_MS, error::ProposerApiError},
+        router::Terminating,
+    },
+    auctioneer::Encoding,
 };
 
 impl<A: Api> ProposerApi<A> {
@@ -159,11 +163,16 @@ impl<A: Api> ProposerApi<A> {
             );
         }
 
-        let signed_bid = serde_json::to_value(signed_bid)?;
         info!(block_hash =% bid_block_hash, ?value, "delivering bid");
 
         timing_guard.done_fetch = true;
-        Ok(axum::Json(signed_bid))
+
+        let response_encoding = Encoding::from_accept(&headers).unwrap_or_default();
+
+        match response_encoding {
+            Encoding::Json => Ok(axum::Json(serde_json::to_value(signed_bid)?).into_response()),
+            Encoding::Ssz => Ok(signed_bid.data.as_ssz_bytes().into_response()),
+        }
     }
 }
 

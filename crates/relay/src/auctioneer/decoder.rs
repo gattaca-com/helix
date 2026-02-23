@@ -11,7 +11,10 @@ use helix_common::metrics::{
     SUBMISSION_DECOMPRESSED_BYTES,
 };
 use helix_types::{BlsPublicKeyBytes, Compression, ForkName, ForkVersionDecode};
-use http::HeaderMap;
+use http::{
+    HeaderMap, HeaderValue,
+    header::{ACCEPT, CONTENT_TYPE},
+};
 use serde::de::DeserializeOwned;
 use ssz::Decode;
 use strum::{AsRefStr, EnumString};
@@ -41,10 +44,38 @@ impl SubmissionType {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub enum Encoding {
+    #[default]
     Json,
     Ssz,
+}
+
+const HEADER_SSZ: &str = "application/octet-stream";
+const HEADER_JSON: &str = "application/json";
+
+impl Encoding {
+    pub fn from_content_type(headers: &HeaderMap) -> Self {
+        match headers.get(CONTENT_TYPE) {
+            Some(header) if header == HeaderValue::from_static(HEADER_SSZ) => Encoding::Ssz,
+            _ => Encoding::Json,
+        }
+    }
+
+    pub fn from_accept(headers: &HeaderMap) -> Option<Self> {
+        match headers.get(ACCEPT) {
+            Some(header) => {
+                if header == HeaderValue::from_static(HEADER_SSZ) {
+                    Some(Encoding::Ssz)
+                } else if header == HeaderValue::from_static(HEADER_JSON) {
+                    Some(Encoding::Json)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug)]
