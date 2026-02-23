@@ -15,6 +15,7 @@ use helix_common::{
     utils::{extract_request_id, utcnow_ms, utcnow_ns},
 };
 use helix_types::{BuilderBid, ForkName, GetHeaderResponse, SignedBuilderBid};
+use http::header::CONTENT_TYPE;
 use ssz::Encode;
 use tracing::{Instrument, debug, error, info, trace, warn};
 
@@ -22,10 +23,12 @@ use super::ProposerApi;
 use crate::{
     api::{
         Api,
-        proposer::{GET_HEADER_REQUEST_CUTOFF_MS, error::ProposerApiError},
+        proposer::{
+            CONSENSUS_VERSION_HEADER, GET_HEADER_REQUEST_CUTOFF_MS, error::ProposerApiError,
+        },
         router::Terminating,
     },
-    auctioneer::Encoding,
+    auctioneer::{Encoding, HEADER_SSZ},
 };
 
 impl<A: Api> ProposerApi<A> {
@@ -167,11 +170,19 @@ impl<A: Api> ProposerApi<A> {
 
         timing_guard.done_fetch = true;
 
-        let response_encoding = Encoding::from_accept(&headers).unwrap_or_default();
+        let response_encoding = Encoding::from_accept(&headers);
 
         match response_encoding {
             Encoding::Json => Ok(axum::Json(serde_json::to_value(signed_bid)?).into_response()),
-            Encoding::Ssz => Ok(signed_bid.data.as_ssz_bytes().into_response()),
+            Encoding::Ssz => {
+                let mut response = signed_bid.data.as_ssz_bytes().into_response();
+
+                let headers = response.headers_mut();
+                headers.insert(CONTENT_TYPE, HEADER_SSZ.parse().unwrap());
+                headers.insert(CONSENSUS_VERSION_HEADER, format!("{}", fork).parse().unwrap());
+
+                Ok(response)
+            }
         }
     }
 }

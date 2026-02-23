@@ -13,22 +13,24 @@ use helix_types::{
     BlsPublicKeyBytes, ExecPayload, ForkName, GetPayloadResponse, PayloadAndBlobs,
     SignedBlindedBeaconBlock, SignedBlindedBeaconBlockFulu, Slot, SlotClockTrait,
 };
-use http::StatusCode;
+use http::{StatusCode, header::CONTENT_TYPE};
 use ssz::{Decode, Encode};
 use tokio::time::sleep;
 use tracing::{Instrument, error, info, warn};
 
 use super::ProposerApi;
 use crate::{
-    api::{Api, proposer::error::ProposerApiError},
-    auctioneer::{Encoding, GetPayloadResultData, PayloadBidData},
+    api::{
+        Api,
+        proposer::{CONSENSUS_VERSION_HEADER, error::ProposerApiError},
+    },
+    auctioneer::{Encoding, GetPayloadResultData, HEADER_SSZ, PayloadBidData},
     beacon::types::BroadcastValidation,
     database::SavePayloadParams,
     gossip::{BroadcastGetPayloadParams, BroadcastPayloadParams},
 };
 
 const GET_PAYLOAD_REQUEST_CUTOFF_MS: i64 = 4000;
-const CONSENSUS_VERSION_HEADER: &str = "Eth-Consensus-Version";
 
 pub enum ProposerApiVersion {
     V1,
@@ -116,14 +118,22 @@ impl<A: Api> ProposerApi<A> {
             .in_current_span()
         );
 
-        let response_encoding = Encoding::from_accept(&headers).unwrap_or(encoding);
+        let response_encoding = Encoding::from_accept(&headers);
         match proposer_api
             ._get_payload(signed_blinded_block, &mut trace, user_agent, ProposerApiVersion::V1)
             .await
         {
             Ok(get_payload_response) => match response_encoding {
                 Encoding::Json => Ok(axum::Json(get_payload_response).into_response()),
-                Encoding::Ssz => Ok(get_payload_response.data.as_ssz_bytes().into_response()),
+                Encoding::Ssz => {
+                    let mut response = get_payload_response.data.as_ssz_bytes().into_response();
+
+                    let headers = response.headers_mut();
+                    headers.insert(CONTENT_TYPE, HEADER_SSZ.parse().unwrap());
+                    headers.insert(CONSENSUS_VERSION_HEADER, format!("{}", fork).parse().unwrap());
+
+                    Ok(response)
+                }
             },
             Err(err) => {
                 // Save error to DB

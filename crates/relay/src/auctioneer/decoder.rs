@@ -51,8 +51,8 @@ pub enum Encoding {
     Ssz,
 }
 
-const HEADER_SSZ: &str = "application/octet-stream";
-const HEADER_JSON: &str = "application/json";
+pub const HEADER_SSZ: &str = "application/octet-stream";
+const HEADER_ACCEPT_SSZ: &str = "application/octet-stream;q=1.0,application/json;q=0.9";
 
 impl Encoding {
     pub fn from_content_type(headers: &HeaderMap) -> Self {
@@ -62,18 +62,15 @@ impl Encoding {
         }
     }
 
-    pub fn from_accept(headers: &HeaderMap) -> Option<Self> {
+    pub fn from_accept(headers: &HeaderMap) -> Self {
         match headers.get(ACCEPT) {
-            Some(header) => {
-                if header == HeaderValue::from_static(HEADER_SSZ) {
-                    Some(Encoding::Ssz)
-                } else if header == HeaderValue::from_static(HEADER_JSON) {
-                    Some(Encoding::Json)
-                } else {
-                    None
-                }
+            Some(header)
+                if header == HeaderValue::from_static(HEADER_SSZ) ||
+                    header == HeaderValue::from_static(HEADER_ACCEPT_SSZ) =>
+            {
+                Encoding::Ssz
             }
-            _ => None,
+            _ => Encoding::Json,
         }
     }
 }
