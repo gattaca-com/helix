@@ -231,10 +231,21 @@ pub struct BidSubmissionResponse {
     pub error_msg: Vec<u8>,
 }
 
+impl Display for BidSubmissionResponse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let request_id = uuid::Uuid::from_bytes(self.request_id);
+        let error_msg = std::str::from_utf8(&self.error_msg).unwrap_or("<invalid utf8>");
+        write!(
+            f,
+            "BidSubmissionResponse {{ sequence_number: {}, request_id: \"{}\", status: {:?}, error_msg: \"{}\" }}",
+            self.sequence_number, request_id, self.status, error_msg
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn test_bid_submission_header() {
         let header = BidSubmissionHeader {

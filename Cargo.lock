@@ -5284,6 +5284,7 @@ dependencies = [
  "tracing",
  "type-hash",
  "type-hash-derive",
+ "uuid 1.19.0",
 ]
 
 [[package]]
