@@ -632,6 +632,34 @@ lazy_static! {
         &RELAY_METRICS_REGISTRY
     )
     .unwrap();
+
+    pub static ref TOKIO_SCHEDULING_DRIFT: Gauge = register_gauge_with_registry!(
+        "tokio_scheduling_drift_ms",
+        "Tokio scheduling drift in ms",
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    pub static ref TOKIO_WORKER_BUSY_DURATION: GaugeVec = register_gauge_vec_with_registry!(
+        "tokio_worker_busy_duration_us",
+        "Duration of tokio worker being busy in us",
+        &["id"],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    pub static ref TOKIO_ALIVE_TASKS: Gauge = register_gauge_with_registry!(
+        "tokio_alive_tasks",
+        "Count of alive tokio tasks",
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+    pub static ref TOKIO_GLOBAL_QUEUE_DEPTH: Gauge = register_gauge_with_registry!(
+        "tokio_global_queue_depth",
+        "Count of tasks in global queue",
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
 }
 
 pub struct ApiMetrics {

@@ -25,8 +25,8 @@ use helix_common::{
 use helix_relay::{
     Api, Auctioneer, AuctioneerHandle, BidSorter, BidSubmissionTcpListener, DefaultBidAdjustor,
     HelixSpine, PostgresDatabaseService, RegWorker, RegWorkerHandle, RelayNetworkManager,
-    SubWorker, WebsiteService, start_admin_service, start_api_service, start_beacon_client,
-    start_db_service, start_housekeeper,
+    SubWorker, WebsiteService, spawn_tokio_monitoring, start_admin_service, start_api_service,
+    start_beacon_client, start_db_service, start_housekeeper,
 };
 use helix_types::BlsKeypair;
 use tikv_jemallocator::Jemalloc;
@@ -120,6 +120,8 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
 
     let terminating = Arc::new(AtomicBool::default());
     let termination_grace_period = Duration::from_millis(config.router_config.shutdown_delay_ms);
+
+    spawn_tokio_monitoring();
 
     let spine = HelixSpine::new(None);
     spine.start(None, Some(termination_grace_period), |spine| {
