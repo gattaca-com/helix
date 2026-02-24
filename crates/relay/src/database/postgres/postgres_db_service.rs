@@ -410,8 +410,11 @@ impl PostgresDatabaseService {
                             svc.handle_db_request(request).await;
                         });
                     }
-                    Err(e) => {
-                        error!("DB request receiver error: {}", e);
+                    Err(crossbeam_channel::TryRecvError::Empty) => {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                    Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                        error!("DB request receiver disconnected");
                         break;
                     }
                 }
