@@ -7,18 +7,15 @@ use lh_types::MainnetEthSpec;
 use ssz::{Decode, Encode};
 use tree_hash::TreeHash;
 
-type LhExecutionPayload = lh_types::ExecutionPayloadElectra<MainnetEthSpec>;
+type LhExecutionPayload = lh_types::ExecutionPayloadFulu<MainnetEthSpec>;
 
 fn benchmark_serde(c: &mut Criterion) {
     let mut group = c.benchmark_group("execution_payload_serde");
 
-    let data_json = include_bytes!("../src/testdata/signed-bid-submission-electra-3.json");
+    let data_json = include_bytes!("../src/testdata/signed-bid-submission-fulu-2.json");
     let submission: SignedBidSubmission = serde_json::from_slice(data_json).unwrap();
-    let payload = match submission {
-        SignedBidSubmission::Electra(ref submission) => &submission.execution_payload,
-        SignedBidSubmission::Fulu(ref submission) => &submission.execution_payload,
-    };
-    let lh_payload = payload.to_lighthouse_electra_payload().unwrap();
+    let payload = &submission.execution_payload;
+    let lh_payload = payload.to_lighthouse_fulu_payload().unwrap();
     let alloy_payload = AlloyExecutionPayload::from_ssz_bytes(&payload.as_ssz_bytes()).unwrap();
 
     group.bench_function("custom_serialize", |b| {
@@ -75,13 +72,10 @@ fn benchmark_serde(c: &mut Criterion) {
 fn benchmark_ssz(c: &mut Criterion) {
     let mut group = c.benchmark_group("execution_payload_ssz");
 
-    let data_json = include_bytes!("../src/testdata/signed-bid-submission-electra-3.json");
+    let data_json = include_bytes!("../src/testdata/signed-bid-submission-fulu-2.json");
     let submission: SignedBidSubmission = serde_json::from_slice(data_json).unwrap();
-    let payload = match submission {
-        SignedBidSubmission::Electra(ref submission) => &submission.execution_payload,
-        SignedBidSubmission::Fulu(ref submission) => &submission.execution_payload,
-    };
-    let lh_payload = payload.to_lighthouse_electra_payload().unwrap();
+    let payload = &submission.execution_payload;
+    let lh_payload = payload.to_lighthouse_fulu_payload().unwrap();
     let alloy_payload = AlloyExecutionPayload::from_ssz_bytes(&payload.as_ssz_bytes()).unwrap();
 
     group.bench_function("custom_encode", |b| {
@@ -133,13 +127,10 @@ fn benchmark_ssz(c: &mut Criterion) {
 fn benchmark_transaction_root(c: &mut Criterion) {
     let mut group = c.benchmark_group("transaction_root");
 
-    let data_json = include_bytes!("../src/testdata/signed-bid-submission-electra-3.json");
+    let data_json = include_bytes!("../src/testdata/signed-bid-submission-fulu-2.json");
     let submission: SignedBidSubmission = serde_json::from_slice(data_json).unwrap();
-    let payload = match submission {
-        SignedBidSubmission::Electra(ref submission) => &submission.execution_payload,
-        SignedBidSubmission::Fulu(ref submission) => &submission.execution_payload,
-    };
-    let lh_payload = payload.to_lighthouse_electra_payload().unwrap();
+    let payload = &submission.execution_payload;
+    let lh_payload = payload.to_lighthouse_fulu_payload().unwrap();
 
     group.bench_function("custom_transaction_root", |b| {
         b.iter(|| {

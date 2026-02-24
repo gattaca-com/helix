@@ -37,21 +37,16 @@ mod tests {
         RelayNetworkConfig, RelayNetworkPeerConfig, api::builder_api::InclusionList,
         chain_info::ChainInfo, signing::RelaySigningContext, utils::utcnow_sec,
     };
-    use helix_types::{BlsKeypair, BlsPublicKey, BlsPublicKeyBytes, BlsSecretKey, Transaction};
+    use helix_types::{BlsKeypair, BlsPublicKeyBytes, BlsSecretKey, Transaction};
     use rand::{Rng as _, SeedableRng, rngs::SmallRng, seq::IndexedRandom};
     use tokio::{task::JoinSet, time::sleep};
     use tracing::{error, info};
     use tree_hash::TreeHash;
     use url::Url;
 
-    use crate::{
-        auctioneer::manager,
-        network::{
-            RelayNetworkManager,
-            api::RelayNetworkApi,
-            inclusion_lists::consensus::INCLUSION_LIST_MAX_BYTES,
-            messages::{HelloMessage, NetworkMessageType},
-        },
+    use crate::network::{
+        RelayNetworkManager, api::RelayNetworkApi,
+        inclusion_lists::consensus::INCLUSION_LIST_MAX_BYTES,
     };
 
     const RELAY_CONNECT_PATH: &str = "/relay/v1/network";

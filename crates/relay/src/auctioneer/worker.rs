@@ -16,7 +16,7 @@ use helix_common::{
 use helix_types::{
     BidAdjustmentData, BlockMergingData, BlsPublicKey, BlsPublicKeyBytes, DehydratedBidSubmission,
     DehydratedBidSubmissionFuluWithAdjustments, ExecPayload, MergeType, MergeableOrdersWithPref,
-    SigError, SignedBidSubmission, SignedBidSubmissionFuluWithAdjustments,
+    SigError, SignedBidSubmission, SignedBidSubmissionWithAdjustments,
     SignedBidSubmissionWithMergingData, SignedBlindedBeaconBlock, SignedValidatorRegistration,
     SubmissionVersion,
 };
@@ -504,7 +504,7 @@ fn decode_default(
     flags: &DecodeFlags,
 ) -> Result<(Submission, Option<BlockMergingData>, Option<BidAdjustmentData>), BuilderApiError> {
     let (submission, bid_adjustment) = if flags.with_adjustments {
-        let sub_with_adjustment: SignedBidSubmissionFuluWithAdjustments = decoder.decode(body)?;
+        let sub_with_adjustment: SignedBidSubmissionWithAdjustments = decoder.decode(body)?;
         let (sub, adjustment_data) = sub_with_adjustment.split();
 
         (sub, Some(adjustment_data))
