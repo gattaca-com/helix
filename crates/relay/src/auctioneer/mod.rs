@@ -14,7 +14,6 @@ mod worker;
 
 use std::{
     cmp::Ordering,
-    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -49,9 +48,10 @@ pub use crate::auctioneer::{
     types::{InternalBidSubmissionHeader, SubmissionRef, SubmissionResult, SubmissionResultSender}, /* move to types? */
 };
 use crate::{
-    HelixSpine, PostgresDatabaseService,
+    HelixSpine,
     api::{builder::error::BuilderApiError, proposer::ProposerApiError},
     auctioneer::types::PendingPayload,
+    database::handle::DbHandle,
     housekeeper::PayloadAttributesUpdate,
 };
 
@@ -66,7 +66,7 @@ impl<B: BidAdjustor> Auctioneer<B> {
     pub fn new(
         chain_info: ChainInfo,
         config: RelayConfig,
-        db: Arc<PostgresDatabaseService>,
+        db: DbHandle,
         bid_sorter: BidSorter,
         local_cache: LocalCache,
         bid_adjustor: B,

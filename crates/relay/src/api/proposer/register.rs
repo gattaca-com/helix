@@ -17,11 +17,11 @@ use helix_common::{
 };
 use helix_types::SignedValidatorRegistration;
 use tokio::{task::JoinSet, time::Instant};
-use tracing::{error, info, trace, warn};
+use tracing::{error, info, trace};
 
 use super::ProposerApi;
 use crate::api::{
-    Api, HEADER_API_KEY,
+    Api,
     proposer::{PreferencesHeader, error::ProposerApiError},
     router::KnownValidatorsLoaded,
 };
@@ -54,20 +54,6 @@ impl<A: Api> ProposerApi<A> {
         if !known_validators_loaded.load(Ordering::Relaxed) {
             return Err(ProposerApiError::ServiceUnavailableError);
         }
-
-        // Get optional api key from headers
-        let api_key = headers.get(HEADER_API_KEY).and_then(|key| key.to_str().ok());
-
-        let pool_name = match api_key {
-            Some(api_key) => match proposer_api.db.get_validator_pool_name(api_key).await? {
-                Some(pool_name) => Some(pool_name),
-                None => {
-                    warn!("Invalid api key provided");
-                    return Err(ProposerApiError::InvalidApiKey);
-                }
-            },
-            None => None,
-        };
 
         // Set using default preferences from config
         let mut validator_preferences = ValidatorPreferences {
@@ -107,7 +93,7 @@ impl<A: Api> ProposerApi<A> {
         let mut skipped_registrations = 0;
 
         let registrations_to_check: Vec<_> = {
-            let known_validators_guard = proposer_api.db.known_validators_cache().read();
+            let known_validators_guard = proposer_api.local_cache.known_validators_cache.read();
             registrations
                 .into_iter()
                 .filter(|reg| {
@@ -119,7 +105,7 @@ impl<A: Api> ProposerApi<A> {
                     }
                 })
                 .filter(|reg| {
-                    if proposer_api.db.is_registration_update_required(reg) {
+                    if proposer_api.local_cache.is_registration_update_required(reg) {
                         true
                     } else {
                         skipped_registrations += 1;
@@ -196,7 +182,7 @@ impl<A: Api> ProposerApi<A> {
                 }
             });
 
-        proposer_api.db.save_validator_registrations(registrations_to_save, pool_name, user_agent);
+        proposer_api.local_cache.save_validator_registrations(registrations_to_save, user_agent);
 
         info!(
             ?process_time,

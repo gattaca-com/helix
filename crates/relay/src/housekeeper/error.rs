@@ -13,4 +13,7 @@ pub enum HousekeeperError {
 
     #[error("auctioneer error. {0}")]
     Auctioneer(#[from] AuctioneerError),
+
+    #[error("oneshot channel recv error. {0}")]
+    Channel(#[from] tokio::sync::oneshot::error::RecvError),
 }

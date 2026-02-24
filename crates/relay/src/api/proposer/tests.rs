@@ -1123,36 +1123,4 @@ mod proposer_api_tests {
 
         let _ = tx.send(());
     }
-
-    #[tokio::test]
-    async fn test_get_validator_preferences() {
-        let (tx, http_config, _api, _curr_slot_info, _auctioneer) = start_api_server().await;
-
-        let validator_pubkey = get_fixed_pubkey(0);
-
-        let req_url = format!(
-            "{}{}{}/{}",
-            http_config.base_url(),
-            PATH_PROPOSER_API,
-            PATH_GET_VALIDATOR_PREFERENCES,
-            validator_pubkey.as_hex_string()
-        );
-
-        let resp = reqwest::Client::new()
-            .get(&req_url)
-            .header("X-Api-Key", "valid-api-key")
-            .send()
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::OK);
-
-        let body = resp.text().await.unwrap();
-        let preferences: ValidatorPreferences = serde_json::from_str(&body).unwrap();
-
-        assert!(preferences.header_delay);
-        assert!(preferences.trusted_builders.is_none());
-
-        let _ = tx.send(());
-    }
 }

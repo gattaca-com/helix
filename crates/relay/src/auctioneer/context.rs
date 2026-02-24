@@ -1,10 +1,7 @@
 use std::{
     ops::{Deref, DerefMut},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::{Duration, Instant},
+    sync::atomic::Ordering,
+    time::Instant,
 };
 
 use alloy_primitives::{B256, U256};
@@ -13,12 +10,10 @@ use helix_common::{
     chain_info::ChainInfo,
     local_cache::LocalCache,
     metrics::{CACHE_SIZE, SimulatorMetrics},
-    spawn_tracked,
-    utils::alert_discord,
 };
 use helix_types::{BlsPublicKeyBytes, HydrationCache, Slot, SubmissionVersion};
 use rustc_hash::FxHashMap;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 use crate::{
     api::builder::error::BuilderApiError,
@@ -30,7 +25,7 @@ use crate::{
         simulator::manager::{SimulationResult, SimulatorManager},
         types::{PayloadEntry, PendingPayload},
     },
-    database::postgres::postgres_db_service::PostgresDatabaseService,
+    database::handle::DbHandle,
 };
 
 // Context that is only valid for a given slot
@@ -52,18 +47,14 @@ pub struct Context<B: BidAdjustor> {
     pub config: RelayConfig,
     pub cache: LocalCache,
     pub unknown_builder_info: BuilderInfo,
-    pub db: Arc<PostgresDatabaseService>,
+    pub db: DbHandle,
     pub slot_context: SlotContext,
     pub bid_adjustor: B,
-    pub adjustments_enabled: Arc<AtomicBool>,
-    pub adjustments_failsafe_trigger: Arc<AtomicBool>,
     pub completed_dry_run: bool,
 }
 
 const EXPECTED_PAYLOADS_PER_SLOT: usize = 5000;
 const EXPECTED_BUILDERS_PER_SLOT: usize = 200;
-
-const DB_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 
 impl<B: BidAdjustor> Context<B> {
     // TODO: refactor to accept fewer parameters
@@ -72,7 +63,7 @@ impl<B: BidAdjustor> Context<B> {
         chain_info: ChainInfo,
         config: RelayConfig,
         sim_manager: SimulatorManager,
-        db: Arc<PostgresDatabaseService>,
+        db: DbHandle,
         bid_sorter: BidSorter,
         cache: LocalCache,
         bid_adjustor: B,
@@ -105,15 +96,6 @@ impl<B: BidAdjustor> Context<B> {
             block_merger,
         };
 
-        let adjustments_enabled = Arc::new(AtomicBool::new(false));
-        let adjustments_failsafe_trigger = Arc::new(AtomicBool::new(false));
-
-        Self::spawn_check_flag_task(
-            db.clone(),
-            adjustments_enabled.clone(),
-            adjustments_failsafe_trigger.clone(),
-        );
-
         Self {
             chain_info,
             cache,
@@ -122,8 +104,6 @@ impl<B: BidAdjustor> Context<B> {
             db,
             config,
             bid_adjustor,
-            adjustments_enabled,
-            adjustments_failsafe_trigger,
             completed_dry_run: false,
         }
     }
@@ -159,26 +139,16 @@ impl<B: BidAdjustor> Context<B> {
                         result.submission.execution_payload_ref().to_header(None, None)
                     );
 
-                    if !self.adjustments_enabled.load(Ordering::Relaxed) {
+                    if !self.cache.adjustments_enabled.load(Ordering::Relaxed) {
                         warn!(%block_hash, "adjustments already disabled");
                     } else {
                         SimulatorMetrics::disable_adjustments();
-                        self.adjustments_enabled.store(false, Ordering::Relaxed);
-
-                        let db = self.db.clone();
-                        let failsafe_trigger = self.adjustments_failsafe_trigger.clone();
-                        let adjustments_enabled = self.adjustments_enabled.clone();
-                        spawn_tracked!(async move {
-                            if let Err(err) = db.disable_adjustments().await {
-                                failsafe_trigger.store(true, Ordering::Relaxed);
-                                adjustments_enabled.store(false, Ordering::Relaxed);
-                                error!(%block_hash, %err, "failed to disable adjustments in database, pulling the failsafe trigger");
-                                alert_discord(&format!(
-                                    "{} {} failed to disable adjustments in database, pulling the failsafe trigger",
-                                    err, block_hash
-                                ));
-                            }
-                        });
+                        self.cache.adjustments_enabled.store(false, Ordering::Relaxed);
+                        self.db.disable_adjustments(
+                            block_hash,
+                            self.cache.adjustments_failsafe_trigger.clone(),
+                            self.cache.adjustments_enabled.clone(),
+                        );
                     }
                 } else if self.cache.demote_builder(&builder) {
                     warn!(%builder, %block_hash, %err, "Block simulation resulted in an error. Demoting builder...");
@@ -189,20 +159,13 @@ impl<B: BidAdjustor> Context<B> {
                     let bid_slot = result.submission.slot();
                     let failsafe_triggered = self.sim_manager.failsafe_triggered.clone();
 
-                    let db = self.db.clone();
-                    spawn_tracked!(async move {
-                        if let Err(err) = db
-                            .db_demote_builder(bid_slot.as_u64(), &builder, &block_hash, reason)
-                            .await
-                        {
-                            failsafe_triggered.store(true, Ordering::Relaxed);
-                            error!(%builder, %err, %block_hash, "failed to demote builder in database! Pausing all optmistic submissions");
-                            alert_discord(&format!(
-                                "{} {} {} failed to demote builder in database! Pausing all optmistic submissions",
-                                builder, err, block_hash
-                            ));
-                        }
-                    });
+                    self.db.db_demote_builder(
+                        bid_slot.as_u64(),
+                        builder,
+                        block_hash,
+                        reason,
+                        failsafe_triggered,
+                    );
                 } else {
                     warn!(%err, %builder, %block_hash, "builder already demoted, skipping demotion");
                 }
@@ -292,38 +255,6 @@ impl<B: BidAdjustor> Context<B> {
             return;
         };
         self.payloads.insert(block_hash, payload);
-    }
-
-    fn spawn_check_flag_task(
-        db: Arc<PostgresDatabaseService>,
-        flag: Arc<AtomicBool>,
-        failsafe_triggered: Arc<AtomicBool>,
-    ) {
-        spawn_tracked!(async move {
-            let mut interval = tokio::time::interval(DB_CHECK_INTERVAL);
-            loop {
-                interval.tick().await;
-
-                if failsafe_triggered.load(Ordering::Relaxed) {
-                    flag.store(false, Ordering::Relaxed);
-                    return;
-                }
-
-                match db.check_adjustments_enabled().await {
-                    Ok(value) => {
-                        let previous = flag.swap(value, Ordering::Relaxed);
-                        if previous != value {
-                            tracing::info!(
-                                "adjustments enabled flag changed from {} to {}",
-                                previous,
-                                value
-                            );
-                        }
-                    }
-                    Err(e) => tracing::error!("failed to check adjustments_enabled flag: {}", e),
-                }
-            }
-        });
     }
 }
 

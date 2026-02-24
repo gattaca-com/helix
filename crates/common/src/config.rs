@@ -63,6 +63,8 @@ pub struct RelayConfig {
     pub tcp_port: u16,
     #[serde(default = "default_usize::<512>")]
     pub tcp_max_connections: usize,
+    /// Directory for local cache snapshots (bincode). Enables fast startup.
+    pub snapshot_dir: Option<PathBuf>,
 }
 
 impl RelayConfig {
@@ -99,6 +101,7 @@ impl RelayConfig {
             api_port: 4040,
             tcp_port: 4041,
             tcp_max_connections: 512,
+            snapshot_dir: None,
         }
     }
 }
