@@ -62,11 +62,12 @@ fn main() {
         instance_id.clone(),
     ));
 
-    init_panic_hook(
-        config.postgres.region_name.clone(),
-        config.discord_webhook_url.clone(),
-        config.logging.dir_path(),
-    );
+    let app_id = config
+        .instance_id
+        .clone()
+        .unwrap_or_else(|| format!("RELAY-{}", config.postgres.region_name));
+
+    init_panic_hook(app_id, config.discord_webhook_url.clone(), config.logging.dir_path());
 
     block_on(start_metrics_server(&config));
     match block_on(run(instance_id, config, keypair)) {
