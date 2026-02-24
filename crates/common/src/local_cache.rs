@@ -114,7 +114,7 @@ impl LocalCache {
         let kill_switch = Arc::new(AtomicBool::new(false));
         let proposer_duties = Arc::new(RwLock::new(Vec::with_capacity(1000)));
         let merged_blocks = Arc::new(DashMap::with_capacity(1000));
-        let validator_registration_cache = Arc::new(DashMap::with_capacity(1_8000_000));
+        let validator_registration_cache = Arc::new(DashMap::with_capacity(1_800_000));
         let pending_validator_registrations = Arc::new(DashSet::with_capacity(20_000));
         let known_validators_cache = Arc::new(RwLock::new(FxHashSet::with_capacity_and_hasher(
             1_200_000,
