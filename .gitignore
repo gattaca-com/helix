@@ -43,3 +43,5 @@ lcov.info
 logs/
 
 .local
+
+scripts/devnet/local-helix/
