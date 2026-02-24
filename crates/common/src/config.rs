@@ -63,6 +63,8 @@ pub struct RelayConfig {
     pub tcp_port: u16,
     #[serde(default = "default_usize::<512>")]
     pub tcp_max_connections: usize,
+    #[serde(default)]
+    pub s3_config: Option<S3Config>,
 }
 
 impl RelayConfig {
@@ -99,6 +101,7 @@ impl RelayConfig {
             api_port: 4040,
             tcp_port: 4041,
             tcp_max_connections: 512,
+            s3_config: None,
         }
     }
 }
@@ -565,6 +568,14 @@ impl Route {
 
 fn default_duration() -> u64 {
     1000
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct S3Config {
+    pub bucket: String,
+    /// Key prefix, e.g. "tcp-bids/mainnet". Must be URL-safe.
+    pub key_prefix: String,
+    pub region: String,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
