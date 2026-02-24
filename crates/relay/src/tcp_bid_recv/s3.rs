@@ -40,7 +40,7 @@ impl S3PayloadSaver {
 
         tokio::spawn(async move {
             while let Some((request_id, payload)) = rx.recv().await {
-                let key = make_key(&self.config.key_prefix, request_id);
+                let key = make_key(request_id);
                 if let Err(e) = client
                     .put_object()
                     .bucket(&self.config.bucket)
@@ -58,7 +58,7 @@ impl S3PayloadSaver {
     }
 }
 
-fn make_key(prefix: &str, request_id: Uuid) -> String {
+fn make_key(request_id: Uuid) -> String {
     let now = Utc::now().to_rfc3339();
-    format!("{prefix}_{now}_{request_id}.bin")
+    format!("{now}_{request_id}.bin")
 }

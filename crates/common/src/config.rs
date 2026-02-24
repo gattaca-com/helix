@@ -573,8 +573,6 @@ fn default_duration() -> u64 {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct S3Config {
     pub bucket: String,
-    /// Key prefix, e.g. "tcp-bids/mainnet". Must be URL-safe.
-    pub key_prefix: String,
     pub region: String,
 }
 
