@@ -1079,7 +1079,7 @@ impl PostgresDatabaseService {
     #[instrument(skip_all)]
     async fn fetch_validator_registrations_since(
         &self,
-        last_fetch_time: SystemTime,
+        let mut record = DbMetricRecord::new("fetch_validator_registrations_since");
     ) -> Result<Vec<SignedValidatorRegistrationEntry>, DatabaseError> {
         let mut record = DbMetricRecord::new("get_validator_registrations");
 
