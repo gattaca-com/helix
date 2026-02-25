@@ -63,6 +63,32 @@ pub(crate) mod types;
 
 const DELEGATE_CALL: u8 = 1;
 
+// Remaining blob slots in the block.
+//
+// We must avoid unsigned underflow here: if `used_blob_count > max_blob_count`,
+// `max_blob_count - used_blob_count` would wrap in release builds (e.g. to `u64::MAX`),
+// effectively making blob-capacity checks think there is "infinite" capacity left.
+fn remaining_blob_slots(max_blob_count: u64, used_blob_count: u64) -> u64 {
+    max_blob_count.saturating_sub(used_blob_count)
+}
+
+fn count_blob_usage_in_transactions(transactions: &[SignedTx]) -> u64 {
+    transactions.iter().map(|tx| tx.blob_count().unwrap_or(0)).fold(0u64, u64::saturating_add)
+}
+
+fn ensure_base_block_blob_limit(
+    max_blob_count: u64,
+    used_blob_count: u64,
+) -> Result<(), BlockMergingApiError> {
+    if used_blob_count > max_blob_count {
+        return Err(BlockMergingApiError::BaseBlockBlobLimitExceeded {
+            max_blob_count,
+            used_blob_count,
+        });
+    }
+    Ok(())
+}
+
 impl BlockMergingApi {
     /// Core logic for appending additional transactions to a block.
     async fn _merge_block_v1(
@@ -221,6 +247,15 @@ impl BlockMergingApi {
         if payment_tx.value() != original_value || payment_tx.to() != Some(proposer_fee_recipient) {
             return Err(BlockMergingApiError::InvalidProposerPayment);
         }
+
+        // Pre-check blob usage to avoid executing invalid base blocks and to prevent
+        // arithmetic underflow in blob-capacity calculations.
+        let blob_params = evm_config
+            .chain_spec()
+            .blob_params_at_timestamp(header.timestamp)
+            .expect("we are past Cancun");
+        let base_blob_count = count_blob_usage_in_transactions(&transactions);
+        ensure_base_block_blob_limit(blob_params.max_blob_count, base_blob_count)?;
 
         // Reserve gas for the final revenue distribution transaction.
         // This amount is based on empirical measurements with some added buffer.
@@ -838,8 +873,10 @@ where
         }
 
         let available_gas = self.gas_limit - self.gas_used;
-        let available_blobs =
-            self.blob_params.max_blob_count - self.blob_versioned_hashes.len() as u64;
+        let available_blobs = remaining_blob_slots(
+            self.blob_params.max_blob_count,
+            self.blob_versioned_hashes.len() as u64,
+        );
 
         let evm_env = self.evm_env.clone();
         let state = self.get_state();
@@ -865,8 +902,10 @@ where
 
     fn append_transaction(&mut self, tx: RecoveredTx) -> Result<bool, BlockMergingApiError> {
         let mut is_success = false;
-        let blobs_available =
-            self.blob_params.max_blob_count - self.blob_versioned_hashes.len() as u64;
+        let blobs_available = remaining_blob_slots(
+            self.blob_params.max_blob_count,
+            self.blob_versioned_hashes.len() as u64,
+        );
         // NOTE: we check this because the block builder doesn't seem to do it
         if tx.blob_count().unwrap_or(0) > blobs_available {
             return Err(BlockMergingApiError::BlobLimitReached);
@@ -1265,5 +1304,27 @@ mod tests {
 
         let recovered = result.unwrap();
         assert_eq!(recovered.signer(), signer.address());
+    }
+    #[test]
+    fn test_remaining_blob_slots_saturates_on_underflow() {
+        assert_eq!(remaining_blob_slots(6, 7), 0);
+        assert_eq!(remaining_blob_slots(6, 6), 0);
+        assert_eq!(remaining_blob_slots(6, 5), 1);
+        assert_eq!(remaining_blob_slots(0, 1), 0);
+    }
+
+    #[test]
+    fn test_ensure_base_block_blob_limit_errors_when_exceeded() {
+        let err = ensure_base_block_blob_limit(6, 7).unwrap_err();
+        match err {
+            BlockMergingApiError::BaseBlockBlobLimitExceeded {
+                max_blob_count,
+                used_blob_count,
+            } => {
+                assert_eq!(max_blob_count, 6);
+                assert_eq!(used_blob_count, 7);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 }

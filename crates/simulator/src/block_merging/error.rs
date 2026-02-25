@@ -49,6 +49,8 @@ pub(crate) enum BlockMergingApiError {
     RevenueAllocationReverted,
     #[error("reached blob limit")]
     BlobLimitReached,
+    #[error("base block exceeds blob limit: used {used_blob_count} blobs > max {max_blob_count}")]
+    BaseBlockBlobLimitExceeded { max_blob_count: u64, used_blob_count: u64 },
     #[error("validation: {0}")]
     Validation(#[from] ValidationApiError),
     #[error("could not find parent block: {_0}")]
@@ -64,7 +66,8 @@ impl From<BlockMergingApiError> for ErrorObject<'static> {
             BlockMergingApiError::InvalidProposerPayment |
             BlockMergingApiError::NoSafeForBuilder(_) |
             BlockMergingApiError::NotEnoughGasForPayment(_) |
-            BlockMergingApiError::InvalidSignatureInBaseBlock => {
+            BlockMergingApiError::InvalidSignatureInBaseBlock |
+            BlockMergingApiError::BaseBlockBlobLimitExceeded { .. } => {
                 invalid_params_rpc_err(error.to_string())
             }
 
