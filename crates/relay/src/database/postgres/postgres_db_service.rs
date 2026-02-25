@@ -302,10 +302,6 @@ impl PostgresDatabaseService {
             .with_label_values(&["known_validators"])
             .set(self.local_cache.known_validators_cache.read().len() as f64);
 
-        CACHE_SIZE
-            .with_label_values(&["known_validators"])
-            .set(self.local_cache.known_validators_cache.read().len() as f64);
-
         record.record_success();
     }
 

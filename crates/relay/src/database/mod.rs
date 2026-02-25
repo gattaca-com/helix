@@ -70,7 +70,7 @@ pub async fn start_db_service(
                 loop {
                     tick.tick().await;
                     // On submission instances cache is updated by the housekeeper
-                    if is_registration_instance{
+                    if is_registration_instance {
                         postgres_db.load_known_validators().await;
                     }
                     if let Some(dir) = &snapshot_dir {

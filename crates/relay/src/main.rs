@@ -24,9 +24,9 @@ use helix_common::{
 };
 use helix_relay::{
     Api, Auctioneer, AuctioneerHandle, BidSorter, BidSubmissionTcpListener, DbHandle,
-    DefaultBidAdjustor, HelixSpine, RegWorker, RegWorkerHandle, RelayNetworkManager, S3PayloadSaver, SubWorker,
-    WebsiteService, spawn_tokio_monitoring, start_admin_service, start_api_service, start_beacon_client, start_db_service,
-    start_housekeeper,
+    DefaultBidAdjustor, HelixSpine, RegWorker, RegWorkerHandle, RelayNetworkManager,
+    S3PayloadSaver, SubWorker, WebsiteService, spawn_tokio_monitoring, start_admin_service,
+    start_api_service, start_beacon_client, start_db_service, start_housekeeper,
 };
 use helix_types::BlsKeypair;
 use tikv_jemallocator::Jemalloc;

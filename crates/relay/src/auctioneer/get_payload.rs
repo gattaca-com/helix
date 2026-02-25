@@ -153,13 +153,13 @@ impl<B: BidAdjustor> Context<B> {
         slot_data: &SlotData,
     ) -> Result<(GetPayloadResponse, VersionedSignedProposal), ProposerApiError> {
         match blinded {
-            SignedBlindedBeaconBlock::Altair(_)
-            | SignedBlindedBeaconBlock::Base(_)
-            | SignedBlindedBeaconBlock::Bellatrix(_)
-            | SignedBlindedBeaconBlock::Capella(_)
-            | SignedBlindedBeaconBlock::Deneb(_)
-            | SignedBlindedBeaconBlock::Electra(_)
-            | SignedBlindedBeaconBlock::Gloas(_) => {
+            SignedBlindedBeaconBlock::Altair(_) |
+            SignedBlindedBeaconBlock::Base(_) |
+            SignedBlindedBeaconBlock::Bellatrix(_) |
+            SignedBlindedBeaconBlock::Capella(_) |
+            SignedBlindedBeaconBlock::Deneb(_) |
+            SignedBlindedBeaconBlock::Electra(_) |
+            SignedBlindedBeaconBlock::Gloas(_) => {
                 Err(ProposerApiError::UnsupportedBeaconChainVersion)
             }
             SignedBlindedBeaconBlock::Fulu(blinded_block) => {

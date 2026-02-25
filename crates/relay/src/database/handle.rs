@@ -22,6 +22,7 @@ use crate::database::{
     postgres::postgres_db_service::{DbRequest, PendingBlockSubmissionValue},
 };
 
+// This is temporary until we have the spine connected up
 #[derive(Clone)]
 pub struct DbHandle {
     sender: crossbeam_channel::Sender<DbRequest>,
@@ -62,7 +63,7 @@ impl DbHandle {
     }
 
     pub fn store_builders_info(&self, builders: Vec<BuilderInfoDocument>) {
-        if let Err(err) = self.sender.send(DbRequest::StoreBuildersInfo { builders }) {
+        if let Err(err) = self.sender.try_send(DbRequest::StoreBuildersInfo { builders }) {
             error!(%err, "failed to send StoreBuildersInfo request");
         }
     }
@@ -75,7 +76,7 @@ impl DbHandle {
         reason: String,
         failsafe_triggered: Arc<AtomicBool>,
     ) {
-        if let Err(err) = self.sender.send(DbRequest::DbDemoteBuilder {
+        if let Err(err) = self.sender.try_send(DbRequest::DbDemoteBuilder {
             slot,
             builder_pub_key,
             block_hash,
@@ -98,7 +99,7 @@ impl DbHandle {
         optimistic_version: OptimisticVersion,
         is_adjusted: bool,
     ) {
-        if let Err(err) = self.batch_sender.send(PendingBlockSubmissionValue {
+        if let Err(err) = self.batch_sender.try_send(PendingBlockSubmissionValue {
             submission,
             trace,
             optimistic_version,
@@ -117,7 +118,7 @@ impl DbHandle {
         mev_boost: bool,
         user_agent: Option<String>,
     ) {
-        if let Err(err) = self.sender.send(DbRequest::SaveGetHeaderCall {
+        if let Err(err) = self.sender.try_send(DbRequest::SaveGetHeaderCall {
             params,
             best_block_hash,
             value,
@@ -137,7 +138,7 @@ impl DbHandle {
         trace: GetPayloadTrace,
     ) {
         if let Err(err) =
-            self.sender.send(DbRequest::SaveFailedGetPayload { slot, block_hash, error, trace })
+            self.sender.try_send(DbRequest::SaveFailedGetPayload { slot, block_hash, error, trace })
         {
             error!(%err, "failed to send SaveFailedGetPayload request");
         }
@@ -145,7 +146,7 @@ impl DbHandle {
 
     pub fn save_gossiped_payload_trace(&self, block_hash: B256, trace: GossipedPayloadTrace) {
         if let Err(err) =
-            self.sender.send(DbRequest::SaveGossipedPayloadTrace { block_hash, trace })
+            self.sender.try_send(DbRequest::SaveGossipedPayloadTrace { block_hash, trace })
         {
             error!(%err, "failed to send SaveGossipedPayloadTrace request");
         }
@@ -158,7 +159,7 @@ impl DbHandle {
         block_parent_hash: B256,
         proposer_pubkey: BlsPublicKeyBytes,
     ) {
-        if let Err(err) = self.sender.send(DbRequest::SaveInclusionList {
+        if let Err(err) = self.sender.try_send(DbRequest::SaveInclusionList {
             inclusion_list,
             slot,
             block_parent_hash,
@@ -169,7 +170,7 @@ impl DbHandle {
     }
 
     pub fn save_block_adjustments_data(&self, entry: DataAdjustmentsEntry) {
-        if let Err(err) = self.sender.send(DbRequest::SaveBlockAdjustmentsData { entry }) {
+        if let Err(err) = self.sender.try_send(DbRequest::SaveBlockAdjustmentsData { entry }) {
             error!(%err, "failed to send SaveBlockAdjustmentsData request");
         }
     }

@@ -5,7 +5,9 @@ mod tests {
     use alloy_primitives::B256;
     use deadpool_postgres::{Config, ManagerConfig, Pool, RecyclingMethod};
     use helix_common::{
-        Filtering, GetPayloadTrace, PostgresConfig, ValidatorSummary, api::proposer_api::ValidatorRegistrationInfo, local_cache::LocalCache, utils::utcnow_sec, validator_preferences::ValidatorPreferences
+        Filtering, GetPayloadTrace, PostgresConfig, ValidatorSummary,
+        api::proposer_api::ValidatorRegistrationInfo, local_cache::LocalCache, utils::utcnow_sec,
+        validator_preferences::ValidatorPreferences,
     };
     use helix_types::{
         BidTrace, BlobsBundle, BlsKeypair, BlsPublicKey, BlsPublicKeyBytes, BlsSecretKey,
@@ -212,8 +214,10 @@ mod tests {
 
     //     let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
 
-    //     let public_key = BlsPublicKey::deserialize(&alloy_primitives::hex!("8C266FD5CB50B5D9431DAA69C4BE17BC9A79A85D172112DA09E0AC3E2D0DCF785021D49B6DF57827D6BC61EBA086A507")).unwrap().serialize().into();
-    //     let builder_info = helix_common::BuilderInfo {
+    //     let public_key =
+    // BlsPublicKey::deserialize(&alloy_primitives::hex!("
+    // 8C266FD5CB50B5D9431DAA69C4BE17BC9A79A85D172112DA09E0AC3E2D0DCF785021D49B6DF57827D6BC61EBA086A507"
+    // )).unwrap().serialize().into();     let builder_info = helix_common::BuilderInfo {
     //         collateral: U256::from(10000000000000000000u64),
     //         is_optimistic: false,
     //         is_optimistic_for_regional_filtering: false,
@@ -252,8 +256,8 @@ mod tests {
     //     assert!(result.is_ok());
 
     //     let result =
-    //         db_service.db_demote_builder(0, &public_key, &Default::default(), "".to_string()).await;
-    //     assert!(result.is_ok());
+    //         db_service.db_demote_builder(0, &public_key, &Default::default(),
+    // "".to_string()).await;     assert!(result.is_ok());
     // }
 
     // #[tokio::test]
@@ -262,7 +266,10 @@ mod tests {
 
     //     let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
 
-    //     let pubkey = BlsPublicKey::deserialize(alloy_primitives::hex!("8592669BC0ACF28BC25D42699CEFA6101D7B10443232FE148420FF0FCDBF8CD240F5EBB94BC904CB6BEFFB61A1F8D36A").as_ref()).unwrap();
+    //     let pubkey =
+    // BlsPublicKey::deserialize(alloy_primitives::hex!("
+    // 8592669BC0ACF28BC25D42699CEFA6101D7B10443232FE148420FF0FCDBF8CD240F5EBB94BC904CB6BEFFB61A1F8D36A"
+    // ).as_ref()).unwrap();
 
     //     let bid_trace =
     //         BidTrace { proposer_pubkey: pubkey.serialize().into(), ..BidTrace::test_random() };
