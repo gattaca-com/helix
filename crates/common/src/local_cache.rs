@@ -261,8 +261,6 @@ impl LocalCache {
             existing_entry.registration_info.registration.message.gas_limit ==
                 registration.message.gas_limit
         {
-            // do registration once per hour, unless fee recipient / gas limit has changed
-
             return false;
         }
         true
