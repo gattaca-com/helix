@@ -33,7 +33,7 @@ pub use crate::{
     spine::HelixSpine,
     tcp_bid_recv::{
         BidSubmissionFlags, BidSubmissionHeader, BidSubmissionResponse, BidSubmissionTcpListener,
-        RegistrationMsg,
+        RegistrationMsg, S3PayloadSaver,
     },
     website::WebsiteService,
 };

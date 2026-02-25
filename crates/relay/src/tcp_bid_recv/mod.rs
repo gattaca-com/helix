@@ -1,5 +1,6 @@
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
+use bytes::Bytes;
 use crossbeam_channel::{Receiver, Sender};
 use dashmap::DashMap;
 use flux::{spine::FluxSpine, tile::Tile};
@@ -11,6 +12,7 @@ use helix_common::{SubmissionTrace, metrics::SUB_CLIENT_TO_SERVER_LATENCY, utils
 use helix_tcp_types::BidSubmission;
 use helix_types::BlsPublicKeyBytes;
 use ssz::{Decode, Encode};
+use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::{
@@ -18,11 +20,13 @@ use crate::{
     auctioneer::{InternalBidSubmissionHeader, SubmissionRef, SubmissionResultSender},
 };
 
+mod s3;
 pub mod types;
 
 pub use helix_tcp_types::{
     BidSubmissionFlags, BidSubmissionHeader, BidSubmissionResponse, RegistrationMsg,
 };
+pub use s3::S3PayloadSaver;
 
 pub use crate::tcp_bid_recv::types::{
     BidSubmissionError, response_from_bid_submission_error, response_from_builder_api_error,
@@ -42,6 +46,7 @@ pub struct BidSubmissionTcpListener {
     to_disconnect: Vec<Token>,
     registered: HashMap<Token, BlsPublicKeyBytes>,
     submission_errors: Vec<SubmissionError>,
+    raw_payloads_tx: Option<mpsc::Sender<(Uuid, Bytes)>>,
 }
 
 impl BidSubmissionTcpListener {
@@ -50,6 +55,7 @@ impl BidSubmissionTcpListener {
         auctioneer_handle: AuctioneerHandle,
         api_key_cache: Arc<DashMap<String, Vec<BlsPublicKeyBytes>>>,
         max_connections: usize,
+        raw_payloads_tx: Option<mpsc::Sender<(Uuid, Bytes)>>,
     ) -> Self {
         let mut listener = TcpConnector::default()
             .with_telemetry(TcpTelemetry::Enabled { app_name: HelixSpine::app_name() })
@@ -68,6 +74,7 @@ impl BidSubmissionTcpListener {
             to_disconnect: Vec::with_capacity(max_connections),
             registered: HashMap::with_capacity(max_connections),
             submission_errors: Vec::with_capacity(max_connections),
+            raw_payloads_tx,
         }
     }
 
@@ -117,10 +124,15 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
             }
             PollEvent::Message { token, payload, send_ts } => {
                 if let Some(expected_pubkey) = self.registered.get(&token) {
+                    let id = Uuid::new_v4();
+                    if let Some(tx) = &self.raw_payloads_tx
+                        && tx.try_send((id, Bytes::copy_from_slice(payload))).is_err() {
+                            tracing::error!("s3 channel full, dropping payload");
+                        }
                     match BidSubmission::try_from(payload).map_err(BidSubmissionError::from) {
                         Ok(bid) => {
                             let submission_ref = SubmissionRef {
-                                id: Uuid::new_v4(),
+                                id,
                                 token,
                                 seq_num: bid.header.sequence_number,
                             };

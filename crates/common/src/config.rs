@@ -63,6 +63,8 @@ pub struct RelayConfig {
     pub tcp_port: u16,
     #[serde(default = "default_usize::<512>")]
     pub tcp_max_connections: usize,
+    #[serde(default)]
+    pub s3_config: Option<S3Config>,
     /// Directory for local cache snapshots (bincode). Enables fast startup.
     pub snapshot_dir: Option<PathBuf>,
 }
@@ -101,6 +103,7 @@ impl RelayConfig {
             api_port: 4040,
             tcp_port: 4041,
             tcp_max_connections: 512,
+            s3_config: None,
             snapshot_dir: None,
         }
     }
@@ -568,6 +571,12 @@ impl Route {
 
 fn default_duration() -> u64 {
     1000
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct S3Config {
+    pub bucket: String,
+    pub region: String,
 }
 
 #[derive(Clone, Deserialize, Serialize)]

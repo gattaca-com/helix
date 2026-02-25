@@ -24,8 +24,8 @@ use helix_common::{
 };
 use helix_relay::{
     Api, Auctioneer, AuctioneerHandle, BidSorter, BidSubmissionTcpListener, DbHandle,
-    DefaultBidAdjustor, HelixSpine, RegWorker, RegWorkerHandle, RelayNetworkManager, SubWorker,
-    WebsiteService, start_admin_service, start_api_service, start_beacon_client, start_db_service,
+    DefaultBidAdjustor, HelixSpine, RegWorker, RegWorkerHandle, RelayNetworkManager, S3PayloadSaver, SubWorker,
+    WebsiteService, spawn_tokio_monitoring, start_admin_service, start_api_service, start_beacon_client, start_db_service,
     start_housekeeper,
 };
 use helix_types::BlsKeypair;
@@ -188,6 +188,9 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
                 attach_tile(worker, spine, TileConfig::new(core, ThreadPriority::OSDefault));
             }
 
+            let raw_payloads_tx =
+                config.s3_config.clone().map(|cfg| S3PayloadSaver::new(cfg).spawn());
+
             let sock_addr =
                 SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, config.tcp_port));
             let block_submission_tcp_listener = BidSubmissionTcpListener::new(
@@ -195,6 +198,7 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
                 auctioneer_handle,
                 local_cache.api_key_cache.clone(),
                 config.tcp_max_connections,
+                raw_payloads_tx,
             );
             attach_tile(
                 block_submission_tcp_listener,
