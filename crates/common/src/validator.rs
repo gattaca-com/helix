@@ -40,12 +40,8 @@ pub struct SignedValidatorRegistrationEntry {
 }
 
 impl SignedValidatorRegistrationEntry {
-    pub fn new(
-        registration_info: ValidatorRegistrationInfo,
-        pool_name: Option<String>,
-        user_agent: Option<String>,
-    ) -> Self {
-        Self { registration_info, inserted_at: utcnow_ms(), pool_name, user_agent }
+    pub fn new(registration_info: ValidatorRegistrationInfo, user_agent: Option<String>) -> Self {
+        Self { registration_info, inserted_at: utcnow_ms(), pool_name: None, user_agent }
     }
 
     pub fn public_key(&self) -> &BlsPublicKeyBytes {

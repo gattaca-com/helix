@@ -9,22 +9,26 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use dashmap::{DashMap, DashSet};
-use helix_types::{BlsPublicKeyBytes, CryptoError, MergedBlock};
+use helix_types::{BlsPublicKeyBytes, CryptoError, MergedBlock, SignedValidatorRegistration};
 use parking_lot::RwLock;
+use rustc_hash::FxHashSet;
 use tracing::error;
 
 use crate::{
-    BuilderConfig, BuilderInfo, ProposerInfo,
-    api::builder_api::{
-        BuilderGetValidatorsResponseEntry, InclusionListWithKey, InclusionListWithMetadata,
-        SlotCoordinate,
+    BuilderConfig, BuilderInfo, SignedValidatorRegistrationEntry,
+    api::{
+        builder_api::{
+            BuilderGetValidatorsResponseEntry, InclusionListWithKey, InclusionListWithMetadata,
+            SlotCoordinate,
+        },
+        proposer_api::ValidatorRegistrationInfo,
     },
     metrics::CACHE_SIZE,
 };
 
-const ESTIMATED_TRUSTED_PROPOSERS: usize = 200_000;
 const ESTIMATED_BUILDER_INFOS_UPPER_BOUND: usize = 1000;
 const MAX_PRIMEV_PROPOSERS: usize = 64;
+const VALIDATOR_REGISTRATION_UPDATE_INTERVAL: u64 = 60 * 60; // 1 hour in seconds
 
 #[derive(Debug, thiserror::Error)]
 pub enum AuctioneerError {
@@ -89,34 +93,60 @@ pub struct LocalCache {
     builder_info_cache: Arc<DashMap<BlsPublicKeyBytes, BuilderInfo>>,
     /// Api key -> builder pubkey
     pub api_key_cache: Arc<DashMap<String, Vec<BlsPublicKeyBytes>>>,
-    trusted_proposers: Arc<DashMap<BlsPublicKeyBytes, ProposerInfo>>,
     primev_proposers: Arc<DashSet<BlsPublicKeyBytes>>,
     kill_switch: Arc<AtomicBool>,
     proposer_duties: Arc<RwLock<Vec<BuilderGetValidatorsResponseEntry>>>,
     merged_blocks: Arc<DashMap<B256, MergedBlock>>,
+    pub validator_registration_cache:
+        Arc<DashMap<BlsPublicKeyBytes, SignedValidatorRegistrationEntry>>,
+    pub pending_validator_registrations: Arc<DashSet<BlsPublicKeyBytes>>,
+    pub known_validators_cache: Arc<RwLock<FxHashSet<BlsPublicKeyBytes>>>,
+    pub adjustments_enabled: Arc<AtomicBool>,
+    pub adjustments_failsafe_trigger: Arc<AtomicBool>,
 }
 
 impl LocalCache {
     pub fn new() -> Self {
         let builder_info_cache =
             Arc::new(DashMap::with_capacity(ESTIMATED_BUILDER_INFOS_UPPER_BOUND));
-        let api_key_cache = Arc::new(DashMap::with_capacity(ESTIMATED_TRUSTED_PROPOSERS));
-        let trusted_proposers = Arc::new(DashMap::with_capacity(ESTIMATED_TRUSTED_PROPOSERS));
+        let api_key_cache = Arc::new(DashMap::with_capacity(ESTIMATED_BUILDER_INFOS_UPPER_BOUND));
         let primev_proposers = Arc::new(DashSet::with_capacity(MAX_PRIMEV_PROPOSERS));
         let kill_switch = Arc::new(AtomicBool::new(false));
-        let proposer_duties = Arc::new(RwLock::new(Vec::new()));
+        let proposer_duties = Arc::new(RwLock::new(Vec::with_capacity(1000)));
         let merged_blocks = Arc::new(DashMap::with_capacity(1000));
+        let validator_registration_cache = Arc::new(DashMap::with_capacity(1_800_000));
+        let pending_validator_registrations = Arc::new(DashSet::with_capacity(20_000));
+        let known_validators_cache = Arc::new(RwLock::new(FxHashSet::with_capacity_and_hasher(
+            1_200_000,
+            Default::default(),
+        )));
+        let adjustments_enabled = Arc::new(AtomicBool::new(false));
+        let adjustments_failsafe_trigger = Arc::new(AtomicBool::new(false));
 
         Self {
             inclusion_list: Default::default(),
             builder_info_cache,
             api_key_cache,
-            trusted_proposers,
             primev_proposers,
             kill_switch,
             proposer_duties,
             merged_blocks,
+            validator_registration_cache,
+            pending_validator_registrations,
+            known_validators_cache,
+            adjustments_enabled,
+            adjustments_failsafe_trigger,
         }
+    }
+
+    pub fn new_test() -> Self {
+        Self::new()
+    }
+}
+
+impl Default for LocalCache {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -164,19 +194,6 @@ impl LocalCache {
 
         CACHE_SIZE.with_label_values(&["builder_info"]).set(self.builder_info_cache.len() as f64);
         CACHE_SIZE.with_label_values(&["api_keys"]).set(self.api_key_cache.len() as f64);
-    }
-
-    pub fn update_trusted_proposers(&self, proposer_whitelist: Vec<ProposerInfo>) {
-        for proposer in &proposer_whitelist {
-            self.trusted_proposers.insert(proposer.pubkey, proposer.clone());
-        }
-        CACHE_SIZE
-            .with_label_values(&["trusted_proposers"])
-            .set(self.trusted_proposers.len() as f64);
-    }
-
-    pub fn is_trusted_proposer(&self, proposer_pub_key: &BlsPublicKeyBytes) -> bool {
-        self.trusted_proposers.contains_key(proposer_pub_key)
     }
 
     pub fn update_primev_proposers(&self, primev_proposers: &[BlsPublicKeyBytes]) {
@@ -228,6 +245,55 @@ impl LocalCache {
         self.merged_blocks.get(block_hash).map(|b| b.value().clone())
     }
 
+    pub fn is_registration_update_required(
+        &self,
+        registration: &SignedValidatorRegistration,
+    ) -> bool {
+        if let Some(existing_entry) =
+            self.validator_registration_cache.get(&registration.message.pubkey) &&
+            existing_entry.registration_info.registration.message.timestamp >=
+                registration
+                    .message
+                    .timestamp
+                    .saturating_sub(VALIDATOR_REGISTRATION_UPDATE_INTERVAL) &&
+            existing_entry.registration_info.registration.message.fee_recipient ==
+                registration.message.fee_recipient &&
+            existing_entry.registration_info.registration.message.gas_limit ==
+                registration.message.gas_limit
+        {
+            return false;
+        }
+        true
+    }
+
+    /// Assume the entries are already validated
+    pub fn save_validator_registrations(
+        &self,
+        entries: impl Iterator<Item = ValidatorRegistrationInfo>,
+        user_agent: Option<String>,
+    ) {
+        for entry in entries {
+            self.pending_validator_registrations.insert(entry.registration.message.pubkey);
+            self.validator_registration_cache.insert(
+                entry.registration.message.pubkey,
+                SignedValidatorRegistrationEntry::new(entry.clone(), user_agent.clone()),
+            );
+        }
+    }
+
+    pub fn get_validator_registrations_for_pub_keys(
+        &self,
+        pub_keys: &[BlsPublicKeyBytes],
+    ) -> Vec<SignedValidatorRegistrationEntry> {
+        let mut registrations = Vec::with_capacity(pub_keys.len());
+        for pub_key in pub_keys {
+            if let Some(entry) = self.validator_registration_cache.get(pub_key) {
+                registrations.push(entry.clone());
+            }
+        }
+        registrations
+    }
+
     pub fn get_merged_blocks(&self) -> Vec<MergedBlock> {
         self.merged_blocks.iter().map(|b| b.value().clone()).collect()
     }
@@ -242,7 +308,6 @@ impl LocalCache {
 mod tests {
 
     use alloy_primitives::U256;
-    use helix_types::{BlsPublicKey, TestRandomSeed, get_fixed_pubkey_bytes};
 
     use super::*;
     use crate::BuilderConfig;
@@ -279,39 +344,6 @@ mod tests {
         // Test case 2: Builder doesn't exist
         let result = cache.get_builder_info(&unknown_builder_pub_key);
         assert!(result.is_none(), "Fetched builder info for unknown builder");
-    }
-
-    #[tokio::test]
-    pub async fn test_get_trusted_proposers_and_update_trusted_proposers() {
-        let cache = LocalCache::new();
-
-        let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::test_random().serialize().into());
-        assert!(!is_trusted, "Failed to check trusted proposer");
-
-        cache.update_trusted_proposers(vec![
-            ProposerInfo { name: "test".to_string(), pubkey: get_fixed_pubkey_bytes(0) },
-            ProposerInfo { name: "test2".to_string(), pubkey: get_fixed_pubkey_bytes(1) },
-        ]);
-
-        let is_trusted = cache.is_trusted_proposer(&get_fixed_pubkey_bytes(0));
-        assert!(is_trusted, "Failed to check trusted proposer");
-
-        let is_trusted = cache.is_trusted_proposer(&get_fixed_pubkey_bytes(1));
-        assert!(is_trusted, "Failed to check trusted proposer");
-
-        let is_trusted = cache.is_trusted_proposer(&get_fixed_pubkey_bytes(2));
-        assert!(!is_trusted, "Failed to check trusted proposer");
-
-        cache.update_trusted_proposers(vec![ProposerInfo {
-            name: "test2".to_string(),
-            pubkey: get_fixed_pubkey_bytes(3),
-        }]);
-
-        let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::test_random().serialize().into());
-        assert!(!is_trusted, "Failed to check trusted proposer");
-
-        let is_trusted = cache.is_trusted_proposer(&get_fixed_pubkey_bytes(3));
-        assert!(is_trusted, "Failed to check trusted proposer");
     }
 
     #[tokio::test]

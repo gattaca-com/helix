@@ -12,7 +12,7 @@ use moka::sync::Cache;
 use tracing::{error, info};
 
 use crate::{
-    AuctioneerHandle, RegWorkerHandle,
+    AuctioneerHandle, DbHandle, PostgresDatabaseService, RegWorkerHandle,
     api::{
         Api,
         builder::api::BuilderApi,
@@ -21,14 +21,12 @@ use crate::{
         router::build_router,
     },
     beacon::multi_beacon_client::MultiBeaconClient,
-    database::postgres::postgres_db_service::PostgresDatabaseService,
     gossip::{GrpcGossiperClientManager, process_gossip_messages},
     housekeeper::CurrentSlotInfo,
     network::api::RelayNetworkApi,
 };
 
 pub(crate) const API_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
-pub(crate) const SIMULATOR_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
 pub fn start_api_service<A: Api>(
     config: RelayConfig,
@@ -43,6 +41,7 @@ pub fn start_api_service<A: Api>(
     terminating: Arc<AtomicBool>,
     top_bid_tx: tokio::sync::broadcast::Sender<TopBidUpdate>,
     relay_network_api: RelayNetworkApi,
+    db_handle: DbHandle,
     auctioneer_handle: AuctioneerHandle,
     registrations_handle: RegWorkerHandle,
 ) {
@@ -59,6 +58,7 @@ pub fn start_api_service<A: Api>(
         terminating.clone(),
         top_bid_tx.clone(),
         relay_network_api,
+        db_handle.clone(),
         auctioneer_handle,
         registrations_handle,
     ));
@@ -77,6 +77,7 @@ pub async fn run_api_service<A: Api>(
     terminating: Arc<AtomicBool>,
     top_bid_tx: tokio::sync::broadcast::Sender<TopBidUpdate>,
     relay_network_api: RelayNetworkApi,
+    db_handle: DbHandle,
     auctioneer_handle: AuctioneerHandle,
     registrations_handle: RegWorkerHandle,
 ) {
@@ -92,7 +93,7 @@ pub async fn run_api_service<A: Api>(
 
     let builder_api = BuilderApi::<A>::new(
         local_cache.clone(),
-        db.clone(),
+        db_handle.clone(),
         config.clone(),
         current_slot_info.clone(),
         top_bid_tx,
@@ -105,7 +106,7 @@ pub async fn run_api_service<A: Api>(
 
     let proposer_api = Arc::new(ProposerApi::<A>::new(
         local_cache,
-        db.clone(),
+        db_handle.clone(),
         gossiper.clone(),
         api_provider.clone(),
         relay_signing_context,

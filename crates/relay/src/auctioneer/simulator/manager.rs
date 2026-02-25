@@ -14,13 +14,13 @@ use helix_common::{
 use helix_types::{BlsPublicKeyBytes, SignedBidSubmission, SubmissionVersion};
 use tracing::{debug, error, info, warn};
 
-use crate::{
-    api::service::SIMULATOR_REQUEST_TIMEOUT,
-    auctioneer::{
-        simulator::{BlockMergeRequest, SimulatorRequest, client::SimulatorClient},
-        types::{Event, SubmissionRef, SubmissionResult, SubmissionResultSender},
-    },
+use crate::auctioneer::{
+    SubmissionResultSender,
+    simulator::{BlockMergeRequest, SimulatorRequest, client::SimulatorClient},
+    types::{Event, SubmissionRef, SubmissionResult},
 };
+
+pub(crate) const SIMULATOR_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Default)]
 struct LocalTelemetry {

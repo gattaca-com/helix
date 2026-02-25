@@ -5,13 +5,13 @@ use helix_common::{
     self, BuilderInfo, SubmissionTrace,
     bid_submission::OptimisticVersion,
     metrics::{BID_ADJUSTMENT_LATENCY, HYDRATION_CACHE_HITS},
-    record_submission_step, spawn_tracked,
+    record_submission_step,
 };
 use helix_types::{
     BidAdjustmentData, BlockValidationError, MergeableOrdersWithPref, SignedBidSubmission,
     SubmissionVersion,
 };
-use tracing::{error, trace};
+use tracing::trace;
 
 use crate::{
     api::builder::error::BuilderApiError,
@@ -48,7 +48,7 @@ impl<B: BidAdjustor> Context<B> {
 
                 if !self.completed_dry_run &&
                     entry.is_adjustable() &&
-                    self.adjustments_enabled.load(Ordering::Relaxed)
+                    self.cache.adjustments_enabled.load(Ordering::Relaxed)
                 {
                     let start = Instant::now();
                     if let Some((adjusted_block, sim_request, _, strategy)) =
@@ -275,14 +275,7 @@ impl<B: BidAdjustor> Context<B> {
         let trace_clone = req.trace.clone();
         let opt_version = req.optimistic_version();
 
-        let db = self.db.clone();
-        spawn_tracked!(async move {
-            if let Err(err) =
-                db.store_block_submission(sub_clone, trace_clone, opt_version, is_adjusted).await
-            {
-                error!(%err, "failed to store block submission")
-            }
-        });
+        self.db.store_block_submission(sub_clone, trace_clone, opt_version, is_adjusted);
 
         self.sim_manager.handle_sim_request(req, fast_track);
     }

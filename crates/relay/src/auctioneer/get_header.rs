@@ -41,7 +41,7 @@ impl<B: BidAdjustor> Context<B> {
         };
 
         let original_bid = original_bid.clone();
-        if self.adjustments_enabled.load(Ordering::Relaxed) {
+        if self.cache.adjustments_enabled.load(Ordering::Relaxed) {
             let start = Instant::now();
             if let Some((adjusted_bid, sim_request, is_adjustable_slot, strategy)) =
                 self.bid_adjustor.try_apply_adjustments(&original_bid, slot_data, false)
