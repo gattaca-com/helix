@@ -79,8 +79,8 @@ pub struct InvalidTxIndex;
 
 impl BundleOrder {
     pub fn validate(&self) -> Result<(), InvalidTxIndex> {
-        if self.reverting_txs.iter().any(|&i| i >= self.txs.len())
-            || self.dropping_txs.iter().any(|&i| i >= self.txs.len())
+        if self.reverting_txs.iter().any(|&i| i >= self.txs.len()) ||
+            self.dropping_txs.iter().any(|&i| i >= self.txs.len())
         {
             return Err(InvalidTxIndex);
         }

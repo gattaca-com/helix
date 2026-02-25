@@ -17,9 +17,8 @@ use tracing::{debug, error, info, warn};
 use crate::{
     api::service::SIMULATOR_REQUEST_TIMEOUT,
     auctioneer::{
-        SubmissionResultSender,
         simulator::{BlockMergeRequest, SimulatorRequest, client::SimulatorClient},
-        types::{Event, SubmissionRef, SubmissionResult},
+        types::{Event, SubmissionRef, SubmissionResult, SubmissionResultSender},
     },
 };
 

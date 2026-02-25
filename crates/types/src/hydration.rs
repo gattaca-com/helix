@@ -27,13 +27,13 @@ pub enum DehydratedBidSubmission {
 impl ForkVersionDecode for DehydratedBidSubmission {
     fn from_ssz_bytes_by_fork(bytes: &[u8], fork: ForkName) -> Result<Self, DecodeError> {
         match fork {
-            ForkName::Base
-            | ForkName::Altair
-            | ForkName::Bellatrix
-            | ForkName::Capella
-            | ForkName::Deneb
-            | ForkName::Electra
-            | ForkName::Gloas => Err(DecodeError::NoMatchingVariant),
+            ForkName::Base |
+            ForkName::Altair |
+            ForkName::Bellatrix |
+            ForkName::Capella |
+            ForkName::Deneb |
+            ForkName::Electra |
+            ForkName::Gloas => Err(DecodeError::NoMatchingVariant),
             ForkName::Fulu => DehydratedBidSubmissionFulu::from_ssz_bytes(bytes)
                 .map(DehydratedBidSubmission::Fulu),
         }
@@ -136,13 +136,13 @@ impl DehydratedBidSubmissionFuluWithAdjustments {
 impl ForkVersionDecode for DehydratedBidSubmissionFuluWithAdjustments {
     fn from_ssz_bytes_by_fork(bytes: &[u8], fork: ForkName) -> Result<Self, DecodeError> {
         match fork {
-            ForkName::Base
-            | ForkName::Altair
-            | ForkName::Bellatrix
-            | ForkName::Capella
-            | ForkName::Deneb
-            | ForkName::Gloas
-            | ForkName::Electra => Err(DecodeError::NoMatchingVariant),
+            ForkName::Base |
+            ForkName::Altair |
+            ForkName::Bellatrix |
+            ForkName::Capella |
+            ForkName::Deneb |
+            ForkName::Gloas |
+            ForkName::Electra => Err(DecodeError::NoMatchingVariant),
             ForkName::Fulu => DehydratedBidSubmissionFuluWithAdjustments::from_ssz_bytes(bytes),
         }
     }
