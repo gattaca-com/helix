@@ -40,6 +40,7 @@ ethereum_ssz = "0.9"
 ethereum_ssz_derive = "0.9"
 ethers = "2.0.14"
 eyre = "0.6.12"
+aws-sdk-s3 = "=1.35.0"
 flate2 = "1.0"
 
 flux = { git = "https://github.com/gattaca-com/flux", rev = "28d290c02c4e91aba3cc5283c26ea750faac8954"}
