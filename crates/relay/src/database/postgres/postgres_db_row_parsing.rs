@@ -30,6 +30,7 @@ impl FromRow for DeliveredPayloadDocument {
             bid_trace: BidTrace::from_row(row)?,
             block_number: parse_i32_to_u64(row.get::<&str, i32>("block_number"))?,
             num_txs: parse_i32_to_usize(row.get::<&str, i32>("num_txs"))?,
+            region: row.get::<&str, Option<&str>>("region").map(|s| s.to_string()),
         })
     }
 }
@@ -79,6 +80,7 @@ impl FromRow for BidSubmissionDocument {
             },
             num_txs: parse_i32_to_usize(row.get::<&str, i32>("num_txs"))?,
             timestamp: parse_i64_to_u64(row.get::<&str, i64>("submission_timestamp"))?,
+            region: row.get::<&str, Option<&str>>("region").map(|s| s.to_string()),
         })
     }
 }

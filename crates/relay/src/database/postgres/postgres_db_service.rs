@@ -1234,10 +1234,10 @@ impl PostgresDatabaseService {
         let client = self.pool.get().await?;
         client.execute(
             "
-                INSERT INTO delivered_payload 
-                    (block_hash, payload_parent_hash, fee_recipient, state_root, receipts_root, logs_bloom, prev_randao, timestamp, block_number, gas_limit, gas_used, extra_data, base_fee_per_gas, user_agent, slot_number, builder_pubkey, proposer_pubkey, proposer_fee_recipient, value, num_txs, filtering )
-                VALUES 
-                    ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+                INSERT INTO delivered_payload
+                    (block_hash, payload_parent_hash, fee_recipient, state_root, receipts_root, logs_bloom, prev_randao, timestamp, block_number, gas_limit, gas_used, extra_data, base_fee_per_gas, user_agent, slot_number, builder_pubkey, proposer_pubkey, proposer_fee_recipient, value, num_txs, filtering, region_id )
+                VALUES
+                    ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
                 ON CONFLICT (block_hash)
                 DO NOTHING
             ",
@@ -1263,6 +1263,7 @@ impl PostgresDatabaseService {
                 &(PostgresNumeric::from(save_payload_params.value)),
                 &(save_payload_params.payload.execution_payload.transactions.len() as i32),
                 &(save_payload_params.filtering as i16),
+                &region_id,
             ],
             ).await?;
 
@@ -1637,11 +1638,14 @@ impl PostgresDatabaseService {
                 block_submission.gas_used gas_used,
                 block_submission.value submission_value,
                 block_submission.num_txs num_txs,
-                LEAST(block_submission.first_seen, header_submission.first_seen) submission_timestamp
-            FROM 
+                LEAST(block_submission.first_seen, header_submission.first_seen) submission_timestamp,
+                region.name region
+            FROM
                 block_submission
             LEFT JOIN
                 header_submission ON block_submission.block_hash = header_submission.block_hash
+            LEFT JOIN
+                region ON block_submission.region_id = region.id
         ");
 
         let mut header_query = String::from(
@@ -1658,8 +1662,9 @@ impl PostgresDatabaseService {
                 header_submission.gas_used gas_used,
                 header_submission.value submission_value,
                 header_submission.tx_count num_txs,
-                header_submission.first_seen submission_timestamp
-            FROM 
+                header_submission.first_seen submission_timestamp,
+                NULL::text region
+            FROM
                 header_submission
         ",
         );
@@ -1818,9 +1823,12 @@ impl PostgresDatabaseService {
                 delivered_payload.gas_limit              gas_limit,
                 delivered_payload.gas_used               gas_used,
                 delivered_payload.block_number           block_number,
-                delivered_payload.num_txs                num_txs
+                delivered_payload.num_txs                num_txs,
+                region.name                              region
             FROM
                 delivered_payload
+            LEFT JOIN
+                region ON delivered_payload.region_id = region.id
         ",
         );
 
@@ -1918,11 +1926,14 @@ impl PostgresDatabaseService {
                 block_submission.gas_limit              gas_limit,
                 block_submission.gas_used               gas_used,
                 block_submission.block_number           block_number,
-                block_submission.num_txs                num_txs
+                block_submission.num_txs                num_txs,
+                region.name                              region
             FROM
                 block_submission
             INNER JOIN
                 delivered_payload ON block_submission.block_number = delivered_payload.block_number and block_submission.block_hash = delivered_payload.block_hash
+            LEFT JOIN
+                region ON block_submission.region_id = region.id
         ",
         );
 

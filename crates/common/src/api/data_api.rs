@@ -71,6 +71,27 @@ pub struct DeliveredPayloadsResponse {
     pub num_tx: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeliveredPayloadsResponseV2 {
+    pub slot: Slot,
+    pub parent_hash: B256,
+    pub block_hash: B256,
+    pub builder_pubkey: BlsPublicKeyBytes,
+    pub proposer_pubkey: BlsPublicKeyBytes,
+    pub proposer_fee_recipient: Address,
+    #[serde(with = "serde_utils::quoted_u64")]
+    pub gas_limit: u64,
+    #[serde(with = "serde_utils::quoted_u64")]
+    pub gas_used: u64,
+    #[serde(with = "serde_utils::quoted_u256")]
+    pub value: U256,
+    #[serde(with = "serde_utils::quoted_u64")]
+    pub block_number: u64,
+    #[serde(with = "serde_utils::quoted_u64")]
+    pub num_tx: u64,
+    pub region: Option<String>,
+}
+
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
 pub struct BuilderBlocksReceivedParams {
     pub slot: Option<u64>,
@@ -117,6 +138,31 @@ pub struct ReceivedBlocksResponse {
     pub timestamp: u64,
     #[serde(with = "serde_utils::quoted_u64")]
     pub timestamp_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReceivedBlocksResponseV2 {
+    pub slot: Slot,
+    pub parent_hash: B256,
+    pub block_hash: B256,
+    pub builder_pubkey: BlsPublicKeyBytes,
+    pub proposer_pubkey: BlsPublicKeyBytes,
+    pub proposer_fee_recipient: Address,
+    #[serde(with = "serde_utils::quoted_u64")]
+    pub gas_limit: u64,
+    #[serde(with = "serde_utils::quoted_u64")]
+    pub gas_used: u64,
+    #[serde(with = "serde_utils::quoted_u256")]
+    pub value: U256,
+    #[serde(with = "serde_utils::quoted_u64")]
+    pub block_number: u64,
+    #[serde(with = "serde_utils::quoted_u64")]
+    pub num_tx: u64,
+    #[serde(with = "serde_utils::quoted_u64")]
+    pub timestamp: u64,
+    #[serde(with = "serde_utils::quoted_u64")]
+    pub timestamp_ms: u64,
+    pub region: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

@@ -9,8 +9,9 @@ use helix_common::{
     ValidatorPreferences,
     api::data_api::{
         BuilderBlocksReceivedParams, DataAdjustmentsParams, DeliveredPayloadsResponse,
-        MergedBlockParams, ProposerHeaderDeliveredParams, ProposerPayloadDeliveredParams,
-        ReceivedBlocksResponse, ValidatorRegistrationParams,
+        DeliveredPayloadsResponseV2, MergedBlockParams, ProposerHeaderDeliveredParams,
+        ProposerPayloadDeliveredParams, ReceivedBlocksResponse, ReceivedBlocksResponseV2,
+        ValidatorRegistrationParams,
     },
     metrics,
 };
@@ -25,15 +26,20 @@ use crate::{
 };
 
 pub(crate) type BidsCache = Cache<BuilderBlocksReceivedParams, Vec<ReceivedBlocksResponse>>;
+pub(crate) type BidsCacheV2 = Cache<BuilderBlocksReceivedParams, Vec<ReceivedBlocksResponseV2>>;
 pub(crate) type DeliveredPayloadsCache =
     Cache<ProposerPayloadDeliveredParams, Vec<DeliveredPayloadsResponse>>;
+pub(crate) type DeliveredPayloadsCacheV2 =
+    Cache<ProposerPayloadDeliveredParams, Vec<DeliveredPayloadsResponseV2>>;
 
 #[derive(Clone)]
 pub struct DataApi {
     validator_preferences: Arc<ValidatorPreferences>,
     db: Arc<PostgresDatabaseService>,
     payload_delivered_stats: ProposerPayloadDeliveredStats,
+    payload_delivered_stats_v2: ProposerPayloadDeliveredStats,
     builder_blocks_received_stats: BuilderBlocksReceivedStats,
+    builder_blocks_received_stats_v2: BuilderBlocksReceivedStats,
 }
 
 impl DataApi {
@@ -58,7 +64,9 @@ impl DataApi {
             validator_preferences,
             db,
             payload_delivered_stats: Default::default(),
+            payload_delivered_stats_v2: Default::default(),
             builder_blocks_received_stats: Default::default(),
+            builder_blocks_received_stats_v2: Default::default(),
         }
     }
 
@@ -114,6 +122,54 @@ impl DataApi {
         }
     }
 
+    pub async fn proposer_payload_delivered_v2(
+        Extension(data_api): Extension<Arc<DataApi>>,
+        Extension(cache): Extension<DeliveredPayloadsCacheV2>,
+        Query(mut params): Query<ProposerPayloadDeliveredParams>,
+    ) -> Result<impl IntoResponse, DataApiError> {
+        if params.slot.is_some() && params.cursor.is_some() {
+            return Err(DataApiError::SlotAndCursor);
+        }
+
+        if params.limit.is_some() && params.limit.unwrap() > 200 {
+            return Err(DataApiError::LimitReached { limit: 200 });
+        }
+        data_api.payload_delivered_stats_v2.record_total(&params);
+
+        if params.limit.is_none() {
+            params.limit = Some(200);
+        }
+
+        if let Some(cached_result) = cache.get(&params) {
+            data_api.payload_delivered_stats_v2.record_cache_hit();
+            metrics::delivered_payloads_cache_hit();
+            return Ok(Json(cached_result));
+        }
+
+        debug!(?params, ?data_api.validator_preferences, "fetching payloads v2");
+
+        match data_api
+            .db
+            .get_delivered_payloads(&(&params).into(), data_api.validator_preferences.clone())
+            .await
+        {
+            Ok(result) => {
+                debug!(?result, "payloads fetched v2");
+                let response = result
+                    .into_iter()
+                    .map(|b| b.into())
+                    .collect::<Vec<DeliveredPayloadsResponseV2>>();
+
+                cache.insert(params, response.clone());
+
+                Ok(Json(response))
+            }
+            Err(err) => {
+                warn!(error=%err, "Failed to fetch delivered payloads v2");
+                Err(DataApiError::InternalServerError)
+            }
+        }
+    }
     /// Implements this API: <https://flashbots.github.io/relay-specs/#/Data/getReceivedBids>
     pub async fn builder_bids_received(
         Extension(data_api): Extension<Arc<DataApi>>,
@@ -154,6 +210,53 @@ impl DataApi {
                     .filter(|b| seen.insert(b.bid_trace.block_hash))
                     .map(|b| b.into())
                     .collect::<Vec<ReceivedBlocksResponse>>();
+
+                cache.insert(params, response.clone());
+
+                Ok(Json(response))
+            }
+            Err(err) => {
+                warn!(error=%err, "Failed to fetch bids");
+                Err(DataApiError::InternalServerError)
+            }
+        }
+    }
+
+    pub async fn builder_bids_received_v2(
+        Extension(data_api): Extension<Arc<DataApi>>,
+        Extension(cache): Extension<BidsCacheV2>,
+        Query(mut params): Query<BuilderBlocksReceivedParams>,
+    ) -> Result<impl IntoResponse, DataApiError> {
+        if params.slot.is_none() &&
+            params.block_hash.is_none() &&
+            params.block_number.is_none() &&
+            params.builder_pubkey.is_none()
+        {
+            return Err(DataApiError::MissingFilter);
+        }
+
+        if params.limit.is_some() && params.limit.unwrap() > 500 && params.slot.is_none() {
+            return Err(DataApiError::LimitReached { limit: 500 });
+        }
+        data_api.builder_blocks_received_stats_v2.record_total(&params);
+
+        // No need to apply limit for slot/block number based queries as the result set is already
+        // limited and returning less than the full set here would be misleading.
+        if params.limit.is_none() && params.slot.is_none() && params.block_number.is_none() {
+            params.limit = Some(500);
+        }
+
+        if let Some(cached_result) = cache.get(&params) {
+            data_api.builder_blocks_received_stats_v2.record_cache_hit();
+            metrics::bids_cache_hit();
+            return Ok(Json(cached_result));
+        }
+
+        match data_api.db.get_bids(&(&params).into(), data_api.validator_preferences.clone()).await
+        {
+            Ok(result) => {
+                let response =
+                    result.into_iter().map(|b| b.into()).collect::<Vec<ReceivedBlocksResponseV2>>();
 
                 cache.insert(params, response.clone());
 
