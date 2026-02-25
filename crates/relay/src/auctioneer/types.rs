@@ -122,8 +122,8 @@ impl InternalBidSubmissionHeader {
     ) -> MergeType {
         match header_map.get(HEADER_MERGE_TYPE) {
             None => {
-                if sub_type.is_some_and(|sub_type| sub_type == SubmissionType::Merge) ||
-                    matches!(header_map.get(HEADER_IS_MERGEABLE), Some(header) if header == HeaderValue::from_static("true"))
+                if sub_type.is_some_and(|sub_type| sub_type == SubmissionType::Merge)
+                    || matches!(header_map.get(HEADER_IS_MERGEABLE), Some(header) if header == HeaderValue::from_static("true"))
                 {
                     MergeType::Mergeable
                 } else {
@@ -369,13 +369,13 @@ impl PayloadEntry {
                 Some(s.withdrawals_root),
                 s.tx_root,
                 s.signed_bid_submission.execution_requests_ref().clone(),
-                s.signed_bid_submission.blobs_bundle().commitments().to_owned(),
+                s.signed_bid_submission.blobs_bundle().commitments.to_owned(),
             ),
             Self::Gossip(s) => (
                 None,
                 None,
                 s.bid_data.execution_requests.clone(),
-                s.payload_and_blobs.blobs_bundle.commitments().to_owned(),
+                s.payload_and_blobs.blobs_bundle.commitments.to_owned(),
             ),
         };
 

@@ -8,7 +8,7 @@ use ssz::{Decode, Encode};
 fn benchmark_signed_bid_submission_ssz(c: &mut Criterion) {
     let mut group = c.benchmark_group("signed_bid_submission ssz");
 
-    let data_json = include_bytes!("../src/testdata/signed-bid-submission-electra-3.json");
+    let data_json = include_bytes!("../src/testdata/signed-bid-submission-fulu-2.json");
     let custom_submission: SignedBidSubmission = serde_json::from_slice(data_json).unwrap();
     let ssz_bytes = custom_submission.as_ssz_bytes();
 
@@ -47,7 +47,7 @@ fn benchmark_signed_bid_submission_ssz(c: &mut Criterion) {
 fn benchmark_signed_bid_submission_serde(c: &mut Criterion) {
     let mut group = c.benchmark_group("signed_bid_submission");
 
-    let data_json = include_bytes!("../src/testdata/signed-bid-submission-electra-3.json");
+    let data_json = include_bytes!("../src/testdata/signed-bid-submission-fulu-2.json");
     let custom_submission: SignedBidSubmission = serde_json::from_slice(data_json).unwrap();
     let ssz_bytes = custom_submission.as_ssz_bytes();
     let alloy_submission = AlloySignedBidSubmission::from_ssz_bytes(&ssz_bytes).unwrap();

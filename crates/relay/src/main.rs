@@ -62,11 +62,12 @@ fn main() {
         instance_id.clone(),
     ));
 
-    init_panic_hook(
-        config.postgres.region_name.clone(),
-        config.discord_webhook_url.clone(),
-        config.logging.dir_path(),
-    );
+    let app_id = config
+        .instance_id
+        .clone()
+        .unwrap_or_else(|| format!("RELAY-{}", config.postgres.region_name));
+
+    init_panic_hook(app_id, config.discord_webhook_url.clone(), config.logging.dir_path());
 
     block_on(start_metrics_server(&config));
     match block_on(run(instance_id, config, keypair)) {
@@ -130,6 +131,8 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
 
     let terminating = Arc::new(AtomicBool::default());
     let termination_grace_period = Duration::from_millis(config.router_config.shutdown_delay_ms);
+
+    spawn_tokio_monitoring();
 
     let spine = HelixSpine::new(None);
     spine.start(None, Some(termination_grace_period), |spine| {

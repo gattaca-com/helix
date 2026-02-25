@@ -79,8 +79,8 @@ pub struct InvalidTxIndex;
 
 impl BundleOrder {
     pub fn validate(&self) -> Result<(), InvalidTxIndex> {
-        if self.reverting_txs.iter().any(|&i| i >= self.txs.len()) ||
-            self.dropping_txs.iter().any(|&i| i >= self.txs.len())
+        if self.reverting_txs.iter().any(|&i| i >= self.txs.len())
+            || self.dropping_txs.iter().any(|&i| i >= self.txs.len())
         {
             return Err(InvalidTxIndex);
         }
@@ -161,20 +161,7 @@ pub struct MergeableBundle {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub enum BlobWithMetadata {
-    V1(BlobWithMetadataV1),
-    V2(BlobWithMetadataV2),
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct BlobWithMetadataV1 {
-    pub commitment: KzgCommitment,
-    pub proof: KzgProof,
-    pub blob: Blob,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct BlobWithMetadataV2 {
+pub struct BlobWithMetadata {
     pub commitment: KzgCommitment,
     pub proofs: Vec<KzgProof>,
     pub blob: Blob,

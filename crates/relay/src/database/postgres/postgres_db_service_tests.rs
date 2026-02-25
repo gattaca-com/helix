@@ -9,8 +9,9 @@ mod tests {
         local_cache::LocalCache, utils::utcnow_sec, validator_preferences::ValidatorPreferences,
     };
     use helix_types::{
-        BlsKeypair, BlsSecretKey, SignedValidatorRegistration, TestRandomSeed, Validator,
-        ValidatorRegistration,
+        BidTrace, BlobsBundle, BlsKeypair, BlsPublicKey, BlsPublicKeyBytes, BlsSecretKey,
+        BlsSignatureBytes, ExecutionPayload, PayloadAndBlobs, SignedBidSubmission,
+        SignedValidatorRegistration, TestRandomSeed, Validator, ValidatorRegistration, Withdrawal,
     };
     use rand::{Rng, rng, seq::SliceRandom};
     use tokio::sync::OnceCell;
@@ -202,6 +203,238 @@ mod tests {
 
         let result = db_service.set_known_validators(validator_summaries).await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_save_and_get_builder_info() {
+        run_setup().await;
+
+        let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
+
+        let public_key = BlsPublicKey::deserialize(&alloy_primitives::hex!("8C266FD5CB50B5D9431DAA69C4BE17BC9A79A85D172112DA09E0AC3E2D0DCF785021D49B6DF57827D6BC61EBA086A507")).unwrap().serialize().into();
+        let builder_info = helix_common::BuilderInfo {
+            collateral: U256::from(10000000000000000000u64),
+            is_optimistic: false,
+            is_optimistic_for_regional_filtering: false,
+            builder_id: None,
+            builder_ids: Some(vec!["test3".to_string()]),
+            api_key: None,
+        };
+
+        let result = db_service.store_builder_info(&public_key, &builder_info).await;
+        assert!(result.is_ok());
+
+        let result = db_service.get_all_builder_infos().await.unwrap();
+        assert!(result.len() == 1);
+        assert!(result[0].pub_key == public_key);
+    }
+
+    #[tokio::test]
+    async fn test_demotion() {
+        run_setup().await;
+
+        let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
+
+        let key = BlsSecretKey::random();
+        let public_key = key.public_key().serialize().into();
+
+        let builder_info = helix_common::BuilderInfo {
+            collateral: Default::default(),
+            is_optimistic: false,
+            is_optimistic_for_regional_filtering: false,
+            builder_id: None,
+            builder_ids: None,
+            api_key: None,
+        };
+
+        let result = db_service.store_builder_info(&public_key, &builder_info).await;
+        assert!(result.is_ok());
+
+        let result =
+            db_service.db_demote_builder(0, &public_key, &Default::default(), "".to_string()).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_store_block_submission() -> Result<(), Box<dyn std::error::Error>> {
+        run_setup().await;
+
+        let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
+
+        let pubkey = BlsPublicKey::deserialize(alloy_primitives::hex!("8592669BC0ACF28BC25D42699CEFA6101D7B10443232FE148420FF0FCDBF8CD240F5EBB94BC904CB6BEFFB61A1F8D36A").as_ref()).unwrap();
+
+        let bid_trace =
+            BidTrace { proposer_pubkey: pubkey.serialize().into(), ..BidTrace::test_random() };
+
+        let signed_bid_submission = SignedBidSubmission {
+            message: bid_trace.clone(),
+            execution_payload: ExecutionPayload::test_random().into(),
+            blobs_bundle: Arc::new(BlobsBundle::V1(Default::default())),
+            signature: BlsSignatureBytes::random(),
+            execution_requests: Default::default(),
+        };
+
+        let submission_trace = SubmissionTrace { receive: utcnow_ns(), ..Default::default() };
+
+        db_service
+            .store_block_submission(
+                signed_bid_submission.into(),
+                submission_trace,
+                OptimisticVersion::NotOptimistic,
+            )
+            .await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_bids() -> Result<(), Box<dyn std::error::Error>> {
+        run_setup().await;
+
+        let db_service = PostgresDatabaseService::new(&test_config(), 0)?;
+        let filter = helix_common::api::data_api::BidFilters {
+            slot: Some(1234),
+            cursor: None,
+            limit: None,
+            block_hash: None,
+            block_number: None,
+            proposer_pubkey: None,
+            builder_pubkey: None,
+            order_by: None,
+        };
+        let validator_preferences = ValidatorPreferences::default();
+        let bids = db_service.get_bids(&filter, Arc::new(validator_preferences)).await?;
+        println!("Bids: {bids:?}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_save_delivered_payloads() -> Result<(), Box<dyn std::error::Error>> {
+        run_setup().await;
+
+        let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
+
+        let mut execution_payload = ExecutionPayload::test_random();
+
+        // execution_payload
+        //     .transactions_mut()
+        //     .push(ethereum_consensus::capella::Transaction::default());
+
+        // execution_payload
+        //     .transactions_mut()
+        //     .push(ethereum_consensus::capella::Transaction::default());
+        execution_payload
+            .withdrawals
+            .push(Withdrawal {
+                index: 0,
+                validator_index: 0,
+                amount: 0,
+                address: Default::default(),
+            })
+            .unwrap();
+
+        let latency_trace = GetPayloadTrace::default();
+
+        let payload_and_blobs =
+            PayloadAndBlobs { execution_payload, blobs_bundle: Default::default() };
+
+        db_service
+            .save_delivered_payload(
+                BlsPublicKeyBytes::random(),
+                Arc::new(payload_and_blobs),
+                &latency_trace,
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_delivered_payloads() -> Result<(), Box<dyn std::error::Error>> {
+        run_setup().await;
+
+        let db_service = PostgresDatabaseService::new(&test_config(), 0)?;
+        let filter = helix_common::api::data_api::BidFilters {
+            slot: None,
+            cursor: None,
+            limit: None,
+            block_hash: None,
+            block_number: None,
+            proposer_pubkey: None,
+            builder_pubkey: None,
+            order_by: None,
+        };
+
+        let validator_preferences = ValidatorPreferences::default();
+
+        let delivered_payloads =
+            db_service.get_delivered_payloads(&filter, Arc::new(validator_preferences)).await?;
+        println!("delivered payloads {delivered_payloads:?}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_late_payloads() -> Result<(), Box<dyn std::error::Error>> {
+        run_setup().await;
+
+        let db_service = PostgresDatabaseService::new(&test_config(), 0)?;
+
+        let reg = get_randomized_signed_validator_registration().registration;
+
+        db_service
+            .save_too_late_get_payload(1, &reg.message.pubkey, &Default::default(), 0, 0)
+            .await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_header() -> Result<(), Box<dyn std::error::Error>> {
+        run_setup().await;
+
+        let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
+
+        let reg = get_randomized_signed_validator_registration().registration;
+
+        db_service
+            .save_get_header_call(
+                1,
+                Default::default(),
+                reg.message.pubkey,
+                Default::default(),
+                Default::default(),
+                false,
+                None,
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_failed_payloads() -> Result<(), Box<dyn std::error::Error>> {
+        run_setup().await;
+
+        let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
+
+        let _reg = get_randomized_signed_validator_registration().registration;
+
+        db_service
+            .save_failed_get_payload(1, Default::default(), "error".to_string(), Default::default())
+            .await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_gossiped_payload() -> Result<(), Box<dyn std::error::Error>> {
+        run_setup().await;
+
+        let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
+        db_service.init_region(&test_postgres_config()).await;
+
+        db_service.save_gossiped_payload_trace(Default::default(), Default::default()).await?;
+
+        Ok(())
     }
 
     fn remove_random_items<T>(vec: &mut Vec<T>, count: usize) -> Vec<T> {

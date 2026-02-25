@@ -156,7 +156,7 @@ pub fn alert_discord(message: &str) {
     let app_id = APP_ID.get().map(String::as_str).unwrap_or("unknown");
 
     let max_len = 1850.min(message.len());
-    let msg = format!("Instance: RELAY-{app_id}\n{}", &message[..max_len]);
+    let msg = format!("Instance: {app_id}\n{}", &message[..max_len]);
 
     let content = HashMap::from([("content", msg)]);
 
