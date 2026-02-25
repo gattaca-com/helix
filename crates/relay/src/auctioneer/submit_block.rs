@@ -16,12 +16,12 @@ use tracing::trace;
 use crate::{
     api::builder::error::BuilderApiError,
     auctioneer::{
-        SubmissionResultSender,
         bid_adjustor::BidAdjustor,
         context::Context,
         simulator::{BlockSimRequest, SimulatorRequest, manager::SimulationResult},
         types::{
             PayloadEntry, SlotData, Submission, SubmissionData, SubmissionRef, SubmissionResult,
+            SubmissionResultSender,
         },
     },
     housekeeper::PayloadAttributesUpdate,

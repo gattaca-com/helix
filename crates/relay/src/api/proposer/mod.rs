@@ -85,3 +85,5 @@ pub async fn status(
         StatusCode::OK
     }
 }
+
+const CONSENSUS_VERSION_HEADER: &str = "Eth-Consensus-Version";

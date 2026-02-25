@@ -33,7 +33,6 @@ impl AlertManager {
         match self {
             AlertManager::Disabled => {}
             AlertManager::Telegram { bot, chat_ids } => {
-                let bot = bot.clone();
                 let msg = message.to_owned();
 
                 for chat_id in chat_ids {

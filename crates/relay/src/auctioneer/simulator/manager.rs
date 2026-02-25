@@ -17,7 +17,7 @@ use tracing::{debug, error, info, warn};
 use crate::auctioneer::{
     SubmissionResultSender,
     simulator::{BlockMergeRequest, SimulatorRequest, client::SimulatorClient},
-    types::{Event, SubmissionRef, SubmissionResult},
+    types::{Event, SubmissionRef, SubmissionResult, SubmissionResultSender},
 };
 
 pub(crate) const SIMULATOR_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);

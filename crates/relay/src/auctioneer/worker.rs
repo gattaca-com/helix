@@ -26,10 +26,12 @@ use crate::{
     HelixSpine,
     api::{builder::error::BuilderApiError, proposer::ProposerApiError},
     auctioneer::{
-        InternalBidSubmissionHeader,
         block_merger::get_mergeable_orders,
         decoder::SubmissionDecoder,
-        types::{Event, RegWorkerJob, SubWorkerJob, Submission, SubmissionData},
+        types::{
+            Event, InternalBidSubmissionHeader, RegWorkerJob, SubWorkerJob, Submission,
+            SubmissionData,
+        },
     },
 };
 
