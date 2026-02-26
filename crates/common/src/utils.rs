@@ -171,6 +171,7 @@ pub fn alert_discord(message: &str) {
             .send();
 
         if let Err(err) = res {
+            error!("failed to send discord alert: {err}");
             eprintln!("failed to send discord alert: {err}");
         }
     });
