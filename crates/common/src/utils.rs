@@ -160,12 +160,20 @@ pub fn alert_discord(message: &str) {
 
     let content = HashMap::from([("content", msg)]);
 
-    if let Err(err) =
-        reqwest::blocking::Client::new().post(webhook_url.clone()).json(&content).send()
-    {
-        error!("failed to send discord alert: {err}");
-        eprintln!("failed to send discord alert: {err}");
-    }
+    let webhook_url = webhook_url.clone();
+    let content = content.clone();
+
+    std::thread::spawn(move || {
+        let res = reqwest::blocking::Client::new()
+            .post(webhook_url)
+            .json(&content)
+            .timeout(std::time::Duration::from_secs(3))
+            .send();
+
+        if let Err(err) = res {
+            eprintln!("failed to send discord alert: {err}");
+        }
+    });
 }
 
 pub fn save_to_file(path: PathBuf, json: String) {
