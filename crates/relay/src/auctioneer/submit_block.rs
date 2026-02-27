@@ -95,7 +95,7 @@ impl<B: BidAdjustor> Context<B> {
 
         match &result.result {
             Err(err) if err.is_demotable() => {
-                self.bid_sorter.demote(*result.submission.builder_public_key());
+                self.bid_sorter.demote(*result.submission.builder_public_key(), err);
                 if let Some(res_tx) = res_tx {
                     res_tx.try_send((
                         result.submission_ref,

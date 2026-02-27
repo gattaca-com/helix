@@ -9,7 +9,8 @@ use helix_common::{
     api::builder_api::TopBidUpdate,
     metrics::{BID_SORTER_PROCESS_LATENCY_US, TopBidMetrics},
     record_submission_step_ns,
-    utils::{avg_duration, utcnow_ns},
+    simulator::BlockSimError,
+    utils::{alert_discord, avg_duration, utcnow_ns},
 };
 use helix_types::{BlsPublicKeyBytes, SignedBidSubmission, SubmissionVersion};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -194,11 +195,13 @@ impl BidSorter {
         is_top_bid
     }
 
-    pub fn demote(&mut self, demoted: BlsPublicKeyBytes) {
+    pub fn demote(&mut self, demoted: BlsPublicKeyBytes, err: &BlockSimError) {
         if !self.demotions.insert(demoted) {
             // already demoted
             return;
         }
+        alert_discord(&format!("demoting builder {} due to simulation error: {}", demoted, err));
+
         self.process_demotion(demoted);
     }
 
