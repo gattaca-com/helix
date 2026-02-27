@@ -15,19 +15,20 @@ use helix_common::{
     },
     metrics,
 };
+use helix_database::{
+    error::DatabaseError, postgres::postgres_db_service::PostgresDatabaseService,
+};
 use moka::sync::Cache;
 use tracing::{debug, warn};
 
 use crate::{
-    api::relay_data::{
-        BuilderBlocksReceivedStats, ProposerPayloadDeliveredStats, error::DataApiError,
-    },
-    database::{error::DatabaseError, postgres::postgres_db_service::PostgresDatabaseService},
+    error::DataApiError,
+    stats::{BuilderBlocksReceivedStats, ProposerPayloadDeliveredStats},
 };
 
-pub(crate) type BidsCache = Cache<BuilderBlocksReceivedParams, Vec<ReceivedBlocksResponse>>;
+pub type BidsCache = Cache<BuilderBlocksReceivedParams, Vec<ReceivedBlocksResponse>>;
 pub(crate) type BidsCacheV2 = Cache<BuilderBlocksReceivedParams, Vec<ReceivedBlocksResponseV2>>;
-pub(crate) type DeliveredPayloadsCache =
+pub type DeliveredPayloadsCache =
     Cache<ProposerPayloadDeliveredParams, Vec<DeliveredPayloadsResponse>>;
 pub(crate) type DeliveredPayloadsCacheV2 =
     Cache<ProposerPayloadDeliveredParams, Vec<DeliveredPayloadsResponseV2>>;
@@ -49,24 +50,30 @@ impl DataApi {
     ) -> Self {
         let payload_delivered_stats = ProposerPayloadDeliveredStats::default();
         let builder_blocks_received_stats = BuilderBlocksReceivedStats::default();
+        let payload_delivered_stats_v2 = ProposerPayloadDeliveredStats::default();
+        let builder_blocks_received_stats_v2 = BuilderBlocksReceivedStats::default();
 
         let delivered = payload_delivered_stats.clone();
         let blocks = builder_blocks_received_stats.clone();
+        let delivered_v2 = payload_delivered_stats_v2.clone();
+        let blocks_v2 = builder_blocks_received_stats_v2.clone();
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_secs(60)).await;
                 delivered.maybe_log_reset();
                 blocks.maybe_log_reset();
+                delivered_v2.maybe_log_reset();
+                blocks_v2.maybe_log_reset();
             }
         });
 
         Self {
             validator_preferences,
             db,
-            payload_delivered_stats: Default::default(),
-            payload_delivered_stats_v2: Default::default(),
-            builder_blocks_received_stats: Default::default(),
-            builder_blocks_received_stats_v2: Default::default(),
+            payload_delivered_stats,
+            payload_delivered_stats_v2,
+            builder_blocks_received_stats,
+            builder_blocks_received_stats_v2,
         }
     }
 

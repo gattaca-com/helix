@@ -29,6 +29,7 @@ use helix_common::{
     metrics::{STATE_TRANSITION_COUNT, STATE_TRANSITION_LATENCY, WORKER_QUEUE_LEN, WORKER_UTIL},
     record_submission_step,
 };
+use helix_database::handle::DbHandle;
 use helix_types::Slot;
 use rustc_hash::FxHashMap;
 pub use simulator::*;
@@ -52,7 +53,6 @@ use crate::{
     HelixSpine,
     api::{builder::error::BuilderApiError, proposer::ProposerApiError},
     auctioneer::types::PendingPayload,
-    database::handle::DbHandle,
     housekeeper::PayloadAttributesUpdate,
 };
 

@@ -12,6 +12,7 @@ use helix_common::{
     RelayConfig, ValidatorPreferences, alerts::AlertManager, chain_info::ChainInfo,
     local_cache::LocalCache, signing::RelaySigningContext,
 };
+use helix_database::handle::DbHandle;
 use hyper::StatusCode;
 pub use types::*;
 
@@ -19,7 +20,6 @@ use crate::{
     api::{Api, router::Terminating},
     auctioneer::{AuctioneerHandle, RegWorkerHandle},
     beacon::multi_beacon_client::MultiBeaconClient,
-    database::handle::DbHandle,
     gossip::GrpcGossiperClientManager,
     housekeeper::CurrentSlotInfo,
 };

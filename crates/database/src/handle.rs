@@ -17,9 +17,9 @@ use helix_common::{
 use helix_types::{BlsPublicKeyBytes, MergedBlock, SignedBidSubmission};
 use tracing::error;
 
-use crate::database::{
-    BuilderInfoDocument, SavePayloadParams,
+use crate::{
     postgres::postgres_db_service::{DbRequest, PendingBlockSubmissionValue},
+    types::{BuilderInfoDocument, SavePayloadParams},
 };
 
 // This is temporary until we have the spine connected up

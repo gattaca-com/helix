@@ -135,7 +135,6 @@ mod tests {
     use alloy_primitives::U256;
 
     use super::*;
-    use crate::database::postgres::postgres_db_u256_parsing::PostgresNumeric;
 
     fn get_values() -> Vec<U256> {
         vec![

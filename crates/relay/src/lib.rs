@@ -1,7 +1,6 @@
 mod api;
 mod auctioneer;
 mod beacon;
-mod database;
 mod gossip;
 mod housekeeper;
 mod network;
@@ -14,6 +13,10 @@ use std::time::Duration;
 use helix_common::metrics::{
     TOKIO_ALIVE_TASKS, TOKIO_GLOBAL_QUEUE_DEPTH, TOKIO_SCHEDULING_DRIFT, TOKIO_WORKER_BUSY_DURATION,
 };
+pub use helix_database::{
+    DbRequest, PendingBlockSubmissionValue, PostgresDatabaseService, handle::DbHandle,
+    start_db_service,
+};
 use tokio::time::Instant;
 
 pub use crate::{
@@ -24,10 +27,6 @@ pub use crate::{
         SubWorker, SubmissionPayload, SubmissionResult,
     },
     beacon::start_beacon_client,
-    database::{
-        DbRequest, PendingBlockSubmissionValue, handle::DbHandle,
-        postgres::postgres_db_service::PostgresDatabaseService, start_db_service,
-    },
     housekeeper::start_housekeeper,
     network::RelayNetworkManager,
     spine::HelixSpine,

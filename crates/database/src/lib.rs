@@ -13,11 +13,11 @@ use std::{
 };
 
 use helix_common::{RelayConfig, is_local_dev, local_cache};
-use postgres::postgres_db_service::PostgresDatabaseService;
+pub use postgres::postgres_db_service::PostgresDatabaseService;
 use tracing::info;
 pub use types::*;
 
-pub use crate::database::postgres::postgres_db_service::{DbRequest, PendingBlockSubmissionValue};
+pub use crate::postgres::postgres_db_service::{DbRequest, PendingBlockSubmissionValue};
 
 pub async fn start_db_service(
     config: &RelayConfig,

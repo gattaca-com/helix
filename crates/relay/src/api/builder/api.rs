@@ -2,11 +2,9 @@ use std::sync::Arc;
 
 use axum::{Extension, http::StatusCode, response::IntoResponse};
 use helix_common::{RelayConfig, api::builder_api::TopBidUpdate, local_cache::LocalCache};
+use helix_database::handle::DbHandle;
 
-use crate::{
-    api::Api, auctioneer::AuctioneerHandle, database::handle::DbHandle,
-    housekeeper::CurrentSlotInfo,
-};
+use crate::{api::Api, auctioneer::AuctioneerHandle, housekeeper::CurrentSlotInfo};
 
 pub(crate) const MAX_PAYLOAD_LENGTH: usize = 1024 * 1024 * 20; // 20MB
 

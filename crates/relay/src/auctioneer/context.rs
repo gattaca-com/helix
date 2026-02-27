@@ -11,6 +11,7 @@ use helix_common::{
     local_cache::LocalCache,
     metrics::{CACHE_SIZE, SimulatorMetrics},
 };
+use helix_database::handle::DbHandle;
 use helix_types::{BlsPublicKeyBytes, HydrationCache, Slot, SubmissionVersion};
 use rustc_hash::FxHashMap;
 use tracing::{debug, info, warn};
@@ -25,7 +26,6 @@ use crate::{
         simulator::manager::{SimulationResult, SimulatorManager},
         types::{PayloadEntry, PendingPayload},
     },
-    database::handle::DbHandle,
 };
 
 // Context that is only valid for a given slot

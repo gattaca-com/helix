@@ -1,6 +1,6 @@
 [workspace]
 default-members = ["crates/relay"]
-members = ["crates/common", "crates/relay", "crates/simulator", "crates/tcp-types", "crates/types"]
+members = ["crates/common", "crates/data-api", "crates/database", "crates/relay", "crates/simulator", "crates/tcp-types", "crates/types"]
 resolver = "2"
 
 [workspace.package]
@@ -51,6 +51,8 @@ flux-type-hash-derive = { package = "type-hash-derive", git = "https://github.co
 futures = "0.3"
 futures-util = { version = "0.3", features = ["compat"] }
 helix-common = { path = "crates/common" }
+helix-data-api = { path = "crates/data-api" }
+helix-database = { path = "crates/database" }
 helix-tcp-types = { path = "./crates/tcp-types" }
 helix-types = { path = "./crates/types" }
 http = "1.0"

@@ -14,11 +14,8 @@ use tracing::{error, info};
 use crate::{
     AuctioneerHandle, DbHandle, PostgresDatabaseService, RegWorkerHandle,
     api::{
-        Api,
-        builder::api::BuilderApi,
-        proposer::ProposerApi,
-        relay_data::{BidsCache, DataApi, DeliveredPayloadsCache, SelectiveExpiry},
-        router::build_router,
+        Api, BidsCache, DataApi, DeliveredPayloadsCache, SelectiveExpiry, builder::api::BuilderApi,
+        proposer::ProposerApi, router::build_router,
     },
     beacon::multi_beacon_client::MultiBeaconClient,
     gossip::{GrpcGossiperClientManager, process_gossip_messages},

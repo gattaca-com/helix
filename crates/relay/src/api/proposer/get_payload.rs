@@ -9,6 +9,7 @@ use helix_common::{
     spawn_tracked,
     utils::{extract_request_id, utcnow_ns},
 };
+use helix_database::types::SavePayloadParams;
 use helix_types::{
     BlsPublicKeyBytes, ExecPayload, ForkName, GetPayloadResponse, PayloadAndBlobs,
     SignedBlindedBeaconBlock, SignedBlindedBeaconBlockFulu, Slot, SlotClockTrait,
@@ -27,7 +28,6 @@ use crate::{
     },
     auctioneer::{Encoding, GetPayloadResultData, HEADER_SSZ, PayloadBidData},
     beacon::types::BroadcastValidation,
-    database::SavePayloadParams,
     gossip::{BroadcastGetPayloadParams, BroadcastPayloadParams},
 };
 
