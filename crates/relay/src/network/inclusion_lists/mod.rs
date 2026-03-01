@@ -270,7 +270,7 @@ mod tests {
             cutoff_1_ms: 2000,
             cutoff_2_ms: 4000,
         };
-        let manager = RelayNetworkManager::new(network_config, signing_context);
+        let _manager = RelayNetworkManager::new(network_config, signing_context);
 
         sleep(Duration::from_secs(40)).await;
     }

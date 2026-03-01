@@ -8,11 +8,15 @@ Helix is a MEV-Boost Relay designed with three key foundational principles: fast
 
 ## Audits
 
-- Audit conducted by Spearbit, with [Alex Stokes](https://github.com/ralexstokes) (EF) and [Matthias Seitz](https://github.com/mattsse) (Reth, Foundry, ethers-rs) leading as security researchers. See the report [here](audits/spearbit-audit.pdf).
+Audit conducted by Spearbit, with [Alex Stokes](https://github.com/ralexstokes) (EF) and [Matthias Seitz](https://github.com/mattsse) (Reth, Foundry, ethers-rs) leading as security researchers. See the report [here](audits/spearbit-audit.pdf).
 
-## Credit to:
+## Security
 
-Credit to [mev-boost-relay](https://github.com/flashbots/mev-boost-relay) and [ethereum-consensus](https://github.com/ralexstokes/ethereum-consensus) for serving as valuable references.
+See [SECURITY.md](https://github.com/gattaca-com/helix/blob/develop/SECURITY.md)
+
+## Acknowledgements
+
+Thanks to [mev-boost-relay](https://github.com/flashbots/mev-boost-relay) and [ethereum-consensus](https://github.com/ralexstokes/ethereum-consensus) for serving as valuable references.
 
 ## License
 

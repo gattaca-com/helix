@@ -139,8 +139,6 @@ impl Default for State {
     }
 }
 
-// TODO: tokio metrics
-
 impl State {
     fn step<B: BidAdjustor>(&mut self, event: Event, ctx: &mut Context<B>, tel: &mut Telemetry) {
         let start = Instant::now();

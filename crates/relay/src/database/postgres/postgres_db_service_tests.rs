@@ -5,14 +5,12 @@ mod tests {
     use alloy_primitives::B256;
     use deadpool_postgres::{Config, ManagerConfig, Pool, RecyclingMethod};
     use helix_common::{
-        Filtering, GetPayloadTrace, PostgresConfig, ValidatorSummary,
-        api::proposer_api::ValidatorRegistrationInfo, local_cache::LocalCache, utils::utcnow_sec,
-        validator_preferences::ValidatorPreferences,
+        Filtering, PostgresConfig, ValidatorSummary, api::proposer_api::ValidatorRegistrationInfo,
+        local_cache::LocalCache, utils::utcnow_sec, validator_preferences::ValidatorPreferences,
     };
     use helix_types::{
-        BidTrace, BlobsBundle, BlsKeypair, BlsPublicKey, BlsPublicKeyBytes, BlsSecretKey,
-        BlsSignatureBytes, ExecutionPayload, PayloadAndBlobs, SignedBidSubmission,
-        SignedValidatorRegistration, TestRandomSeed, Validator, ValidatorRegistration, Withdrawal,
+        BlsKeypair, BlsSecretKey, SignedValidatorRegistration, TestRandomSeed, Validator,
+        ValidatorRegistration,
     };
     use rand::{Rng, rng, seq::SliceRandom};
     use tokio::sync::OnceCell;
