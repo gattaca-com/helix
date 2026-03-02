@@ -22,11 +22,10 @@ use tracing::{info, warn};
 
 use crate::{
     api::{
-        Api,
+        Api, BidsCache, DataApi, DeliveredPayloadsCache,
         builder::api::BuilderApi,
         middleware::body_limit_middleware,
         proposer::{self, ProposerApi},
-        relay_data::{BidsCache, DataApi, DeliveredPayloadsCache},
         service::API_REQUEST_TIMEOUT,
     },
     network::api::RelayNetworkApi,

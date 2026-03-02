@@ -1,6 +1,3 @@
-pub mod api;
-pub mod error;
-
 use std::{
     sync::{
         Arc,
@@ -9,7 +6,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub use api::*;
 use helix_common::api::data_api::{
     BuilderBlocksReceivedParams, DeliveredPayloadsResponse, ProposerPayloadDeliveredParams,
 };

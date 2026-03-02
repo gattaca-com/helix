@@ -32,7 +32,7 @@ use rustc_hash::FxHashSet;
 use tokio_postgres::{NoTls, types::ToSql};
 use tracing::{error, info, instrument, warn};
 
-use crate::database::{
+use crate::{
     error::DatabaseError,
     postgres::{
         postgres_db_filters::PgBidFilters,

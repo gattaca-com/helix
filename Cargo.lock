@@ -5593,6 +5593,51 @@ dependencies = [
 ]
 
 [[package]]
+name = "helix-data-api"
+version = "0.0.1"
+dependencies = [
+ "axum 0.8.7",
+ "crossbeam-channel",
+ "eyre",
+ "helix-common",
+ "helix-database",
+ "helix-types",
+ "moka",
+ "thiserror 1.0.69",
+ "tokio",
+ "tower 0.4.13",
+ "tower-http 0.5.2",
+ "tracing",
+ "tracing-subscriber 0.3.22",
+]
+
+[[package]]
+name = "helix-database"
+version = "0.0.1"
+dependencies = [
+ "alloy-primitives",
+ "bincode",
+ "bytes",
+ "chrono",
+ "crossbeam-channel",
+ "dashmap 5.5.3",
+ "deadpool-postgres",
+ "eyre",
+ "helix-common",
+ "helix-types",
+ "parking_lot",
+ "rand 0.9.2",
+ "refinery",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-postgres",
+ "tracing",
+]
+
+[[package]]
 name = "helix-relay"
 version = "0.0.1"
 dependencies = [
@@ -5620,6 +5665,8 @@ dependencies = [
  "flux-network",
  "futures",
  "helix-common",
+ "helix-data-api",
+ "helix-database",
  "helix-tcp-types",
  "helix-types",
  "http 1.4.0",

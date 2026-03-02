@@ -13,14 +13,14 @@ use std::sync::Arc;
 
 pub use chain_event_updater::{ChainEventUpdater, PayloadAttributesUpdate, SlotUpdate};
 use helix_common::{RelayConfig, chain_info::ChainInfo, local_cache::LocalCache};
+use helix_database::handle::DbHandle;
 pub use housekeeper::Housekeeper;
 pub use primev_service::EthereumPrimevService;
 pub use slot_info::CurrentSlotInfo;
 use tokio::sync::broadcast;
 
 use crate::{
-    DbHandle, auctioneer::Event, beacon::multi_beacon_client::MultiBeaconClient,
-    network::RelayNetworkManager,
+    auctioneer::Event, beacon::multi_beacon_client::MultiBeaconClient, network::RelayNetworkManager,
 };
 
 const HEAD_EVENT_CHANNEL_SIZE: usize = 100;

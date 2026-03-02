@@ -7,12 +7,12 @@ use helix_common::{
     chain_info::ChainInfo,
     local_cache::LocalCache,
 };
+use helix_database::handle::DbHandle;
 use helix_types::{BlsPublicKeyBytes, Slot};
 use tracing::{info, warn};
 
 use crate::{
-    DbHandle, auctioneer::Event,
-    housekeeper::inclusion_list::http_fetcher::HttpInclusionListFetcher,
+    auctioneer::Event, housekeeper::inclusion_list::http_fetcher::HttpInclusionListFetcher,
     network::RelayNetworkManager,
 };
 

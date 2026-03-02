@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use helix_common::{api_provider::ApiProvider, local_cache::LocalCache};
+pub use helix_data_api::{BidsCache, DataApi, DeliveredPayloadsCache, SelectiveExpiry};
 pub use service::start_api_service;
 
 pub use crate::auctioneer::{BidAdjustor, DefaultBidAdjustor};
@@ -12,7 +13,6 @@ pub mod builder;
 pub mod integration_tests;
 pub mod middleware;
 pub mod proposer;
-pub mod relay_data;
 pub mod router;
 pub mod service;
 

@@ -13,9 +13,10 @@ use helix_types::{
     ValidatorRegistration,
 };
 
-use crate::database::{
-    BidSubmissionDocument, BuilderInfoDocument, DeliveredPayloadDocument, error::DatabaseError,
+use crate::{
+    error::DatabaseError,
     postgres::postgres_db_u256_parsing::PostgresNumeric,
+    types::{BidSubmissionDocument, BuilderInfoDocument, DeliveredPayloadDocument},
 };
 
 pub trait FromRow {
