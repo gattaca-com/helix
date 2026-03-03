@@ -5,6 +5,7 @@ use std::{
 
 use alloy_primitives::B256;
 use flux::{
+    spine::SpineProducers,
     tile::{Tile, TileName},
     timing::Nanos,
     utils::{ShortTypename, short_typename},

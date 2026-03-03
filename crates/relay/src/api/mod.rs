@@ -15,6 +15,7 @@ pub mod middleware;
 pub mod proposer;
 pub mod router;
 pub mod service;
+pub mod submission_results_fanout;
 
 pub type FutureBidSubmissionResult = helix_common::api::builder_api::FutureBidSubmissionResult<
     crate::spine::messages::SubmissionResultWithRef,

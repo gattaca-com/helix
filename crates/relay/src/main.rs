@@ -27,9 +27,9 @@ use helix_common::{
 use helix_relay::{
     Api, Auctioneer, AuctioneerHandle, BidSorter, BidSubmissionTcpListener, DbHandle,
     DefaultBidAdjustor, FutureBidSubmissionResult, HelixSpine, InternalBidSubmission, RegWorker,
-    RegWorkerHandle, RelayNetworkManager, S3PayloadSaver, SubWorker, WebsiteService,
-    spawn_tokio_monitoring, start_admin_service, start_api_service, start_beacon_client,
-    start_db_service, start_housekeeper,
+    RegWorkerHandle, RelayNetworkManager, S3PayloadSaver, SubWorker, SubmissionResultWithRef,
+    SubmissionResultsFanOut, WebsiteService, spawn_tokio_monitoring, start_admin_service,
+    start_api_service, start_beacon_client, start_db_service, start_housekeeper,
 };
 use helix_types::BlsKeypair;
 use tikv_jemallocator::Jemalloc;
@@ -154,6 +154,9 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
         let future_results = Arc::new(SharedVector::<FutureBidSubmissionResult>::with_capacity(
             MAX_SUBMISSIONS_PER_SLOT,
         ));
+        let submission_results = Arc::new(SharedVector::<SubmissionResultWithRef>::with_capacity(
+            MAX_SUBMISSIONS_PER_SLOT,
+        ));
 
         let bid_producer = spine.spine.standalone_producer_for(TileName::from_str_truncate("Api"));
         start_api_service::<ApiProd>(
@@ -207,6 +210,17 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
                 // TODO @nina remove when collaborative consumers are ready
                 break;
             }
+
+            let http_sub_results_fanout =
+                SubmissionResultsFanOut::new(future_results, submission_results.clone());
+            attach_tile(
+                http_sub_results_fanout,
+                spine,
+                TileConfig::new(
+                    config.cores.submission_results_fanout,
+                    flux::utils::ThreadPriority::Low,
+                ),
+            );
 
             let raw_payloads_tx =
                 config.s3_config.clone().map(|cfg| S3PayloadSaver::new(cfg).spawn());
