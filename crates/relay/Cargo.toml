@@ -28,6 +28,7 @@ aws-sdk-s3.workspace = true
 flate2.workspace = true
 flux.workspace = true
 flux-network.workspace = true
+flux-utils.workspace = true
 futures.workspace = true
 helix-common.workspace = true
 helix-data-api.workspace = true

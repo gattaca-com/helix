@@ -1,10 +1,11 @@
 use std::{
     ops::{Deref, DerefMut},
-    sync::atomic::Ordering,
+    sync::{Arc, atomic::Ordering},
     time::Instant,
 };
 
 use alloy_primitives::{B256, U256};
+use flux_utils::SharedVector;
 use helix_common::{
     BuilderInfo, RelayConfig,
     chain_info::ChainInfo,
@@ -17,6 +18,7 @@ use rustc_hash::FxHashMap;
 use tracing::{debug, info, warn};
 
 use crate::{
+    HelixSpine,
     api::builder::error::BuilderApiError,
     auctioneer::{
         BlockMergeResponse,
@@ -24,8 +26,9 @@ use crate::{
         bid_sorter::BidSorter,
         block_merger::BlockMerger,
         simulator::manager::{SimulationResult, SimulatorManager},
-        types::{PayloadEntry, PendingPayload},
+        types::{PayloadEntry, PendingPayload, SubmissionRef, SubmissionResultWithRef},
     },
+    spine::messages::SubmissionResultIx,
 };
 
 // Context that is only valid for a given slot
@@ -51,6 +54,7 @@ pub struct Context<B: BidAdjustor> {
     pub slot_context: SlotContext,
     pub bid_adjustor: B,
     pub completed_dry_run: bool,
+    pub submission_results: Arc<SharedVector<SubmissionResultWithRef>>,
 }
 
 const EXPECTED_PAYLOADS_PER_SLOT: usize = 5000;
@@ -67,6 +71,7 @@ impl<B: BidAdjustor> Context<B> {
         bid_sorter: BidSorter,
         cache: LocalCache,
         bid_adjustor: B,
+        submission_results: Arc<SharedVector<SubmissionResultWithRef>>,
     ) -> Self {
         let unknown_builder_info = BuilderInfo {
             collateral: U256::ZERO,
@@ -105,6 +110,7 @@ impl<B: BidAdjustor> Context<B> {
             config,
             bid_adjustor,
             completed_dry_run: false,
+            submission_results,
         }
     }
 
@@ -115,7 +121,12 @@ impl<B: BidAdjustor> Context<B> {
     /// 1. Check whether we should demote the builder, this is processed even if the result comes
     ///    after the slot has finished
     /// 2. Store simulation to DB
-    pub fn handle_simulation_result(&mut self, result: SimulationResult) {
+    pub fn handle_simulation_result(
+        &mut self,
+        result: SimulationResult,
+        already_sent: bool,
+        adapter: &mut flux::spine::SpineAdapter<HelixSpine>,
+    ) {
         let (id, result) = result;
 
         let paused_until = result.as_ref().and_then(|r| r.paused_until);
@@ -174,11 +185,23 @@ impl<B: BidAdjustor> Context<B> {
             debug!(%builder, %block_hash,"adjusted block passed simulator validation!");
         }
 
-        if let Some(res_tx) = result.res_tx {
-            // submission was initially valid but by the time sim finished the slot already
-            // progressed
-            res_tx.try_send((result.submission_ref, Err(BuilderApiError::SimOnNextSlot)));
+        if !already_sent && !result.optimistic_version.is_optimistic() {
+            self.send_submission_result(
+                adapter,
+                result.submission_ref,
+                Err(BuilderApiError::SimOnNextSlot),
+            );
         }
+    }
+
+    pub fn send_submission_result(
+        &self,
+        adapter: &mut flux::spine::SpineAdapter<HelixSpine>,
+        sub_ref: SubmissionRef,
+        result: Result<(), BuilderApiError>,
+    ) {
+        let ix = self.submission_results.push(SubmissionResultWithRef { sub_ref, result });
+        adapter.produce(SubmissionResultIx { ix });
     }
 
     pub fn on_new_slot(&mut self, bid_slot: Slot) {

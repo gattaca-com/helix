@@ -1,11 +1,11 @@
 use std::{sync::atomic::Ordering, time::Duration};
 
+use flux_utils::ArrayStr;
 use serde::{Deserialize, Serialize};
 
 use crate::{RequestTimings, metrics::SUB_TRACE_LATENCY, utils::utcnow_ns};
 
-// all timestamps are in nanoseconds
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct SubmissionTrace {
     // first packet
     pub receive_ns: u64,
@@ -13,7 +13,7 @@ pub struct SubmissionTrace {
     pub read_body_ns: u64,
     // when body finished being decoded
     pub decoded_ns: u64,
-    pub metadata: Option<String>,
+    pub metadata: Option<ArrayStr<128>>,
 }
 
 impl SubmissionTrace {

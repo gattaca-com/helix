@@ -14,12 +14,14 @@ mod worker;
 
 use std::{
     cmp::Ordering,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
 use alloy_primitives::B256;
 pub use block_merger::OrderValidationError;
 use flux::tile::Tile;
+use flux_utils::SharedVector;
 pub use handle::{AuctioneerHandle, RegWorkerHandle};
 use helix_common::{
     RelayConfig,
@@ -47,7 +49,9 @@ pub use crate::auctioneer::{
     simulator::{
         BlockSimRequest, SimulatorRequest, client::SimulatorClient, manager::SimulatorManager,
     },
-    types::{InternalBidSubmissionHeader, SubmissionRef, SubmissionResult, SubmissionResultSender}, /* move to types? */
+    types::{
+        InternalBidSubmission, InternalBidSubmissionHeader, SubmissionRef, SubmissionResultWithRef,
+    },
 };
 use crate::{
     HelixSpine,
@@ -74,6 +78,7 @@ impl<B: BidAdjustor> Auctioneer<B> {
         event_tx: crossbeam_channel::Sender<Event>,
         event_rx: crossbeam_channel::Receiver<Event>,
         id: usize,
+        submission_results: Arc<SharedVector<SubmissionResultWithRef>>,
     ) -> Self {
         let sim_manager = SimulatorManager::new(config.simulators.clone(), event_tx.clone());
 
@@ -85,6 +90,7 @@ impl<B: BidAdjustor> Auctioneer<B> {
             bid_sorter,
             local_cache,
             bid_adjustor,
+            submission_results.clone(),
         );
         Self {
             ctx,
@@ -96,9 +102,9 @@ impl<B: BidAdjustor> Auctioneer<B> {
 }
 
 impl<B: BidAdjustor> Tile<HelixSpine> for Auctioneer<B> {
-    fn loop_body(&mut self, _adapter: &mut flux::spine::SpineAdapter<HelixSpine>) {
+    fn loop_body(&mut self, adapter: &mut flux::spine::SpineAdapter<HelixSpine>) {
         for event in self.event_rx.try_iter() {
-            self.state.step(event, &mut self.ctx, &mut self.tel);
+            self.state.step(event, &mut self.ctx, &mut self.tel, adapter);
         }
 
         self.tel.telemetry(&self.event_rx);
@@ -140,12 +146,18 @@ impl Default for State {
 }
 
 impl State {
-    fn step<B: BidAdjustor>(&mut self, event: Event, ctx: &mut Context<B>, tel: &mut Telemetry) {
+    fn step<B: BidAdjustor>(
+        &mut self,
+        event: Event,
+        ctx: &mut Context<B>,
+        tel: &mut Telemetry,
+        adapter: &mut flux::spine::SpineAdapter<HelixSpine>,
+    ) {
         let start = Instant::now();
         let start_state = self.as_str();
         let event_tag = event.as_str();
 
-        self._step(event, ctx);
+        self._step(event, ctx, adapter);
 
         let end_state = self.as_str();
         let step_dur = start.elapsed();
@@ -159,7 +171,12 @@ impl State {
             .observe(step_dur.as_nanos() as f64 / 1000.);
     }
 
-    fn _step<B: BidAdjustor>(&mut self, event: Event, ctx: &mut Context<B>) {
+    fn _step<B: BidAdjustor>(
+        &mut self,
+        event: Event,
+        ctx: &mut Context<B>,
+        adapter: &mut flux::spine::SpineAdapter<HelixSpine>,
+    ) {
         match (&self, event) {
             ///////////// LIFECYCLE EVENTS (ALWAYS VALID) /////////////
 
@@ -292,27 +309,24 @@ impl State {
 
             // late sim result
             (State::Broadcasting { .. } | State::Slot { .. }, Event::SimResult(result)) => {
-                ctx.handle_simulation_result(result);
+                ctx.handle_simulation_result(result, false, adapter);
             }
 
             // late merge result
             (State::Broadcasting { .. } | State::Slot { .. }, Event::MergeResult((id, _))) => {
-                ctx.handle_simulation_result((id, None));
+                ctx.handle_simulation_result((id, None), false, adapter);
             }
 
             ///////////// VALID STATES / EVENTS /////////////
 
             // submission
-            (
-                State::Sorting(slot_data),
-                Event::Submission { submission_data, res_tx, span, sent_at },
-            ) => {
+            (State::Sorting(slot_data), Event::Submission { submission_data, span, sent_at }) => {
                 record_submission_step("loop_recv", sent_at.elapsed());
 
                 let _guard = span.enter();
                 trace!("received in auctioneer");
 
-                ctx.handle_submission(submission_data, res_tx, slot_data);
+                ctx.handle_submission(submission_data, slot_data, adapter);
 
                 trace!("finished processing");
                 drop(_guard);
@@ -385,11 +399,11 @@ impl State {
 
             // sim result
             (State::Sorting(slot_data), Event::SimResult(mut result)) => {
-                if result.1.as_ref().is_some_and(|r| r.submission.slot() == slot_data.bid_slot) {
-                    ctx.sort_simulation_result(&mut result);
-                }
+                let already_sent =
+                    result.1.as_ref().is_some_and(|r| r.submission.slot() == slot_data.bid_slot) &&
+                        ctx.sort_simulation_result(&mut result, adapter);
 
-                ctx.handle_simulation_result(result);
+                ctx.handle_simulation_result(result, already_sent, adapter);
             }
 
             // gossiped payload
@@ -410,23 +424,21 @@ impl State {
                     }
                 }
 
-                ctx.handle_simulation_result((id, None));
+                ctx.handle_simulation_result((id, None), false, adapter);
             }
 
             ///////////// INVALID STATES / EVENTS /////////////
 
             // late submission
-            (
-                State::Broadcasting { slot_data: slot_ctx, .. },
-                Event::Submission { submission_data, res_tx, .. },
-            ) => {
-                res_tx.try_send((
+            (State::Broadcasting { slot_data, .. }, Event::Submission { submission_data, .. }) => {
+                ctx.send_submission_result(
+                    adapter,
                     submission_data.submission_ref,
                     Err(BuilderApiError::DeliveringPayload {
                         bid_slot: submission_data.bid_slot(),
-                        delivering: slot_ctx.bid_slot.as_u64(),
+                        delivering: slot_data.bid_slot.as_u64(),
                     }),
-                ));
+                );
             }
 
             // late get_header
@@ -469,15 +481,17 @@ impl State {
             }
 
             // submission unregistered
-            (State::Slot { bid_slot, .. }, Event::Submission { res_tx, submission_data, .. }) => {
+            (State::Slot { bid_slot, .. }, Event::Submission { submission_data, .. }) => {
                 if submission_data.bid_slot() == bid_slot.as_u64() {
                     // either not registered or waiting for full data from housekepper
-                    res_tx.try_send((
+                    ctx.send_submission_result(
+                        adapter,
                         submission_data.submission_ref,
                         Err(BuilderApiError::ProposerDutyNotFound),
-                    ));
+                    );
                 } else {
-                    res_tx.try_send((
+                    ctx.send_submission_result(
+                        adapter,
                         submission_data.submission_ref,
                         Err(BuilderApiError::BidValidation(
                             helix_types::BlockValidationError::SubmissionForWrongSlot {
@@ -485,7 +499,7 @@ impl State {
                                 got: submission_data.bid_slot().into(),
                             },
                         )),
-                    ));
+                    );
                 }
             }
 
