@@ -14,15 +14,13 @@ use helix_types::{
 use tracing::trace;
 
 use crate::{
+    HelixSpine,
     api::builder::error::BuilderApiError,
     auctioneer::{
         bid_adjustor::BidAdjustor,
         context::Context,
         simulator::{BlockSimRequest, SimulatorRequest, manager::SimulationResult},
-        types::{
-            PayloadEntry, SlotData, Submission, SubmissionData, SubmissionRef, SubmissionResult,
-            SubmissionResultSender,
-        },
+        types::{PayloadEntry, SlotData, Submission, SubmissionData, SubmissionRef},
     },
     housekeeper::PayloadAttributesUpdate,
 };
@@ -31,20 +29,19 @@ impl<B: BidAdjustor> Context<B> {
     pub(super) fn handle_submission(
         &mut self,
         submission_data: SubmissionData,
-        res_tx: SubmissionResultSender<SubmissionResult>,
         slot_data: &SlotData,
+        adapter: &mut flux::spine::SpineAdapter<HelixSpine>,
     ) {
         let submission_ref = submission_data.submission_ref;
         match self.validate_and_sort(submission_data, slot_data) {
             Ok((validated, optimistic_version, merging_data)) => {
-                let res_tx = if optimistic_version.is_optimistic() {
-                    res_tx.try_send((submission_ref, Ok(())));
-                    None
-                } else {
-                    Some(res_tx)
+                let is_optimistic = optimistic_version.is_optimistic();
+                if is_optimistic {
+                    self.send_submission_result(adapter, submission_ref, Ok(()));
                 };
 
-                let (req, entry) = self.prep_data_to_store_and_sim(validated, res_tx, slot_data);
+                let (req, entry) =
+                    self.prep_data_to_store_and_sim(validated, slot_data, is_optimistic);
 
                 if !self.completed_dry_run &&
                     entry.is_adjustable() &&
@@ -79,48 +76,52 @@ impl<B: BidAdjustor> Context<B> {
                 }
             }
 
-            Err(err) => {
-                res_tx.try_send((submission_ref, Err(err)));
+            Err(e) => {
+                self.send_submission_result(adapter, submission_ref, Err(e));
             }
         }
     }
 
-    /// Sort the simulation result if it wasn't optimistic
-    pub(super) fn sort_simulation_result(&mut self, result: &mut SimulationResult) {
+    pub(super) fn sort_simulation_result(
+        &mut self,
+        result: &mut SimulationResult,
+        adapter: &mut flux::spine::SpineAdapter<HelixSpine>,
+    ) -> bool {
         let Some(result) = &mut result.1 else {
-            return;
+            return false;
         };
 
-        let res_tx = result.res_tx.take();
+        if result.optimistic_version.is_optimistic() {
+            return false;
+        }
 
         match &result.result {
             Err(err) if err.is_demotable() => {
                 self.bid_sorter.demote(*result.submission.builder_public_key());
-                if let Some(res_tx) = res_tx {
-                    res_tx.try_send((
-                        result.submission_ref,
-                        Err(BuilderApiError::BlockSimulation(err.clone())),
-                    ));
-                };
+                self.send_submission_result(
+                    adapter,
+                    result.submission_ref,
+                    Err(BuilderApiError::BlockSimulation(err.clone())),
+                );
             }
 
             Ok(_) | Err(_) => {
-                if let Some(res_tx) = res_tx {
-                    let is_top_bid = self.bid_sorter.sort(
-                        result.version,
-                        &result.submission,
-                        &mut result.trace,
-                        false,
-                    );
-                    if is_top_bid {
-                        self.block_merger.update_base_block(*result.submission.block_hash());
-                    }
-                    self.request_merged_block();
+                let is_top_bid = self.bid_sorter.sort(
+                    result.version,
+                    &result.submission,
+                    &mut result.trace,
+                    false,
+                );
+                if is_top_bid {
+                    self.block_merger.update_base_block(*result.submission.block_hash());
+                }
+                self.request_merged_block();
 
-                    res_tx.try_send((result.submission_ref, Ok(())));
-                };
+                self.send_submission_result(adapter, result.submission_ref, Ok(()));
             }
         }
+
+        true
     }
 
     fn validate_and_sort<'a>(
@@ -226,8 +227,8 @@ impl<B: BidAdjustor> Context<B> {
     fn prep_data_to_store_and_sim(
         &mut self,
         validated: ValidatedData,
-        res_tx: Option<SubmissionResultSender<SubmissionResult>>,
         slot_data: &SlotData,
+        is_optimistic: bool,
     ) -> (SimulatorRequest, PayloadEntry) {
         let request = BlockSimRequest::new(
             slot_data.registration_data.entry.registration.message.gas_limit,
@@ -238,12 +239,12 @@ impl<B: BidAdjustor> Context<B> {
         );
 
         let req = SimulatorRequest {
+            is_optimistic,
             submission_ref: validated.submission_ref,
             request,
             is_top_bid: validated.is_top_bid,
-            res_tx,
             submission: validated.submission.clone(),
-            trace: validated.trace.clone(),
+            trace: validated.trace,
             tx_root: validated.tx_root,
             version: validated.version,
         };
@@ -272,10 +273,9 @@ impl<B: BidAdjustor> Context<B> {
         self.payloads.insert(block_hash, entry);
 
         let sub_clone = req.submission.clone();
-        let trace_clone = req.trace.clone();
         let opt_version = req.optimistic_version();
 
-        self.db.store_block_submission(sub_clone, trace_clone, opt_version, is_adjusted);
+        self.db.store_block_submission(sub_clone, req.trace, opt_version, is_adjusted);
 
         self.sim_manager.handle_sim_request(req, fast_track);
     }
@@ -311,7 +311,7 @@ impl<B: BidAdjustor> Context<B> {
 }
 
 pub struct ValidatedData<'a> {
-    pub submission_ref: Option<SubmissionRef>,
+    pub submission_ref: SubmissionRef,
     pub submission: SignedBidSubmission,
     pub tx_root: Option<B256>,
     pub payload_attributes: &'a PayloadAttributesUpdate,

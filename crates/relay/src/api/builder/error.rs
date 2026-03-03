@@ -70,6 +70,12 @@ pub enum BuilderApiError {
 
 impl IntoResponse for BuilderApiError {
     fn into_response(self) -> Response {
+        (&self).into_response()
+    }
+}
+
+impl IntoResponse for &BuilderApiError {
+    fn into_response(self) -> Response {
         let code = match self {
             BuilderApiError::JsonDecodeError(_) |
             BuilderApiError::IOError(_) |
@@ -91,7 +97,7 @@ impl IntoResponse for BuilderApiError {
             BuilderApiError::AuctioneerError(_) |
             BuilderApiError::DatabaseError(_) => StatusCode::INTERNAL_SERVER_ERROR,
 
-            BuilderApiError::BlockSimulation(ref err) => match err {
+            BuilderApiError::BlockSimulation(err) => match err {
                 BlockSimError::Timeout | BlockSimError::SimulationDropped => {
                     StatusCode::REQUEST_TIMEOUT
                 }

@@ -15,9 +15,8 @@ use helix_types::{BlsPublicKeyBytes, SignedBidSubmission, SubmissionVersion};
 use tracing::{debug, error, info, warn};
 
 use crate::auctioneer::{
-    SubmissionResultSender,
     simulator::{BlockMergeRequest, SimulatorRequest, client::SimulatorClient},
-    types::{Event, SubmissionRef, SubmissionResult},
+    types::{Event, SubmissionRef},
 };
 
 pub(crate) const SIMULATOR_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
@@ -40,9 +39,7 @@ struct LocalTelemetry {
 pub type SimulationResult = (usize, Option<SimulationResultInner>);
 pub struct SimulationResultInner {
     pub result: Result<(), BlockSimError>,
-    pub submission_ref: Option<SubmissionRef>,
-    // Some if not optimistic
-    pub res_tx: Option<SubmissionResultSender<SubmissionResult>>,
+    pub submission_ref: SubmissionRef,
     // TODO: move up
     pub paused_until: Option<Instant>,
     pub submission: SignedBidSubmission,
@@ -237,7 +234,6 @@ impl SimulatorManager {
                     submission_ref: req.submission_ref,
                     result: res,
                     paused_until,
-                    res_tx: req.res_tx,
                     submission: req.submission,
                     trace: req.trace,
                     optimistic_version,
@@ -312,7 +308,7 @@ impl SimulatorManager {
 /// Pending requests, we only keep the last one for each builder
 struct PendingRquests {
     map: Vec<SimulatorRequest>,
-    sort_keys: Vec<(u8, u8, u64)>,
+    sort_keys: Vec<(u8, u64)>,
     builder_pubkeys: Vec<BlsPublicKeyBytes>,
 }
 
@@ -360,7 +356,7 @@ impl PendingRquests {
 
         while i < self.map.len() {
             let req = &self.map[i];
-            if req.is_closed() || req.bid_slot() < bid_slot {
+            if req.bid_slot() < bid_slot {
                 self.sort_keys.swap_remove(i);
                 self.builder_pubkeys.swap_remove(i);
                 self.map.swap_remove(i);

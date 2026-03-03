@@ -4,23 +4,28 @@ use std::{
     time::Duration,
 };
 
+use flux::spine::StandaloneProducer;
+use flux_utils::SharedVector;
 use helix_common::{
     RelayConfig, api::builder_api::TopBidUpdate, chain_info::ChainInfo, local_cache::LocalCache,
     signing::RelaySigningContext,
 };
+use helix_data_api::{BidsCache, DataApi, DeliveredPayloadsCache, SelectiveExpiry};
 use moka::sync::Cache;
 use tracing::{error, info};
 
 use crate::{
-    AuctioneerHandle, DbHandle, PostgresDatabaseService, RegWorkerHandle,
+    AuctioneerHandle, DbHandle, InternalBidSubmission, PostgresDatabaseService, RegWorkerHandle,
     api::{
-        Api, BidsCache, DataApi, DeliveredPayloadsCache, SelectiveExpiry, builder::api::BuilderApi,
-        proposer::ProposerApi, router::build_router,
+        Api, builder::api::BuilderApi, proposer::ProposerApi, router::build_router,
+        submission_results_fanout::FutureBidSubmissionResult,
     },
+    auctioneer::SubmissionResultWithRef,
     beacon::multi_beacon_client::MultiBeaconClient,
     gossip::{GrpcGossiperClientManager, process_gossip_messages},
     housekeeper::CurrentSlotInfo,
     network::api::RelayNetworkApi,
+    spine::messages::NewBidSubmissionIx,
 };
 
 pub(crate) const API_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
@@ -41,6 +46,10 @@ pub fn start_api_service<A: Api>(
     db_handle: DbHandle,
     auctioneer_handle: AuctioneerHandle,
     registrations_handle: RegWorkerHandle,
+    submissions: Arc<SharedVector<InternalBidSubmission>>,
+    submission_results: Arc<SharedVector<SubmissionResultWithRef>>,
+    bid_producer: StandaloneProducer<NewBidSubmissionIx>,
+    future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
 ) {
     tokio::spawn(run_api_service::<A>(
         config.clone(),
@@ -58,6 +67,10 @@ pub fn start_api_service<A: Api>(
         db_handle.clone(),
         auctioneer_handle,
         registrations_handle,
+        submissions,
+        submission_results,
+        bid_producer,
+        future_results,
     ));
 }
 
@@ -77,6 +90,10 @@ pub async fn run_api_service<A: Api>(
     db_handle: DbHandle,
     auctioneer_handle: AuctioneerHandle,
     registrations_handle: RegWorkerHandle,
+    submissions: Arc<SharedVector<InternalBidSubmission>>,
+    submission_results: Arc<SharedVector<SubmissionResultWithRef>>,
+    bid_producer: StandaloneProducer<NewBidSubmissionIx>,
+    future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
 ) {
     let gossiper = Arc::new(
         GrpcGossiperClientManager::new(config.relays.iter().map(|cfg| cfg.url.clone()).collect())
@@ -96,6 +113,10 @@ pub async fn run_api_service<A: Api>(
         top_bid_tx,
         auctioneer_handle.clone(),
         api_provider.clone(),
+        submissions,
+        submission_results,
+        bid_producer,
+        future_results,
     );
     let builder_api = Arc::new(builder_api);
 

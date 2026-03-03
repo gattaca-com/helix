@@ -1,54 +1,27 @@
-use std::{ops::Range, sync::Arc, time::Instant};
+use std::{ops::Range, sync::Arc};
 
-use helix_common::{GetPayloadTrace, SubmissionTrace, api::proposer_api::GetHeaderParams};
+use helix_common::{GetPayloadTrace, api::proposer_api::GetHeaderParams};
 use helix_types::{BlsPublicKeyBytes, SignedBlindedBeaconBlock, SignedValidatorRegistration};
 use tokio::sync::oneshot;
 use tracing::trace;
 
 use crate::{
-    auctioneer::types::{
-        Event, GetHeaderResult, GetPayloadResult, InternalBidSubmissionHeader, RegWorkerJob,
-        SubWorkerJob, SubmissionRef, SubmissionResult, SubmissionResultSender,
-    },
+    auctioneer::types::{Event, GetHeaderResult, GetPayload, GetPayloadResult, RegWorkerJob},
     gossip::BroadcastPayloadParams,
 };
 
 #[derive(Clone)]
 pub struct AuctioneerHandle {
-    worker: crossbeam_channel::Sender<SubWorkerJob>,
+    worker: crossbeam_channel::Sender<GetPayload>,
     auctioneer: crossbeam_channel::Sender<Event>,
 }
 
 impl AuctioneerHandle {
     pub fn new(
-        worker: crossbeam_channel::Sender<SubWorkerJob>,
+        worker: crossbeam_channel::Sender<GetPayload>,
         auctioneer: crossbeam_channel::Sender<Event>,
     ) -> Self {
         Self { worker, auctioneer }
-    }
-
-    pub fn block_submission(
-        &self,
-        submission_ref: Option<SubmissionRef>,
-        header: InternalBidSubmissionHeader,
-        body: bytes::Bytes,
-        trace: SubmissionTrace,
-        res_tx: SubmissionResultSender<SubmissionResult>,
-        expected_pubkey: Option<BlsPublicKeyBytes>,
-    ) -> Result<(), ChannelFull> {
-        trace!("sending to worker");
-        self.worker
-            .try_send(SubWorkerJob::BlockSubmission {
-                submission_ref,
-                header,
-                body,
-                trace,
-                res_tx,
-                span: tracing::Span::current(),
-                sent_at: Instant::now(),
-                expected_pubkey,
-            })
-            .map_err(|_| ChannelFull)
     }
 
     pub fn get_header(
@@ -72,7 +45,7 @@ impl AuctioneerHandle {
         let (tx, rx) = oneshot::channel();
         trace!("sending to worker");
         self.worker
-            .try_send(SubWorkerJob::GetPayload {
+            .try_send(GetPayload {
                 proposer_pubkey,
                 blinded_block: Box::new(blinded_block),
                 trace,

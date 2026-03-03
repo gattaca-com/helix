@@ -1,12 +1,17 @@
-use std::time::{Duration, Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use alloy_primitives::B256;
 use flux::{
+    spine::SpineProducers,
     tile::{Tile, TileName},
     utils::{ShortTypename, short_typename},
 };
+use flux_utils::SharedVector;
 use helix_common::{
-    GetPayloadTrace, RelayConfig, SubmissionTrace,
+    RelayConfig, SubmissionTrace,
     chain_info::ChainInfo,
     local_cache::LocalCache,
     metrics::{WORKER_QUEUE_LEN, WORKER_TASK_COUNT, WORKER_TASK_LATENCY_US, WORKER_UTIL},
@@ -26,13 +31,15 @@ use crate::{
     HelixSpine,
     api::{builder::error::BuilderApiError, proposer::ProposerApiError},
     auctioneer::{
+        InternalBidSubmission, SubmissionRef,
         block_merger::get_mergeable_orders,
         decoder::SubmissionDecoder,
         types::{
-            Event, InternalBidSubmissionHeader, RegWorkerJob, SubWorkerJob, Submission,
-            SubmissionData,
+            Event, GetPayload, InternalBidSubmissionHeader, RegWorkerJob, Submission,
+            SubmissionData, SubmissionResultWithRef,
         },
     },
+    spine::messages::{NewBidSubmissionIx, SubmissionResultIx},
 };
 
 pub struct Telemetry {
@@ -95,161 +102,165 @@ pub struct SubWorker {
     core_id: usize,
     id: ShortTypename,
     tx: crossbeam_channel::Sender<Event>,
-    rx: crossbeam_channel::Receiver<SubWorkerJob>,
+    rx: crossbeam_channel::Receiver<GetPayload>,
     cache: LocalCache,
     chain_info: ChainInfo,
     tel: Telemetry,
     config: RelayConfig,
+    submissions: Arc<SharedVector<InternalBidSubmission>>,
+    submission_results: Arc<SharedVector<SubmissionResultWithRef>>,
 }
 
 impl SubWorker {
     pub fn new(
         core_id: usize,
         tx: crossbeam_channel::Sender<Event>,
-        rx: crossbeam_channel::Receiver<SubWorkerJob>,
+        rx: crossbeam_channel::Receiver<GetPayload>,
         cache: LocalCache,
         chain_info: ChainInfo,
         config: RelayConfig,
+        submissions: Arc<SharedVector<InternalBidSubmission>>,
+        submission_results: Arc<SharedVector<SubmissionResultWithRef>>,
     ) -> Self {
         let id = ShortTypename::from_str_truncate(&format!("submission_{core_id}"));
-        Self { core_id, id, tx, rx, cache, chain_info, tel: Telemetry::default(), config }
+        Self {
+            core_id,
+            id,
+            tx,
+            rx,
+            cache,
+            chain_info,
+            tel: Telemetry::default(),
+            config,
+            submissions,
+            submission_results,
+        }
     }
 
-    fn _handle_task(&self, task: SubWorkerJob) {
-        match task {
-            SubWorkerJob::BlockSubmission {
-                submission_ref,
-                header,
-                body,
-                mut trace,
-                res_tx,
-                span,
-                sent_at,
-                expected_pubkey,
-            } => {
-                record_submission_step("worker_recv", sent_at.elapsed());
-                let guard = span.enter();
-                trace!("received by worker");
-                match self.handle_block_submission(header, expected_pubkey, body, &mut trace) {
-                    Ok((
-                        submission,
-                        withdrawals_root,
-                        version,
-                        merging_data,
-                        bid_adjustment_data,
-                    )) => {
-                        tracing::Span::current()
-                            .record("bid_slot", tracing::field::display(submission.bid_slot()));
-                        tracing::Span::current()
-                            .record("block_hash", tracing::field::display(submission.block_hash()));
-                        tracing::Span::current().record(
-                            "builder_pubkey",
-                            tracing::field::display(submission.builder_pubkey()),
-                        );
-
-                        trace!("sending to auctioneer");
-                        drop(guard);
-
-                        let merging_data = if self.config.block_merging_config.is_enabled {
-                            merging_data.and_then(|data| {
-                                if let Submission::Full(ref signed_bid_submission) = submission {
-                                    //TODO: split up mergeable order and submission processing to
-                                    // avoid delaying the bid update
-                                    match get_mergeable_orders(signed_bid_submission, &data) {
-                                        Ok(orders) => Some(MergeableOrdersWithPref {
-                                            allow_appending: data.allow_appending,
-                                            orders,
-                                        }),
-                                        Err(err) => {
-                                            error!(%err, "failed to process mergeable orders");
-                                            None
-                                        }
-                                    }
-                                } else {
-                                    None
-                                }
-                            })
-                        } else {
-                            None
-                        };
-
-                        let submission_data = SubmissionData {
-                            submission_ref,
-                            submission,
-                            version,
-                            merging_data,
-                            bid_adjustment_data,
-                            withdrawals_root,
-                            trace,
-                        };
-
-                        let message = Event::Submission {
-                            submission_data,
-                            res_tx,
-                            span,
-                            sent_at: Instant::now(),
-                        };
-
-                        if self.tx.try_send(message).is_err() {
-                            error!("failed sending submission to auctioneer");
-                        }
-                    }
-
-                    Err(err) => {
-                        res_tx.try_send((submission_ref, Err(err)));
-                    }
+    fn handle_get_payload(&self, task: GetPayload) {
+        let GetPayload { blinded_block, proposer_pubkey, trace, res_tx, span } = task;
+        let guard = span.enter();
+        trace!("received by worker");
+        let block_hash: Result<_, ProposerApiError> = (|| {
+            verify_signed_blinded_block_signature(
+                &self.chain_info,
+                &blinded_block,
+                &proposer_pubkey,
+            )?;
+            blinded_block
+                .message()
+                .body()
+                .execution_payload()
+                .map_err(|_| ProposerApiError::InvalidFork)
+                .map(|p| p.block_hash().0)
+        })();
+        match block_hash {
+            Ok(block_hash) => {
+                trace!("sending to auctioneer");
+                drop(guard);
+                if self
+                    .tx
+                    .try_send(Event::GetPayload {
+                        block_hash,
+                        blinded: Box::new(*blinded_block),
+                        trace,
+                        res_tx,
+                        span,
+                    })
+                    .is_err()
+                {
+                    error!("failed to send get_payload to auctioneer");
                 }
             }
-
-            SubWorkerJob::GetPayload {
-                blinded_block,
-                proposer_pubkey,
-                mut trace,
-                res_tx,
-                span,
-            } => {
-                let guard = span.enter();
-                trace!("received by worker");
-                match self.handle_get_payload(&proposer_pubkey, *blinded_block, &mut trace) {
-                    Ok((blinded, block_hash)) => {
-                        trace!("sending to auctioneer");
-                        drop(guard);
-
-                        if self
-                            .tx
-                            .try_send(Event::GetPayload {
-                                block_hash,
-                                blinded: Box::new(blinded),
-                                trace,
-                                res_tx,
-                                span,
-                            })
-                            .is_err()
-                        {
-                            error!("failed to send get_payload to auctioneer");
-                        };
-                    }
-                    Err(err) => {
-                        let _ = res_tx.send(Err(err));
-                    }
-                }
+            Err(err) => {
+                let _ = res_tx.send(Err(err));
             }
         }
     }
 
-    #[allow(clippy::type_complexity)]
     fn handle_block_submission(
+        &self,
+        submission_ref: SubmissionRef,
+        header: InternalBidSubmissionHeader,
+        body: &bytes::Bytes,
+        mut trace: SubmissionTrace,
+        span: tracing::Span,
+        sent_at: Instant,
+        expected_pubkey: Option<BlsPublicKeyBytes>,
+    ) -> Result<(), BuilderApiError> {
+        record_submission_step("worker_recv", sent_at.elapsed());
+        let guard = span.enter();
+        trace!("received by worker");
+        let (submission, withdrawals_root, version, merging_data, bid_adjustment_data) =
+            self.try_handle_block_submission(header, expected_pubkey, body, &mut trace)?;
+
+        tracing::Span::current().record("bid_slot", tracing::field::display(submission.bid_slot()));
+        tracing::Span::current()
+            .record("block_hash", tracing::field::display(submission.block_hash()));
+        tracing::Span::current()
+            .record("builder_pubkey", tracing::field::display(submission.builder_pubkey()));
+
+        trace!("sending to auctioneer");
+        drop(guard);
+
+        let merging_data = if self.config.block_merging_config.is_enabled {
+            merging_data.and_then(|data| {
+                if let Submission::Full(ref signed_bid_submission) = submission {
+                    //TODO: split up mergeable order and submission processing to
+                    // avoid delaying the bid update
+                    match get_mergeable_orders(signed_bid_submission, &data) {
+                        Ok(orders) => Some(MergeableOrdersWithPref {
+                            allow_appending: data.allow_appending,
+                            orders,
+                        }),
+                        Err(err) => {
+                            error!(%err, "failed to process mergeable orders");
+                            None
+                        }
+                    }
+                } else {
+                    None
+                }
+            })
+        } else {
+            None
+        };
+
+        let submission_data = SubmissionData {
+            submission_ref,
+            submission,
+            version,
+            merging_data,
+            bid_adjustment_data,
+            withdrawals_root,
+            trace,
+        };
+
+        let message = Event::Submission { submission_data, span, sent_at: Instant::now() };
+
+        if self.tx.try_send(message).is_err() {
+            error!("failed sending submission to auctioneer");
+        }
+
+        Ok(())
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn try_handle_block_submission(
         &self,
         header: InternalBidSubmissionHeader,
         expected_pubkey: Option<BlsPublicKeyBytes>,
-        body: bytes::Bytes,
+        body: &bytes::Bytes,
         trace: &mut SubmissionTrace,
     ) -> Result<
         (Submission, B256, SubmissionVersion, Option<BlockMergingData>, Option<BidAdjustmentData>),
         BuilderApiError,
     > {
         let mut decoder = SubmissionDecoder::new(header.compression, header.encoding);
-        let body = decoder.decompress(body)?;
+        let body = match decoder.decompress(body) {
+            None => body,
+            Some(res) => &res?,
+        };
 
         let with_mergeable_data = header.merge_type.is_some();
         let with_adjustments = header.flags.with_adjustments();
@@ -297,36 +308,34 @@ impl SubWorker {
         let version = SubmissionVersion::new(trace.receive_ns, header.sequence_number);
         Ok((submission, withdrawals_root, version, merging_data, bid_adjustment_data))
     }
-
-    fn handle_get_payload(
-        &self,
-        proposer_pubkey: &BlsPublicKeyBytes,
-        blinded_block: SignedBlindedBeaconBlock,
-        _trace: &mut GetPayloadTrace,
-    ) -> Result<(SignedBlindedBeaconBlock, B256), ProposerApiError> {
-        trace!("verifying signature");
-        verify_signed_blinded_block_signature(&self.chain_info, &blinded_block, proposer_pubkey)?;
-        trace!("signature verified");
-
-        let block_hash = blinded_block
-            .message()
-            .body()
-            .execution_payload()
-            .map_err(|_| ProposerApiError::InvalidFork)? // this should never happen as post altair there's always an execution payload
-            .block_hash()
-            .0;
-
-        Ok((blinded_block, block_hash))
-    }
 }
 
 impl Tile<HelixSpine> for SubWorker {
-    fn loop_body(&mut self, _adapter: &mut flux::spine::SpineAdapter<HelixSpine>) {
+    fn loop_body(&mut self, adapter: &mut flux::spine::SpineAdapter<HelixSpine>) {
+        adapter.consume(|NewBidSubmissionIx { ix }, producers| {
+            if let Some(bid) = self.submissions.get(ix) &&
+                let Err(e) = self.handle_block_submission(
+                    bid.submission_ref,
+                    bid.header,
+                    &bid.body,
+                    bid.trace,
+                    bid.span.clone(),
+                    bid.sent_at,
+                    bid.expected_pubkey,
+                )
+            {
+                let ix = self
+                    .submission_results
+                    .push(SubmissionResultWithRef { sub_ref: bid.submission_ref, result: Err(e) });
+                producers.produce(SubmissionResultIx { ix });
+            }
+        });
+
         for task in self.rx.try_iter() {
             let start_task = Instant::now();
             let task_name = task.as_str();
 
-            self._handle_task(task);
+            self.handle_get_payload(task);
 
             let task_dur = start_task.elapsed();
             self.tel.loop_worked += task_dur;
@@ -428,7 +437,7 @@ struct DecodeFlags {
 
 fn decode_dehydrated(
     decoder: &mut SubmissionDecoder,
-    body: bytes::Bytes,
+    body: &bytes::Bytes,
     trace: &mut SubmissionTrace,
     chain_info: &ChainInfo,
     flags: &DecodeFlags,
@@ -473,7 +482,7 @@ fn decode_dehydrated(
 
 fn decode_merge(
     decoder: &mut SubmissionDecoder,
-    body: bytes::Bytes,
+    body: &bytes::Bytes,
     trace: &mut SubmissionTrace,
     chain_info: &ChainInfo,
     flags: &DecodeFlags,
@@ -500,7 +509,7 @@ fn decode_merge(
 
 fn decode_default(
     decoder: &mut SubmissionDecoder,
-    body: bytes::Bytes,
+    body: &bytes::Bytes,
     trace: &mut SubmissionTrace,
     chain_info: &ChainInfo,
     flags: &DecodeFlags,
