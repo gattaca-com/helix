@@ -10,7 +10,7 @@ use rustc_hash::FxHashSet;
 use tracing::{info, warn};
 
 const KNOWN_VALIDATORS_FILE: &str = "known_validators.bin";
-const VALIDATOR_REGISTRATIONS_FILE: &str = "validator_registrations.bin";
+const VALIDATOR_REGISTRATIONS_FILE: &str = "validator_registrations.json";
 
 /// Atomically write `data` to `path` via a temp file + rename.
 fn atomic_write(path: &Path, data: &[u8]) -> io::Result<()> {
@@ -56,7 +56,7 @@ pub fn save_validator_registrations(
     let tmp = path.with_extension("bin.tmp");
     let file = fs::File::create(&tmp)?;
     let writer = BufWriter::new(file);
-    bincode::serialize_into(writer, entries).map_err(io::Error::other)?;
+    serde_json::to_writer(writer, entries).map_err(io::Error::other)?;
     fs::rename(&tmp, &path)?;
     info!(count = entries.len(), "saved validator_registrations snapshot");
     Ok(())
@@ -69,7 +69,7 @@ pub fn load_validator_registrations(
     let file = fs::File::open(&path)?;
     let reader = BufReader::new(file);
     let entries: Vec<(BlsPublicKeyBytes, SignedValidatorRegistrationEntry)> =
-        bincode::deserialize_from(reader)
+        serde_json::from_reader(reader)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     info!(count = entries.len(), "loaded validator_registrations from snapshot");
     Ok(entries)
