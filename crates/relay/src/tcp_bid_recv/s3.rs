@@ -1,6 +1,6 @@
 use aws_sdk_s3::{
     Client,
-    config::{Credentials, Region},
+    config::{BehaviorVersion, Credentials, Region},
     primitives::ByteStream,
 };
 use bytes::Bytes;
@@ -33,6 +33,7 @@ impl S3PayloadSaver {
         let creds =
             Credentials::new(&self.access_key_id, &self.secret_access_key, None, None, "env");
         let sdk_config = aws_sdk_s3::Config::builder()
+            .behavior_version(BehaviorVersion::latest())
             .credentials_provider(creds)
             .region(Region::new(self.config.region.clone()))
             .build();
