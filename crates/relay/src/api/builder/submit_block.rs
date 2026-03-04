@@ -72,19 +72,14 @@ impl<A: Api> BuilderApi<A> {
             return BuilderApiError::InternalError.into_response();
         };
 
-        let result_ix = FutureBidSubmissionResult::wait(future).await;
-        let Some(result) = api.submission_results.get(result_ix) else {
-            tracing::error!("submission result missing from shared vec");
-            return BuilderApiError::InternalError.into_response();
-        };
-        match &result.result {
-            Ok(()) => StatusCode::OK.into_response(),
-            Err(err) => {
-                if err.should_report() {
-                    tracing::error!(%err);
-                }
-                err.into_response()
+        let result = FutureBidSubmissionResult::wait(future).await;
+        if result.tcp_status.is_okay() {
+            StatusCode::OK.into_response()
+        } else {
+            if result.should_report {
+                tracing::error!(err = result.error_msg.as_str());
             }
+            (result.http_status, result.error_msg.to_string()).into_response()
         }
     }
 }

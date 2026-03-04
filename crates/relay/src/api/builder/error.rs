@@ -76,7 +76,13 @@ impl IntoResponse for BuilderApiError {
 
 impl IntoResponse for &BuilderApiError {
     fn into_response(self) -> Response {
-        let code = match self {
+        (self.http_status(), self.to_string()).into_response()
+    }
+}
+
+impl BuilderApiError {
+    pub fn http_status(&self) -> StatusCode {
+        match self {
             BuilderApiError::JsonDecodeError(_) |
             BuilderApiError::IOError(_) |
             BuilderApiError::SszDecode(_) |
@@ -101,13 +107,11 @@ impl IntoResponse for &BuilderApiError {
                 BlockSimError::Timeout | BlockSimError::SimulationDropped => {
                     StatusCode::REQUEST_TIMEOUT
                 }
-
                 _ => StatusCode::BAD_REQUEST,
             },
 
             BuilderApiError::RequestTimeout => StatusCode::REQUEST_TIMEOUT,
-        };
-        (code, self.to_string()).into_response()
+        }
     }
 }
 

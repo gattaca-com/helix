@@ -7,7 +7,7 @@ use helix_common::{RelayConfig, api::builder_api::TopBidUpdate, local_cache::Loc
 use helix_database::handle::DbHandle;
 
 use crate::{
-    InternalBidSubmission, SubmissionResultWithRef,
+    InternalBidSubmission,
     api::{Api, submission_results_fanout::FutureBidSubmissionResult},
     auctioneer::AuctioneerHandle,
     housekeeper::CurrentSlotInfo,
@@ -26,7 +26,6 @@ pub struct BuilderApi<A: Api> {
     pub auctioneer_handle: AuctioneerHandle,
     pub api_provider: Arc<A::ApiProvider>,
     pub submissions: Arc<SharedVector<InternalBidSubmission>>,
-    pub submission_results: Arc<SharedVector<SubmissionResultWithRef>>,
     pub producer: StandaloneProducer<NewBidSubmissionIx>,
     pub future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
 }
@@ -41,7 +40,6 @@ impl<A: Api> BuilderApi<A> {
         auctioneer_handle: AuctioneerHandle,
         api_provider: Arc<A::ApiProvider>,
         submissions: Arc<SharedVector<InternalBidSubmission>>,
-        submission_results: Arc<SharedVector<SubmissionResultWithRef>>,
         producer: StandaloneProducer<NewBidSubmissionIx>,
         future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
     ) -> Self {
@@ -54,7 +52,6 @@ impl<A: Api> BuilderApi<A> {
             auctioneer_handle,
             api_provider,
             submissions,
-            submission_results,
             producer,
             future_results,
         }

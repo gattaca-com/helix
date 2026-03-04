@@ -7,14 +7,10 @@ use flux::tile::Tile;
 use flux_utils::SharedVector;
 use futures::task::AtomicWaker;
 
-use crate::{
-    HelixSpine,
-    auctioneer::{SubmissionRef, SubmissionResultWithRef},
-    spine::messages::SubmissionResultIx,
-};
+use crate::{HelixSpine, auctioneer::SubmissionRef, spine::messages::SubmissionResultWithRef};
 
 pub struct FutureBidSubmissionResult {
-    result_ix: OnceLock<usize>,
+    result: OnceLock<SubmissionResultWithRef>,
     waker: AtomicWaker,
 }
 
@@ -26,22 +22,22 @@ impl Default for FutureBidSubmissionResult {
 
 impl FutureBidSubmissionResult {
     pub fn new() -> Self {
-        Self { result_ix: OnceLock::new(), waker: AtomicWaker::new() }
+        Self { result: OnceLock::new(), waker: AtomicWaker::new() }
     }
 
-    fn set(&self, ix: usize) {
-        let _ = self.result_ix.set(ix);
+    fn set(&self, result: SubmissionResultWithRef) {
+        let _ = self.result.set(result);
         self.waker.wake();
     }
 
-    pub fn wait(slot: Arc<Self>) -> impl Future<Output = usize> {
+    pub fn wait(slot: Arc<Self>) -> impl Future<Output = SubmissionResultWithRef> {
         std::future::poll_fn(move |cx| {
-            if let Some(&ix) = slot.result_ix.get() {
-                return Poll::Ready(ix);
+            if let Some(&result) = slot.result.get() {
+                return Poll::Ready(result);
             }
             slot.waker.register(cx.waker());
-            match slot.result_ix.get() {
-                Some(&ix) => Poll::Ready(ix),
+            match slot.result.get() {
+                Some(&result) => Poll::Ready(result),
                 None => Poll::Pending,
             }
         })
@@ -50,25 +46,20 @@ impl FutureBidSubmissionResult {
 
 pub struct SubmissionResultsFanOut {
     future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
-    submission_results: Arc<SharedVector<SubmissionResultWithRef>>,
 }
 
 impl SubmissionResultsFanOut {
-    pub fn new(
-        future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
-        submission_results: Arc<SharedVector<SubmissionResultWithRef>>,
-    ) -> Self {
-        Self { future_results, submission_results }
+    pub fn new(future_results: Arc<SharedVector<FutureBidSubmissionResult>>) -> Self {
+        Self { future_results }
     }
 }
 
 impl Tile<HelixSpine> for SubmissionResultsFanOut {
     fn loop_body(&mut self, adapter: &mut flux::spine::SpineAdapter<HelixSpine>) {
-        adapter.consume(|SubmissionResultIx { ix }, _producers| {
-            let Some(result) = self.submission_results.get(ix) else { return };
+        adapter.consume(|result: SubmissionResultWithRef, _producers| {
             let SubmissionRef::Http(future_ix) = result.sub_ref else { return };
             let Some(future) = self.future_results.get(future_ix) else { return };
-            future.set(ix);
+            future.set(result);
         });
     }
 }

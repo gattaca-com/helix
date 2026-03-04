@@ -37,8 +37,7 @@ use uuid::Uuid;
 use crate::{
     api::{
         HEADER_API_KEY, HEADER_API_TOKEN, HEADER_HYDRATE, HEADER_IS_MERGEABLE, HEADER_MERGE_TYPE,
-        HEADER_SEQUENCE, HEADER_WITH_ADJUSTMENTS, builder::error::BuilderApiError,
-        proposer::ProposerApiError,
+        HEADER_SEQUENCE, HEADER_WITH_ADJUSTMENTS, proposer::ProposerApiError,
     },
     auctioneer::{
         BlockMergeResult,
@@ -48,11 +47,6 @@ use crate::{
     gossip::BroadcastPayloadParams,
     housekeeper::PayloadAttributesUpdate,
 };
-
-pub struct SubmissionResultWithRef {
-    pub sub_ref: SubmissionRef,
-    pub result: Result<(), BuilderApiError>,
-}
 
 #[derive(Debug, Clone)]
 pub struct InternalBidSubmission {

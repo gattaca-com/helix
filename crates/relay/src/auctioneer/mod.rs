@@ -14,14 +14,12 @@ mod worker;
 
 use std::{
     cmp::Ordering,
-    sync::Arc,
     time::{Duration, Instant},
 };
 
 use alloy_primitives::B256;
 pub use block_merger::OrderValidationError;
 use flux::tile::Tile;
-use flux_utils::SharedVector;
 pub use handle::{AuctioneerHandle, RegWorkerHandle};
 use helix_common::{
     RelayConfig,
@@ -49,9 +47,7 @@ pub use crate::auctioneer::{
     simulator::{
         BlockSimRequest, SimulatorRequest, client::SimulatorClient, manager::SimulatorManager,
     },
-    types::{
-        InternalBidSubmission, InternalBidSubmissionHeader, SubmissionRef, SubmissionResultWithRef,
-    },
+    types::{InternalBidSubmission, InternalBidSubmissionHeader, SubmissionRef},
 };
 use crate::{
     HelixSpine,
@@ -78,7 +74,6 @@ impl<B: BidAdjustor> Auctioneer<B> {
         event_tx: crossbeam_channel::Sender<Event>,
         event_rx: crossbeam_channel::Receiver<Event>,
         id: usize,
-        submission_results: Arc<SharedVector<SubmissionResultWithRef>>,
     ) -> Self {
         let sim_manager = SimulatorManager::new(config.simulators.clone(), event_tx.clone());
 
@@ -90,7 +85,6 @@ impl<B: BidAdjustor> Auctioneer<B> {
             bid_sorter,
             local_cache,
             bid_adjustor,
-            submission_results.clone(),
         );
         Self {
             ctx,

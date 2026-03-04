@@ -37,10 +37,10 @@ use crate::{
         decoder::SubmissionDecoder,
         types::{
             Event, GetPayload, InternalBidSubmissionHeader, RegWorkerJob, Submission,
-            SubmissionData, SubmissionResultWithRef,
+            SubmissionData,
         },
     },
-    spine::messages::{NewBidSubmissionIx, SubmissionResultIx},
+    spine::messages::{NewBidSubmissionIx, SubmissionResultWithRef},
 };
 
 pub struct Telemetry {
@@ -109,7 +109,6 @@ pub struct SubWorker {
     tel: Telemetry,
     config: RelayConfig,
     submissions: Arc<SharedVector<InternalBidSubmission>>,
-    submission_results: Arc<SharedVector<SubmissionResultWithRef>>,
 }
 
 impl SubWorker {
@@ -121,7 +120,6 @@ impl SubWorker {
         chain_info: ChainInfo,
         config: RelayConfig,
         submissions: Arc<SharedVector<InternalBidSubmission>>,
-        submission_results: Arc<SharedVector<SubmissionResultWithRef>>,
     ) -> Self {
         let id = ShortTypename::from_str_truncate(&format!("submission_{core_id}"));
         Self {
@@ -134,7 +132,6 @@ impl SubWorker {
             tel: Telemetry::default(),
             config,
             submissions,
-            submission_results,
         }
     }
 
@@ -325,10 +322,7 @@ impl Tile<HelixSpine> for SubWorker {
                     bid.expected_pubkey,
                 )
             {
-                let ix = self
-                    .submission_results
-                    .push(SubmissionResultWithRef { sub_ref: bid.submission_ref, result: Err(e) });
-                producers.produce(SubmissionResultIx { ix });
+                producers.produce(SubmissionResultWithRef::new(bid.submission_ref, Err(e)));
             }
         });
 

@@ -27,9 +27,9 @@ use helix_common::{
 use helix_relay::{
     Api, Auctioneer, AuctioneerHandle, BidSorter, BidSubmissionTcpListener, DbHandle,
     DefaultBidAdjustor, FutureBidSubmissionResult, HelixSpine, InternalBidSubmission, RegWorker,
-    RegWorkerHandle, RelayNetworkManager, S3PayloadSaver, SubWorker, SubmissionResultWithRef,
-    SubmissionResultsFanOut, WebsiteService, spawn_tokio_monitoring, start_admin_service,
-    start_api_service, start_beacon_client, start_db_service, start_housekeeper,
+    RegWorkerHandle, RelayNetworkManager, S3PayloadSaver, SubWorker, SubmissionResultsFanOut,
+    WebsiteService, spawn_tokio_monitoring, start_admin_service, start_api_service,
+    start_beacon_client, start_db_service, start_housekeeper,
 };
 use helix_types::BlsKeypair;
 use tikv_jemallocator::Jemalloc;
@@ -154,9 +154,6 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
         let future_results = Arc::new(SharedVector::<FutureBidSubmissionResult>::with_capacity(
             MAX_SUBMISSIONS_PER_SLOT,
         ));
-        let submission_results = Arc::new(SharedVector::<SubmissionResultWithRef>::with_capacity(
-            MAX_SUBMISSIONS_PER_SLOT,
-        ));
 
         let bid_producer = spine.spine.standalone_producer_for(TileName::from_str_truncate("Api"));
         start_api_service::<ApiProd>(
@@ -176,7 +173,6 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
             auctioneer_handle,
             registrations_handle,
             submissions.clone(),
-            submission_results.clone(),
             bid_producer,
             future_results.clone(),
         );
@@ -204,7 +200,6 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
                     chain_info.as_ref().clone(),
                     config.clone(),
                     submissions.clone(),
-                    submission_results.clone(),
                 );
 
                 attach_tile(worker, spine, TileConfig::new(core, ThreadPriority::OSDefault));
@@ -212,8 +207,7 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
                 break;
             }
 
-            let http_sub_results_fanout =
-                SubmissionResultsFanOut::new(future_results, submission_results.clone());
+            let http_sub_results_fanout = SubmissionResultsFanOut::new(future_results);
             attach_tile(
                 http_sub_results_fanout,
                 spine,
@@ -234,7 +228,6 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
                 config.tcp_max_connections,
                 raw_payloads_tx,
                 submissions,
-                submission_results.clone(),
             );
             attach_tile(
                 block_submission_tcp_listener,
@@ -256,7 +249,6 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
                 event_tx,
                 event_rx,
                 auctioneer_core,
-                submission_results,
             );
             attach_tile(
                 auctioneer,

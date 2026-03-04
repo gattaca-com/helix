@@ -20,7 +20,6 @@ use crate::{
         Api, builder::api::BuilderApi, proposer::ProposerApi, router::build_router,
         submission_results_fanout::FutureBidSubmissionResult,
     },
-    auctioneer::SubmissionResultWithRef,
     beacon::multi_beacon_client::MultiBeaconClient,
     gossip::{GrpcGossiperClientManager, process_gossip_messages},
     housekeeper::CurrentSlotInfo,
@@ -47,7 +46,6 @@ pub fn start_api_service<A: Api>(
     auctioneer_handle: AuctioneerHandle,
     registrations_handle: RegWorkerHandle,
     submissions: Arc<SharedVector<InternalBidSubmission>>,
-    submission_results: Arc<SharedVector<SubmissionResultWithRef>>,
     bid_producer: StandaloneProducer<NewBidSubmissionIx>,
     future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
 ) {
@@ -68,7 +66,6 @@ pub fn start_api_service<A: Api>(
         auctioneer_handle,
         registrations_handle,
         submissions,
-        submission_results,
         bid_producer,
         future_results,
     ));
@@ -91,7 +88,6 @@ pub async fn run_api_service<A: Api>(
     auctioneer_handle: AuctioneerHandle,
     registrations_handle: RegWorkerHandle,
     submissions: Arc<SharedVector<InternalBidSubmission>>,
-    submission_results: Arc<SharedVector<SubmissionResultWithRef>>,
     bid_producer: StandaloneProducer<NewBidSubmissionIx>,
     future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
 ) {
@@ -114,7 +110,6 @@ pub async fn run_api_service<A: Api>(
         auctioneer_handle.clone(),
         api_provider.clone(),
         submissions,
-        submission_results,
         bid_producer,
         future_results,
     );

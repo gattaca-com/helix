@@ -17,10 +17,8 @@ use uuid::Uuid;
 
 use crate::{
     HelixSpine,
-    auctioneer::{
-        InternalBidSubmission, InternalBidSubmissionHeader, SubmissionRef, SubmissionResultWithRef,
-    },
-    spine::messages::{NewBidSubmissionIx, SubmissionResultIx},
+    auctioneer::{InternalBidSubmission, InternalBidSubmissionHeader, SubmissionRef},
+    spine::messages::{NewBidSubmissionIx, SubmissionResultWithRef},
 };
 
 mod s3;
@@ -32,7 +30,7 @@ pub use helix_tcp_types::{
 pub use s3::S3PayloadSaver;
 
 pub use crate::tcp_bid_recv::types::{
-    BidSubmissionError, response_from_bid_submission_error, response_from_builder_api_error,
+    BidSubmissionError, response_from_bid_submission_error, response_from_submission_result,
 };
 
 type SubmissionError = (Token, Option<u32>, Option<Uuid>, BidSubmissionError);
@@ -47,7 +45,6 @@ pub struct BidSubmissionTcpListener {
     submission_errors: Vec<SubmissionError>,
     raw_payloads_tx: Option<mpsc::Sender<(Uuid, Bytes)>>,
     submissions: Arc<SharedVector<InternalBidSubmission>>,
-    submission_results: Arc<SharedVector<SubmissionResultWithRef>>,
 }
 
 impl BidSubmissionTcpListener {
@@ -57,7 +54,6 @@ impl BidSubmissionTcpListener {
         max_connections: usize,
         raw_payloads_tx: Option<mpsc::Sender<(Uuid, Bytes)>>,
         submissions: Arc<SharedVector<InternalBidSubmission>>,
-        submission_results: Arc<SharedVector<SubmissionResultWithRef>>,
     ) -> Self {
         let mut listener = TcpConnector::default()
             .with_telemetry(TcpTelemetry::Enabled { app_name: HelixSpine::app_name() })
@@ -73,7 +69,6 @@ impl BidSubmissionTcpListener {
             submission_errors: Vec::with_capacity(max_connections),
             raw_payloads_tx,
             submissions,
-            submission_results,
         }
     }
 }
@@ -177,26 +172,14 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
             });
         }
 
-        adapter.consume(|SubmissionResultIx { ix }, _producers| {
-            if let Some(submissione_result) = self.submission_results.get(ix) {
-                match submissione_result.sub_ref {
-                    SubmissionRef::Tcp { id, token, seq_num } => {
-                        let response = response_from_builder_api_error(
-                            seq_num,
-                            id,
-                            &submissione_result.result,
-                        );
-                        tracing::debug!("submission result: {}", response);
-                        self.listener.write_or_enqueue_with(
-                            SendBehavior::Single(token),
-                            |buffer| {
-                                response.ssz_append(buffer);
-                            },
-                        );
-                    }
-                    SubmissionRef::Http(_) => {}
-                }
-            }
+        adapter.consume(|r: SubmissionResultWithRef, _producers| {
+            let SubmissionRef::Tcp { id, token, seq_num } = r.sub_ref else { return };
+            let response =
+                response_from_submission_result(seq_num, id, r.tcp_status, r.error_msg.as_str());
+            tracing::debug!("submission result: {}", response);
+            self.listener.write_or_enqueue_with(SendBehavior::Single(token), |buffer| {
+                response.ssz_append(buffer);
+            });
         });
     }
 }
