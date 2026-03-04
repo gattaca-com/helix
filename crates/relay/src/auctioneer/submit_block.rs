@@ -14,7 +14,6 @@ use helix_types::{
 use tracing::trace;
 
 use crate::{
-    HelixSpine,
     api::builder::error::BuilderApiError,
     auctioneer::{
         bid_adjustor::BidAdjustor,
@@ -22,18 +21,18 @@ use crate::{
         simulator::{BlockSimRequest, SimulatorRequest, manager::SimulationResult},
         types::{PayloadEntry, SlotData, Submission, SubmissionData, SubmissionRef},
     },
-    housekeeper::PayloadAttributesUpdate,
+    housekeeper::PayloadAttributesUpdate, spine::HelixSpineProducers,
 };
 
 impl<B: BidAdjustor> Context<B> {
     pub(super) fn handle_submission(
         &mut self,
-        submission_data: SubmissionData,
+        submission_data: &SubmissionData,
         slot_data: &SlotData,
-        adapter: &mut flux::spine::SpineAdapter<HelixSpine>,
+        producers: &mut HelixSpineProducers,
     ) {
         let submission_ref = submission_data.submission_ref;
-        match self.validate_and_sort(submission_data, slot_data) {
+        match self.validate_and_sort(submission_data.clone(), slot_data) {
             Ok((validated, optimistic_version, merging_data)) => {
                 let is_optimistic = optimistic_version.is_optimistic();
                 if is_optimistic {
@@ -95,7 +94,7 @@ impl<B: BidAdjustor> Context<B> {
     pub(super) fn sort_simulation_result(
         &mut self,
         result: &mut SimulationResult,
-        adapter: &mut flux::spine::SpineAdapter<HelixSpine>,
+        producers: &mut HelixSpineProducers,
     ) -> bool {
         let Some(result) = &mut result.1 else {
             return false;

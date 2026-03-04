@@ -15,7 +15,7 @@ use helix_types::{BlsPublicKeyBytes, SignedBidSubmission, SubmissionVersion};
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::{info, trace};
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct BidEntry {
     version: SubmissionVersion,
     value: U256,

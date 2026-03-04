@@ -47,3 +47,9 @@ impl SubmissionResultWithRef {
         }
     }
 }
+
+// references position in SharedVector<BidSubmission>
+#[derive(Debug, Clone, Copy)]
+pub struct DecodedSubmission {
+    pub ix: usize,
+}
