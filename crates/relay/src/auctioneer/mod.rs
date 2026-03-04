@@ -36,7 +36,8 @@ use rustc_hash::FxHashMap;
 pub use simulator::*;
 use tracing::{debug, error, info, trace, warn};
 pub use types::{
-    Event, GetPayloadResultData, PayloadBidData, PayloadEntry, SlotData, Submission, SubmissionData, SubmissionPayload,
+    Event, GetPayloadResultData, PayloadBidData, PayloadEntry, SlotData, Submission,
+    SubmissionData, SubmissionPayload,
 };
 pub use worker::{RegWorker, SubWorker};
 
@@ -51,10 +52,7 @@ pub use crate::auctioneer::{
     types::{InternalBidSubmission, InternalBidSubmissionHeader, SubmissionRef},
 };
 use crate::{
-    HelixSpine,
-    api::{FutureBidSubmissionResult, builder::error::BuilderApiError, proposer::ProposerApiError},
-    auctioneer::{context::send_submission_result, types::PendingPayload},
-    housekeeper::PayloadAttributesUpdate,
+    HelixSpine, SubmissionDataWithSpan, api::{FutureBidSubmissionResult, builder::error::BuilderApiError, proposer::ProposerApiError}, auctioneer::{context::send_submission_result, types::PendingPayload}, housekeeper::PayloadAttributesUpdate, spine::{HelixSpineProducers, messages::DecodedSubmission}
 };
 
 pub struct Auctioneer<B: BidAdjustor> {
@@ -111,7 +109,7 @@ impl<B: BidAdjustor> Tile<HelixSpine> for Auctioneer<B> {
             match self.decoded.get(submission.ix) {
                 Some(submission) => {
                     let event = Event::Submission { submission_data: submission };
-                     self.state.step(event, &mut self.ctx, &mut self.tel, producers);
+                    self.state.step(event, &mut self.ctx, &mut self.tel, producers);
                 }
                 None => {
                     tracing::error!(?submission, "no submission found");
@@ -444,9 +442,9 @@ impl State {
             // late submission
             (State::Broadcasting { slot_data, .. }, Event::Submission { submission_data, .. }) => {
                 send_submission_result(
-                    &mut adapter.producers,
+                    producers,
                     &ctx.future_results,
-                    submission_data.submission_ref,
+                    submission_data.submission_data.submission_ref,
                     Err(BuilderApiError::DeliveringPayload {
                         bid_slot: submission_data.submission_data.bid_slot(),
                         delivering: slot_data.bid_slot.as_u64(),
@@ -498,16 +496,16 @@ impl State {
                 if submission_data.submission_data.bid_slot() == bid_slot.as_u64() {
                     // either not registered or waiting for full data from housekepper
                     send_submission_result(
-                        &mut adapter.producers,
+                        producers,
                         &ctx.future_results,
-                        submission_data.submission_ref,
+                        submission_data.submission_data.submission_ref,
                         Err(BuilderApiError::ProposerDutyNotFound),
                     );
                 } else {
                     send_submission_result(
-                        &mut adapter.producers,
+                        producers,
                         &ctx.future_results,
-                        submission_data.submission_ref,
+                        submission_data.submission_data.submission_ref,
                         Err(BuilderApiError::BidValidation(
                             helix_types::BlockValidationError::SubmissionForWrongSlot {
                                 expected: *bid_slot,

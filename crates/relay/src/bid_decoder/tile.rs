@@ -3,12 +3,31 @@ use std::{sync::Arc, time::Instant};
 use alloy_primitives::B256;
 use flux::{spine::SpineProducers, tile::Tile};
 use flux_utils::SharedVector;
-use helix_common::{RelayConfig, SubmissionTrace, chain_info::ChainInfo, local_cache::LocalCache, record_submission_step};
-use helix_types::{BidAdjustmentData, BlockMergingData, BlsPublicKeyBytes, MergeableOrdersWithPref, SubmissionVersion};
-use tracing::{trace};
+use helix_common::{
+    RelayConfig, SubmissionTrace, chain_info::ChainInfo, local_cache::LocalCache,
+    record_submission_step,
+};
+use helix_types::{
+    BidAdjustmentData, BlockMergingData, BlsPublicKeyBytes, MergeableOrdersWithPref,
+    SubmissionVersion,
+};
+use tracing::trace;
 
-use crate::{HelixSpine, InternalBidSubmission, SubmissionResultWithRef, api::builder::error::BuilderApiError, auctioneer::{InternalBidSubmissionHeader, Submission, SubmissionData, SubmissionRef, get_mergeable_orders}, bid_decoder::{SubmissionDataWithSpan, decoder::{DecodeFlags, SubmissionDecoder, decode_default, decode_dehydrated, decode_merge}}, spine::messages::{DecodedSubmission, NewBidSubmissionIx, SubmissionResultIx}};
-
+use crate::{
+    HelixSpine, InternalBidSubmission, SubmissionResultWithRef,
+    api::builder::error::BuilderApiError,
+    auctioneer::{
+        InternalBidSubmissionHeader, Submission, SubmissionData, SubmissionRef,
+        get_mergeable_orders,
+    },
+    bid_decoder::{
+        SubmissionDataWithSpan,
+        decoder::{
+            DecodeFlags, SubmissionDecoder, decode_default, decode_dehydrated, decode_merge,
+        },
+    },
+    spine::messages::{DecodedSubmission, NewBidSubmissionIx, SubmissionResultIx},
+};
 
 pub struct DecoderTile {
     chain_info: ChainInfo,
@@ -23,21 +42,26 @@ impl Tile<HelixSpine> for DecoderTile {
     fn loop_body(&mut self, adapter: &mut flux::spine::SpineAdapter<HelixSpine>) {
         adapter.consume(|new_bid: NewBidSubmissionIx, producers| {
             match self.submissions.get(new_bid.ix) {
-                Some(bid) => match self.handle_bid(&bid) {      
+                Some(bid) => match self.handle_bid(&bid) {
                     Ok(submission) => {
-                        let ix = self.decoded.push(SubmissionDataWithSpan { submission_data: submission, span: bid.span.clone(), sent_at: Instant::now() });
+                        let ix = self.decoded.push(SubmissionDataWithSpan {
+                            submission_data: submission,
+                            span: bid.span.clone(),
+                            sent_at: Instant::now(),
+                        });
                         producers.produce(DecodedSubmission { ix });
                     }
-                    Err(e) => {              
-                        let ix = self
-                            .submission_results
-                            .push(SubmissionResultWithRef { sub_ref: bid.submission_ref, result: Err(e) });
+                    Err(e) => {
+                        let ix = self.submission_results.push(SubmissionResultWithRef {
+                            sub_ref: bid.submission_ref,
+                            result: Err(e),
+                        });
                         producers.produce(SubmissionResultIx { ix });
-                    }                    
+                    }
                 },
                 None => {
                     tracing::error!(?new_bid, "No bid submission found");
-                },
+                }
             }
         });
     }
@@ -52,18 +76,22 @@ impl DecoderTile {
         submission_results: Arc<SharedVector<SubmissionResultWithRef>>,
         decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
     ) -> Self {
-        Self {
-            chain_info,
-            cache,
-            config,
-            submissions,
-            decoded,
-            submission_results,
-        }
+        Self { chain_info, cache, config, submissions, decoded, submission_results }
     }
 
-    fn handle_bid(&mut self, bid: &Arc<InternalBidSubmission>) -> Result<SubmissionData, BuilderApiError> {
-        self.handle_block_submission(&bid.submission_ref, &bid.header, &bid.body, bid.trace, &bid.span, bid.sent_at, bid.expected_pubkey.as_ref())
+    fn handle_bid(
+        &mut self,
+        bid: &Arc<InternalBidSubmission>,
+    ) -> Result<SubmissionData, BuilderApiError> {
+        self.handle_block_submission(
+            &bid.submission_ref,
+            &bid.header,
+            &bid.body,
+            bid.trace,
+            &bid.span,
+            bid.sent_at,
+            bid.expected_pubkey.as_ref(),
+        )
     }
 
     fn handle_block_submission(

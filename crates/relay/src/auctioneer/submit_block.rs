@@ -21,7 +21,8 @@ use crate::{
         simulator::{BlockSimRequest, SimulatorRequest, manager::SimulationResult},
         types::{PayloadEntry, SlotData, Submission, SubmissionData, SubmissionRef},
     },
-    housekeeper::PayloadAttributesUpdate, spine::HelixSpineProducers,
+    housekeeper::PayloadAttributesUpdate,
+    spine::HelixSpineProducers,
 };
 
 impl<B: BidAdjustor> Context<B> {
@@ -37,7 +38,7 @@ impl<B: BidAdjustor> Context<B> {
                 let is_optimistic = optimistic_version.is_optimistic();
                 if is_optimistic {
                     send_submission_result(
-                        &mut adapter.producers,
+                        producers,
                         &self.future_results,
                         submission_ref,
                         Ok(()),
@@ -82,7 +83,7 @@ impl<B: BidAdjustor> Context<B> {
 
             Err(e) => {
                 send_submission_result(
-                    &mut adapter.producers,
+                    producers,
                     &self.future_results,
                     submission_ref,
                     Err(e),
@@ -106,7 +107,7 @@ impl<B: BidAdjustor> Context<B> {
                 self.bid_sorter.demote(*result.submission.builder_public_key());
                 if need_send_result {
                     send_submission_result(
-                        &mut adapter.producers,
+                        producers,
                         &self.future_results,
                         result.submission_ref,
                         Err(BuilderApiError::BlockSimulation(err.clone())),
@@ -128,7 +129,7 @@ impl<B: BidAdjustor> Context<B> {
 
                 if need_send_result {
                     send_submission_result(
-                        &mut adapter.producers,
+                        producers,
                         &self.future_results,
                         result.submission_ref,
                         Ok(()),

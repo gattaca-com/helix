@@ -35,14 +35,16 @@ use tracing::debug;
 use uuid::Uuid;
 
 use crate::{
-    SubmissionDataWithSpan, api::{
+    SubmissionDataWithSpan,
+    api::{
         HEADER_API_KEY, HEADER_API_TOKEN, HEADER_HYDRATE, HEADER_IS_MERGEABLE, HEADER_MERGE_TYPE,
         HEADER_SEQUENCE, HEADER_WITH_ADJUSTMENTS, builder::error::BuilderApiError,
         proposer::ProposerApiError,
-    }, auctioneer::{
-        BlockMergeResult,
-        simulator::manager::SimulationResult,
-    }, bid_decoder::{Encoding, SubmissionType}, gossip::BroadcastPayloadParams, housekeeper::PayloadAttributesUpdate
+    },
+    auctioneer::{BlockMergeResult, simulator::manager::SimulationResult},
+    bid_decoder::{Encoding, SubmissionType},
+    gossip::BroadcastPayloadParams,
+    housekeeper::PayloadAttributesUpdate,
 };
 
 #[derive(Debug, Clone)]

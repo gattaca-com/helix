@@ -1,6 +1,4 @@
-use std::{
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 use flux::{
     tile::{Tile, TileName},
@@ -13,18 +11,15 @@ use helix_common::{
     utils::{utcnow_ns, utcnow_sec},
 };
 use helix_types::{
-    BlsPublicKey, BlsPublicKeyBytes, ExecPayload, SigError, SignedBlindedBeaconBlock, SignedValidatorRegistration
+    BlsPublicKey, BlsPublicKeyBytes, ExecPayload, SigError, SignedBlindedBeaconBlock,
+    SignedValidatorRegistration,
 };
 use tracing::{error, trace};
 
 use crate::{
     HelixSpine,
     api::proposer::ProposerApiError,
-    auctioneer::{
-        types::{
-            Event, GetPayload, RegWorkerJob, 
-        },
-    },
+    auctioneer::types::{Event, GetPayload, RegWorkerJob},
 };
 
 pub struct Telemetry {
@@ -100,14 +95,7 @@ impl SubWorker {
         chain_info: ChainInfo,
     ) -> Self {
         let id = ShortTypename::from_str_truncate(&format!("submission_{core_id}"));
-        Self {
-            core_id,
-            id,
-            tx,
-            rx,
-            chain_info,
-            tel: Telemetry::default(),
-        }
+        Self { core_id, id, tx, rx, chain_info, tel: Telemetry::default() }
     }
 
     fn handle_get_payload(&self, task: GetPayload) {
@@ -154,7 +142,6 @@ impl SubWorker {
 
 impl Tile<HelixSpine> for SubWorker {
     fn loop_body(&mut self, _adapter: &mut flux::spine::SpineAdapter<HelixSpine>) {
-
         for task in self.rx.try_iter() {
             let start_task = Instant::now();
             let task_name = task.as_str();

@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-pub use decoder::{Encoding, SubmissionType, HEADER_SSZ};
+pub use decoder::{Encoding, HEADER_SSZ, SubmissionType};
 pub use tile::DecoderTile;
 
 use crate::auctioneer::SubmissionData;
