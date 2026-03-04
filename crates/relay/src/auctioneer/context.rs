@@ -18,7 +18,6 @@ use rustc_hash::FxHashMap;
 use tracing::{debug, info, warn};
 
 use crate::{
-    HelixSpine,
     api::builder::error::BuilderApiError,
     auctioneer::{
         BlockMergeResponse,
@@ -28,7 +27,7 @@ use crate::{
         simulator::manager::{SimulationResult, SimulatorManager},
         types::{PayloadEntry, PendingPayload, SubmissionRef, SubmissionResultWithRef},
     },
-    spine::messages::SubmissionResultIx,
+    spine::{HelixSpineProducers, messages::SubmissionResultIx},
 };
 
 // Context that is only valid for a given slot
@@ -125,7 +124,7 @@ impl<B: BidAdjustor> Context<B> {
         &mut self,
         result: SimulationResult,
         already_sent: bool,
-        adapter: &mut flux::spine::SpineAdapter<HelixSpine>,
+        producers: &mut HelixSpineProducers,
     ) {
         let (id, result) = result;
 
@@ -187,7 +186,7 @@ impl<B: BidAdjustor> Context<B> {
 
         if !already_sent && !result.optimistic_version.is_optimistic() {
             self.send_submission_result(
-                adapter,
+                producers,
                 result.submission_ref,
                 Err(BuilderApiError::SimOnNextSlot),
             );
@@ -196,12 +195,12 @@ impl<B: BidAdjustor> Context<B> {
 
     pub fn send_submission_result(
         &self,
-        adapter: &mut flux::spine::SpineAdapter<HelixSpine>,
+        producers: &mut HelixSpineProducers,
         sub_ref: SubmissionRef,
         result: Result<(), BuilderApiError>,
     ) {
         let ix = self.submission_results.push(SubmissionResultWithRef { sub_ref, result });
-        adapter.produce(SubmissionResultIx { ix });
+        producers.bid_submission_result.produce(&(SubmissionResultIx { ix }).into());
     }
 
     pub fn on_new_slot(&mut self, bid_slot: Slot) {

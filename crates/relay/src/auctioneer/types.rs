@@ -35,18 +35,14 @@ use tracing::debug;
 use uuid::Uuid;
 
 use crate::{
-    api::{
+    SubmissionDataWithSpan, api::{
         HEADER_API_KEY, HEADER_API_TOKEN, HEADER_HYDRATE, HEADER_IS_MERGEABLE, HEADER_MERGE_TYPE,
         HEADER_SEQUENCE, HEADER_WITH_ADJUSTMENTS, builder::error::BuilderApiError,
         proposer::ProposerApiError,
-    },
-    auctioneer::{
+    }, auctioneer::{
         BlockMergeResult,
-        decoder::{Encoding, SubmissionType},
         simulator::manager::SimulationResult,
-    },
-    gossip::BroadcastPayloadParams,
-    housekeeper::PayloadAttributesUpdate,
+    }, bid_decoder::{Encoding, SubmissionType}, gossip::BroadcastPayloadParams, housekeeper::PayloadAttributesUpdate
 };
 
 pub struct SubmissionResultWithRef {
@@ -486,9 +482,7 @@ pub enum Event {
         il: Option<InclusionListWithMetadata>,
     },
     Submission {
-        submission_data: SubmissionData,
-        span: tracing::Span,
-        sent_at: Instant,
+        submission_data: Arc<SubmissionDataWithSpan>,
     },
     /// Assume already some validation (so we don't have to wait here)
     /// timing games already done

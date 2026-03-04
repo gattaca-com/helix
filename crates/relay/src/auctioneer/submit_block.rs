@@ -14,7 +14,6 @@ use helix_types::{
 use tracing::trace;
 
 use crate::{
-    HelixSpine,
     api::builder::error::BuilderApiError,
     auctioneer::{
         bid_adjustor::BidAdjustor,
@@ -22,22 +21,22 @@ use crate::{
         simulator::{BlockSimRequest, SimulatorRequest, manager::SimulationResult},
         types::{PayloadEntry, SlotData, Submission, SubmissionData, SubmissionRef},
     },
-    housekeeper::PayloadAttributesUpdate,
+    housekeeper::PayloadAttributesUpdate, spine::HelixSpineProducers,
 };
 
 impl<B: BidAdjustor> Context<B> {
     pub(super) fn handle_submission(
         &mut self,
-        submission_data: SubmissionData,
+        submission_data: &SubmissionData,
         slot_data: &SlotData,
-        adapter: &mut flux::spine::SpineAdapter<HelixSpine>,
+        producers: &mut HelixSpineProducers,
     ) {
         let submission_ref = submission_data.submission_ref;
-        match self.validate_and_sort(submission_data, slot_data) {
+        match self.validate_and_sort(submission_data.clone(), slot_data) {
             Ok((validated, optimistic_version, merging_data)) => {
                 let is_optimistic = optimistic_version.is_optimistic();
                 if is_optimistic {
-                    self.send_submission_result(adapter, submission_ref, Ok(()));
+                    self.send_submission_result(producers, submission_ref, Ok(()));
                 };
 
                 let (req, entry) =
@@ -77,7 +76,7 @@ impl<B: BidAdjustor> Context<B> {
             }
 
             Err(e) => {
-                self.send_submission_result(adapter, submission_ref, Err(e));
+                self.send_submission_result(producers, submission_ref, Err(e));
             }
         }
     }
@@ -85,7 +84,7 @@ impl<B: BidAdjustor> Context<B> {
     pub(super) fn sort_simulation_result(
         &mut self,
         result: &mut SimulationResult,
-        adapter: &mut flux::spine::SpineAdapter<HelixSpine>,
+        producers: &mut HelixSpineProducers,
     ) -> bool {
         let Some(result) = &mut result.1 else {
             return false;
@@ -99,7 +98,7 @@ impl<B: BidAdjustor> Context<B> {
             Err(err) if err.is_demotable() => {
                 self.bid_sorter.demote(*result.submission.builder_public_key());
                 self.send_submission_result(
-                    adapter,
+                    producers,
                     result.submission_ref,
                     Err(BuilderApiError::BlockSimulation(err.clone())),
                 );
@@ -117,7 +116,7 @@ impl<B: BidAdjustor> Context<B> {
                 }
                 self.request_merged_block();
 
-                self.send_submission_result(adapter, result.submission_ref, Ok(()));
+                self.send_submission_result(producers, result.submission_ref, Ok(()));
             }
         }
 

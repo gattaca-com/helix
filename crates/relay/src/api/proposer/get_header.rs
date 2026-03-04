@@ -28,7 +28,7 @@ use crate::{
         },
         router::Terminating,
     },
-    auctioneer::{Encoding, HEADER_SSZ},
+    bid_decoder::{Encoding, HEADER_SSZ},
 };
 
 impl<A: Api> ProposerApi<A> {

@@ -26,8 +26,9 @@ use crate::{
         Api,
         proposer::{CONSENSUS_VERSION_HEADER, error::ProposerApiError},
     },
-    auctioneer::{Encoding, GetPayloadResultData, HEADER_SSZ, PayloadBidData},
+    auctioneer::{GetPayloadResultData, PayloadBidData},
     beacon::types::BroadcastValidation,
+    bid_decoder::{Encoding, HEADER_SSZ},
     gossip::{BroadcastGetPayloadParams, BroadcastPayloadParams},
 };
 

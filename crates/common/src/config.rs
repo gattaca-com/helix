@@ -99,6 +99,7 @@ impl RelayConfig {
                 reg_workers: vec![],
                 tcp_bid_submissions_tile: 2,
                 submission_results_fanout: 3,
+                decoder: 4,
             },
             gossip_payload_on_header: false,
             api_port: 4040,
@@ -150,6 +151,7 @@ pub struct CoresConfig {
     pub reg_workers: Vec<usize>,
     pub tcp_bid_submissions_tile: usize,
     pub submission_results_fanout: usize,
+    pub decoder: usize,
 }
 
 impl Default for WebsiteConfig {

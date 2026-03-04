@@ -5,12 +5,12 @@ use std::{
 
 use bytes::Bytes;
 use flate2::read::GzDecoder;
-use helix_common::metrics::{
+use helix_common::{SubmissionTrace, chain_info::ChainInfo, metrics::{
     BID_DECODING_LATENCY, BID_DECOMPRESS_SIZEHINT_REL_ERROR, DECOMPRESSION_LATENCY,
     SUBMISSION_BY_COMPRESSION, SUBMISSION_BY_ENCODING, SUBMISSION_COMPRESSED_BYTES,
     SUBMISSION_DECOMPRESSED_BYTES,
-};
-use helix_types::{BlsPublicKeyBytes, Compression, ForkName, ForkVersionDecode};
+}, record_submission_step, utils::utcnow_ns};
+use helix_types::{BidAdjustmentData, BlockMergingData, BlsPublicKeyBytes, Compression, DehydratedBidSubmission, DehydratedBidSubmissionFuluWithAdjustments, ForkName, ForkVersionDecode, MergeType, SignedBidSubmission, SignedBidSubmissionWithAdjustments, SignedBidSubmissionWithMergingData};
 use http::{
     HeaderMap, HeaderValue,
     header::{ACCEPT, CONTENT_TYPE},
@@ -18,16 +18,16 @@ use http::{
 use serde::de::DeserializeOwned;
 use ssz::Decode;
 use strum::{AsRefStr, EnumString};
-use tracing::trace;
+use tracing::{error, trace};
 use zstd::{
     stream::read::Decoder as ZstdDecoder,
     zstd_safe::{CONTENTSIZE_ERROR, CONTENTSIZE_UNKNOWN, get_frame_content_size},
 };
 
-use crate::api::{
+use crate::{api::{
     HEADER_SUBMISSION_TYPE,
     builder::{api::MAX_PAYLOAD_LENGTH, error::BuilderApiError},
-};
+}, auctioneer::Submission};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString, AsRefStr)]
 #[strum(serialize_all = "snake_case", ascii_case_insensitive)]
@@ -72,6 +72,140 @@ impl Encoding {
             _ => Encoding::Json,
         }
     }
+}
+
+pub(super) struct DecodeFlags {
+    pub(super) skip_sigverify: bool,
+    pub(super) merge_type: MergeType,
+    pub(super) with_adjustments: bool,
+    pub(super) block_merging_dry_run: bool,
+}
+
+pub(super) fn decode_dehydrated(
+    decoder: &mut SubmissionDecoder,
+    body: &bytes::Bytes,
+    trace: &mut SubmissionTrace,
+    chain_info: &ChainInfo,
+    flags: &DecodeFlags,
+) -> Result<(Submission, Option<BlockMergingData>, Option<BidAdjustmentData>), BuilderApiError> {
+    if !flags.skip_sigverify {
+        return Err(BuilderApiError::UntrustedBuilderOnDehydratedPayload);
+    }
+
+    let (submission, bid_adjustment) = if flags.with_adjustments {
+        let sub_with_adjustment: DehydratedBidSubmissionFuluWithAdjustments =
+            decoder.decode_by_fork(body, chain_info.current_fork_name())?;
+        let (sub, adjustment_data) = sub_with_adjustment.split();
+
+        (sub, Some(adjustment_data))
+    } else {
+        let submission: DehydratedBidSubmission =
+            decoder.decode_by_fork(body, chain_info.current_fork_name())?;
+
+        (submission, None)
+    };
+
+    trace.decoded_ns = utcnow_ns();
+
+    let merging_data = match flags.merge_type {
+        MergeType::Mergeable => {
+            //Should this return an error instead?
+            error!("mergeable dehydrated submissions are not supported");
+            None
+        }
+        MergeType::AppendOnly => Some(BlockMergingData::append_only(submission.fee_recipient())),
+        MergeType::None => {
+            if flags.block_merging_dry_run {
+                Some(BlockMergingData::append_only(submission.fee_recipient()))
+            } else {
+                None
+            }
+        }
+    };
+
+    Ok((Submission::Dehydrated(submission), merging_data, bid_adjustment))
+}
+
+pub(super) fn decode_merge(
+    decoder: &mut SubmissionDecoder,
+    body: &bytes::Bytes,
+    trace: &mut SubmissionTrace,
+    chain_info: &ChainInfo,
+    flags: &DecodeFlags,
+) -> Result<(Submission, Option<BlockMergingData>, Option<BidAdjustmentData>), BuilderApiError> {
+    let sub_with_merging: SignedBidSubmissionWithMergingData = decoder.decode(body)?;
+    let mut upgraded = sub_with_merging.maybe_upgrade_to_fulu(chain_info.current_fork_name());
+    trace.decoded_ns = utcnow_ns();
+    let merging_data = match flags.merge_type {
+        MergeType::Mergeable => Some(upgraded.merging_data),
+        //Handle append-only by creating empty mergeable orders
+        //this allows builder to switch between append-only and mergeable without changing
+        // submission alternatively we could reject or ignore append-only here if the
+        // submission is mergeable?
+        MergeType::AppendOnly => Some(BlockMergingData {
+            allow_appending: upgraded.merging_data.allow_appending,
+            builder_address: upgraded.merging_data.builder_address,
+            merge_orders: vec![],
+        }),
+        MergeType::None => Some(upgraded.merging_data),
+    };
+    verify_and_validate(&mut upgraded.submission, flags.skip_sigverify, chain_info)?;
+    Ok((Submission::Full(upgraded.submission), merging_data, None))
+}
+
+pub(super) fn decode_default(
+    decoder: &mut SubmissionDecoder,
+    body: &bytes::Bytes,
+    trace: &mut SubmissionTrace,
+    chain_info: &ChainInfo,
+    flags: &DecodeFlags,
+) -> Result<(Submission, Option<BlockMergingData>, Option<BidAdjustmentData>), BuilderApiError> {
+    let (submission, bid_adjustment) = if flags.with_adjustments {
+        let sub_with_adjustment: SignedBidSubmissionWithAdjustments = decoder.decode(body)?;
+        let (sub, adjustment_data) = sub_with_adjustment.split();
+
+        (sub, Some(adjustment_data))
+    } else {
+        let submission: SignedBidSubmission = decoder.decode(body)?;
+
+        (submission, None)
+    };
+
+    let mut upgraded = submission.maybe_upgrade_to_fulu(chain_info.current_fork_name());
+    trace.decoded_ns = utcnow_ns();
+    let merging_data = match flags.merge_type {
+        MergeType::Mergeable => {
+            //Should this return an error instead?
+            error!("mergeable dehydrated submissions are not supported");
+            None
+        }
+        MergeType::AppendOnly => Some(BlockMergingData::append_only(upgraded.fee_recipient())),
+        MergeType::None => {
+            if flags.block_merging_dry_run {
+                Some(BlockMergingData::allow_all(upgraded.fee_recipient(), upgraded.num_txs()))
+            } else {
+                None
+            }
+        }
+    };
+    verify_and_validate(&mut upgraded, flags.skip_sigverify, chain_info)?;
+    Ok((Submission::Full(upgraded), merging_data, bid_adjustment))
+}
+
+fn verify_and_validate(
+    submission: &mut SignedBidSubmission,
+    skip_sigverify: bool,
+    chain_info: &ChainInfo,
+) -> Result<(), BuilderApiError> {
+    if !skip_sigverify {
+        trace!("verifying signature");
+        let start_sig = Instant::now();
+        submission.verify_signature(chain_info.builder_domain)?;
+        trace!("signature ok");
+        record_submission_step("signature", start_sig.elapsed());
+    }
+    submission.validate_payload_ssz_lengths(chain_info.max_blobs_per_block())?;
+    Ok(())
 }
 
 #[derive(Debug)]

@@ -2,7 +2,6 @@ mod bid_adjustor;
 mod bid_sorter;
 mod block_merger;
 mod context;
-mod decoder;
 mod get_header;
 mod get_payload;
 mod handle;
@@ -37,15 +36,15 @@ use rustc_hash::FxHashMap;
 pub use simulator::*;
 use tracing::{debug, error, info, trace, warn};
 pub use types::{
-    Event, GetPayloadResultData, PayloadBidData, PayloadEntry, SlotData, SubmissionPayload,
+    Event, GetPayloadResultData, PayloadBidData, PayloadEntry, SlotData, Submission, SubmissionData, SubmissionPayload,
 };
 pub use worker::{RegWorker, SubWorker};
 
 pub use crate::auctioneer::{
     bid_adjustor::{BidAdjustor, DefaultBidAdjustor},
     bid_sorter::BidSorter,
+    block_merger::get_mergeable_orders,
     context::Context,
-    decoder::{Encoding, HEADER_SSZ},
     simulator::{
         BlockSimRequest, SimulatorRequest, client::SimulatorClient, manager::SimulatorManager,
     },
@@ -54,10 +53,7 @@ pub use crate::auctioneer::{
     },
 };
 use crate::{
-    HelixSpine,
-    api::{builder::error::BuilderApiError, proposer::ProposerApiError},
-    auctioneer::types::PendingPayload,
-    housekeeper::PayloadAttributesUpdate,
+    HelixSpine, SubmissionDataWithSpan, api::{builder::error::BuilderApiError, proposer::ProposerApiError}, auctioneer::types::PendingPayload, housekeeper::PayloadAttributesUpdate, spine::{HelixSpineProducers, messages::DecodedSubmission}
 };
 
 pub struct Auctioneer<B: BidAdjustor> {
@@ -65,6 +61,7 @@ pub struct Auctioneer<B: BidAdjustor> {
     state: State,
     tel: Telemetry,
     event_rx: crossbeam_channel::Receiver<Event>,
+    decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
 }
 
 impl<B: BidAdjustor> Auctioneer<B> {
@@ -79,6 +76,7 @@ impl<B: BidAdjustor> Auctioneer<B> {
         event_rx: crossbeam_channel::Receiver<Event>,
         id: usize,
         submission_results: Arc<SharedVector<SubmissionResultWithRef>>,
+        decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
     ) -> Self {
         let sim_manager = SimulatorManager::new(config.simulators.clone(), event_tx.clone());
 
@@ -97,6 +95,7 @@ impl<B: BidAdjustor> Auctioneer<B> {
             state: State::default(),
             tel: Telemetry::new(format!("auctioneer_{id}")),
             event_rx,
+            decoded,
         }
     }
 }
@@ -104,8 +103,20 @@ impl<B: BidAdjustor> Auctioneer<B> {
 impl<B: BidAdjustor> Tile<HelixSpine> for Auctioneer<B> {
     fn loop_body(&mut self, adapter: &mut flux::spine::SpineAdapter<HelixSpine>) {
         for event in self.event_rx.try_iter() {
-            self.state.step(event, &mut self.ctx, &mut self.tel, adapter);
+            self.state.step(event, &mut self.ctx, &mut self.tel, &mut adapter.producers);
         }
+
+        adapter.consume(|submission: DecodedSubmission, producers| {
+            match self.decoded.get(submission.ix) {
+                Some(submission) => {
+                    let event = Event::Submission { submission_data: submission };
+                     self.state.step(event, &mut self.ctx, &mut self.tel, producers);
+                }
+                None => {
+                    tracing::error!(?submission, "no submission found");
+                }
+            }
+        });
 
         self.tel.telemetry(&self.event_rx);
     }
@@ -151,13 +162,13 @@ impl State {
         event: Event,
         ctx: &mut Context<B>,
         tel: &mut Telemetry,
-        adapter: &mut flux::spine::SpineAdapter<HelixSpine>,
+        producers: &mut HelixSpineProducers,
     ) {
         let start = Instant::now();
         let start_state = self.as_str();
         let event_tag = event.as_str();
 
-        self._step(event, ctx, adapter);
+        self._step(event, ctx, producers);
 
         let end_state = self.as_str();
         let step_dur = start.elapsed();
@@ -175,7 +186,7 @@ impl State {
         &mut self,
         event: Event,
         ctx: &mut Context<B>,
-        adapter: &mut flux::spine::SpineAdapter<HelixSpine>,
+        producers: &mut HelixSpineProducers,
     ) {
         match (&self, event) {
             ///////////// LIFECYCLE EVENTS (ALWAYS VALID) /////////////
@@ -309,24 +320,24 @@ impl State {
 
             // late sim result
             (State::Broadcasting { .. } | State::Slot { .. }, Event::SimResult(result)) => {
-                ctx.handle_simulation_result(result, false, adapter);
+                ctx.handle_simulation_result(result, false, producers);
             }
 
             // late merge result
             (State::Broadcasting { .. } | State::Slot { .. }, Event::MergeResult((id, _))) => {
-                ctx.handle_simulation_result((id, None), false, adapter);
+                ctx.handle_simulation_result((id, None), false, producers);
             }
 
             ///////////// VALID STATES / EVENTS /////////////
 
             // submission
-            (State::Sorting(slot_data), Event::Submission { submission_data, span, sent_at }) => {
-                record_submission_step("loop_recv", sent_at.elapsed());
+            (State::Sorting(slot_data), Event::Submission { submission_data }) => {
+                record_submission_step("loop_recv", submission_data.sent_at.elapsed());
 
-                let _guard = span.enter();
+                let _guard = submission_data.span.enter();
                 trace!("received in auctioneer");
 
-                ctx.handle_submission(submission_data, slot_data, adapter);
+                ctx.handle_submission(&submission_data.submission_data, slot_data, producers);
 
                 trace!("finished processing");
                 drop(_guard);
@@ -401,9 +412,9 @@ impl State {
             (State::Sorting(slot_data), Event::SimResult(mut result)) => {
                 let already_sent =
                     result.1.as_ref().is_some_and(|r| r.submission.slot() == slot_data.bid_slot) &&
-                        ctx.sort_simulation_result(&mut result, adapter);
+                        ctx.sort_simulation_result(&mut result, producers);
 
-                ctx.handle_simulation_result(result, already_sent, adapter);
+                ctx.handle_simulation_result(result, already_sent, producers);
             }
 
             // gossiped payload
@@ -424,7 +435,7 @@ impl State {
                     }
                 }
 
-                ctx.handle_simulation_result((id, None), false, adapter);
+                ctx.handle_simulation_result((id, None), false, producers);
             }
 
             ///////////// INVALID STATES / EVENTS /////////////
@@ -432,10 +443,10 @@ impl State {
             // late submission
             (State::Broadcasting { slot_data, .. }, Event::Submission { submission_data, .. }) => {
                 ctx.send_submission_result(
-                    adapter,
-                    submission_data.submission_ref,
+                    producers,
+                    submission_data.submission_data.submission_ref,
                     Err(BuilderApiError::DeliveringPayload {
-                        bid_slot: submission_data.bid_slot(),
+                        bid_slot: submission_data.submission_data.bid_slot(),
                         delivering: slot_data.bid_slot.as_u64(),
                     }),
                 );
@@ -482,21 +493,21 @@ impl State {
 
             // submission unregistered
             (State::Slot { bid_slot, .. }, Event::Submission { submission_data, .. }) => {
-                if submission_data.bid_slot() == bid_slot.as_u64() {
+                if submission_data.submission_data.bid_slot() == bid_slot.as_u64() {
                     // either not registered or waiting for full data from housekepper
                     ctx.send_submission_result(
-                        adapter,
-                        submission_data.submission_ref,
+                        producers,
+                        submission_data.submission_data.submission_ref,
                         Err(BuilderApiError::ProposerDutyNotFound),
                     );
                 } else {
                     ctx.send_submission_result(
-                        adapter,
-                        submission_data.submission_ref,
+                        producers,
+                        submission_data.submission_data.submission_ref,
                         Err(BuilderApiError::BidValidation(
                             helix_types::BlockValidationError::SubmissionForWrongSlot {
                                 expected: *bid_slot,
-                                got: submission_data.bid_slot().into(),
+                                got: submission_data.submission_data.bid_slot().into(),
                             },
                         )),
                     );

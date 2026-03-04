@@ -12,4 +12,7 @@ pub struct HelixSpine {
 
     #[queue(size(2usize.pow(16)))]
     pub bid_submission_result: SpineQueue<messages::SubmissionResultIx>,
+
+    #[queue(size(2usize.pow(16)))]
+    pub decoded: SpineQueue<messages::DecodedSubmission>,
 }
