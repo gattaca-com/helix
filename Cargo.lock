@@ -5573,6 +5573,7 @@ dependencies = [
  "ethereum_ssz",
  "ethereum_ssz_derive",
  "eyre",
+ "flux",
  "flux-utils",
  "helix-types",
  "http 1.4.0",

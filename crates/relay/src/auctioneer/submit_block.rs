@@ -91,18 +91,17 @@ impl<B: BidAdjustor> Context<B> {
             return false;
         };
 
-        if result.optimistic_version.is_optimistic() {
-            return false;
-        }
-
+        let need_send_result = !result.optimistic_version.is_optimistic();
         match &result.result {
             Err(err) if err.is_demotable() => {
                 self.bid_sorter.demote(*result.submission.builder_public_key());
-                self.send_submission_result(
-                    adapter,
-                    result.submission_ref,
-                    Err(BuilderApiError::BlockSimulation(err.clone())),
-                );
+                if need_send_result {
+                    self.send_submission_result(
+                        adapter,
+                        result.submission_ref,
+                        Err(BuilderApiError::BlockSimulation(err.clone())),
+                    );
+                }
             }
 
             Ok(_) | Err(_) => {
@@ -117,11 +116,13 @@ impl<B: BidAdjustor> Context<B> {
                 }
                 self.request_merged_block();
 
-                self.send_submission_result(adapter, result.submission_ref, Ok(()));
+                if need_send_result {
+                    self.send_submission_result(adapter, result.submission_ref, Ok(()));
+                }
             }
         }
 
-        true
+        need_send_result
     }
 
     fn validate_and_sort<'a>(

@@ -2,7 +2,7 @@ use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Instant};
 
 use bytes::Bytes;
 use dashmap::DashMap;
-use flux::{spine::FluxSpine, tile::Tile, utils::SharedVector};
+use flux::{spine::FluxSpine, tile::Tile, timing::Nanos, utils::SharedVector};
 use flux_network::{
     Token,
     tcp::{PollEvent, SendBehavior, TcpConnector, TcpTelemetry},
@@ -113,8 +113,8 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                                 .observe((now.saturating_sub(send_ts.0) / 1000) as f64);
 
                             let trace = SubmissionTrace {
-                                receive_ns: now,
-                                read_body_ns: now,
+                                receive_ns: Nanos(now),
+                                read_body_ns: Nanos(now),
                                 ..Default::default()
                             };
 

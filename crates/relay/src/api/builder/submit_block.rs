@@ -50,7 +50,7 @@ impl<A: Api> BuilderApi<A> {
         trace.metadata =
             api.api_provider.get_metadata(&headers).map(|s| ArrayStr::from_str_truncate(&s));
 
-        observe_client_to_server_latency(&headers, trace.receive_ns);
+        observe_client_to_server_latency(&headers, trace.receive_ns.0);
 
         let header = InternalBidSubmissionHeader::from_http_headers(id, headers);
 

@@ -7,6 +7,7 @@ use alloy_primitives::B256;
 use flux::{
     spine::SpineProducers,
     tile::{Tile, TileName},
+    timing::Nanos,
     utils::{ShortTypename, short_typename},
 };
 use flux_utils::SharedVector;
@@ -305,7 +306,7 @@ impl SubWorker {
 
         let withdrawals_root = submission.withdrawal_root();
 
-        let version = SubmissionVersion::new(trace.receive_ns, header.sequence_number);
+        let version = SubmissionVersion::new(trace.receive_ns.0, header.sequence_number);
         Ok((submission, withdrawals_root, version, merging_data, bid_adjustment_data))
     }
 }
@@ -459,7 +460,7 @@ fn decode_dehydrated(
         (submission, None)
     };
 
-    trace.decoded_ns = utcnow_ns();
+    trace.decoded_ns = Nanos::now();
 
     let merging_data = match flags.merge_type {
         MergeType::Mergeable => {
@@ -489,7 +490,7 @@ fn decode_merge(
 ) -> Result<(Submission, Option<BlockMergingData>, Option<BidAdjustmentData>), BuilderApiError> {
     let sub_with_merging: SignedBidSubmissionWithMergingData = decoder.decode(body)?;
     let mut upgraded = sub_with_merging.maybe_upgrade_to_fulu(chain_info.current_fork_name());
-    trace.decoded_ns = utcnow_ns();
+    trace.decoded_ns = Nanos::now();
     let merging_data = match flags.merge_type {
         MergeType::Mergeable => Some(upgraded.merging_data),
         //Handle append-only by creating empty mergeable orders
@@ -526,7 +527,7 @@ fn decode_default(
     };
 
     let mut upgraded = submission.maybe_upgrade_to_fulu(chain_info.current_fork_name());
-    trace.decoded_ns = utcnow_ns();
+    trace.decoded_ns = Nanos::now();
     let merging_data = match flags.merge_type {
         MergeType::Mergeable => {
             //Should this return an error instead?
