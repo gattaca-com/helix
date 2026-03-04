@@ -36,7 +36,8 @@ use rustc_hash::FxHashMap;
 pub use simulator::*;
 use tracing::{debug, error, info, trace, warn};
 pub use types::{
-    Event, GetPayloadResultData, PayloadBidData, PayloadEntry, SlotData, Submission, SubmissionData, SubmissionPayload,
+    Event, GetPayloadResultData, PayloadBidData, PayloadEntry, SlotData, Submission,
+    SubmissionData, SubmissionPayload,
 };
 pub use worker::{RegWorker, SubWorker};
 
@@ -53,7 +54,11 @@ pub use crate::auctioneer::{
     },
 };
 use crate::{
-    HelixSpine, SubmissionDataWithSpan, api::{builder::error::BuilderApiError, proposer::ProposerApiError}, auctioneer::types::PendingPayload, housekeeper::PayloadAttributesUpdate, spine::{HelixSpineProducers, messages::DecodedSubmission}
+    HelixSpine, SubmissionDataWithSpan,
+    api::{builder::error::BuilderApiError, proposer::ProposerApiError},
+    auctioneer::types::PendingPayload,
+    housekeeper::PayloadAttributesUpdate,
+    spine::{HelixSpineProducers, messages::DecodedSubmission},
 };
 
 pub struct Auctioneer<B: BidAdjustor> {
@@ -110,7 +115,7 @@ impl<B: BidAdjustor> Tile<HelixSpine> for Auctioneer<B> {
             match self.decoded.get(submission.ix) {
                 Some(submission) => {
                     let event = Event::Submission { submission_data: submission };
-                     self.state.step(event, &mut self.ctx, &mut self.tel, producers);
+                    self.state.step(event, &mut self.ctx, &mut self.tel, producers);
                 }
                 None => {
                     tracing::error!(?submission, "no submission found");

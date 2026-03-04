@@ -1,5 +1,3 @@
-use helix_types::BlsPublicKeyBytes;
-
 // references position in SharedVector<InternalBidSubmission>
 #[derive(Debug, Clone, Copy)]
 pub struct NewBidSubmissionIx {

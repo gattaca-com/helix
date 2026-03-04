@@ -25,7 +25,12 @@ use helix_common::{
     utils::{init_panic_hook, init_tracing_log},
 };
 use helix_relay::{
-    Api, Auctioneer, AuctioneerHandle, BidSorter, BidSubmissionTcpListener, DbHandle, DecoderTile, DefaultBidAdjustor, FutureBidSubmissionResult, HelixSpine, InternalBidSubmission, RegWorker, RegWorkerHandle, RelayNetworkManager, S3PayloadSaver, SubWorker, SubmissionDataWithSpan, SubmissionResultWithRef, SubmissionResultsFanOut, WebsiteService, spawn_tokio_monitoring, start_admin_service, start_api_service, start_beacon_client, start_db_service, start_housekeeper
+    Api, Auctioneer, AuctioneerHandle, BidSorter, BidSubmissionTcpListener, DbHandle, DecoderTile,
+    DefaultBidAdjustor, FutureBidSubmissionResult, HelixSpine, InternalBidSubmission, RegWorker,
+    RegWorkerHandle, RelayNetworkManager, S3PayloadSaver, SubWorker, SubmissionDataWithSpan,
+    SubmissionResultWithRef, SubmissionResultsFanOut, WebsiteService, spawn_tokio_monitoring,
+    start_admin_service, start_api_service, start_beacon_client, start_db_service,
+    start_housekeeper,
 };
 use helix_types::BlsKeypair;
 use tikv_jemallocator::Jemalloc;
@@ -197,13 +202,17 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
             // TODO multiple decoder tiles
             let decoder_tile = DecoderTile::new(
                 local_cache.as_ref().clone(),
-                chain_info.as_ref().clone(), 
-                config.clone(), 
-                submissions.clone(), 
-                submission_results.clone(), 
+                chain_info.as_ref().clone(),
+                config.clone(),
+                submissions.clone(),
+                submission_results.clone(),
                 decoded.clone(),
             );
-            attach_tile(decoder_tile, spine, TileConfig::new(config.cores.decoder, ThreadPriority::OSDefault));
+            attach_tile(
+                decoder_tile,
+                spine,
+                TileConfig::new(config.cores.decoder, ThreadPriority::OSDefault),
+            );
 
             for core in config.cores.sub_workers.clone() {
                 let worker = SubWorker::new(

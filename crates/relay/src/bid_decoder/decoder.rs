@@ -5,12 +5,22 @@ use std::{
 
 use bytes::Bytes;
 use flate2::read::GzDecoder;
-use helix_common::{SubmissionTrace, chain_info::ChainInfo, metrics::{
-    BID_DECODING_LATENCY, BID_DECOMPRESS_SIZEHINT_REL_ERROR, DECOMPRESSION_LATENCY,
-    SUBMISSION_BY_COMPRESSION, SUBMISSION_BY_ENCODING, SUBMISSION_COMPRESSED_BYTES,
-    SUBMISSION_DECOMPRESSED_BYTES,
-}, record_submission_step, utils::utcnow_ns};
-use helix_types::{BidAdjustmentData, BlockMergingData, BlsPublicKeyBytes, Compression, DehydratedBidSubmission, DehydratedBidSubmissionFuluWithAdjustments, ForkName, ForkVersionDecode, MergeType, SignedBidSubmission, SignedBidSubmissionWithAdjustments, SignedBidSubmissionWithMergingData};
+use helix_common::{
+    SubmissionTrace,
+    chain_info::ChainInfo,
+    metrics::{
+        BID_DECODING_LATENCY, BID_DECOMPRESS_SIZEHINT_REL_ERROR, DECOMPRESSION_LATENCY,
+        SUBMISSION_BY_COMPRESSION, SUBMISSION_BY_ENCODING, SUBMISSION_COMPRESSED_BYTES,
+        SUBMISSION_DECOMPRESSED_BYTES,
+    },
+    record_submission_step,
+    utils::utcnow_ns,
+};
+use helix_types::{
+    BidAdjustmentData, BlockMergingData, BlsPublicKeyBytes, Compression, DehydratedBidSubmission,
+    DehydratedBidSubmissionFuluWithAdjustments, ForkName, ForkVersionDecode, MergeType,
+    SignedBidSubmission, SignedBidSubmissionWithAdjustments, SignedBidSubmissionWithMergingData,
+};
 use http::{
     HeaderMap, HeaderValue,
     header::{ACCEPT, CONTENT_TYPE},
@@ -24,10 +34,13 @@ use zstd::{
     zstd_safe::{CONTENTSIZE_ERROR, CONTENTSIZE_UNKNOWN, get_frame_content_size},
 };
 
-use crate::{api::{
-    HEADER_SUBMISSION_TYPE,
-    builder::{api::MAX_PAYLOAD_LENGTH, error::BuilderApiError},
-}, auctioneer::Submission};
+use crate::{
+    api::{
+        HEADER_SUBMISSION_TYPE,
+        builder::{api::MAX_PAYLOAD_LENGTH, error::BuilderApiError},
+    },
+    auctioneer::Submission,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString, AsRefStr)]
 #[strum(serialize_all = "snake_case", ascii_case_insensitive)]

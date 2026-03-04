@@ -21,7 +21,8 @@ use crate::{
         simulator::{BlockSimRequest, SimulatorRequest, manager::SimulationResult},
         types::{PayloadEntry, SlotData, Submission, SubmissionData, SubmissionRef},
     },
-    housekeeper::PayloadAttributesUpdate, spine::HelixSpineProducers,
+    housekeeper::PayloadAttributesUpdate,
+    spine::HelixSpineProducers,
 };
 
 impl<B: BidAdjustor> Context<B> {
