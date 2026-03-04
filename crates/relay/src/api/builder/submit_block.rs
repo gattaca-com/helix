@@ -15,9 +15,7 @@ use tracing::trace;
 
 use super::api::BuilderApi;
 use crate::{
-    api::{
-        Api, builder::error::BuilderApiError, submission_results_fanout::FutureBidSubmissionResult,
-    },
+    api::{Api, FutureBidSubmissionResult, builder::error::BuilderApiError},
     auctioneer::{InternalBidSubmission, InternalBidSubmissionHeader, SubmissionRef},
     spine::messages::NewBidSubmissionIx,
 };

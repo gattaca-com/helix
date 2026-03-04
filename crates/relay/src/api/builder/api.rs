@@ -8,7 +8,7 @@ use helix_database::handle::DbHandle;
 
 use crate::{
     InternalBidSubmission,
-    api::{Api, submission_results_fanout::FutureBidSubmissionResult},
+    api::{Api, FutureBidSubmissionResult},
     auctioneer::AuctioneerHandle,
     housekeeper::CurrentSlotInfo,
     spine::messages::NewBidSubmissionIx,

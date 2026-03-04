@@ -18,7 +18,7 @@ use crate::{
     api::builder::error::BuilderApiError,
     auctioneer::{
         bid_adjustor::BidAdjustor,
-        context::Context,
+        context::{Context, send_submission_result},
         simulator::{BlockSimRequest, SimulatorRequest, manager::SimulationResult},
         types::{PayloadEntry, SlotData, Submission, SubmissionData, SubmissionRef},
     },
@@ -37,7 +37,12 @@ impl<B: BidAdjustor> Context<B> {
             Ok((validated, optimistic_version, merging_data)) => {
                 let is_optimistic = optimistic_version.is_optimistic();
                 if is_optimistic {
-                    self.send_submission_result(adapter, submission_ref, Ok(()));
+                    send_submission_result(
+                        &mut adapter.producers,
+                        &self.future_results,
+                        submission_ref,
+                        Ok(()),
+                    );
                 };
 
                 let (req, entry) =
@@ -77,7 +82,12 @@ impl<B: BidAdjustor> Context<B> {
             }
 
             Err(e) => {
-                self.send_submission_result(adapter, submission_ref, Err(e));
+                send_submission_result(
+                    &mut adapter.producers,
+                    &self.future_results,
+                    submission_ref,
+                    Err(e),
+                );
             }
         }
     }
@@ -96,8 +106,9 @@ impl<B: BidAdjustor> Context<B> {
             Err(err) if err.is_demotable() => {
                 self.bid_sorter.demote(*result.submission.builder_public_key());
                 if need_send_result {
-                    self.send_submission_result(
-                        adapter,
+                    send_submission_result(
+                        &mut adapter.producers,
+                        &self.future_results,
                         result.submission_ref,
                         Err(BuilderApiError::BlockSimulation(err.clone())),
                     );
@@ -117,7 +128,12 @@ impl<B: BidAdjustor> Context<B> {
                 self.request_merged_block();
 
                 if need_send_result {
-                    self.send_submission_result(adapter, result.submission_ref, Ok(()));
+                    send_submission_result(
+                        &mut adapter.producers,
+                        &self.future_results,
+                        result.submission_ref,
+                        Ok(()),
+                    );
                 }
             }
         }

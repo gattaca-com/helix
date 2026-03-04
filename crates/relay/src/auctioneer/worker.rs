@@ -5,7 +5,6 @@ use std::{
 
 use alloy_primitives::B256;
 use flux::{
-    spine::SpineProducers,
     tile::{Tile, TileName},
     timing::Nanos,
     utils::{ShortTypename, short_typename},
@@ -30,17 +29,18 @@ use tracing::{error, trace};
 
 use crate::{
     HelixSpine,
-    api::{builder::error::BuilderApiError, proposer::ProposerApiError},
+    api::{FutureBidSubmissionResult, builder::error::BuilderApiError, proposer::ProposerApiError},
     auctioneer::{
         InternalBidSubmission, SubmissionRef,
         block_merger::get_mergeable_orders,
+        context::send_submission_result,
         decoder::SubmissionDecoder,
         types::{
             Event, GetPayload, InternalBidSubmissionHeader, RegWorkerJob, Submission,
             SubmissionData,
         },
     },
-    spine::messages::{NewBidSubmissionIx, SubmissionResultWithRef},
+    spine::messages::NewBidSubmissionIx,
 };
 
 pub struct Telemetry {
@@ -109,6 +109,7 @@ pub struct SubWorker {
     tel: Telemetry,
     config: RelayConfig,
     submissions: Arc<SharedVector<InternalBidSubmission>>,
+    future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
 }
 
 impl SubWorker {
@@ -120,6 +121,7 @@ impl SubWorker {
         chain_info: ChainInfo,
         config: RelayConfig,
         submissions: Arc<SharedVector<InternalBidSubmission>>,
+        future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
     ) -> Self {
         let id = ShortTypename::from_str_truncate(&format!("submission_{core_id}"));
         Self {
@@ -132,6 +134,7 @@ impl SubWorker {
             tel: Telemetry::default(),
             config,
             submissions,
+            future_results,
         }
     }
 
@@ -311,8 +314,8 @@ impl SubWorker {
 impl Tile<HelixSpine> for SubWorker {
     fn loop_body(&mut self, adapter: &mut flux::spine::SpineAdapter<HelixSpine>) {
         adapter.consume(|NewBidSubmissionIx { ix }, producers| {
-            if let Some(bid) = self.submissions.get(ix) &&
-                let Err(e) = self.handle_block_submission(
+            if let Some(bid) = self.submissions.get(ix) {
+                if let Err(e) = self.handle_block_submission(
                     bid.submission_ref,
                     bid.header,
                     &bid.body,
@@ -320,9 +323,16 @@ impl Tile<HelixSpine> for SubWorker {
                     bid.span.clone(),
                     bid.sent_at,
                     bid.expected_pubkey,
-                )
-            {
-                producers.produce(SubmissionResultWithRef::new(bid.submission_ref, Err(e)));
+                ) {
+                    send_submission_result(
+                        producers,
+                        &self.future_results,
+                        bid.submission_ref,
+                        Err(e),
+                    );
+                }
+            } else {
+                tracing::error!("failed to find encoded bid submission for ix {}!", ix);
             }
         });
 

@@ -27,9 +27,9 @@ use helix_common::{
 use helix_relay::{
     Api, Auctioneer, AuctioneerHandle, BidSorter, BidSubmissionTcpListener, DbHandle,
     DefaultBidAdjustor, FutureBidSubmissionResult, HelixSpine, InternalBidSubmission, RegWorker,
-    RegWorkerHandle, RelayNetworkManager, S3PayloadSaver, SubWorker, SubmissionResultsFanOut,
-    WebsiteService, spawn_tokio_monitoring, start_admin_service, start_api_service,
-    start_beacon_client, start_db_service, start_housekeeper,
+    RegWorkerHandle, RelayNetworkManager, S3PayloadSaver, SubWorker, WebsiteService,
+    spawn_tokio_monitoring, start_admin_service, start_api_service, start_beacon_client,
+    start_db_service, start_housekeeper,
 };
 use helix_types::BlsKeypair;
 use tikv_jemallocator::Jemalloc;
@@ -200,22 +200,13 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
                     chain_info.as_ref().clone(),
                     config.clone(),
                     submissions.clone(),
+                    future_results.clone(),
                 );
 
                 attach_tile(worker, spine, TileConfig::new(core, ThreadPriority::OSDefault));
                 // TODO @nina remove when collaborative consumers are ready
                 break;
             }
-
-            let http_sub_results_fanout = SubmissionResultsFanOut::new(future_results);
-            attach_tile(
-                http_sub_results_fanout,
-                spine,
-                TileConfig::new(
-                    config.cores.submission_results_fanout,
-                    flux::utils::ThreadPriority::Low,
-                ),
-            );
 
             let raw_payloads_tx =
                 config.s3_config.clone().map(|cfg| S3PayloadSaver::new(cfg).spawn());
@@ -249,6 +240,7 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
                 event_tx,
                 event_rx,
                 auctioneer_core,
+                future_results,
             );
             attach_tile(
                 auctioneer,

@@ -15,7 +15,10 @@ pub mod middleware;
 pub mod proposer;
 pub mod router;
 pub mod service;
-pub mod submission_results_fanout;
+
+pub type FutureBidSubmissionResult = helix_common::api::builder_api::FutureBidSubmissionResult<
+    crate::spine::messages::SubmissionResultWithRef,
+>;
 
 pub fn start_admin_service(auctioneer: Arc<LocalCache>, admin_token: String) {
     tokio::spawn(admin_service::run_admin_service(auctioneer, admin_token));

@@ -14,12 +14,14 @@ mod worker;
 
 use std::{
     cmp::Ordering,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
 use alloy_primitives::B256;
 pub use block_merger::OrderValidationError;
 use flux::tile::Tile;
+use flux_utils::SharedVector;
 pub use handle::{AuctioneerHandle, RegWorkerHandle};
 use helix_common::{
     RelayConfig,
@@ -51,8 +53,8 @@ pub use crate::auctioneer::{
 };
 use crate::{
     HelixSpine,
-    api::{builder::error::BuilderApiError, proposer::ProposerApiError},
-    auctioneer::types::PendingPayload,
+    api::{FutureBidSubmissionResult, builder::error::BuilderApiError, proposer::ProposerApiError},
+    auctioneer::{context::send_submission_result, types::PendingPayload},
     housekeeper::PayloadAttributesUpdate,
 };
 
@@ -74,6 +76,7 @@ impl<B: BidAdjustor> Auctioneer<B> {
         event_tx: crossbeam_channel::Sender<Event>,
         event_rx: crossbeam_channel::Receiver<Event>,
         id: usize,
+        future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
     ) -> Self {
         let sim_manager = SimulatorManager::new(config.simulators.clone(), event_tx.clone());
 
@@ -85,6 +88,7 @@ impl<B: BidAdjustor> Auctioneer<B> {
             bid_sorter,
             local_cache,
             bid_adjustor,
+            future_results,
         );
         Self {
             ctx,
@@ -425,8 +429,9 @@ impl State {
 
             // late submission
             (State::Broadcasting { slot_data, .. }, Event::Submission { submission_data, .. }) => {
-                ctx.send_submission_result(
-                    adapter,
+                send_submission_result(
+                    &mut adapter.producers,
+                    &ctx.future_results,
                     submission_data.submission_ref,
                     Err(BuilderApiError::DeliveringPayload {
                         bid_slot: submission_data.bid_slot(),
@@ -478,14 +483,16 @@ impl State {
             (State::Slot { bid_slot, .. }, Event::Submission { submission_data, .. }) => {
                 if submission_data.bid_slot() == bid_slot.as_u64() {
                     // either not registered or waiting for full data from housekepper
-                    ctx.send_submission_result(
-                        adapter,
+                    send_submission_result(
+                        &mut adapter.producers,
+                        &ctx.future_results,
                         submission_data.submission_ref,
                         Err(BuilderApiError::ProposerDutyNotFound),
                     );
                 } else {
-                    ctx.send_submission_result(
-                        adapter,
+                    send_submission_result(
+                        &mut adapter.producers,
+                        &ctx.future_results,
                         submission_data.submission_ref,
                         Err(BuilderApiError::BidValidation(
                             helix_types::BlockValidationError::SubmissionForWrongSlot {

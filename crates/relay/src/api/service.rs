@@ -17,8 +17,8 @@ use tracing::{error, info};
 use crate::{
     AuctioneerHandle, DbHandle, InternalBidSubmission, PostgresDatabaseService, RegWorkerHandle,
     api::{
-        Api, builder::api::BuilderApi, proposer::ProposerApi, router::build_router,
-        submission_results_fanout::FutureBidSubmissionResult,
+        Api, FutureBidSubmissionResult, builder::api::BuilderApi, proposer::ProposerApi,
+        router::build_router,
     },
     beacon::multi_beacon_client::MultiBeaconClient,
     gossip::{GrpcGossiperClientManager, process_gossip_messages},
