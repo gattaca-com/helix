@@ -241,6 +241,7 @@ impl SubWorker {
 
         if self.tx.try_send(message).is_err() {
             error!("failed sending submission to auctioneer");
+            return Err(BuilderApiError::InternalError);
         }
 
         Ok(())
