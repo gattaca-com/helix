@@ -303,5 +303,6 @@ pub fn send_submission_result<P>(
             }
         }
         SubmissionRef::Tcp { .. } => producers.produce(result),
+        SubmissionRef::Internal => {}
     }
 }
