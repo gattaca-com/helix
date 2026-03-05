@@ -1,4 +1,7 @@
-use std::{sync::Arc, time::Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use axum::{
     Extension,
@@ -11,6 +14,7 @@ use helix_common::{
     metrics::SUB_CLIENT_TO_SERVER_LATENCY, utils::extract_request_id,
 };
 use http::{HeaderMap, StatusCode};
+use tokio::time::timeout;
 use tracing::trace;
 
 use super::api::BuilderApi;
@@ -70,14 +74,20 @@ impl<A: Api> BuilderApi<A> {
             return BuilderApiError::InternalError.into_response();
         };
 
-        let result = FutureBidSubmissionResult::wait(future).await;
-        if result.tcp_status.is_okay() {
-            StatusCode::OK.into_response()
-        } else {
-            if result.should_report {
-                tracing::error!(err = result.error_msg.as_str());
+        if let Ok(result) =
+            timeout(Duration::from_secs(3), FutureBidSubmissionResult::wait(future)).await
+        {
+            if result.tcp_status.is_okay() {
+                StatusCode::OK.into_response()
+            } else {
+                if result.should_report {
+                    tracing::error!(err = result.error_msg.as_str());
+                }
+                (result.http_status, result.error_msg.to_string()).into_response()
             }
-            (result.http_status, result.error_msg.to_string()).into_response()
+        } else {
+            tracing::error!("timeout while waiting for bid submission processing respopnse");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
 }
