@@ -8,5 +8,8 @@ pub struct HelixSpine {
     pub tile_info: ShmemData<TileInfo>,
 
     #[queue(size(2usize.pow(16)))]
-    pub filler: SpineQueue<messages::Tmp>,
+    pub to_decode: SpineQueue<messages::NewBidSubmissionIx>,
+
+    #[queue(size(2usize.pow(16)))]
+    pub bid_submission_result: SpineQueue<messages::SubmissionResultWithRef>,
 }

@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use helix_common::{api_provider::ApiProvider, local_cache::LocalCache};
-pub use helix_data_api::{BidsCache, DataApi, DeliveredPayloadsCache, SelectiveExpiry};
+pub use helix_data_api::{BidsCache, DataApi, DeliveredPayloadsCache};
 pub use service::start_api_service;
 
 pub use crate::auctioneer::{BidAdjustor, DefaultBidAdjustor};
@@ -15,6 +15,10 @@ pub mod middleware;
 pub mod proposer;
 pub mod router;
 pub mod service;
+
+pub type FutureBidSubmissionResult = helix_common::api::builder_api::FutureBidSubmissionResult<
+    crate::spine::messages::SubmissionResultWithRef,
+>;
 
 pub fn start_admin_service(auctioneer: Arc<LocalCache>, admin_token: String) {
     tokio::spawn(admin_service::run_admin_service(auctioneer, admin_token));

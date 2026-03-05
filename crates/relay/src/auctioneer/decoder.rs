@@ -152,27 +152,40 @@ impl SubmissionDecoder {
         }
     }
 
-    pub fn decompress(&mut self, body: Bytes) -> Result<Bytes, BuilderApiError> {
+    pub fn decompress(&mut self, body: &Bytes) -> Option<Result<Bytes, BuilderApiError>> {
         let start = Instant::now();
         self.bytes_before_decompress = body.len();
-        let decompressed = match self.compression {
-            Compression::None => body,
+        let decompressed: Bytes = match self.compression {
+            Compression::None => {
+                return None;
+            }
             Compression::Gzip => {
                 let mut decoder = GzDecoder::new(body.as_ref());
-                let cap = gzip_size_hint(&body).unwrap_or(body.len() * 2);
+                let cap = gzip_size_hint(body).unwrap_or(body.len() * 2);
                 self.estimated_decompress = cap;
                 let mut buf = Vec::with_capacity(cap);
 
-                decoder.read_to_end(&mut buf)?;
+                if let Err(e) = decoder.read_to_end(&mut buf) {
+                    return Some(Err(e.into()));
+                }
+
                 buf.into()
             }
             Compression::Zstd => {
-                let mut decoder = ZstdDecoder::new(body.as_ref())?;
-                let cap = zstd_size_hint(&body).unwrap_or(body.len() * 2);
+                let mut decoder = match ZstdDecoder::new(body.as_ref()) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        return Some(Err(e.into()));
+                    }
+                };
+
+                let cap = zstd_size_hint(body).unwrap_or(body.len() * 2);
                 self.estimated_decompress = cap;
                 let mut buf = Vec::with_capacity(cap);
 
-                decoder.read_to_end(&mut buf)?;
+                if let Err(e) = decoder.read_to_end(&mut buf) {
+                    return Some(Err(e.into()));
+                }
                 buf.into()
             }
         };
@@ -180,18 +193,18 @@ impl SubmissionDecoder {
         self.bytes_after_decompress = decompressed.len();
         self.decompress_latency = start.elapsed();
 
-        Ok(decompressed)
+        Some(Ok(decompressed))
     }
 
     // TODO: pass a buffer pool to avoid allocations
     pub fn decode<T: Decode + DeserializeOwned>(
         &mut self,
-        body: Bytes,
+        body: &Bytes,
     ) -> Result<T, BuilderApiError> {
         let start = Instant::now();
         let payload: T = match self.encoding {
-            Encoding::Ssz => T::from_ssz_bytes(&body).map_err(BuilderApiError::SszDecode)?,
-            Encoding::Json => serde_json::from_slice(&body)?,
+            Encoding::Ssz => T::from_ssz_bytes(body).map_err(BuilderApiError::SszDecode)?,
+            Encoding::Json => serde_json::from_slice(body)?,
         };
 
         self.decode_latency = start.elapsed().saturating_sub(self.decompress_latency);
@@ -202,15 +215,15 @@ impl SubmissionDecoder {
 
     pub fn decode_by_fork<T: ForkVersionDecode + DeserializeOwned>(
         &mut self,
-        body: Bytes,
+        body: &Bytes,
         fork: ForkName,
     ) -> Result<T, BuilderApiError> {
         let start = Instant::now();
         let payload: T = match self.encoding {
             Encoding::Ssz => {
-                T::from_ssz_bytes_by_fork(&body, fork).map_err(BuilderApiError::SszDecode)?
+                T::from_ssz_bytes_by_fork(body, fork).map_err(BuilderApiError::SszDecode)?
             }
-            Encoding::Json => serde_json::from_slice(&body)?,
+            Encoding::Json => serde_json::from_slice(body)?,
         };
 
         self.decode_latency = start.elapsed().saturating_sub(self.decompress_latency);

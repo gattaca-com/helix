@@ -1,26 +1,31 @@
 use std::{sync::atomic::Ordering, time::Duration};
 
+use flux::timing::Nanos;
+use flux_utils::ArrayStr;
 use serde::{Deserialize, Serialize};
 
 use crate::{RequestTimings, metrics::SUB_TRACE_LATENCY, utils::utcnow_ns};
 
-// all timestamps are in nanoseconds
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct SubmissionTrace {
     // first packet
-    pub receive_ns: u64,
+    pub receive_ns: Nanos,
     // when body finished being read
-    pub read_body_ns: u64,
+    pub read_body_ns: Nanos,
     // when body finished being decoded
-    pub decoded_ns: u64,
-    pub metadata: Option<String>,
+    pub decoded_ns: Nanos,
+    pub metadata: Option<ArrayStr<128>>,
 }
 
 impl SubmissionTrace {
     pub fn init_from_timings(timings: RequestTimings) -> Self {
         let read_body = timings.stats.finish_ns.load(Ordering::Relaxed);
         record_submission_step_ns("start_handler", read_body, utcnow_ns());
-        Self { receive_ns: timings.on_receive_ns, read_body_ns: read_body, ..Default::default() }
+        Self {
+            receive_ns: Nanos(timings.on_receive_ns),
+            read_body_ns: Nanos(read_body),
+            ..Default::default()
+        }
     }
 }
 

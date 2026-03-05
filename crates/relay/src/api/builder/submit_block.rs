@@ -1,25 +1,34 @@
-use std::sync::Arc;
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
-use axum::Extension;
-use flux::timing::Nanos;
+use axum::{
+    Extension,
+    response::{IntoResponse, Response},
+};
+use flux::{spine::SpineProducers, timing::Nanos};
+use flux_utils::ArrayStr;
 use helix_common::{
     self, RequestTimings, SubmissionTrace, api_provider::ApiProvider,
     metrics::SUB_CLIENT_TO_SERVER_LATENCY, utils::extract_request_id,
 };
-use http::HeaderMap;
-use tracing::{error, trace};
+use http::{HeaderMap, StatusCode};
+use tokio::time::timeout;
+use tracing::trace;
 
 use super::api::BuilderApi;
 use crate::{
-    api::{Api, builder::error::BuilderApiError},
-    auctioneer::{InternalBidSubmissionHeader, SubmissionResultSender},
+    api::{Api, FutureBidSubmissionResult, builder::error::BuilderApiError},
+    auctioneer::{InternalBidSubmission, InternalBidSubmissionHeader, SubmissionRef},
+    spine::messages::NewBidSubmissionIx,
 };
 
 const HEADER_SEND_TS: &str = "x-send-ts";
 
 impl<A: Api> BuilderApi<A> {
     /// Implements this API: <https://flashbots.github.io/relay-specs/#/Builder/submitBlock>
-    #[tracing::instrument(skip_all, err(level = tracing::Level::TRACE),
+    #[tracing::instrument(skip_all,
         fields(
         id = tracing::field::Empty,
         slot = tracing::field::Empty,
@@ -32,41 +41,54 @@ impl<A: Api> BuilderApi<A> {
         Extension(timings): Extension<RequestTimings>,
         headers: HeaderMap,
         body: bytes::Bytes,
-    ) -> Result<(), BuilderApiError> {
-        let request_id = extract_request_id(&headers);
+    ) -> Response {
+        let id = extract_request_id(&headers);
 
-        tracing::Span::current().record("id", tracing::field::display(request_id));
+        tracing::Span::current().record("id", tracing::field::display(id));
 
         trace!("start handler");
 
         let mut trace = SubmissionTrace::init_from_timings(timings);
-        trace.metadata = api.api_provider.get_metadata(&headers);
+        trace.metadata =
+            api.api_provider.get_metadata(&headers).map(|s| ArrayStr::from_str_truncate(&s));
 
-        observe_client_to_server_latency(&headers, trace.receive_ns);
+        observe_client_to_server_latency(&headers, trace.receive_ns.0);
 
-        let header = InternalBidSubmissionHeader::from_http_headers(request_id, headers);
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        if api
-            .auctioneer_handle
-            .block_submission(None, header, body, trace, SubmissionResultSender::OneShot(tx), None)
-            .is_err()
-        {
-            error!("failed sending request to worker");
-            return Err(BuilderApiError::InternalError);
-        }
+        let header = InternalBidSubmissionHeader::from_http_headers(id, headers);
 
-        let res = match rx.await {
-            Ok((_, res)) => res,
-            Err(_) => Err(BuilderApiError::RequestTimeout),
+        let future_ix = api.future_results.push(FutureBidSubmissionResult::new());
+        let internal_bid = InternalBidSubmission {
+            header,
+            submission_ref: SubmissionRef::Http(future_ix),
+            trace,
+            body,
+            span: tracing::Span::current(),
+            sent_at: Instant::now(),
+            expected_pubkey: None,
+        };
+        let ix = api.submissions.push(internal_bid);
+        api.producer.produce(NewBidSubmissionIx { ix });
+
+        let Some(future) = api.future_results.get(future_ix) else {
+            tracing::error!("failed to find future response in the shared vec");
+            return BuilderApiError::InternalError.into_response();
         };
 
-        if let Err(err) = &res &&
-            err.should_report()
+        if let Ok(result) =
+            timeout(Duration::from_secs(3), FutureBidSubmissionResult::wait(future)).await
         {
-            error!(%err)
+            if result.tcp_status.is_okay() {
+                StatusCode::OK.into_response()
+            } else {
+                if result.should_report {
+                    tracing::error!(err = result.error_msg.as_str());
+                }
+                (result.http_status, result.error_msg.to_string()).into_response()
+            }
+        } else {
+            tracing::error!("timeout while waiting for bid submission processing respopnse");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
-
-        res
     }
 }
 

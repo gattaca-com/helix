@@ -1,14 +1,21 @@
 use std::sync::Arc;
 
 use axum::{Extension, http::StatusCode, response::IntoResponse};
+use flux::spine::StandaloneProducer;
+use flux_utils::SharedVector;
 use helix_common::{RelayConfig, api::builder_api::TopBidUpdate, local_cache::LocalCache};
 use helix_database::handle::DbHandle;
 
-use crate::{api::Api, auctioneer::AuctioneerHandle, housekeeper::CurrentSlotInfo};
+use crate::{
+    InternalBidSubmission,
+    api::{Api, FutureBidSubmissionResult},
+    auctioneer::AuctioneerHandle,
+    housekeeper::CurrentSlotInfo,
+    spine::messages::NewBidSubmissionIx,
+};
 
 pub(crate) const MAX_PAYLOAD_LENGTH: usize = 1024 * 1024 * 20; // 20MB
 
-#[derive(Clone)]
 pub struct BuilderApi<A: Api> {
     pub local_cache: Arc<LocalCache>,
     pub db: DbHandle,
@@ -18,6 +25,9 @@ pub struct BuilderApi<A: Api> {
     pub top_bid_tx: tokio::sync::broadcast::Sender<TopBidUpdate>,
     pub auctioneer_handle: AuctioneerHandle,
     pub api_provider: Arc<A::ApiProvider>,
+    pub submissions: Arc<SharedVector<InternalBidSubmission>>,
+    pub producer: StandaloneProducer<NewBidSubmissionIx>,
+    pub future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
 }
 
 impl<A: Api> BuilderApi<A> {
@@ -29,6 +39,9 @@ impl<A: Api> BuilderApi<A> {
         top_bid_tx: tokio::sync::broadcast::Sender<TopBidUpdate>,
         auctioneer_handle: AuctioneerHandle,
         api_provider: Arc<A::ApiProvider>,
+        submissions: Arc<SharedVector<InternalBidSubmission>>,
+        producer: StandaloneProducer<NewBidSubmissionIx>,
+        future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
     ) -> Self {
         Self {
             local_cache,
@@ -38,6 +51,9 @@ impl<A: Api> BuilderApi<A> {
             top_bid_tx,
             auctioneer_handle,
             api_provider,
+            submissions,
+            producer,
+            future_results,
         }
     }
 

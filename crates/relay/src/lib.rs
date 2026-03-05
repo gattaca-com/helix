@@ -20,11 +20,14 @@ pub use helix_database::{
 use tokio::time::Instant;
 
 pub use crate::{
-    api::{Api, BidAdjustor, DefaultBidAdjustor, start_admin_service, start_api_service},
+    api::{
+        Api, BidAdjustor, DefaultBidAdjustor, FutureBidSubmissionResult, start_admin_service,
+        start_api_service,
+    },
     auctioneer::{
-        Auctioneer, AuctioneerHandle, BidSorter, BlockSimRequest, Context, Event, PayloadEntry,
-        RegWorker, RegWorkerHandle, SimulatorClient, SimulatorManager, SimulatorRequest, SlotData,
-        SubWorker, SubmissionPayload, SubmissionResult,
+        Auctioneer, AuctioneerHandle, BidSorter, BlockSimRequest, Context, Event,
+        InternalBidSubmission, PayloadEntry, RegWorker, RegWorkerHandle, SimulatorClient,
+        SimulatorManager, SimulatorRequest, SlotData, SubWorker, SubmissionPayload,
     },
     beacon::start_beacon_client,
     housekeeper::start_housekeeper,

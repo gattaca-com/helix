@@ -9,9 +9,11 @@ use std::{
 
 use eyre::eyre;
 use flux::{
-    tile::{TileConfig, attach_tile},
+    spine::FluxSpine,
+    tile::{TileConfig, TileName, attach_tile},
     utils::ThreadPriority,
 };
+use flux_utils::SharedVector;
 use helix_common::{
     RelayConfig,
     api_provider::DefaultApiProvider,
@@ -24,9 +26,10 @@ use helix_common::{
 };
 use helix_relay::{
     Api, Auctioneer, AuctioneerHandle, BidSorter, BidSubmissionTcpListener, DbHandle,
-    DefaultBidAdjustor, HelixSpine, RegWorker, RegWorkerHandle, RelayNetworkManager,
-    S3PayloadSaver, SubWorker, WebsiteService, spawn_tokio_monitoring, start_admin_service,
-    start_api_service, start_beacon_client, start_db_service, start_housekeeper,
+    DefaultBidAdjustor, FutureBidSubmissionResult, HelixSpine, InternalBidSubmission, RegWorker,
+    RegWorkerHandle, RelayNetworkManager, S3PayloadSaver, SubWorker, WebsiteService,
+    spawn_tokio_monitoring, start_admin_service, start_api_service, start_beacon_client,
+    start_db_service, start_housekeeper,
 };
 use helix_types::BlsKeypair;
 use tikv_jemallocator::Jemalloc;
@@ -37,6 +40,8 @@ use tracing::{error, info};
 static GLOBAL: Jemalloc = Jemalloc;
 
 const ADMIN_TOKEN_ENV_VAR: &str = "ADMIN_TOKEN";
+
+const MAX_SUBMISSIONS_PER_SLOT: usize = 10_000;
 
 #[derive(Clone)]
 struct ApiProd;
@@ -143,6 +148,14 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
 
         let (top_bid_tx, _) = tokio::sync::broadcast::channel(100);
 
+        let submissions = Arc::new(SharedVector::<InternalBidSubmission>::with_capacity(
+            MAX_SUBMISSIONS_PER_SLOT,
+        ));
+        let future_results = Arc::new(SharedVector::<FutureBidSubmissionResult>::with_capacity(
+            MAX_SUBMISSIONS_PER_SLOT,
+        ));
+
+        let bid_producer = spine.spine.standalone_producer_for(TileName::from_str_truncate("Api"));
         start_api_service::<ApiProd>(
             config.clone(),
             db.clone(),
@@ -157,8 +170,11 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
             top_bid_tx.clone(),
             relay_network_api.api(),
             db_handle.clone(),
-            auctioneer_handle.clone(),
+            auctioneer_handle,
             registrations_handle,
+            submissions.clone(),
+            bid_producer,
+            future_results.clone(),
         );
 
         if config.website.enabled {
@@ -183,9 +199,13 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
                     local_cache.as_ref().clone(),
                     chain_info.as_ref().clone(),
                     config.clone(),
+                    submissions.clone(),
+                    future_results.clone(),
                 );
 
                 attach_tile(worker, spine, TileConfig::new(core, ThreadPriority::OSDefault));
+                // TODO @nina remove when collaborative consumers are ready
+                break;
             }
 
             let raw_payloads_tx =
@@ -195,10 +215,10 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
                 SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, config.tcp_port));
             let block_submission_tcp_listener = BidSubmissionTcpListener::new(
                 sock_addr,
-                auctioneer_handle,
                 local_cache.api_key_cache.clone(),
                 config.tcp_max_connections,
                 raw_payloads_tx,
+                submissions,
             );
             attach_tile(
                 block_submission_tcp_listener,
@@ -220,6 +240,7 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
                 event_tx,
                 event_rx,
                 auctioneer_core,
+                future_results,
             );
             attach_tile(
                 auctioneer,

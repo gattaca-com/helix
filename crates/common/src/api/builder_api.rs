@@ -1,6 +1,12 @@
+use std::{
+    sync::{Arc, OnceLock},
+    task::Poll,
+};
+
 use alloy_consensus::TxEnvelope;
 use alloy_primitives::{Address, B256, U256};
 use alloy_rlp::Decodable;
+use futures::task::AtomicWaker;
 use helix_types::{
     BlsPublicKeyBytes, SignedValidatorRegistration, Slot, Transaction, Transactions,
 };
@@ -162,5 +168,40 @@ mod tests {
 
         assert_eq!(ssz, ssz_check);
         assert_eq!(ssz.len(), TopBidUpdate::SSZ_SIZE);
+    }
+}
+
+pub struct FutureBidSubmissionResult<T: Copy + Send> {
+    result: OnceLock<T>,
+    waker: AtomicWaker,
+}
+
+impl<T: Copy + Send> Default for FutureBidSubmissionResult<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T: Copy + Send> FutureBidSubmissionResult<T> {
+    pub fn new() -> Self {
+        Self { result: OnceLock::new(), waker: AtomicWaker::new() }
+    }
+
+    pub fn set(&self, result: T) {
+        let _ = self.result.set(result);
+        self.waker.wake();
+    }
+
+    pub fn wait(slot: Arc<Self>) -> impl Future<Output = T> {
+        std::future::poll_fn(move |cx| {
+            if let Some(&result) = slot.result.get() {
+                return Poll::Ready(result);
+            }
+            slot.waker.register(cx.waker());
+            match slot.result.get() {
+                Some(&result) => Poll::Ready(result),
+                None => Poll::Pending,
+            }
+        })
     }
 }

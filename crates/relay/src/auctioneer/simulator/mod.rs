@@ -11,7 +11,7 @@ use helix_types::{
     SignedBidSubmission, SubmissionVersion,
 };
 
-use crate::auctioneer::types::{SubmissionRef, SubmissionResult, SubmissionResultSender};
+use crate::auctioneer::types::SubmissionRef;
 
 pub mod client;
 pub mod manager;
@@ -108,13 +108,12 @@ pub struct BlockMergeResponse {
 }
 
 pub struct SimulatorRequest {
+    pub is_optimistic: bool,
     pub request: BlockSimRequest,
     pub is_top_bid: bool,
     pub version: SubmissionVersion,
     pub submission: SignedBidSubmission,
-    pub submission_ref: Option<SubmissionRef>,
-    /// None if optimistic
-    pub res_tx: Option<SubmissionResultSender<SubmissionResult>>,
+    pub submission_ref: SubmissionRef,
     pub trace: SubmissionTrace,
     // only Some for dehydrated submissions
     pub tx_root: Option<B256>,
@@ -122,18 +121,13 @@ pub struct SimulatorRequest {
 
 impl SimulatorRequest {
     pub fn on_receive_ns(&self) -> u64 {
-        self.trace.receive_ns
+        self.trace.receive_ns.0
     }
 
     // TODO: use a "score" eg how close to top bid even if below
-    pub fn sort_key(&self) -> (u8, u8, u64) {
-        let open = if self.is_closed() { 0 } else { 1 };
+    pub fn sort_key(&self) -> (u8, u64) {
         let top = if self.is_top_bid { 1 } else { 0 };
-        (open, top, u64::MAX - self.on_receive_ns())
-    }
-
-    pub fn is_closed(&self) -> bool {
-        self.res_tx.as_ref().is_some_and(|r| r.is_closed())
+        (top, u64::MAX - self.on_receive_ns())
     }
 
     pub fn bid_slot(&self) -> u64 {
@@ -145,6 +139,6 @@ impl SimulatorRequest {
     }
 
     pub fn optimistic_version(&self) -> OptimisticVersion {
-        if self.res_tx.is_some() { OptimisticVersion::NotOptimistic } else { OptimisticVersion::V1 }
+        if self.is_optimistic { OptimisticVersion::V1 } else { OptimisticVersion::NotOptimistic }
     }
 }
