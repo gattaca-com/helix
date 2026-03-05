@@ -52,7 +52,11 @@ pub use crate::auctioneer::{
     types::{InternalBidSubmission, InternalBidSubmissionHeader, SubmissionRef},
 };
 use crate::{
-    HelixSpine, SubmissionDataWithSpan, api::{FutureBidSubmissionResult, builder::error::BuilderApiError, proposer::ProposerApiError}, auctioneer::types::PendingPayload, housekeeper::PayloadAttributesUpdate, spine::{HelixSpineProducers, messages::DecodedSubmission}
+    HelixSpine, SubmissionDataWithSpan,
+    api::{FutureBidSubmissionResult, builder::error::BuilderApiError, proposer::ProposerApiError},
+    auctioneer::types::PendingPayload,
+    housekeeper::PayloadAttributesUpdate,
+    spine::{HelixSpineProducers, messages::DecodedSubmission},
 };
 
 pub struct Auctioneer<B: BidAdjustor> {

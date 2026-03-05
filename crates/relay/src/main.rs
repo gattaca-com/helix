@@ -15,15 +15,21 @@ use flux::{
 };
 use flux_utils::SharedVector;
 use helix_common::{
-    RelayConfig, api::builder_api::FutureBidSubmissionResult, api_provider::DefaultApiProvider, expect_env_var, load_config, load_keypair, local_cache::LocalCache, metrics::start_metrics_server, signing::RelaySigningContext, task::{block_on, init_runtime}, utils::{init_panic_hook, init_tracing_log}
+    RelayConfig,
+    api_provider::DefaultApiProvider,
+    expect_env_var, load_config, load_keypair,
+    local_cache::LocalCache,
+    metrics::start_metrics_server,
+    signing::RelaySigningContext,
+    task::{block_on, init_runtime},
+    utils::{init_panic_hook, init_tracing_log},
 };
 use helix_relay::{
     Api, Auctioneer, AuctioneerHandle, BidSorter, BidSubmissionTcpListener, DbHandle, DecoderTile,
-    DefaultBidAdjustor, HelixSpine, InternalBidSubmission, RegWorker,
+    DefaultBidAdjustor, FutureBidSubmissionResult, HelixSpine, InternalBidSubmission, RegWorker,
     RegWorkerHandle, RelayNetworkManager, S3PayloadSaver, SubWorker, SubmissionDataWithSpan,
-    WebsiteService, spawn_tokio_monitoring,
-    start_admin_service, start_api_service, start_beacon_client, start_db_service,
-    start_housekeeper,
+    WebsiteService, spawn_tokio_monitoring, start_admin_service, start_api_service,
+    start_beacon_client, start_db_service, start_housekeeper,
 };
 use helix_types::BlsKeypair;
 use tikv_jemallocator::Jemalloc;

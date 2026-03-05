@@ -37,12 +37,7 @@ impl<B: BidAdjustor> Context<B> {
             Ok((validated, optimistic_version, merging_data)) => {
                 let is_optimistic = optimistic_version.is_optimistic();
                 if is_optimistic {
-                    send_submission_result(
-                        producers,
-                        &self.future_results,
-                        submission_ref,
-                        Ok(()),
-                    );
+                    send_submission_result(producers, &self.future_results, submission_ref, Ok(()));
                 };
 
                 let (req, entry) =
@@ -82,12 +77,7 @@ impl<B: BidAdjustor> Context<B> {
             }
 
             Err(e) => {
-                send_submission_result(
-                    producers,
-                    &self.future_results,
-                    submission_ref,
-                    Err(e),
-                );
+                send_submission_result(producers, &self.future_results, submission_ref, Err(e));
             }
         }
     }
