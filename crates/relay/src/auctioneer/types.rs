@@ -63,6 +63,7 @@ pub struct InternalBidSubmission {
 pub enum SubmissionRef {
     Http(usize),
     Tcp { id: Uuid, token: Token, seq_num: u32 },
+    Internal,
 }
 
 pub type GetHeaderResult = Result<PayloadEntry, ProposerApiError>;

@@ -27,7 +27,7 @@ pub use crate::{
     auctioneer::{
         Auctioneer, AuctioneerHandle, BidSorter, BlockSimRequest, Context, Event,
         InternalBidSubmission, PayloadEntry, RegWorker, RegWorkerHandle, SimulatorClient,
-        SimulatorManager, SimulatorRequest, SlotData, SubWorker, SubmissionPayload,
+        SimulatorManager, SimulatorRequest, SlotData, SubWorker, SubmissionPayload, SubmissionRef,
     },
     beacon::start_beacon_client,
     housekeeper::start_housekeeper,
