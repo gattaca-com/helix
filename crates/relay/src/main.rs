@@ -15,20 +15,13 @@ use flux::{
 };
 use flux_utils::SharedVector;
 use helix_common::{
-    RelayConfig,
-    api_provider::DefaultApiProvider,
-    expect_env_var, load_config, load_keypair,
-    local_cache::LocalCache,
-    metrics::start_metrics_server,
-    signing::RelaySigningContext,
-    task::{block_on, init_runtime},
-    utils::{init_panic_hook, init_tracing_log},
+    RelayConfig, api::builder_api::FutureBidSubmissionResult, api_provider::DefaultApiProvider, expect_env_var, load_config, load_keypair, local_cache::LocalCache, metrics::start_metrics_server, signing::RelaySigningContext, task::{block_on, init_runtime}, utils::{init_panic_hook, init_tracing_log}
 };
 use helix_relay::{
     Api, Auctioneer, AuctioneerHandle, BidSorter, BidSubmissionTcpListener, DbHandle, DecoderTile,
-    DefaultBidAdjustor, FutureBidSubmissionResult, HelixSpine, InternalBidSubmission, RegWorker,
+    DefaultBidAdjustor, HelixSpine, InternalBidSubmission, RegWorker,
     RegWorkerHandle, RelayNetworkManager, S3PayloadSaver, SubWorker, SubmissionDataWithSpan,
-    SubmissionResultWithRef, SubmissionResultsFanOut, WebsiteService, spawn_tokio_monitoring,
+    WebsiteService, spawn_tokio_monitoring,
     start_admin_service, start_api_service, start_beacon_client, start_db_service,
     start_housekeeper,
 };
@@ -155,9 +148,6 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
         let future_results = Arc::new(SharedVector::<FutureBidSubmissionResult>::with_capacity(
             MAX_SUBMISSIONS_PER_SLOT,
         ));
-        let submission_results = Arc::new(SharedVector::<SubmissionResultWithRef>::with_capacity(
-            MAX_SUBMISSIONS_PER_SLOT,
-        ));
         let decoded = Arc::new(SharedVector::<SubmissionDataWithSpan>::with_capacity(
             MAX_SUBMISSIONS_PER_SLOT,
         ));
@@ -204,7 +194,7 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
                 chain_info.as_ref().clone(),
                 config.clone(),
                 submissions.clone(),
-                submission_results.clone(),
+                future_results.clone(),
                 decoded.clone(),
             );
             attach_tile(
@@ -225,17 +215,6 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
                 // TODO @nina remove when collaborative consumers are ready
                 break;
             }
-
-            let http_sub_results_fanout =
-                SubmissionResultsFanOut::new(future_results, submission_results.clone());
-            attach_tile(
-                http_sub_results_fanout,
-                spine,
-                TileConfig::new(
-                    config.cores.submission_results_fanout,
-                    flux::utils::ThreadPriority::Low,
-                ),
-            );
 
             let raw_payloads_tx =
                 config.s3_config.clone().map(|cfg| S3PayloadSaver::new(cfg).spawn());

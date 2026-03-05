@@ -45,14 +45,14 @@ pub use crate::auctioneer::{
     bid_adjustor::{BidAdjustor, DefaultBidAdjustor},
     bid_sorter::BidSorter,
     block_merger::get_mergeable_orders,
-    context::Context,
+    context::{Context, send_submission_result},
     simulator::{
         BlockSimRequest, SimulatorRequest, client::SimulatorClient, manager::SimulatorManager,
     },
     types::{InternalBidSubmission, InternalBidSubmissionHeader, SubmissionRef},
 };
 use crate::{
-    HelixSpine, SubmissionDataWithSpan, api::{FutureBidSubmissionResult, builder::error::BuilderApiError, proposer::ProposerApiError}, auctioneer::{context::send_submission_result, types::PendingPayload}, housekeeper::PayloadAttributesUpdate, spine::{HelixSpineProducers, messages::DecodedSubmission}
+    HelixSpine, SubmissionDataWithSpan, api::{FutureBidSubmissionResult, builder::error::BuilderApiError, proposer::ProposerApiError}, auctioneer::types::PendingPayload, housekeeper::PayloadAttributesUpdate, spine::{HelixSpineProducers, messages::DecodedSubmission}
 };
 
 pub struct Auctioneer<B: BidAdjustor> {

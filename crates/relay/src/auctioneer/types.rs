@@ -38,7 +38,7 @@ use crate::{
     SubmissionDataWithSpan,
     api::{
         HEADER_API_KEY, HEADER_API_TOKEN, HEADER_HYDRATE, HEADER_IS_MERGEABLE, HEADER_MERGE_TYPE,
-        HEADER_SEQUENCE, HEADER_WITH_ADJUSTMENTS, builder::error::BuilderApiError,
+        HEADER_SEQUENCE, HEADER_WITH_ADJUSTMENTS,
         proposer::ProposerApiError,
     },
     auctioneer::{BlockMergeResult, simulator::manager::SimulationResult},

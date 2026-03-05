@@ -2,7 +2,6 @@ use std::time::{Duration, Instant};
 
 use flux::{
     tile::{Tile, TileName},
-    timing::Nanos,
     utils::{ShortTypename, short_typename},
 };
 use helix_common::{

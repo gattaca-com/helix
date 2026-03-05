@@ -19,7 +19,6 @@ use rustc_hash::FxHashMap;
 use tracing::{debug, info, warn};
 
 use crate::{
-    HelixSpine,
     api::{FutureBidSubmissionResult, builder::error::BuilderApiError},
     auctioneer::{
         BlockMergeResponse,

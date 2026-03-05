@@ -5,6 +5,7 @@ use std::{
 
 use bytes::Bytes;
 use flate2::read::GzDecoder;
+use flux::timing::Nanos;
 use helix_common::{
     SubmissionTrace,
     chain_info::ChainInfo,
@@ -14,7 +15,6 @@ use helix_common::{
         SUBMISSION_DECOMPRESSED_BYTES,
     },
     record_submission_step,
-    utils::utcnow_ns,
 };
 use helix_types::{
     BidAdjustmentData, BlockMergingData, BlsPublicKeyBytes, Compression, DehydratedBidSubmission,
@@ -118,7 +118,7 @@ pub(super) fn decode_dehydrated(
         (submission, None)
     };
 
-    trace.decoded_ns = utcnow_ns();
+    trace.decoded_ns = Nanos::now();
 
     let merging_data = match flags.merge_type {
         MergeType::Mergeable => {
@@ -148,7 +148,7 @@ pub(super) fn decode_merge(
 ) -> Result<(Submission, Option<BlockMergingData>, Option<BidAdjustmentData>), BuilderApiError> {
     let sub_with_merging: SignedBidSubmissionWithMergingData = decoder.decode(body)?;
     let mut upgraded = sub_with_merging.maybe_upgrade_to_fulu(chain_info.current_fork_name());
-    trace.decoded_ns = utcnow_ns();
+    trace.decoded_ns = Nanos::now();
     let merging_data = match flags.merge_type {
         MergeType::Mergeable => Some(upgraded.merging_data),
         //Handle append-only by creating empty mergeable orders
@@ -185,7 +185,7 @@ pub(super) fn decode_default(
     };
 
     let mut upgraded = submission.maybe_upgrade_to_fulu(chain_info.current_fork_name());
-    trace.decoded_ns = utcnow_ns();
+    trace.decoded_ns = Nanos::now();
     let merging_data = match flags.merge_type {
         MergeType::Mergeable => {
             //Should this return an error instead?

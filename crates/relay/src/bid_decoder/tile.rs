@@ -14,11 +14,11 @@ use helix_types::{
 use tracing::trace;
 
 use crate::{
-    HelixSpine, InternalBidSubmission, SubmissionResultWithRef,
-    api::builder::error::BuilderApiError,
+    HelixSpine, InternalBidSubmission,
+    api::{FutureBidSubmissionResult, builder::error::BuilderApiError},
     auctioneer::{
         InternalBidSubmissionHeader, Submission, SubmissionData, SubmissionRef,
-        get_mergeable_orders,
+        get_mergeable_orders, send_submission_result,
     },
     bid_decoder::{
         SubmissionDataWithSpan,
@@ -26,7 +26,7 @@ use crate::{
             DecodeFlags, SubmissionDecoder, decode_default, decode_dehydrated, decode_merge,
         },
     },
-    spine::messages::{DecodedSubmission, NewBidSubmissionIx, SubmissionResultIx},
+    spine::messages::{DecodedSubmission, NewBidSubmissionIx},
 };
 
 pub struct DecoderTile {
@@ -35,7 +35,7 @@ pub struct DecoderTile {
     config: RelayConfig,
     submissions: Arc<SharedVector<InternalBidSubmission>>,
     decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
-    submission_results: Arc<SharedVector<SubmissionResultWithRef>>,
+    future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
 }
 
 impl Tile<HelixSpine> for DecoderTile {
@@ -52,11 +52,12 @@ impl Tile<HelixSpine> for DecoderTile {
                         producers.produce(DecodedSubmission { ix });
                     }
                     Err(e) => {
-                        let ix = self.submission_results.push(SubmissionResultWithRef {
-                            sub_ref: bid.submission_ref,
-                            result: Err(e),
-                        });
-                        producers.produce(SubmissionResultIx { ix });
+                        send_submission_result(
+                            producers,
+                            &self.future_results,
+                            bid.submission_ref,
+                            Err(e),
+                        );
                     }
                 },
                 None => {
@@ -73,10 +74,10 @@ impl DecoderTile {
         chain_info: ChainInfo,
         config: RelayConfig,
         submissions: Arc<SharedVector<InternalBidSubmission>>,
-        submission_results: Arc<SharedVector<SubmissionResultWithRef>>,
+        future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
         decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
     ) -> Self {
-        Self { chain_info, cache, config, submissions, decoded, submission_results }
+        Self { chain_info, cache, config, submissions, decoded, future_results }
     }
 
     fn handle_bid(
@@ -215,7 +216,7 @@ impl DecoderTile {
 
         let withdrawals_root = submission.withdrawal_root();
 
-        let version = SubmissionVersion::new(trace.receive_ns, header.sequence_number);
+        let version = SubmissionVersion::new(trace.receive_ns.0, header.sequence_number);
         Ok((submission, withdrawals_root, version, merging_data, bid_adjustment_data))
     }
 }
