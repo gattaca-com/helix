@@ -43,11 +43,11 @@ eyre = "0.6.12"
 aws-sdk-s3 = "=1.35.0"
 flate2 = "1.0"
 
-flux = { git = "https://github.com/gattaca-com/flux", branch = "ng/sharedvec" }
-flux-network = { package = "flux-network", git = "https://github.com/gattaca-com/flux", branch = "ng/sharedvec" }
-flux-utils = { package = "flux-utils", git = "https://github.com/gattaca-com/flux", branch = "ng/sharedvec" }
-flux-type-hash = { package = "type-hash", git = "https://github.com/gattaca-com/flux", branch = "ng/sharedvec" }
-flux-type-hash-derive = { package = "type-hash-derive", git = "https://github.com/gattaca-com/flux", branch = "ng/sharedvec" }
+flux = { git = "https://github.com/gattaca-com/flux", rev = "f0180aa0477d6531631a1ca2387dc94c4fa37900" }
+flux-network = { package = "flux-network", git = "https://github.com/gattaca-com/flux", rev = "f0180aa0477d6531631a1ca2387dc94c4fa37900" }
+flux-utils = { package = "flux-utils", git = "https://github.com/gattaca-com/flux", rev = "f0180aa0477d6531631a1ca2387dc94c4fa37900" }
+flux-type-hash = { package = "type-hash", git = "https://github.com/gattaca-com/flux", rev = "f0180aa0477d6531631a1ca2387dc94c4fa37900" }
+flux-type-hash-derive = { package = "type-hash-derive", git = "https://github.com/gattaca-com/flux", rev = "f0180aa0477d6531631a1ca2387dc94c4fa37900" }
 
 futures = "0.3"
 futures-util = { version = "0.3", features = ["compat"] }
