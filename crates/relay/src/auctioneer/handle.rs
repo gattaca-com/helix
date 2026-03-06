@@ -1,27 +1,27 @@
 use std::{ops::Range, sync::Arc};
 
-use helix_common::{GetPayloadTrace, api::proposer_api::GetHeaderParams};
-use helix_types::{BlsPublicKeyBytes, SignedBlindedBeaconBlock, SignedValidatorRegistration};
+use helix_common::{GetPayloadTrace, api::proposer_api::GetHeaderParams, chain_info::ChainInfo};
+use helix_types::{
+    BlsPublicKey, BlsPublicKeyBytes, ExecPayload, SigError, SignedBlindedBeaconBlock,
+    SignedValidatorRegistration,
+};
 use tokio::sync::oneshot;
 use tracing::trace;
 
 use crate::{
-    auctioneer::types::{Event, GetHeaderResult, GetPayload, GetPayloadResult, RegWorkerJob},
+    api::proposer::ProposerApiError,
+    auctioneer::types::{Event, GetHeaderResult, GetPayloadResult, RegWorkerJob},
     gossip::BroadcastPayloadParams,
 };
 
 #[derive(Clone)]
 pub struct AuctioneerHandle {
-    worker: crossbeam_channel::Sender<GetPayload>,
     auctioneer: crossbeam_channel::Sender<Event>,
 }
 
 impl AuctioneerHandle {
-    pub fn new(
-        worker: crossbeam_channel::Sender<GetPayload>,
-        auctioneer: crossbeam_channel::Sender<Event>,
-    ) -> Self {
-        Self { worker, auctioneer }
+    pub fn new(auctioneer: crossbeam_channel::Sender<Event>) -> Self {
+        Self { auctioneer }
     }
 
     pub fn get_header(
@@ -38,21 +38,43 @@ impl AuctioneerHandle {
 
     pub fn get_payload(
         &self,
+        chain_info: &ChainInfo,
         proposer_pubkey: BlsPublicKeyBytes,
         blinded_block: SignedBlindedBeaconBlock,
         trace: GetPayloadTrace,
     ) -> Result<oneshot::Receiver<GetPayloadResult>, ChannelFull> {
-        let (tx, rx) = oneshot::channel();
-        trace!("sending to worker");
-        self.worker
-            .try_send(GetPayload {
-                proposer_pubkey,
-                blinded_block: Box::new(blinded_block),
-                trace,
-                res_tx: tx,
-                span: tracing::Span::current(),
-            })
-            .map_err(|_| ChannelFull)?;
+        let (res_tx, rx) = oneshot::channel();
+        let blinded_block_hash: Result<_, ProposerApiError> = (|| {
+            verify_signed_blinded_block_signature(chain_info, &blinded_block, &proposer_pubkey)?;
+            blinded_block
+                .message()
+                .body()
+                .execution_payload()
+                .map_err(|_| ProposerApiError::InvalidFork)
+                .map(|p| p.block_hash().0)
+        })();
+        match blinded_block_hash {
+            Ok(block_hash) => {
+                tracing::trace!("sending to auctioneer");
+                if self
+                    .auctioneer
+                    .try_send(Event::GetPayload {
+                        block_hash,
+                        blinded: Box::new(blinded_block),
+                        trace,
+                        res_tx,
+                        span: tracing::Span::current(),
+                    })
+                    .is_err()
+                {
+                    tracing::error!("failed to send get_payload to auctioneer");
+                    return Err(ChannelFull)
+                }
+            }
+            Err(err) => {
+                let _ = res_tx.send(Err(err));
+            }
+        }
         Ok(rx)
     }
 
@@ -84,4 +106,30 @@ impl RegWorkerHandle {
 
         Ok(rx)
     }
+}
+
+fn verify_signed_blinded_block_signature(
+    chain_info: &ChainInfo,
+    signed_blinded_beacon_block: &SignedBlindedBeaconBlock,
+    public_key: &BlsPublicKeyBytes,
+) -> Result<(), SigError> {
+    let uncompressed_public_key = BlsPublicKey::deserialize(public_key.as_slice())
+        .map_err(|_| SigError::InvalidBlsPubkeyBytes)?;
+    let slot = signed_blinded_beacon_block.message().slot();
+    let epoch = slot.epoch(chain_info.slots_per_epoch());
+    let fork = chain_info.spec.fork_at_epoch(epoch);
+
+    let valid = signed_blinded_beacon_block.verify_signature(
+        None,
+        &uncompressed_public_key,
+        &fork,
+        chain_info.genesis_validators_root,
+        &chain_info.spec,
+    );
+
+    if !valid {
+        return Err(SigError::InvalidBlsSignature);
+    }
+
+    Ok(())
 }

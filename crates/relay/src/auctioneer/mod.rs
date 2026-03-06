@@ -39,7 +39,7 @@ pub use types::{
     Event, GetPayloadResultData, PayloadBidData, PayloadEntry, SlotData, Submission,
     SubmissionData, SubmissionPayload,
 };
-pub use worker::{RegWorker, SubWorker};
+pub use worker::RegWorker;
 
 pub use crate::auctioneer::{
     bid_adjustor::{BidAdjustor, DefaultBidAdjustor},

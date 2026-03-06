@@ -271,9 +271,12 @@ impl<A: Api> ProposerApi<A> {
             return Err(ProposerApiError::RequestForPastSlot { request_slot: slot, head_slot });
         }
 
-        let Ok(rx) =
-            self.auctioneer_handle.get_payload(proposer_public_key, signed_blinded_block, *trace)
-        else {
+        let Ok(rx) = self.auctioneer_handle.get_payload(
+            &self.chain_info,
+            proposer_public_key,
+            signed_blinded_block,
+            *trace,
+        ) else {
             error!("failed sending request to worker");
             return Err(ProposerApiError::InternalServerError);
         };
