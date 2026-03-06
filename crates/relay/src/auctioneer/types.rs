@@ -419,14 +419,6 @@ impl PayloadBidDataRef<'_> {
     }
 }
 
-pub struct GetPayload {
-    pub blinded_block: Box<SignedBlindedBeaconBlock>,
-    pub proposer_pubkey: BlsPublicKeyBytes,
-    pub trace: GetPayloadTrace,
-    pub res_tx: oneshot::Sender<GetPayloadResult>,
-    pub span: tracing::Span,
-}
-
 pub struct RegWorkerJob {
     pub regs: Arc<Vec<SignedValidatorRegistration>>,
     pub range: Range<usize>,
@@ -517,11 +509,5 @@ impl Event {
             Event::SimulatorSync { .. } => "SimulatorSync",
             Event::MergeResult(_) => "MergeResult",
         }
-    }
-}
-
-impl GetPayload {
-    pub fn as_str(&self) -> &'static str {
-        "GetPayload"
     }
 }

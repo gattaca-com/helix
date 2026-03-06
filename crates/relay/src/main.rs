@@ -27,9 +27,9 @@ use helix_common::{
 use helix_relay::{
     Api, Auctioneer, AuctioneerHandle, BidSorter, BidSubmissionTcpListener, DbHandle, DecoderTile,
     DefaultBidAdjustor, FutureBidSubmissionResult, HelixSpine, InternalBidSubmission, RegWorker,
-    RegWorkerHandle, RelayNetworkManager, S3PayloadSaver, SubWorker, SubmissionDataWithSpan,
-    WebsiteService, spawn_tokio_monitoring, start_admin_service, start_api_service,
-    start_beacon_client, start_db_service, start_housekeeper,
+    RegWorkerHandle, RelayNetworkManager, S3PayloadSaver, SubmissionDataWithSpan, WebsiteService,
+    spawn_tokio_monitoring, start_admin_service, start_api_service, start_beacon_client,
+    start_db_service, start_housekeeper,
 };
 use helix_types::BlsKeypair;
 use tikv_jemallocator::Jemalloc;
@@ -117,7 +117,6 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
 
     config.router_config.validate_bid_sorter()?;
 
-    let (sub_worker_tx, sub_worker_rx) = crossbeam_channel::bounded(10_000);
     let (reg_worker_tx, reg_worker_rx) = crossbeam_channel::bounded(100_000);
 
     let (event_tx, event_rx) = crossbeam_channel::bounded(10_000);
@@ -143,7 +142,7 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
     spine.start(None, Some(termination_grace_period), |spine| {
         start_admin_service(local_cache.clone(), expect_env_var(ADMIN_TOKEN_ENV_VAR));
 
-        let auctioneer_handle = AuctioneerHandle::new(sub_worker_tx, event_tx.clone());
+        let auctioneer_handle = AuctioneerHandle::new(event_tx.clone());
         let registrations_handle = RegWorkerHandle::new(reg_worker_tx);
 
         let (top_bid_tx, _) = tokio::sync::broadcast::channel(100);
@@ -208,19 +207,6 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
                 spine,
                 TileConfig::new(config.cores.decoder, ThreadPriority::OSDefault),
             );
-
-            for core in config.cores.sub_workers.clone() {
-                let worker = SubWorker::new(
-                    core,
-                    event_tx.clone(),
-                    sub_worker_rx.clone(),
-                    chain_info.as_ref().clone(),
-                );
-
-                attach_tile(worker, spine, TileConfig::new(core, ThreadPriority::OSDefault));
-                // TODO @nina remove when collaborative consumers are ready
-                break;
-            }
 
             let raw_payloads_tx =
                 config.s3_config.clone().map(|cfg| S3PayloadSaver::new(cfg).spawn());

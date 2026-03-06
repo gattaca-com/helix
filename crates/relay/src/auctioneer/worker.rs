@@ -9,17 +9,9 @@ use helix_common::{
     metrics::{WORKER_QUEUE_LEN, WORKER_TASK_COUNT, WORKER_TASK_LATENCY_US, WORKER_UTIL},
     utils::{utcnow_ns, utcnow_sec},
 };
-use helix_types::{
-    BlsPublicKey, BlsPublicKeyBytes, ExecPayload, SigError, SignedBlindedBeaconBlock,
-    SignedValidatorRegistration,
-};
-use tracing::{error, trace};
+use helix_types::SignedValidatorRegistration;
 
-use crate::{
-    HelixSpine,
-    api::proposer::ProposerApiError,
-    auctioneer::types::{Event, GetPayload, RegWorkerJob},
-};
+use crate::{HelixSpine, api::proposer::ProposerApiError, auctioneer::types::RegWorkerJob};
 
 pub struct Telemetry {
     work: Duration,
@@ -73,94 +65,6 @@ impl Default for Telemetry {
             loop_start: Instant::now(),
             loop_worked: Default::default(),
         }
-    }
-}
-
-// TODO: spans
-pub struct SubWorker {
-    core_id: usize,
-    id: ShortTypename,
-    tx: crossbeam_channel::Sender<Event>,
-    rx: crossbeam_channel::Receiver<GetPayload>,
-    chain_info: ChainInfo,
-    tel: Telemetry,
-}
-
-impl SubWorker {
-    pub fn new(
-        core_id: usize,
-        tx: crossbeam_channel::Sender<Event>,
-        rx: crossbeam_channel::Receiver<GetPayload>,
-        chain_info: ChainInfo,
-    ) -> Self {
-        let id = ShortTypename::from_str_truncate(&format!("submission_{core_id}"));
-        Self { core_id, id, tx, rx, chain_info, tel: Telemetry::default() }
-    }
-
-    fn handle_get_payload(&self, task: GetPayload) {
-        let GetPayload { blinded_block, proposer_pubkey, trace, res_tx, span } = task;
-        let guard = span.enter();
-        trace!("received by worker");
-        let block_hash: Result<_, ProposerApiError> = (|| {
-            verify_signed_blinded_block_signature(
-                &self.chain_info,
-                &blinded_block,
-                &proposer_pubkey,
-            )?;
-            blinded_block
-                .message()
-                .body()
-                .execution_payload()
-                .map_err(|_| ProposerApiError::InvalidFork)
-                .map(|p| p.block_hash().0)
-        })();
-        match block_hash {
-            Ok(block_hash) => {
-                trace!("sending to auctioneer");
-                drop(guard);
-                if self
-                    .tx
-                    .try_send(Event::GetPayload {
-                        block_hash,
-                        blinded: Box::new(*blinded_block),
-                        trace,
-                        res_tx,
-                        span,
-                    })
-                    .is_err()
-                {
-                    error!("failed to send get_payload to auctioneer");
-                }
-            }
-            Err(err) => {
-                let _ = res_tx.send(Err(err));
-            }
-        }
-    }
-}
-
-impl Tile<HelixSpine> for SubWorker {
-    fn loop_body(&mut self, _adapter: &mut flux::spine::SpineAdapter<HelixSpine>) {
-        for task in self.rx.try_iter() {
-            let start_task = Instant::now();
-            let task_name = task.as_str();
-
-            self.handle_get_payload(task);
-
-            let task_dur = start_task.elapsed();
-            self.tel.loop_worked += task_dur;
-
-            WORKER_TASK_COUNT.with_label_values(&[task_name, &self.id]).inc();
-            WORKER_TASK_LATENCY_US
-                .with_label_values(&[task_name, &self.id])
-                .observe(task_dur.as_micros() as f64);
-        }
-
-        self.tel.telemetry(&self.id, "submission", &self.rx);
-    }
-
-    fn name(&self) -> TileName {
-        TileName::from_str_truncate(&format!("{}_{}", short_typename::<Self>(), self.core_id))
     }
 }
 
@@ -236,32 +140,6 @@ impl Tile<HelixSpine> for RegWorker {
     fn name(&self) -> TileName {
         TileName::from_str_truncate(&format!("{}_{}", short_typename::<Self>(), self.core_id))
     }
-}
-
-fn verify_signed_blinded_block_signature(
-    chain_info: &ChainInfo,
-    signed_blinded_beacon_block: &SignedBlindedBeaconBlock,
-    public_key: &BlsPublicKeyBytes,
-) -> Result<(), SigError> {
-    let uncompressed_public_key = BlsPublicKey::deserialize(public_key.as_slice())
-        .map_err(|_| SigError::InvalidBlsPubkeyBytes)?;
-    let slot = signed_blinded_beacon_block.message().slot();
-    let epoch = slot.epoch(chain_info.slots_per_epoch());
-    let fork = chain_info.spec.fork_at_epoch(epoch);
-
-    let valid = signed_blinded_beacon_block.verify_signature(
-        None,
-        &uncompressed_public_key,
-        &fork,
-        chain_info.genesis_validators_root,
-        &chain_info.spec,
-    );
-
-    if !valid {
-        return Err(SigError::InvalidBlsSignature);
-    }
-
-    Ok(())
 }
 
 /// Validate a single registration.
