@@ -26,7 +26,7 @@ use crate::{
         Api,
         proposer::{CONSENSUS_VERSION_HEADER, error::ProposerApiError},
     },
-    auctioneer::{GetPayloadResultData, PayloadBidData},
+    auctioneer::{GetPayloadKind, GetPayloadResultData, PayloadBidData},
     beacon::types::BroadcastValidation,
     bid_decoder::{Encoding, HEADER_SSZ},
     gossip::{BroadcastGetPayloadParams, BroadcastPayloadParams},
@@ -271,22 +271,41 @@ impl<A: Api> ProposerApi<A> {
             return Err(ProposerApiError::RequestForPastSlot { request_slot: slot, head_slot });
         }
 
-        let Ok(rx) = self.auctioneer_handle.get_payload(
-            &self.chain_info,
-            proposer_public_key,
-            signed_blinded_block,
-            *trace,
-        ) else {
-            error!("failed sending request to worker");
-            return Err(ProposerApiError::InternalServerError);
+        let payload_kind = self
+            .auctioneer_handle
+            .get_payload(&self.chain_info, proposer_public_key, signed_blinded_block, *trace)
+            .map_err(|_| {
+                error!("failed sending request to worker");
+                ProposerApiError::InternalServerError
+            })?;
+
+        // Dedup path: another caller is already processing this signature.
+        let (rx, dedup_tx) = match payload_kind {
+            GetPayloadKind::Dedup(fut) => {
+                info!("dedup get_payload, waiting for primary");
+                let result = fut.await;
+                let response = Arc::try_unwrap(result).unwrap_or_else(|arc| (*arc).clone());
+                return response.ok_or(ProposerApiError::InternalServerError);
+            }
+            GetPayloadKind::Primary { rx, dedup_tx } => (rx, dedup_tx),
         };
 
-        let GetPayloadResultData { to_proposer, to_publish, trace: new_trace, fork, bid } = rx
+        // Primary path: process the payload and notify dedup waiters.
+        let result = rx
             .await
             .inspect_err(|err| {
                 error!(%err, "failed to receive payload response from auctioneer");
             })
-            .map_err(|_| ProposerApiError::InternalServerError)??;
+            .map_err(|_| ProposerApiError::InternalServerError)?;
+
+        let GetPayloadResultData { to_proposer, to_publish, trace: new_trace, fork, bid } =
+            match result {
+                Ok(data) => data,
+                Err(err) => {
+                    let _ = dedup_tx.send(Arc::new(None));
+                    return Err(err);
+                }
+            };
 
         *trace = new_trace;
         info!("found payload for blinded signed block");
@@ -298,7 +317,6 @@ impl<A: Api> ProposerApi<A> {
         {
             warn!(error = %err, "get_payload was sent too late");
 
-            // Save too late request to db for debugging
             self.db.save_too_late_get_payload(
                 (head_slot + 1).into(),
                 proposer_public_key,
@@ -307,6 +325,7 @@ impl<A: Api> ProposerApi<A> {
                 trace.payload_fetched,
             );
 
+            let _ = dedup_tx.send(Arc::new(None));
             return Err(err);
         }
 
@@ -367,12 +386,14 @@ impl<A: Api> ProposerApi<A> {
 
         if matches!(api_version, ProposerApiVersion::V1) {
             let Ok((new_trace, failed_publishing)) = handle.await else {
+                let _ = dedup_tx.send(Arc::new(None));
                 return Err(ProposerApiError::InternalServerError);
             };
             *trace = new_trace;
 
             if failed_publishing {
                 error!("failed to publish payload to beacon client");
+                let _ = dedup_tx.send(Arc::new(None));
                 return Err(ProposerApiError::InternalServerError);
             }
 
@@ -392,6 +413,9 @@ impl<A: Api> ProposerApi<A> {
                 sleep(Duration::from_millis(remaining_sleep_ms)).await;
             }
         }
+
+        // Notify dedup waiters with the successful response.
+        let _ = dedup_tx.send(Arc::new(Some(to_proposer.clone())));
 
         // Return response
         info!(?trace, timestamp = utcnow_ns(), "delivering payload");

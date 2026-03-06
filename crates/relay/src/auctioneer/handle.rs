@@ -1,9 +1,11 @@
-use std::{ops::Range, sync::Arc};
+use std::{future::Future, ops::Range, pin::Pin, sync::Arc};
 
+use dashmap::DashMap;
+use futures::{FutureExt, future::Shared};
 use helix_common::{GetPayloadTrace, api::proposer_api::GetHeaderParams, chain_info::ChainInfo};
 use helix_types::{
-    BlsPublicKey, BlsPublicKeyBytes, ExecPayload, SigError, SignedBlindedBeaconBlock,
-    SignedValidatorRegistration,
+    BlsPublicKey, BlsPublicKeyBytes, ExecPayload, GetPayloadResponse, SigError,
+    SignedBlindedBeaconBlock, SignedValidatorRegistration,
 };
 use tokio::sync::oneshot;
 use tracing::trace;
@@ -14,14 +16,35 @@ use crate::{
     gossip::BroadcastPayloadParams,
 };
 
+/// 96-byte BLS signature used as dedup key for get_payload.
+type SignatureKey = [u8; 96];
+
+/// Dedup waiters only get the response on success or a flag on error.
+pub type DedupPayloadResult = Option<GetPayloadResponse>;
+type SharedPayloadFut =
+    Shared<Pin<Box<dyn Future<Output = Arc<DedupPayloadResult>> + Send + 'static>>>;
+
+pub enum GetPayloadKind {
+    /// First caller — owns the oneshot, responsible for full processing.
+    /// Must send the final response through `dedup_tx` to resolve dedup waiters.
+    Primary {
+        rx: oneshot::Receiver<GetPayloadResult>,
+        dedup_tx: oneshot::Sender<Arc<DedupPayloadResult>>,
+    },
+    /// Duplicate caller — shared result, only returns the response.
+    Dedup(SharedPayloadFut),
+}
+
 #[derive(Clone)]
 pub struct AuctioneerHandle {
     auctioneer: crossbeam_channel::Sender<Event>,
+    /// Dedup concurrent get_payload calls with the same block signature.
+    inflight_payloads: Arc<DashMap<SignatureKey, SharedPayloadFut>>,
 }
 
 impl AuctioneerHandle {
     pub fn new(auctioneer: crossbeam_channel::Sender<Event>) -> Self {
-        Self { auctioneer }
+        Self { auctioneer, inflight_payloads: Arc::new(DashMap::new()) }
     }
 
     pub fn get_header(
@@ -42,40 +65,68 @@ impl AuctioneerHandle {
         proposer_pubkey: BlsPublicKeyBytes,
         blinded_block: SignedBlindedBeaconBlock,
         trace: GetPayloadTrace,
-    ) -> Result<oneshot::Receiver<GetPayloadResult>, ChannelFull> {
-        let (res_tx, rx) = oneshot::channel();
-        let blinded_block_hash: Result<_, ProposerApiError> = (|| {
-            verify_signed_blinded_block_signature(chain_info, &blinded_block, &proposer_pubkey)?;
-            blinded_block
-                .message()
-                .body()
-                .execution_payload()
-                .map_err(|_| ProposerApiError::InvalidFork)
-                .map(|p| p.block_hash().0)
-        })();
-        match blinded_block_hash {
-            Ok(block_hash) => {
-                tracing::trace!("sending to auctioneer");
-                if self
-                    .auctioneer
-                    .try_send(Event::GetPayload {
-                        block_hash,
-                        blinded: Box::new(blinded_block),
-                        trace,
-                        res_tx,
-                        span: tracing::Span::current(),
-                    })
-                    .is_err()
-                {
-                    tracing::error!("failed to send get_payload to auctioneer");
-                    return Err(ChannelFull)
-                }
+    ) -> Result<GetPayloadKind, ChannelFull> {
+        let sig_key: SignatureKey = blinded_block.signature().serialize();
+
+        match self.inflight_payloads.entry(sig_key) {
+            dashmap::mapref::entry::Entry::Occupied(entry) => {
+                trace!("dedup get_payload hit");
+                Ok(GetPayloadKind::Dedup(entry.get().clone()))
             }
-            Err(err) => {
-                let _ = res_tx.send(Err(err));
+            dashmap::mapref::entry::Entry::Vacant(entry) => {
+                let (res_tx, rx) = oneshot::channel();
+                let blinded_block_hash: Result<_, ProposerApiError> = (|| {
+                    verify_signed_blinded_block_signature(
+                        chain_info,
+                        &blinded_block,
+                        &proposer_pubkey,
+                    )?;
+                    blinded_block
+                        .message()
+                        .body()
+                        .execution_payload()
+                        .map_err(|_| ProposerApiError::InvalidFork)
+                        .map(|p| p.block_hash().0)
+                })();
+
+                match blinded_block_hash {
+                    Ok(block_hash) => {
+                        tracing::trace!("sending to auctioneer");
+                        if self
+                            .auctioneer
+                            .try_send(Event::GetPayload {
+                                block_hash,
+                                blinded: Box::new(blinded_block),
+                                trace,
+                                res_tx,
+                                span: tracing::Span::current(),
+                            })
+                            .is_err()
+                        {
+                            tracing::error!("failed to send get_payload to auctioneer");
+                            return Err(ChannelFull)
+                        }
+                    }
+                    Err(err) => {
+                        let _ = res_tx.send(Err(err));
+                    }
+                }
+
+                // Shared future for dedup callers. Primary caller completes it via dedup_tx.
+                let (dedup_tx, dedup_rx) = oneshot::channel::<Arc<DedupPayloadResult>>();
+                let fut: SharedPayloadFut =
+                    (Box::pin(async move { dedup_rx.await.unwrap_or_else(|_| Arc::new(None)) })
+                        as Pin<Box<dyn Future<Output = Arc<DedupPayloadResult>> + Send>>)
+                        .shared();
+
+                entry.insert(fut);
+                Ok(GetPayloadKind::Primary { rx, dedup_tx })
             }
         }
-        Ok(rx)
+    }
+
+    pub fn clear_inflight_payloads(&self) {
+        self.inflight_payloads.clear();
     }
 
     pub fn gossip_payload(&self, req: BroadcastPayloadParams) -> Result<(), ChannelFull> {
