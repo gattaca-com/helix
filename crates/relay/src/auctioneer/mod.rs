@@ -21,7 +21,7 @@ use alloy_primitives::B256;
 pub use block_merger::OrderValidationError;
 use flux::tile::Tile;
 use flux_utils::SharedVector;
-pub use handle::{AuctioneerHandle, RegWorkerHandle};
+pub use handle::{AuctioneerHandle, GetPayloadKind, RegWorkerHandle};
 use helix_common::{
     RelayConfig,
     api::builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
@@ -82,6 +82,7 @@ impl<B: BidAdjustor> Auctioneer<B> {
         id: usize,
         submission_results: Arc<SharedVector<SubmissionResultWithRef>>,
         decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
+        auctioneer_handle: AuctioneerHandle,
     ) -> Self {
         let sim_manager = SimulatorManager::new(config.simulators.clone(), event_tx.clone());
 
@@ -94,6 +95,7 @@ impl<B: BidAdjustor> Auctioneer<B> {
             local_cache,
             bid_adjustor,
             submission_results.clone(),
+            auctioneer_handle,
         );
         Self {
             ctx,

@@ -20,7 +20,7 @@ use tracing::{debug, info, warn};
 use crate::{
     api::builder::error::BuilderApiError,
     auctioneer::{
-        BlockMergeResponse,
+        AuctioneerHandle, BlockMergeResponse,
         bid_adjustor::BidAdjustor,
         bid_sorter::BidSorter,
         block_merger::BlockMerger,
@@ -54,6 +54,7 @@ pub struct Context<B: BidAdjustor> {
     pub bid_adjustor: B,
     pub completed_dry_run: bool,
     pub submission_results: Arc<SharedVector<SubmissionResultWithRef>>,
+    pub auctioneer_handle: AuctioneerHandle,
 }
 
 const EXPECTED_PAYLOADS_PER_SLOT: usize = 5000;
@@ -71,6 +72,7 @@ impl<B: BidAdjustor> Context<B> {
         cache: LocalCache,
         bid_adjustor: B,
         submission_results: Arc<SharedVector<SubmissionResultWithRef>>,
+        auctioneer_handle: AuctioneerHandle,
     ) -> Self {
         let unknown_builder_info = BuilderInfo {
             collateral: U256::ZERO,
@@ -110,6 +112,7 @@ impl<B: BidAdjustor> Context<B> {
             bid_adjustor,
             completed_dry_run: false,
             submission_results,
+            auctioneer_handle,
         }
     }
 
@@ -231,6 +234,7 @@ impl<B: BidAdjustor> Context<B> {
         self.sim_manager.on_new_slot(bid_slot.as_u64());
         self.block_merger.on_new_slot(bid_slot.as_u64());
         self.bid_adjustor.on_new_slot(bid_slot.as_u64());
+        self.auctioneer_handle.clear_inflight_payloads();
 
         if !self.payloads.is_empty() {
             // here we need to deallocate a lot of data, taking more than 1s on busy slots
