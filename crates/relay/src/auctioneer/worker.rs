@@ -1,46 +1,24 @@
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
-use alloy_primitives::B256;
 use flux::{
     tile::{Tile, TileName},
-    timing::Nanos,
     utils::{ShortTypename, short_typename},
 };
-use flux_utils::SharedVector;
 use helix_common::{
-    RelayConfig, SubmissionTrace,
     chain_info::ChainInfo,
-    local_cache::LocalCache,
     metrics::{WORKER_QUEUE_LEN, WORKER_TASK_COUNT, WORKER_TASK_LATENCY_US, WORKER_UTIL},
-    record_submission_step,
     utils::{utcnow_ns, utcnow_sec},
 };
 use helix_types::{
-    BidAdjustmentData, BlockMergingData, BlsPublicKey, BlsPublicKeyBytes, DehydratedBidSubmission,
-    DehydratedBidSubmissionFuluWithAdjustments, ExecPayload, MergeType, MergeableOrdersWithPref,
-    SigError, SignedBidSubmission, SignedBidSubmissionWithAdjustments,
-    SignedBidSubmissionWithMergingData, SignedBlindedBeaconBlock, SignedValidatorRegistration,
-    SubmissionVersion,
+    BlsPublicKey, BlsPublicKeyBytes, ExecPayload, SigError, SignedBlindedBeaconBlock,
+    SignedValidatorRegistration,
 };
 use tracing::{error, trace};
 
 use crate::{
     HelixSpine,
-    api::{FutureBidSubmissionResult, builder::error::BuilderApiError, proposer::ProposerApiError},
-    auctioneer::{
-        InternalBidSubmission, SubmissionRef,
-        block_merger::get_mergeable_orders,
-        context::send_submission_result,
-        decoder::SubmissionDecoder,
-        types::{
-            Event, GetPayload, InternalBidSubmissionHeader, RegWorkerJob, Submission,
-            SubmissionData,
-        },
-    },
-    spine::messages::NewBidSubmissionIx,
+    api::proposer::ProposerApiError,
+    auctioneer::types::{Event, GetPayload, RegWorkerJob},
 };
 
 pub struct Telemetry {
@@ -104,12 +82,8 @@ pub struct SubWorker {
     id: ShortTypename,
     tx: crossbeam_channel::Sender<Event>,
     rx: crossbeam_channel::Receiver<GetPayload>,
-    cache: LocalCache,
     chain_info: ChainInfo,
     tel: Telemetry,
-    config: RelayConfig,
-    submissions: Arc<SharedVector<InternalBidSubmission>>,
-    future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
 }
 
 impl SubWorker {
@@ -117,25 +91,10 @@ impl SubWorker {
         core_id: usize,
         tx: crossbeam_channel::Sender<Event>,
         rx: crossbeam_channel::Receiver<GetPayload>,
-        cache: LocalCache,
         chain_info: ChainInfo,
-        config: RelayConfig,
-        submissions: Arc<SharedVector<InternalBidSubmission>>,
-        future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
     ) -> Self {
         let id = ShortTypename::from_str_truncate(&format!("submission_{core_id}"));
-        Self {
-            core_id,
-            id,
-            tx,
-            rx,
-            cache,
-            chain_info,
-            tel: Telemetry::default(),
-            config,
-            submissions,
-            future_results,
-        }
+        Self { core_id, id, tx, rx, chain_info, tel: Telemetry::default() }
     }
 
     fn handle_get_payload(&self, task: GetPayload) {
@@ -178,165 +137,10 @@ impl SubWorker {
             }
         }
     }
-
-    fn handle_block_submission(
-        &self,
-        submission_ref: SubmissionRef,
-        header: InternalBidSubmissionHeader,
-        body: &bytes::Bytes,
-        mut trace: SubmissionTrace,
-        span: tracing::Span,
-        sent_at: Instant,
-        expected_pubkey: Option<BlsPublicKeyBytes>,
-    ) -> Result<(), BuilderApiError> {
-        record_submission_step("worker_recv", sent_at.elapsed());
-        let guard = span.enter();
-        trace!("received by worker");
-        let (submission, withdrawals_root, version, merging_data, bid_adjustment_data) =
-            self.try_handle_block_submission(header, expected_pubkey, body, &mut trace)?;
-
-        tracing::Span::current().record("bid_slot", tracing::field::display(submission.bid_slot()));
-        tracing::Span::current()
-            .record("block_hash", tracing::field::display(submission.block_hash()));
-        tracing::Span::current()
-            .record("builder_pubkey", tracing::field::display(submission.builder_pubkey()));
-
-        trace!("sending to auctioneer");
-        drop(guard);
-
-        let merging_data = if self.config.block_merging_config.is_enabled {
-            merging_data.and_then(|data| {
-                if let Submission::Full(ref signed_bid_submission) = submission {
-                    //TODO: split up mergeable order and submission processing to
-                    // avoid delaying the bid update
-                    match get_mergeable_orders(signed_bid_submission, &data) {
-                        Ok(orders) => Some(MergeableOrdersWithPref {
-                            allow_appending: data.allow_appending,
-                            orders,
-                        }),
-                        Err(err) => {
-                            error!(%err, "failed to process mergeable orders");
-                            None
-                        }
-                    }
-                } else {
-                    None
-                }
-            })
-        } else {
-            None
-        };
-
-        let submission_data = SubmissionData {
-            submission_ref,
-            submission,
-            version,
-            merging_data,
-            bid_adjustment_data,
-            withdrawals_root,
-            trace,
-        };
-
-        let message = Event::Submission { submission_data, span, sent_at: Instant::now() };
-
-        if self.tx.try_send(message).is_err() {
-            error!("failed sending submission to auctioneer");
-            return Err(BuilderApiError::InternalError);
-        }
-
-        Ok(())
-    }
-
-    #[allow(clippy::type_complexity)]
-    fn try_handle_block_submission(
-        &self,
-        header: InternalBidSubmissionHeader,
-        expected_pubkey: Option<BlsPublicKeyBytes>,
-        body: &bytes::Bytes,
-        trace: &mut SubmissionTrace,
-    ) -> Result<
-        (Submission, B256, SubmissionVersion, Option<BlockMergingData>, Option<BidAdjustmentData>),
-        BuilderApiError,
-    > {
-        let mut decoder = SubmissionDecoder::new(header.compression, header.encoding);
-        let body = match decoder.decompress(body) {
-            None => body,
-            Some(res) => &res?,
-        };
-
-        let with_mergeable_data = header.merge_type.is_some();
-        let with_adjustments = header.flags.with_adjustments();
-        let is_dehydrated = header.flags.is_dehydrated();
-
-        let builder_pubkey = decoder.extract_builder_pubkey(body.as_ref(), with_mergeable_data)?;
-        let skip_sigverify = if let Some(expected_pubkey) = expected_pubkey {
-            if builder_pubkey != expected_pubkey {
-                return Err(BuilderApiError::InvalidBuilderPubkey(expected_pubkey, builder_pubkey));
-            }
-
-            true
-        } else {
-            header
-                .api_key
-                .is_some_and(|api_key| self.cache.validate_api_key(&api_key, &builder_pubkey))
-        };
-
-        trace!(
-            ?header.sequence_number,
-            is_dehydrated,
-            skip_sigverify,
-            with_mergeable_data,
-            with_adjustments,
-            "processing payload"
-        );
-
-        let flags = DecodeFlags {
-            skip_sigverify,
-            merge_type: header.merge_type,
-            with_adjustments,
-            block_merging_dry_run: self.config.block_merging_config.is_dry_run,
-        };
-
-        let (submission, merging_data, bid_adjustment_data) = if is_dehydrated {
-            decode_dehydrated(&mut decoder, body, trace, &self.chain_info, &flags)?
-        } else if with_mergeable_data {
-            decode_merge(&mut decoder, body, trace, &self.chain_info, &flags)?
-        } else {
-            decode_default(&mut decoder, body, trace, &self.chain_info, &flags)?
-        };
-
-        let withdrawals_root = submission.withdrawal_root();
-
-        let version = SubmissionVersion::new(trace.receive_ns.0, header.sequence_number);
-        Ok((submission, withdrawals_root, version, merging_data, bid_adjustment_data))
-    }
 }
 
 impl Tile<HelixSpine> for SubWorker {
-    fn loop_body(&mut self, adapter: &mut flux::spine::SpineAdapter<HelixSpine>) {
-        adapter.consume(|NewBidSubmissionIx { ix }, producers| {
-            if let Some(bid) = self.submissions.get(ix) {
-                if let Err(e) = self.handle_block_submission(
-                    bid.submission_ref,
-                    bid.header,
-                    &bid.body,
-                    bid.trace,
-                    bid.span.clone(),
-                    bid.sent_at,
-                    bid.expected_pubkey,
-                ) {
-                    send_submission_result(
-                        producers,
-                        &self.future_results,
-                        bid.submission_ref,
-                        Err(e),
-                    );
-                }
-            } else {
-                tracing::error!("failed to find encoded bid submission for ix {}!", ix);
-            }
-        });
-
+    fn loop_body(&mut self, _adapter: &mut flux::spine::SpineAdapter<HelixSpine>) {
         for task in self.rx.try_iter() {
             let start_task = Instant::now();
             let task_name = task.as_str();
@@ -432,140 +236,6 @@ impl Tile<HelixSpine> for RegWorker {
     fn name(&self) -> TileName {
         TileName::from_str_truncate(&format!("{}_{}", short_typename::<Self>(), self.core_id))
     }
-}
-
-struct DecodeFlags {
-    skip_sigverify: bool,
-    merge_type: MergeType,
-    with_adjustments: bool,
-    block_merging_dry_run: bool,
-}
-
-fn decode_dehydrated(
-    decoder: &mut SubmissionDecoder,
-    body: &bytes::Bytes,
-    trace: &mut SubmissionTrace,
-    chain_info: &ChainInfo,
-    flags: &DecodeFlags,
-) -> Result<(Submission, Option<BlockMergingData>, Option<BidAdjustmentData>), BuilderApiError> {
-    if !flags.skip_sigverify {
-        return Err(BuilderApiError::UntrustedBuilderOnDehydratedPayload);
-    }
-
-    let (submission, bid_adjustment) = if flags.with_adjustments {
-        let sub_with_adjustment: DehydratedBidSubmissionFuluWithAdjustments =
-            decoder.decode_by_fork(body, chain_info.current_fork_name())?;
-        let (sub, adjustment_data) = sub_with_adjustment.split();
-
-        (sub, Some(adjustment_data))
-    } else {
-        let submission: DehydratedBidSubmission =
-            decoder.decode_by_fork(body, chain_info.current_fork_name())?;
-
-        (submission, None)
-    };
-
-    trace.decoded_ns = Nanos::now();
-
-    let merging_data = match flags.merge_type {
-        MergeType::Mergeable => {
-            //Should this return an error instead?
-            error!("mergeable dehydrated submissions are not supported");
-            None
-        }
-        MergeType::AppendOnly => Some(BlockMergingData::append_only(submission.fee_recipient())),
-        MergeType::None => {
-            if flags.block_merging_dry_run {
-                Some(BlockMergingData::append_only(submission.fee_recipient()))
-            } else {
-                None
-            }
-        }
-    };
-
-    Ok((Submission::Dehydrated(submission), merging_data, bid_adjustment))
-}
-
-fn decode_merge(
-    decoder: &mut SubmissionDecoder,
-    body: &bytes::Bytes,
-    trace: &mut SubmissionTrace,
-    chain_info: &ChainInfo,
-    flags: &DecodeFlags,
-) -> Result<(Submission, Option<BlockMergingData>, Option<BidAdjustmentData>), BuilderApiError> {
-    let sub_with_merging: SignedBidSubmissionWithMergingData = decoder.decode(body)?;
-    let mut upgraded = sub_with_merging.maybe_upgrade_to_fulu(chain_info.current_fork_name());
-    trace.decoded_ns = Nanos::now();
-    let merging_data = match flags.merge_type {
-        MergeType::Mergeable => Some(upgraded.merging_data),
-        //Handle append-only by creating empty mergeable orders
-        //this allows builder to switch between append-only and mergeable without changing
-        // submission alternatively we could reject or ignore append-only here if the
-        // submission is mergeable?
-        MergeType::AppendOnly => Some(BlockMergingData {
-            allow_appending: upgraded.merging_data.allow_appending,
-            builder_address: upgraded.merging_data.builder_address,
-            merge_orders: vec![],
-        }),
-        MergeType::None => Some(upgraded.merging_data),
-    };
-    verify_and_validate(&mut upgraded.submission, flags.skip_sigverify, chain_info)?;
-    Ok((Submission::Full(upgraded.submission), merging_data, None))
-}
-
-fn decode_default(
-    decoder: &mut SubmissionDecoder,
-    body: &bytes::Bytes,
-    trace: &mut SubmissionTrace,
-    chain_info: &ChainInfo,
-    flags: &DecodeFlags,
-) -> Result<(Submission, Option<BlockMergingData>, Option<BidAdjustmentData>), BuilderApiError> {
-    let (submission, bid_adjustment) = if flags.with_adjustments {
-        let sub_with_adjustment: SignedBidSubmissionWithAdjustments = decoder.decode(body)?;
-        let (sub, adjustment_data) = sub_with_adjustment.split();
-
-        (sub, Some(adjustment_data))
-    } else {
-        let submission: SignedBidSubmission = decoder.decode(body)?;
-
-        (submission, None)
-    };
-
-    let mut upgraded = submission.maybe_upgrade_to_fulu(chain_info.current_fork_name());
-    trace.decoded_ns = Nanos::now();
-    let merging_data = match flags.merge_type {
-        MergeType::Mergeable => {
-            //Should this return an error instead?
-            error!("mergeable dehydrated submissions are not supported");
-            None
-        }
-        MergeType::AppendOnly => Some(BlockMergingData::append_only(upgraded.fee_recipient())),
-        MergeType::None => {
-            if flags.block_merging_dry_run {
-                Some(BlockMergingData::allow_all(upgraded.fee_recipient(), upgraded.num_txs()))
-            } else {
-                None
-            }
-        }
-    };
-    verify_and_validate(&mut upgraded, flags.skip_sigverify, chain_info)?;
-    Ok((Submission::Full(upgraded), merging_data, bid_adjustment))
-}
-
-fn verify_and_validate(
-    submission: &mut SignedBidSubmission,
-    skip_sigverify: bool,
-    chain_info: &ChainInfo,
-) -> Result<(), BuilderApiError> {
-    if !skip_sigverify {
-        trace!("verifying signature");
-        let start_sig = Instant::now();
-        submission.verify_signature(chain_info.builder_domain)?;
-        trace!("signature ok");
-        record_submission_step("signature", start_sig.elapsed());
-    }
-    submission.validate_payload_ssz_lengths(chain_info.max_blobs_per_block())?;
-    Ok(())
 }
 
 fn verify_signed_blinded_block_signature(

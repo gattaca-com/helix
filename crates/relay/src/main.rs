@@ -25,11 +25,11 @@ use helix_common::{
     utils::{init_panic_hook, init_tracing_log},
 };
 use helix_relay::{
-    Api, Auctioneer, AuctioneerHandle, BidSorter, BidSubmissionTcpListener, DbHandle,
+    Api, Auctioneer, AuctioneerHandle, BidSorter, BidSubmissionTcpListener, DbHandle, DecoderTile,
     DefaultBidAdjustor, FutureBidSubmissionResult, HelixSpine, InternalBidSubmission, RegWorker,
-    RegWorkerHandle, RelayNetworkManager, S3PayloadSaver, SubWorker, WebsiteService,
-    spawn_tokio_monitoring, start_admin_service, start_api_service, start_beacon_client,
-    start_db_service, start_housekeeper,
+    RegWorkerHandle, RelayNetworkManager, S3PayloadSaver, SubWorker, SubmissionDataWithSpan,
+    WebsiteService, spawn_tokio_monitoring, start_admin_service, start_api_service,
+    start_beacon_client, start_db_service, start_housekeeper,
 };
 use helix_types::BlsKeypair;
 use tikv_jemallocator::Jemalloc;
@@ -154,6 +154,9 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
         let future_results = Arc::new(SharedVector::<FutureBidSubmissionResult>::with_capacity(
             MAX_SUBMISSIONS_PER_SLOT,
         ));
+        let decoded = Arc::new(SharedVector::<SubmissionDataWithSpan>::with_capacity(
+            MAX_SUBMISSIONS_PER_SLOT,
+        ));
 
         let bid_producer = spine.spine.standalone_producer_for(TileName::from_str_truncate("Api"));
         start_api_service::<ApiProd>(
@@ -191,16 +194,27 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
         }
 
         if config.is_submission_instance {
+            // TODO multiple decoder tiles
+            let decoder_tile = DecoderTile::new(
+                local_cache.as_ref().clone(),
+                chain_info.as_ref().clone(),
+                config.clone(),
+                submissions.clone(),
+                future_results.clone(),
+                decoded.clone(),
+            );
+            attach_tile(
+                decoder_tile,
+                spine,
+                TileConfig::new(config.cores.decoder, ThreadPriority::OSDefault),
+            );
+
             for core in config.cores.sub_workers.clone() {
                 let worker = SubWorker::new(
                     core,
                     event_tx.clone(),
                     sub_worker_rx.clone(),
-                    local_cache.as_ref().clone(),
                     chain_info.as_ref().clone(),
-                    config.clone(),
-                    submissions.clone(),
-                    future_results.clone(),
                 );
 
                 attach_tile(worker, spine, TileConfig::new(core, ThreadPriority::OSDefault));
@@ -241,6 +255,7 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
                 event_rx,
                 auctioneer_core,
                 future_results,
+                decoded,
             );
             attach_tile(
                 auctioneer,

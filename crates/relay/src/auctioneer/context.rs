@@ -19,7 +19,6 @@ use rustc_hash::FxHashMap;
 use tracing::{debug, info, warn};
 
 use crate::{
-    HelixSpine,
     api::{FutureBidSubmissionResult, builder::error::BuilderApiError},
     auctioneer::{
         BlockMergeResponse,
@@ -29,7 +28,7 @@ use crate::{
         simulator::manager::{SimulationResult, SimulatorManager},
         types::{PayloadEntry, PendingPayload, SubmissionRef},
     },
-    spine::messages::SubmissionResultWithRef,
+    spine::{HelixSpineProducers, messages::SubmissionResultWithRef},
 };
 
 // Context that is only valid for a given slot
@@ -126,7 +125,7 @@ impl<B: BidAdjustor> Context<B> {
         &mut self,
         result: SimulationResult,
         already_sent: bool,
-        adapter: &mut flux::spine::SpineAdapter<HelixSpine>,
+        producers: &mut HelixSpineProducers,
     ) {
         let (id, result) = result;
 
@@ -188,7 +187,7 @@ impl<B: BidAdjustor> Context<B> {
 
         if !already_sent && !result.optimistic_version.is_optimistic() {
             send_submission_result(
-                &mut adapter.producers,
+                producers,
                 &self.future_results,
                 result.submission_ref,
                 Err(BuilderApiError::SimOnNextSlot),

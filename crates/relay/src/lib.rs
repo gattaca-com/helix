@@ -1,6 +1,7 @@
 mod api;
 mod auctioneer;
 mod beacon;
+mod bid_decoder;
 mod gossip;
 mod housekeeper;
 mod network;
@@ -27,9 +28,10 @@ pub use crate::{
     auctioneer::{
         Auctioneer, AuctioneerHandle, BidSorter, BlockSimRequest, Context, Event,
         InternalBidSubmission, PayloadEntry, RegWorker, RegWorkerHandle, SimulatorClient,
-        SimulatorManager, SimulatorRequest, SlotData, SubWorker, SubmissionPayload, SubmissionRef,
+        SimulatorManager, SimulatorRequest, SlotData, SubWorker, SubmissionPayload,
     },
     beacon::start_beacon_client,
+    bid_decoder::{DecoderTile, SubmissionDataWithSpan},
     housekeeper::start_housekeeper,
     network::RelayNetworkManager,
     spine::HelixSpine,

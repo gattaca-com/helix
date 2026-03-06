@@ -14,7 +14,6 @@ use helix_types::{
 use tracing::trace;
 
 use crate::{
-    HelixSpine,
     api::builder::error::BuilderApiError,
     auctioneer::{
         bid_adjustor::BidAdjustor,
@@ -23,26 +22,22 @@ use crate::{
         types::{PayloadEntry, SlotData, Submission, SubmissionData, SubmissionRef},
     },
     housekeeper::PayloadAttributesUpdate,
+    spine::HelixSpineProducers,
 };
 
 impl<B: BidAdjustor> Context<B> {
     pub(super) fn handle_submission(
         &mut self,
-        submission_data: SubmissionData,
+        submission_data: &SubmissionData,
         slot_data: &SlotData,
-        adapter: &mut flux::spine::SpineAdapter<HelixSpine>,
+        producers: &mut HelixSpineProducers,
     ) {
         let submission_ref = submission_data.submission_ref;
-        match self.validate_and_sort(submission_data, slot_data) {
+        match self.validate_and_sort(submission_data.clone(), slot_data) {
             Ok((validated, optimistic_version, merging_data)) => {
                 let is_optimistic = optimistic_version.is_optimistic();
                 if is_optimistic {
-                    send_submission_result(
-                        &mut adapter.producers,
-                        &self.future_results,
-                        submission_ref,
-                        Ok(()),
-                    );
+                    send_submission_result(producers, &self.future_results, submission_ref, Ok(()));
                 };
 
                 let (req, entry) =
@@ -82,12 +77,7 @@ impl<B: BidAdjustor> Context<B> {
             }
 
             Err(e) => {
-                send_submission_result(
-                    &mut adapter.producers,
-                    &self.future_results,
-                    submission_ref,
-                    Err(e),
-                );
+                send_submission_result(producers, &self.future_results, submission_ref, Err(e));
             }
         }
     }
@@ -95,7 +85,7 @@ impl<B: BidAdjustor> Context<B> {
     pub(super) fn sort_simulation_result(
         &mut self,
         result: &mut SimulationResult,
-        adapter: &mut flux::spine::SpineAdapter<HelixSpine>,
+        producers: &mut HelixSpineProducers,
     ) -> bool {
         let Some(result) = &mut result.1 else {
             return false;
@@ -107,7 +97,7 @@ impl<B: BidAdjustor> Context<B> {
                 self.bid_sorter.demote(*result.submission.builder_public_key());
                 if need_send_result {
                     send_submission_result(
-                        &mut adapter.producers,
+                        producers,
                         &self.future_results,
                         result.submission_ref,
                         Err(BuilderApiError::BlockSimulation(err.clone())),
@@ -129,7 +119,7 @@ impl<B: BidAdjustor> Context<B> {
 
                 if need_send_result {
                     send_submission_result(
-                        &mut adapter.producers,
+                        producers,
                         &self.future_results,
                         result.submission_ref,
                         Ok(()),
