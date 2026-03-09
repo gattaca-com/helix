@@ -34,6 +34,7 @@ use crate::{
 
 const GET_PAYLOAD_REQUEST_CUTOFF_MS: i64 = 4000;
 
+#[derive(Copy, Clone, Eq, PartialEq, Hash)]
 pub enum ProposerApiVersion {
     V1,
     V2,
@@ -273,7 +274,7 @@ impl<A: Api> ProposerApi<A> {
 
         let payload_kind = self
             .auctioneer_handle
-            .get_payload(&self.chain_info, proposer_public_key, signed_blinded_block, *trace)
+            .get_payload(&self.chain_info, api_version, proposer_public_key, signed_blinded_block, *trace)
             .map_err(|_| {
                 error!("failed sending request to worker");
                 ProposerApiError::InternalServerError

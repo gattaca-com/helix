@@ -11,7 +11,7 @@ use tokio::sync::oneshot::{self, Receiver};
 use tracing::trace;
 
 use crate::{
-    api::proposer::ProposerApiError,
+    api::proposer::{ProposerApiError, get_payload::ProposerApiVersion},
     auctioneer::types::{Event, GetHeaderResult, GetPayloadResult, RegWorkerJob},
     gossip::BroadcastPayloadParams,
 };
@@ -39,7 +39,7 @@ pub enum GetPayloadKind {
 pub struct AuctioneerHandle {
     auctioneer: crossbeam_channel::Sender<Event>,
     /// Dedup concurrent get_payload calls with the same block signature.
-    inflight_payloads: Arc<DashMap<SignatureKey, SharedPayloadFut>>,
+    inflight_payloads: Arc<DashMap<(ProposerApiVersion, SignatureKey), SharedPayloadFut>>,
 }
 
 impl AuctioneerHandle {
@@ -62,13 +62,14 @@ impl AuctioneerHandle {
     pub fn get_payload(
         &self,
         chain_info: &ChainInfo,
+        api_version: ProposerApiVersion,
         proposer_pubkey: BlsPublicKeyBytes,
         blinded_block: SignedBlindedBeaconBlock,
         trace: GetPayloadTrace,
     ) -> Result<GetPayloadKind, ChannelFull> {
         let sig_key: SignatureKey = blinded_block.signature().serialize();
 
-        match self.inflight_payloads.entry(sig_key) {
+        match self.inflight_payloads.entry((api_version, sig_key)) {
             dashmap::mapref::entry::Entry::Occupied(entry) => {
                 trace!("dedup get_payload hit");
                 Ok(GetPayloadKind::Dedup(entry.get().clone()))
