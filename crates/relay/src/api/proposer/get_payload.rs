@@ -283,7 +283,7 @@ impl<A: Api> ProposerApi<A> {
         let (rx, dedup_tx) = match payload_kind {
             GetPayloadKind::Dedup(fut) => {
                 info!("dedup get_payload, waiting for primary");
-                let result = fut.await;
+                let result = fut.await.unwrap_or_else(|_| Arc::new(None));
                 let response = Arc::try_unwrap(result).unwrap_or_else(|arc| (*arc).clone());
                 return response.ok_or(ProposerApiError::InternalServerError);
             }
@@ -291,12 +291,14 @@ impl<A: Api> ProposerApi<A> {
         };
 
         // Primary path: process the payload and notify dedup waiters.
-        let result = rx
-            .await
-            .inspect_err(|err| {
+        let result = match rx.await {
+            Ok(result) => result,
+            Err(err) => {
                 error!(%err, "failed to receive payload response from auctioneer");
-            })
-            .map_err(|_| ProposerApiError::InternalServerError)?;
+                let _ = dedup_tx.send(Arc::new(None));
+                return Err(ProposerApiError::InternalServerError);
+            }
+        };
 
         let GetPayloadResultData { to_proposer, to_publish, trace: new_trace, fork, bid } =
             match result {

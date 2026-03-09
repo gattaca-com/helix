@@ -1,4 +1,4 @@
-use std::{future::Future, ops::Range, pin::Pin, sync::Arc};
+use std::{ops::Range, sync::Arc};
 
 use dashmap::DashMap;
 use futures::{FutureExt, future::Shared};
@@ -6,7 +6,7 @@ use helix_common::{GetPayloadTrace, api::proposer_api::GetHeaderParams};
 use helix_types::{
     BlsPublicKeyBytes, GetPayloadResponse, SignedBlindedBeaconBlock, SignedValidatorRegistration,
 };
-use tokio::sync::oneshot;
+use tokio::sync::oneshot::{self, Receiver};
 use tracing::trace;
 
 use crate::{
@@ -19,8 +19,8 @@ type SignatureKey = [u8; 96];
 
 /// Dedup waiters only get the response on success or a flag on error.
 pub type DedupPayloadResult = Option<GetPayloadResponse>;
-type SharedPayloadFut =
-    Shared<Pin<Box<dyn Future<Output = Arc<DedupPayloadResult>> + Send + 'static>>>;
+type SharedPayloadFut = Shared<Receiver<Arc<DedupPayloadResult>>>;
+//Shared<Pin<Box<dyn Future<Output = Arc<DedupPayloadResult>> + Send + 'static>>>;
 
 pub enum GetPayloadKind {
     /// First caller — owns the oneshot, responsible for full processing.
@@ -89,11 +89,7 @@ impl AuctioneerHandle {
 
                 // Shared future for dedup callers. Primary caller completes it via dedup_tx.
                 let (dedup_tx, dedup_rx) = oneshot::channel::<Arc<DedupPayloadResult>>();
-                let fut: SharedPayloadFut =
-                    (Box::pin(async move { dedup_rx.await.unwrap_or_else(|_| Arc::new(None)) })
-                        as Pin<Box<dyn Future<Output = Arc<DedupPayloadResult>> + Send>>)
-                        .shared();
-
+                let fut: SharedPayloadFut = dedup_rx.shared();
                 entry.insert(fut);
                 Ok(GetPayloadKind::Primary { rx, dedup_tx })
             }
