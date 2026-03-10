@@ -1,4 +1,4 @@
-use std::{sync::atomic::Ordering, time::Duration};
+use std::sync::atomic::Ordering;
 
 use flux::timing::Nanos;
 use flux_utils::ArrayStr;
@@ -29,8 +29,8 @@ impl SubmissionTrace {
     }
 }
 
-pub fn record_submission_step(label: &str, duration: Duration) {
-    let value = duration.as_nanos() as f64 / 1000.;
+pub fn record_submission_step(label: &str, duration: Nanos) {
+    let value = duration.0 as f64 / 1000.;
     SUB_TRACE_LATENCY.with_label_values(&[label]).observe(value);
 }
 

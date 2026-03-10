@@ -101,24 +101,7 @@ pub struct BidSubmission {
     pub data: Bytes,
 }
 
-const BID_SUB_HEADER_SIZE: usize = 6;
-
-impl TryFrom<&[u8]> for BidSubmission {
-    type Error = ParseError;
-
-    fn try_from(data: &[u8]) -> Result<Self, Self::Error> {
-        if data.len() < BID_SUB_HEADER_SIZE {
-            return Err(ParseError::SubmissionTooShort)
-        }
-
-        let header = BidSubmissionHeader::try_from(&data[..BID_SUB_HEADER_SIZE])?;
-
-        tracing::trace!("{:?}", header);
-
-        let data = Bytes::copy_from_slice(&data[BID_SUB_HEADER_SIZE..]);
-        Ok(BidSubmission { header, data })
-    }
-}
+pub const BID_SUB_HEADER_SIZE: usize = 6;
 
 /// Wire header for bid submission. Manually encoded as
 /// `[4B BE seq_number][1B merge_type][1B flags]` (6 bytes total).
@@ -136,6 +119,9 @@ impl TryFrom<&[u8]> for BidSubmissionHeader {
     type Error = ParseError;
 
     fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        if value.len() < BID_SUB_HEADER_SIZE {
+            return Err(ParseError::SubmissionTooShort)
+        }
         let sequence_number = u32::from_be_bytes(value[..4].try_into().unwrap());
         let merge_type =
             MergeType::try_from(value[4]).map_err(|_| ParseError::InvalidMergeType(value[4]))?;

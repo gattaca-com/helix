@@ -49,7 +49,7 @@ pub use crate::auctioneer::{
     simulator::{
         BlockSimRequest, SimulatorRequest, client::SimulatorClient, manager::SimulatorManager,
     },
-    types::{InternalBidSubmission, InternalBidSubmissionHeader, SubmissionRef},
+    types::{InternalBidSubmissionHeader, SubmissionRef},
 };
 use crate::{
     HelixSpine, SubmissionDataWithSpan,
@@ -68,6 +68,7 @@ pub struct Auctioneer<B: BidAdjustor> {
 }
 
 impl<B: BidAdjustor> Auctioneer<B> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         chain_info: ChainInfo,
         config: RelayConfig,

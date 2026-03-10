@@ -3,7 +3,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use bytes::Bytes;
 use flate2::read::GzDecoder;
 use flux::timing::Nanos;
 use helix_common::{
@@ -57,10 +56,11 @@ impl SubmissionType {
     }
 }
 
+#[repr(u8)]
 #[derive(Clone, Copy, Debug)]
 pub enum Encoding {
-    Json,
-    Ssz,
+    Json = 0,
+    Ssz = 1,
 }
 
 pub const HEADER_SSZ: &str = "application/octet-stream";
@@ -96,7 +96,7 @@ pub(super) struct DecodeFlags {
 
 pub(super) fn decode_dehydrated(
     decoder: &mut SubmissionDecoder,
-    body: &bytes::Bytes,
+    body: &[u8],
     trace: &mut SubmissionTrace,
     chain_info: &ChainInfo,
     flags: &DecodeFlags,
@@ -141,7 +141,7 @@ pub(super) fn decode_dehydrated(
 
 pub(super) fn decode_merge(
     decoder: &mut SubmissionDecoder,
-    body: &bytes::Bytes,
+    body: &[u8],
     trace: &mut SubmissionTrace,
     chain_info: &ChainInfo,
     flags: &DecodeFlags,
@@ -168,7 +168,7 @@ pub(super) fn decode_merge(
 
 pub(super) fn decode_default(
     decoder: &mut SubmissionDecoder,
-    body: &bytes::Bytes,
+    body: &[u8],
     trace: &mut SubmissionTrace,
     chain_info: &ChainInfo,
     flags: &DecodeFlags,
@@ -212,7 +212,7 @@ fn verify_and_validate(
 ) -> Result<(), BuilderApiError> {
     if !skip_sigverify {
         trace!("verifying signature");
-        let start_sig = Instant::now();
+        let start_sig = Nanos::now();
         submission.verify_signature(chain_info.builder_domain)?;
         trace!("signature ok");
         record_submission_step("signature", start_sig.elapsed());
@@ -299,54 +299,52 @@ impl SubmissionDecoder {
         }
     }
 
-    pub fn decompress(&mut self, body: &Bytes) -> Option<Result<Bytes, BuilderApiError>> {
+    pub fn decompress(
+        &mut self,
+        payload: &[u8],
+        buf: &mut Vec<u8>,
+    ) -> Option<Result<(), BuilderApiError>> {
         let start = Instant::now();
-        self.bytes_before_decompress = body.len();
-        let decompressed: Bytes = match self.compression {
-            Compression::None => {
-                return None;
-            }
-            Compression::Gzip => {
-                let mut decoder = GzDecoder::new(body.as_ref());
-                let cap = gzip_size_hint(body).unwrap_or(body.len() * 2);
-                self.estimated_decompress = cap;
-                let mut buf = Vec::with_capacity(cap);
+        self.bytes_before_decompress = payload.len();
 
-                if let Err(e) = decoder.read_to_end(&mut buf) {
+        match self.compression {
+            Compression::None => return None,
+            Compression::Gzip => {
+                let cap = gzip_size_hint(payload).unwrap_or(payload.len() * 2);
+                self.estimated_decompress = cap;
+                buf.clear();
+                buf.reserve(cap);
+                let mut decoder = GzDecoder::new(payload).take(MAX_PAYLOAD_LENGTH as u64);
+                if let Err(e) = decoder.read_to_end(buf) {
                     return Some(Err(e.into()));
                 }
-
-                buf.into()
             }
             Compression::Zstd => {
-                let mut decoder = match ZstdDecoder::new(body.as_ref()) {
-                    Ok(d) => d,
-                    Err(e) => {
-                        return Some(Err(e.into()));
-                    }
-                };
-
-                let cap = zstd_size_hint(body).unwrap_or(body.len() * 2);
+                let cap = zstd_size_hint(payload).unwrap_or(payload.len() * 2);
                 self.estimated_decompress = cap;
-                let mut buf = Vec::with_capacity(cap);
-
-                if let Err(e) = decoder.read_to_end(&mut buf) {
+                buf.clear();
+                buf.reserve(cap);
+                let inner = match ZstdDecoder::new(payload) {
+                    Ok(d) => d,
+                    Err(e) => return Some(Err(e.into())),
+                };
+                let mut decoder = inner.take(MAX_PAYLOAD_LENGTH as u64);
+                if let Err(e) = decoder.read_to_end(buf) {
                     return Some(Err(e.into()));
                 }
-                buf.into()
             }
-        };
+        }
 
-        self.bytes_after_decompress = decompressed.len();
+        self.bytes_after_decompress = buf.len();
         self.decompress_latency = start.elapsed();
 
-        Some(Ok(decompressed))
+        Some(Ok(()))
     }
 
     // TODO: pass a buffer pool to avoid allocations
     pub fn decode<T: Decode + DeserializeOwned>(
         &mut self,
-        body: &Bytes,
+        body: &[u8],
     ) -> Result<T, BuilderApiError> {
         let start = Instant::now();
         let payload: T = match self.encoding {
@@ -362,7 +360,7 @@ impl SubmissionDecoder {
 
     pub fn decode_by_fork<T: ForkVersionDecode + DeserializeOwned>(
         &mut self,
-        body: &Bytes,
+        body: &[u8],
         fork: ForkName,
     ) -> Result<T, BuilderApiError> {
         let start = Instant::now();

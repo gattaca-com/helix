@@ -1,13 +1,21 @@
-use flux_utils::ArrayStr;
+use flux_utils::{ArrayStr, DCacheRef};
+use helix_common::SubmissionTrace;
 use helix_tcp_types::Status;
+use helix_types::BlsPublicKeyBytes;
 use http::StatusCode;
 
-use crate::{api::builder::error::BuilderApiError, auctioneer::SubmissionRef};
+use crate::{
+    api::builder::error::BuilderApiError,
+    auctioneer::{InternalBidSubmissionHeader, SubmissionRef},
+};
 
-// references position in SharedVector<InternalBidSubmission>
 #[derive(Debug, Clone, Copy)]
-pub struct NewBidSubmissionIx {
-    pub ix: usize,
+pub struct NewBidSubmission {
+    pub dref: DCacheRef,
+    pub submission_ref: SubmissionRef,
+    pub header: InternalBidSubmissionHeader,
+    pub trace: SubmissionTrace,
+    pub expected_pubkey: Option<BlsPublicKeyBytes>,
 }
 
 #[derive(Debug, Clone, Copy)]

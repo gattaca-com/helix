@@ -1,24 +1,22 @@
-use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Instant};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
-use bytes::Bytes;
 use dashmap::DashMap;
-use flux::{spine::FluxSpine, tile::Tile, timing::Nanos, utils::SharedVector};
+use flux::{spine::FluxSpine, tile::Tile, timing::Nanos};
 use flux_network::{
     Token,
     tcp::{PollEvent, SendBehavior, TcpConnector, TcpTelemetry},
 };
+use flux_utils::DCache;
 use helix_common::{SubmissionTrace, metrics::SUB_CLIENT_TO_SERVER_LATENCY, utils::utcnow_ns};
-use helix_tcp_types::BidSubmission;
+use helix_tcp_types::BID_SUB_HEADER_SIZE;
 use helix_types::BlsPublicKeyBytes;
 use ssz::{Decode, Encode};
-use tokio::sync::mpsc;
-use tracing::Span;
 use uuid::Uuid;
 
 use crate::{
     HelixSpine,
-    auctioneer::{InternalBidSubmission, InternalBidSubmissionHeader, SubmissionRef},
-    spine::messages::{NewBidSubmissionIx, SubmissionResultWithRef},
+    auctioneer::{InternalBidSubmissionHeader, SubmissionRef},
+    spine::messages::{NewBidSubmission, SubmissionResultWithRef},
 };
 
 mod s3;
@@ -43,8 +41,7 @@ pub struct BidSubmissionTcpListener {
     to_disconnect: Vec<Token>,
     registered: HashMap<Token, BlsPublicKeyBytes>,
     submission_errors: Vec<SubmissionError>,
-    raw_payloads_tx: Option<mpsc::Sender<(Uuid, Bytes)>>,
-    submissions: Arc<SharedVector<InternalBidSubmission>>,
+    submissions: Arc<DCache>,
 }
 
 impl BidSubmissionTcpListener {
@@ -52,8 +49,7 @@ impl BidSubmissionTcpListener {
         listener_addr: SocketAddr,
         api_key_cache: Arc<DashMap<String, Vec<BlsPublicKeyBytes>>>,
         max_connections: usize,
-        raw_payloads_tx: Option<mpsc::Sender<(Uuid, Bytes)>>,
-        submissions: Arc<SharedVector<InternalBidSubmission>>,
+        submissions: Arc<DCache>,
     ) -> Self {
         let mut listener = TcpConnector::default()
             .with_telemetry(TcpTelemetry::Enabled { app_name: HelixSpine::app_name() })
@@ -67,7 +63,6 @@ impl BidSubmissionTcpListener {
             to_disconnect: Vec::with_capacity(max_connections),
             registered: HashMap::with_capacity(max_connections),
             submission_errors: Vec::with_capacity(max_connections),
-            raw_payloads_tx,
             submissions,
         }
     }
@@ -88,50 +83,57 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
             }
             PollEvent::Message { token, payload, send_ts } => {
                 if let Some(expected_pubkey) = self.registered.get(&token) {
-                    let id = Uuid::new_v4();
-                    if let Some(tx) = &self.raw_payloads_tx &&
-                        tx.try_send((id, Bytes::copy_from_slice(payload))).is_err()
-                    {
-                        tracing::error!("s3 channel full, dropping payload");
-                    }
-                    match BidSubmission::try_from(payload).map_err(BidSubmissionError::from) {
-                        Ok(bid) => {
-                            let submission_ref = SubmissionRef::Tcp {
-                                id,
-                                token,
-                                seq_num: bid.header.sequence_number,
-                            };
-
-                            let now = utcnow_ns();
-                            SUB_CLIENT_TO_SERVER_LATENCY
-                                .with_label_values(&["tcp"])
-                                .observe((now.saturating_sub(send_ts.0) / 1000) as f64);
-
-                            let trace = SubmissionTrace {
-                                receive_ns: Nanos(now),
-                                read_body_ns: Nanos(now),
-                                ..Default::default()
-                            };
-
-                            let header =
-                                InternalBidSubmissionHeader::from_tcp_header(id, bid.header);
-                            let internal_bid = InternalBidSubmission {
-                                header,
-                                submission_ref,
-                                trace,
-                                body: bid.data,
-                                span: Span::current(),
-                                sent_at: Instant::now(),
-                                expected_pubkey: Some(*expected_pubkey),
-                            };
-                            let ix = self.submissions.push(internal_bid);
-                            adapter.produce(NewBidSubmissionIx { ix });
-                        }
+                    let header = match BidSubmissionHeader::try_from(payload) {
+                        Ok(header) => header,
                         Err(e) => {
-                            tracing::error!(err=%e, "failed to deserialize the bid");
-                            self.submission_errors.push((token, None, None, e));
+                            tracing::error!("{e} failed to parse the bid submission header");
+                            self.submission_errors.push((
+                                token,
+                                None,
+                                None,
+                                BidSubmissionError::ParseError(e),
+                            ));
+
+                            return;
                         }
                     };
+
+                    let id = Uuid::new_v4();
+                    let body = &payload[BID_SUB_HEADER_SIZE..];
+
+                    let submission_ref =
+                        SubmissionRef::Tcp { id, token, seq_num: header.sequence_number };
+
+                    let now = utcnow_ns();
+                    SUB_CLIENT_TO_SERVER_LATENCY
+                        .with_label_values(&["tcp"])
+                        .observe((now.saturating_sub(send_ts.0) / 1000) as f64);
+
+                    let trace = SubmissionTrace {
+                        receive_ns: Nanos(now),
+                        read_body_ns: Nanos(now),
+                        ..Default::default()
+                    };
+
+                    match self.submissions.write(body.len(), |buffer| buffer.copy_from_slice(body))
+                    {
+                        Ok(dref) => adapter.produce(NewBidSubmission {
+                            dref,
+                            header: InternalBidSubmissionHeader::from_tcp_header(id, header),
+                            submission_ref,
+                            trace,
+                            expected_pubkey: Some(*expected_pubkey),
+                        }),
+                        Err(e) => {
+                            tracing::error!("{e} failed to write the bid submission into dcache");
+                            self.submission_errors.push((
+                                token,
+                                Some(header.sequence_number),
+                                Some(id),
+                                BidSubmissionError::InternalError,
+                            ));
+                        }
+                    }
                 } else {
                     let registration_message = RegistrationMsg::from_ssz_bytes(payload);
                     match registration_message {

@@ -1,7 +1,4 @@
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{sync::Arc, time::Duration};
 
 use axum::{
     Extension,
@@ -20,8 +17,8 @@ use tracing::trace;
 use super::api::BuilderApi;
 use crate::{
     api::{Api, FutureBidSubmissionResult, builder::error::BuilderApiError},
-    auctioneer::{InternalBidSubmission, InternalBidSubmissionHeader, SubmissionRef},
-    spine::messages::NewBidSubmissionIx,
+    auctioneer::{InternalBidSubmissionHeader, SubmissionRef},
+    spine::messages::NewBidSubmission,
 };
 
 const HEADER_SEND_TS: &str = "x-send-ts";
@@ -57,17 +54,20 @@ impl<A: Api> BuilderApi<A> {
         let header = InternalBidSubmissionHeader::from_http_headers(id, headers);
 
         let future_ix = api.future_results.push(FutureBidSubmissionResult::new());
-        let internal_bid = InternalBidSubmission {
-            header,
-            submission_ref: SubmissionRef::Http(future_ix),
-            trace,
-            body,
-            span: tracing::Span::current(),
-            sent_at: Instant::now(),
-            expected_pubkey: None,
-        };
-        let ix = api.submissions.push(internal_bid);
-        api.producer.produce(NewBidSubmissionIx { ix });
+
+        match api.submissions.write(body.len(), |buf| buf.copy_from_slice(&body)) {
+            Ok(dref) => api.producer.produce(NewBidSubmission {
+                dref,
+                header,
+                submission_ref: SubmissionRef::Http(future_ix),
+                trace,
+                expected_pubkey: None,
+            }),
+            Err(e) => {
+                tracing::error!("failed to write bid submission into dcache: {e}");
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            }
+        }
 
         let Some(future) = api.future_results.get(future_ix) else {
             tracing::error!("failed to find future response in the shared vec");

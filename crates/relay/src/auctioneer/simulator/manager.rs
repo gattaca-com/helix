@@ -7,6 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use flux::timing::Nanos;
 use helix_common::{
     SimulatorConfig, SubmissionTrace, bid_submission::OptimisticVersion, is_local_dev,
     metrics::SimulatorMetrics, record_submission_step, simulator::BlockSimError, spawn_tracked,
@@ -197,7 +198,7 @@ impl SimulatorManager {
         let timer = SimulatorMetrics::timer(client.endpoint());
         let tx = self.sim_result_tx.clone();
         spawn_tracked!(async move {
-            let start_sim = Instant::now();
+            let start_sim = Nanos::now();
             let block_hash = req.submission.block_hash();
             debug!(%block_hash, "sending simulation request");
 

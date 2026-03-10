@@ -1,8 +1,8 @@
-use std::{sync::Arc, time::Instant};
+use std::sync::Arc;
 
 use alloy_primitives::B256;
-use flux::{spine::SpineProducers, tile::Tile};
-use flux_utils::SharedVector;
+use flux::{spine::SpineProducers, tile::Tile, timing::Nanos};
+use flux_utils::{DCache, SharedVector};
 use helix_common::{
     RelayConfig, SubmissionTrace, chain_info::ChainInfo, local_cache::LocalCache,
     record_submission_step,
@@ -14,8 +14,11 @@ use helix_types::{
 use tracing::trace;
 
 use crate::{
-    HelixSpine, InternalBidSubmission,
-    api::{FutureBidSubmissionResult, builder::error::BuilderApiError},
+    HelixSpine,
+    api::{
+        FutureBidSubmissionResult,
+        builder::{api::MAX_PAYLOAD_LENGTH, error::BuilderApiError},
+    },
     auctioneer::{
         InternalBidSubmissionHeader, Submission, SubmissionData, SubmissionRef,
         get_mergeable_orders, send_submission_result,
@@ -26,45 +29,66 @@ use crate::{
             DecodeFlags, SubmissionDecoder, decode_default, decode_dehydrated, decode_merge,
         },
     },
-    spine::messages::{DecodedSubmission, NewBidSubmissionIx},
+    spine::messages::{DecodedSubmission, NewBidSubmission},
 };
 
 pub struct DecoderTile {
     chain_info: ChainInfo,
     cache: LocalCache,
     config: RelayConfig,
-    submissions: Arc<SharedVector<InternalBidSubmission>>,
+    submissions: Arc<DCache>,
     decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
     future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
+    buffer: Vec<u8>,
 }
 
 impl Tile<HelixSpine> for DecoderTile {
     fn loop_body(&mut self, adapter: &mut flux::spine::SpineAdapter<HelixSpine>) {
-        adapter.consume(|new_bid: NewBidSubmissionIx, producers| {
-            match self.submissions.get(new_bid.ix) {
-                Some(bid) => match self.handle_bid(&bid) {
-                    Ok(submission) => {
+        adapter.consume_internal_message(
+            |new_bid: &mut flux::timing::InternalMessage<NewBidSubmission>, producers| {
+                let sent_at = new_bid.tracking_timestamp().publish_t();
+                match self.submissions.map(new_bid.dref, |payload| {
+                    Self::handle_block_submission(
+                        &self.cache,
+                        &self.chain_info,
+                        &self.config,
+                        &new_bid.submission_ref,
+                        &new_bid.header,
+                        payload,
+                        &mut self.buffer,
+                        new_bid.trace,
+                        sent_at,
+                        new_bid.expected_pubkey.as_ref(),
+                    )
+                }) {
+                    Ok(Ok(submission)) => {
                         let ix = self.decoded.push(SubmissionDataWithSpan {
                             submission_data: submission,
-                            span: bid.span.clone(),
-                            sent_at: Instant::now(),
+                            span: tracing::Span::current(),
+                            sent_at,
                         });
                         producers.produce(DecodedSubmission { ix });
                     }
-                    Err(e) => {
+                    Ok(Err(e)) => {
                         send_submission_result(
                             producers,
                             &self.future_results,
-                            bid.submission_ref,
+                            new_bid.submission_ref,
                             Err(e),
                         );
                     }
-                },
-                None => {
-                    tracing::error!(?new_bid, "No bid submission found");
+                    Err(e) => {
+                        tracing::error!(%e, "dcache read failed");
+                        send_submission_result(
+                            producers,
+                            &self.future_results,
+                            new_bid.submission_ref,
+                            Err(BuilderApiError::InternalError),
+                        );
+                    }
                 }
-            }
-        });
+            },
+        );
     }
 }
 
@@ -73,43 +97,49 @@ impl DecoderTile {
         cache: LocalCache,
         chain_info: ChainInfo,
         config: RelayConfig,
-        submissions: Arc<SharedVector<InternalBidSubmission>>,
+        submissions: Arc<DCache>,
         future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
         decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
     ) -> Self {
-        Self { chain_info, cache, config, submissions, decoded, future_results }
+        Self {
+            chain_info,
+            cache,
+            config,
+            submissions,
+            decoded,
+            future_results,
+            buffer: Vec::with_capacity(MAX_PAYLOAD_LENGTH),
+        }
     }
 
-    fn handle_bid(
-        &mut self,
-        bid: &Arc<InternalBidSubmission>,
-    ) -> Result<SubmissionData, BuilderApiError> {
-        self.handle_block_submission(
-            &bid.submission_ref,
-            &bid.header,
-            &bid.body,
-            bid.trace,
-            &bid.span,
-            bid.sent_at,
-            bid.expected_pubkey.as_ref(),
-        )
-    }
-
+    #[allow(clippy::too_many_arguments)]
     fn handle_block_submission(
-        &self,
+        cache: &LocalCache,
+        chain_info: &ChainInfo,
+        config: &RelayConfig,
         submission_ref: &SubmissionRef,
         header: &InternalBidSubmissionHeader,
-        body: &bytes::Bytes,
+        payload: &[u8],
+        buffer: &mut Vec<u8>,
         mut trace: SubmissionTrace,
-        span: &tracing::Span,
-        sent_at: Instant,
+        sent_at: Nanos,
         expected_pubkey: Option<&BlsPublicKeyBytes>,
     ) -> Result<SubmissionData, BuilderApiError> {
         record_submission_step("worker_recv", sent_at.elapsed());
-        let guard = span.enter();
+        // todo @nina - ?
+        // let guard = span.enter();
         trace!("received by worker");
         let (submission, withdrawals_root, version, merging_data, bid_adjustment_data) =
-            self.try_handle_block_submission(header, expected_pubkey, body, &mut trace)?;
+            Self::try_handle_block_submission(
+                cache,
+                chain_info,
+                config,
+                header,
+                expected_pubkey,
+                payload,
+                buffer,
+                &mut trace,
+            )?;
 
         tracing::Span::current().record("bid_slot", tracing::field::display(submission.bid_slot()));
         tracing::Span::current()
@@ -118,12 +148,11 @@ impl DecoderTile {
             .record("builder_pubkey", tracing::field::display(submission.builder_pubkey()));
 
         trace!("sending to auctioneer");
-        drop(guard);
 
-        let merging_data = if self.config.block_merging_config.is_enabled {
+        let merging_data = if config.block_merging_config.is_enabled {
             merging_data.and_then(|data| {
                 if let Submission::Full(ref signed_bid_submission) = submission {
-                    //TODO: split up mergeable order and submission processing to
+                    // TODO: split up mergeable order and submission processing to
                     // avoid delaying the bid update
                     match get_mergeable_orders(signed_bid_submission, &data) {
                         Ok(orders) => Some(MergeableOrdersWithPref {
@@ -156,28 +185,32 @@ impl DecoderTile {
         Ok(submission_data)
     }
 
-    #[allow(clippy::type_complexity)]
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     fn try_handle_block_submission(
-        &self,
+        cache: &LocalCache,
+        chain_info: &ChainInfo,
+        config: &RelayConfig,
         header: &InternalBidSubmissionHeader,
         expected_pubkey: Option<&BlsPublicKeyBytes>,
-        body: &bytes::Bytes,
+        payload: &[u8],
+        buffer: &mut Vec<u8>,
         trace: &mut SubmissionTrace,
     ) -> Result<
         (Submission, B256, SubmissionVersion, Option<BlockMergingData>, Option<BidAdjustmentData>),
         BuilderApiError,
     > {
         let mut decoder = SubmissionDecoder::new(header.compression, header.encoding);
-        let body = match decoder.decompress(body) {
-            None => body,
-            Some(res) => &res?,
+        let body: &[u8] = match decoder.decompress(payload, buffer) {
+            None => payload,
+            Some(Ok(())) => buffer,
+            Some(Err(e)) => return Err(e),
         };
 
         let with_mergeable_data = header.merge_type.is_some();
         let with_adjustments = header.flags.with_adjustments();
         let is_dehydrated = header.flags.is_dehydrated();
 
-        let builder_pubkey = decoder.extract_builder_pubkey(body.as_ref(), with_mergeable_data)?;
+        let builder_pubkey = decoder.extract_builder_pubkey(body, with_mergeable_data)?;
         let skip_sigverify = if let Some(expected_pubkey) = expected_pubkey {
             if builder_pubkey != *expected_pubkey {
                 return Err(BuilderApiError::InvalidBuilderPubkey(*expected_pubkey, builder_pubkey));
@@ -185,9 +218,7 @@ impl DecoderTile {
 
             true
         } else {
-            header
-                .api_key
-                .is_some_and(|api_key| self.cache.validate_api_key(&api_key, &builder_pubkey))
+            header.api_key.is_some_and(|api_key| cache.validate_api_key(&api_key, &builder_pubkey))
         };
 
         trace!(
@@ -203,15 +234,15 @@ impl DecoderTile {
             skip_sigverify,
             merge_type: header.merge_type,
             with_adjustments,
-            block_merging_dry_run: self.config.block_merging_config.is_dry_run,
+            block_merging_dry_run: config.block_merging_config.is_dry_run,
         };
 
         let (submission, merging_data, bid_adjustment_data) = if is_dehydrated {
-            decode_dehydrated(&mut decoder, body, trace, &self.chain_info, &flags)?
+            decode_dehydrated(&mut decoder, body, trace, chain_info, &flags)?
         } else if with_mergeable_data {
-            decode_merge(&mut decoder, body, trace, &self.chain_info, &flags)?
+            decode_merge(&mut decoder, body, trace, chain_info, &flags)?
         } else {
-            decode_default(&mut decoder, body, trace, &self.chain_info, &flags)?
+            decode_default(&mut decoder, body, trace, chain_info, &flags)?
         };
 
         let withdrawals_root = submission.withdrawal_root();

@@ -13,7 +13,7 @@ use flux::{
     tile::{TileConfig, TileName, attach_tile},
     utils::ThreadPriority,
 };
-use flux_utils::SharedVector;
+use flux_utils::{DCache, SharedVector};
 use helix_common::{
     RelayConfig,
     api_provider::DefaultApiProvider,
@@ -26,8 +26,8 @@ use helix_common::{
 };
 use helix_relay::{
     Api, Auctioneer, AuctioneerHandle, BidSorter, BidSubmissionTcpListener, DbHandle, DecoderTile,
-    DefaultBidAdjustor, FutureBidSubmissionResult, HelixSpine, InternalBidSubmission, RegWorker,
-    RegWorkerHandle, RelayNetworkManager, S3PayloadSaver, SubmissionDataWithSpan, WebsiteService,
+    DefaultBidAdjustor, FutureBidSubmissionResult, HelixSpine, RegWorker, RegWorkerHandle,
+    RelayNetworkManager, S3PayloadSaver, SubmissionDataWithSpan, WebsiteService,
     spawn_tokio_monitoring, start_admin_service, start_api_service, start_beacon_client,
     start_db_service, start_housekeeper,
 };
@@ -147,9 +147,7 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
 
         let (top_bid_tx, _) = tokio::sync::broadcast::channel(100);
 
-        let submissions = Arc::new(SharedVector::<InternalBidSubmission>::with_capacity(
-            MAX_SUBMISSIONS_PER_SLOT,
-        ));
+        let submissions: Arc<DCache> = Arc::from(DCache::new(config.dcache_capacity));
         let future_results = Arc::new(SharedVector::<FutureBidSubmissionResult>::with_capacity(
             MAX_SUBMISSIONS_PER_SLOT,
         ));
@@ -208,8 +206,10 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
                 TileConfig::new(config.cores.decoder, ThreadPriority::OSDefault),
             );
 
-            let raw_payloads_tx =
-                config.s3_config.clone().map(|cfg| S3PayloadSaver::new(cfg).spawn());
+            if let Some(cfg) = config.s3_config.clone() {
+                let s3_saver = S3PayloadSaver::new(cfg, submissions.clone());
+                attach_tile(s3_saver, spine, TileConfig::background(None, None));
+            }
 
             let sock_addr =
                 SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, config.tcp_port));
@@ -217,7 +217,6 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
                 sock_addr,
                 local_cache.api_key_cache.clone(),
                 config.tcp_max_connections,
-                raw_payloads_tx,
                 submissions,
             );
             attach_tile(
