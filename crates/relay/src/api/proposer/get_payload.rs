@@ -305,7 +305,13 @@ impl<A: Api> ProposerApi<A> {
             match result {
                 Ok(data) => data,
                 Err(err) => {
-                    let _ = dedup_tx.send(Arc::new(None));
+                    match err {
+                        ProposerApiError::InvalidFork | ProposerApiError::SigError(_) => {
+                            // Bad request - cache the error
+                            let _ = dedup_tx.send(Arc::new(None));
+                        },
+                        _ => {}
+                    }
                     return Err(err);
                 }
             };
@@ -389,14 +395,12 @@ impl<A: Api> ProposerApi<A> {
 
         if matches!(api_version, ProposerApiVersion::V1) {
             let Ok((new_trace, failed_publishing)) = handle.await else {
-                let _ = dedup_tx.send(Arc::new(None));
                 return Err(ProposerApiError::InternalServerError);
             };
             *trace = new_trace;
 
             if failed_publishing {
                 error!("failed to publish payload to beacon client");
-                let _ = dedup_tx.send(Arc::new(None));
                 return Err(ProposerApiError::InternalServerError);
             }
 

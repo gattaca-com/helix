@@ -242,7 +242,7 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
                 auctioneer_core,
                 future_results,
                 decoded,
-                auctioneer_handle.clone(),
+                auctioneer_handle,
             );
             attach_tile(
                 auctioneer,
