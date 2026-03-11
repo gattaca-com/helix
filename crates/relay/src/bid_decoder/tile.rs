@@ -9,7 +9,7 @@ use flux::{
 use flux_utils::{DCache, SharedVector};
 use helix_common::{
     RelayConfig, SubmissionTrace, chain_info::ChainInfo, local_cache::LocalCache,
-    record_submission_step,
+    record_submission_step, simulator::SubmissionFormat,
 };
 use helix_types::{
     BidAdjustmentData, BlockMergingData, BlsPublicKeyBytes, MergeableOrdersWithPref,
@@ -158,7 +158,7 @@ impl DecoderTile {
         tracing::Span::current().record("id", tracing::field::display(header.id));
         record_submission_step("worker_recv", sent_at.elapsed());
         trace!("received by worker");
-        let (submission, withdrawals_root, version, merging_data, bid_adjustment_data) =
+        let (submission, withdrawals_root, version, merging_data, bid_adjustment_data, sim_bytes) =
             Self::try_handle_block_submission(
                 cache,
                 chain_info,
@@ -209,6 +209,7 @@ impl DecoderTile {
             bid_adjustment_data,
             withdrawals_root,
             trace,
+            sim_bytes,
         };
 
         Ok((submission_data, tracing::Span::current()))
@@ -225,7 +226,14 @@ impl DecoderTile {
         buffer: &mut Vec<u8>,
         trace: &mut SubmissionTrace,
     ) -> Result<
-        (Submission, B256, SubmissionVersion, Option<BlockMergingData>, Option<BidAdjustmentData>),
+        (
+            Submission,
+            B256,
+            SubmissionVersion,
+            Option<BlockMergingData>,
+            Option<BidAdjustmentData>,
+            Option<(bytes::Bytes, SubmissionFormat)>,
+        ),
         BuilderApiError,
     > {
         let mut decoder = SubmissionDecoder::new(header.compression, header.encoding);
@@ -270,13 +278,37 @@ impl DecoderTile {
             decode_dehydrated(&mut decoder, body, trace, chain_info, &flags)?
         } else if with_mergeable_data {
             decode_merge(&mut decoder, body, trace, chain_info, &flags)?
+
         } else {
             decode_default(&mut decoder, body, trace, chain_info, &flags)?
+        };
+
+        // For plain SSZ full submissions, capture the decompressed bytes so the
+        // auctioneer can forward them to the simulator without re-encoding.
+        let sim_bytes = if !is_dehydrated &&
+            !with_mergeable_data &&
+            matches!(header.encoding, crate::bid_decoder::Encoding::Ssz)
+        {
+            Some((body.clone(), SubmissionFormat::FullSsz))
+        } else {
+            None
+        };
+
+        // For plain SSZ full submissions, capture the decompressed bytes so the
+        // auctioneer can forward them to the simulator without re-encoding.
+        let sim_bytes = if !is_dehydrated &&
+            !with_mergeable_data &&
+            matches!(header.encoding, crate::bid_decoder::Encoding::Ssz)
+        {
+            Some((body.clone(), SubmissionFormat::FullSsz))
+        } else {
+            None
+            
         };
 
         let withdrawals_root = submission.withdrawal_root();
 
         let version = SubmissionVersion::new(trace.receive_ns.0, header.sequence_number);
-        Ok((submission, withdrawals_root, version, merging_data, bid_adjustment_data))
+        Ok((submission, withdrawals_root, version, merging_data, bid_adjustment_data, sim_bytes))
     }
 }

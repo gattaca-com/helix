@@ -1,7 +1,8 @@
-use std::time::Instant;
-
 use alloy_primitives::{Address, U256};
-use helix_common::{SimulatorConfig, simulator::BlockSimError};
+use helix_common::{
+    SimulatorConfig,
+    simulator::{BlockSimError, BlockSimRequest, SimRequest},
+};
 use helix_types::ForkName;
 use reqwest::{
     RequestBuilder,
@@ -9,14 +10,27 @@ use reqwest::{
 };
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
+use ssz::Encode;
 use tracing::{debug, error};
 
-use crate::auctioneer::{
-    JsonRpcError,
-    simulator::{
-        BlockMergeRequest, BlockMergeResponse, BlockSimRequest, BlockSimRpcResponse, RpcResult,
-    },
-};
+use crate::simulator::{BlockMergeRequest, BlockMergeResponse};
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct JsonRpcError {
+    message: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct BlockSimRpcResponse {
+    error: Option<JsonRpcError>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
+#[serde(untagged)]
+enum RpcResult<T> {
+    Ok { result: T },
+    Err { error: JsonRpcError },
+}
 
 #[derive(Clone)]
 pub struct SimulatorClient {
@@ -24,69 +38,41 @@ pub struct SimulatorClient {
     pub config: SimulatorConfig,
     pub sim_method_v4: String,
     pub sim_method_v5: String,
-    pub is_synced: bool,
-    /// For certain errors we pause sims for some time to allow time for the node to recover
-    // TODO: can we get these errors even if the node is reporting that it's synced?
-    pub paused_until: Option<Instant>,
-    /// Current number of pending tasks (validation or merging)
-    pub pending: usize,
+    /// If set, use SSZ binary endpoint instead of JSON-RPC for simulations
+    pub ssz_url: Option<String>,
 }
 
 impl SimulatorClient {
     pub fn new(client: reqwest::Client, config: SimulatorConfig) -> Self {
         let sim_method_v4 = format!("{}_validateBuilderSubmissionV4", config.namespace);
         let sim_method_v5 = format!("{}_validateBuilderSubmissionV5", config.namespace);
-        Self {
-            client,
-            config,
-            sim_method_v4,
-            sim_method_v5,
-            is_synced: false,
-            paused_until: None,
-            pending: 0,
-        }
+        let ssz_url = config.ssz_url.clone();
+        Self { client, config, sim_method_v4, sim_method_v5, ssz_url }
     }
 
     pub fn endpoint(&self) -> &str {
         &self.config.url
     }
 
-    /// A lighter check to decide whether we should accept optimistic submissions
-    pub fn can_simulate_light(&self) -> bool {
-        self.is_synced &&
-            match self.paused_until {
-                Some(until) => Instant::now() > until,
-                None => true,
-            }
+    pub fn ssz_request_builder(&self) -> Option<RequestBuilder> {
+        self.ssz_url.as_ref().map(|url| self.client.post(format!("{url}/validate")))
     }
 
-    pub fn can_simulate(&self) -> bool {
-        self.can_simulate_light() && self.pending < self.config.max_concurrent_tasks
+    pub fn sim_request_builder(&self, fork: ForkName) -> (RequestBuilder, &str) {
+        let method = if fork == ForkName::Fulu { &self.sim_method_v5 } else { &self.sim_method_v4 };
+        (self.client.post(&self.config.url), method)
     }
 
-    pub fn can_merge(&self) -> bool {
-        self.can_simulate() && self.config.is_merging_simulator
-    }
-
-    pub fn sim_request_builder(&self, fork: ForkName) -> (RequestBuilder, String) {
-        let mut sim_method = &self.sim_method_v4;
-        if fork == ForkName::Fulu {
-            sim_method = &self.sim_method_v5;
-        }
-
-        (self.client.post(&self.config.url), sim_method.clone())
-    }
-
-    pub async fn do_sim_request(
+    pub async fn do_json_sim_request(
         request: &BlockSimRequest,
         is_top_bid: bool,
-        sim_method: String,
+        sim_method: &str,
         to_send: RequestBuilder,
     ) -> Result<(), BlockSimError> {
         let mut headers = HeaderMap::new();
         if is_top_bid {
             headers.insert("X-High-Priority", HeaderValue::from_static("true"));
-        };
+        }
 
         let rpc_payload = json!({
             "jsonrpc": "2.0",
@@ -95,9 +81,11 @@ impl SimulatorClient {
             "params": [request]
         });
 
-        let to_send = to_send.headers(headers).json(&rpc_payload);
-
-        let res = match Self::rpc_request::<BlockSimRpcResponse>(to_send).await {
+        let res = match Self::rpc_request::<BlockSimRpcResponse>(
+            to_send.headers(headers).json(&rpc_payload),
+        )
+        .await
+        {
             Ok(res) => res,
             Err(err) => {
                 error!(%err, "failed rpc simulation");
@@ -112,7 +100,38 @@ impl SimulatorClient {
         Ok(())
     }
 
-    pub async fn balance_request(&self, address: &Address) -> Result<U256, JsonRpcError> {
+    pub async fn do_sim_request(
+        ssz_req: &SimRequest,
+        is_top_bid: bool,
+        to_send: RequestBuilder,
+    ) -> Result<(), BlockSimError> {
+        Self::ssz_request(to_send.body(ssz_req.as_ssz_bytes()), is_top_bid).await
+    }
+
+    async fn ssz_request(to_send: RequestBuilder, is_top_bid: bool) -> Result<(), BlockSimError> {
+        let mut headers = HeaderMap::new();
+        headers.insert("Content-Type", HeaderValue::from_static("application/octet-stream"));
+        if is_top_bid {
+            headers.insert("X-High-Priority", HeaderValue::from_static("true"));
+        }
+
+        let res = match to_send.headers(headers).send().await {
+            Ok(r) => r,
+            Err(err) => {
+                error!(%err, "failed ssz simulation");
+                return Err(BlockSimError::RpcError);
+            }
+        };
+
+        match res.status().as_u16() {
+            200 => Ok(()),
+            400 => Err(BlockSimError::BlockValidationFailed(res.text().await.unwrap_or_default())),
+            424 => Err(BlockSimError::HydrationMiss),
+            _ => Err(BlockSimError::RpcError),
+        }
+    }
+
+    pub async fn balance_request(&self, address: &Address) -> Result<U256, String> {
         let rpc_payload = json!({
             "jsonrpc": "2.0",
             "id": "1",
@@ -121,12 +140,9 @@ impl SimulatorClient {
         });
 
         let to_send = self.client.post(&self.config.url).json(&rpc_payload);
-        match Self::rpc_request::<RpcResult<U256>>(to_send)
-            .await
-            .map_err(|e| JsonRpcError { message: e.to_string() })?
-        {
+        match Self::rpc_request::<RpcResult<U256>>(to_send).await.map_err(|e| e.to_string())? {
             RpcResult::Ok { result } => Ok(result),
-            RpcResult::Err { error } => Err(error),
+            RpcResult::Err { error } => Err(error.message),
         }
     }
 
@@ -206,6 +222,7 @@ mod test {
             namespace: "relay".into(),
             is_merging_simulator: false,
             max_concurrent_tasks: 1,
+            ssz_url: None,
         });
         let builder_address =
             super::Address::from_hex("0xD9d3A3f47a56a987A8119b15C994Bc126337dd27").unwrap();

@@ -12,6 +12,7 @@ use crate::{
         context::Context,
         types::{GetHeaderResult, SlotData},
     },
+    spine::HelixSpineProducers,
 };
 
 impl<B: BidAdjustor> Context<B> {
@@ -20,12 +21,18 @@ impl<B: BidAdjustor> Context<B> {
         params: GetHeaderParams,
         slot_data: &SlotData,
         res_tx: oneshot::Sender<GetHeaderResult>,
+        producers: &mut HelixSpineProducers,
     ) {
         assert_eq!(params.slot, self.bid_slot.as_u64(), "params should already be validated!");
-        let _ = res_tx.send(self.get_header(params.parent_hash, slot_data));
+        let _ = res_tx.send(self.get_header(params.parent_hash, slot_data, producers));
     }
 
-    fn get_header(&mut self, parent_hash: B256, slot_data: &SlotData) -> GetHeaderResult {
+    fn get_header(
+        &mut self,
+        parent_hash: B256,
+        slot_data: &SlotData,
+        producers: &mut HelixSpineProducers,
+    ) -> GetHeaderResult {
         let Some(best_block_hash) = self.bid_sorter.get_header(&parent_hash) else {
             warn!(%parent_hash, "no bids for this fork");
             return Err(ProposerApiError::NoBidPrepared);
@@ -50,7 +57,7 @@ impl<B: BidAdjustor> Context<B> {
                     .with_label_values(&[strategy])
                     .observe(start.elapsed().as_micros() as f64);
 
-                self.store_data_and_sim(sim_request, adjusted_bid.clone(), true);
+                self.store_data_and_sim(sim_request, adjusted_bid.clone(), true, producers);
 
                 if is_adjustable_slot {
                     return Ok(adjusted_bid);

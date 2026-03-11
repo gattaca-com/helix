@@ -14,6 +14,7 @@ use helix_common::{
         proposer_api::GetHeaderParams,
     },
     metrics::BID_CREATION_LATENCY,
+    simulator::SubmissionFormat,
 };
 use helix_tcp_types::{BidSubmissionFlags, BidSubmissionHeader};
 use helix_types::{
@@ -40,10 +41,11 @@ use crate::{
         HEADER_API_KEY, HEADER_API_TOKEN, HEADER_HYDRATE, HEADER_IS_MERGEABLE, HEADER_MERGE_TYPE,
         HEADER_SEQUENCE, HEADER_WITH_ADJUSTMENTS, proposer::ProposerApiError,
     },
-    auctioneer::{BlockMergeResult, simulator::manager::SimulationResult},
+    auctioneer::BlockMergeResult,
     bid_decoder::{Encoding, SubmissionType},
     gossip::BroadcastPayloadParams,
     housekeeper::PayloadAttributesUpdate,
+    simulator::tile::SimulationResult,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -200,6 +202,9 @@ pub struct SubmissionData {
     pub version: SubmissionVersion,
     pub withdrawals_root: B256,
     pub trace: SubmissionTrace,
+    /// Decompressed bytes to forward verbatim to the simulator, avoiding re-encoding.
+    /// `None` means the auctioneer must encode from `submission`.
+    pub sim_bytes: Option<(bytes::Bytes, SubmissionFormat)>,
 }
 
 impl Deref for SubmissionData {
@@ -515,10 +520,6 @@ pub enum Event {
     },
     GossipPayload(BroadcastPayloadParams),
     SimResult(SimulationResult),
-    SimulatorSync {
-        id: usize,
-        is_synced: bool,
-    },
     MergeResult(BlockMergeResult),
 }
 
@@ -531,7 +532,6 @@ impl Event {
             Event::GetPayload { .. } => "GetPayload",
             Event::GossipPayload(_) => "GossipPayload",
             Event::SimResult(_) => "SimResult",
-            Event::SimulatorSync { .. } => "SimulatorSync",
             Event::MergeResult(_) => "MergeResult",
         }
     }

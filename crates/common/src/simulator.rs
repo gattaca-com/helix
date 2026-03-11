@@ -1,5 +1,58 @@
-use alloy_primitives::B256;
+use std::sync::Arc;
+
+use alloy_primitives::{B256, Bytes};
+use helix_types::{
+    BidTrace, BlobsBundle, BlsSignatureBytes, ExecutionPayload, ExecutionRequests,
+    SignedBidSubmission,
+};
+use ssz_derive::{Decode, Encode};
 use thiserror::Error;
+
+use crate::{ValidatorPreferences, api::builder_api::InclusionListWithMetadata};
+
+/// Wire format of `signed_bid_submission` in `SimRequest`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[repr(u8)]
+pub enum SubmissionFormat {
+    /// Uncompressed SSZ `SignedBidSubmission` (current default).
+    #[default]
+    FullSsz = 0,
+    /// Uncompressed SSZ `DehydratedBidSubmission`.
+    DehydratedSsz = 1,
+}
+
+impl ssz::Encode for SubmissionFormat {
+    fn is_ssz_fixed_len() -> bool {
+        true
+    }
+    fn ssz_fixed_len() -> usize {
+        1
+    }
+    fn ssz_bytes_len(&self) -> usize {
+        1
+    }
+    fn ssz_append(&self, buf: &mut Vec<u8>) {
+        buf.push(*self as u8);
+    }
+}
+
+impl ssz::Decode for SubmissionFormat {
+    fn is_ssz_fixed_len() -> bool {
+        true
+    }
+    fn ssz_fixed_len() -> usize {
+        1
+    }
+    fn from_ssz_bytes(bytes: &[u8]) -> Result<Self, ssz::DecodeError> {
+        match bytes {
+            [0] => Ok(Self::FullSsz),
+            [1] => Ok(Self::DehydratedSsz),
+            _ => {
+                Err(ssz::DecodeError::BytesInvalid(format!("unknown SubmissionFormat: {bytes:?}")))
+            }
+        }
+    }
+}
 
 const UNKNOWN_ANCESTOR: &str = "unknown ancestor";
 const PARENT_NOT_FOUND: &str = "parent block not found";
@@ -31,6 +84,9 @@ pub enum BlockSimError {
 
     #[error("simulation dropped")]
     SimulationDropped,
+
+    #[error("hydration miss: simulator cache does not have required transactions/blobs")]
+    HydrationMiss,
 }
 
 impl BlockSimError {
@@ -71,6 +127,55 @@ impl BlockSimError {
 
     pub fn is_demotable(&self) -> bool {
         !self.is_already_known() && !self.is_temporary() && !self.is_too_old()
+    }
+}
+
+#[derive(Debug, Clone, Encode, Decode)]
+pub struct SimRequest {
+    pub apply_blacklist: bool,
+    pub registered_gas_limit: u64,
+    pub parent_beacon_block_root: B256,
+    pub inclusion_list: InclusionListWithMetadata,
+    pub format: SubmissionFormat,
+    pub signed_bid_submission: Bytes,
+}
+
+// TODO: refactor this in a SignedBidSubmission + extra fields
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BlockSimRequest {
+    #[serde(with = "serde_utils::quoted_u64")]
+    pub registered_gas_limit: u64,
+    pub message: BidTrace,
+    pub execution_payload: ExecutionPayload,
+    pub signature: BlsSignatureBytes,
+    pub proposer_preferences: ValidatorPreferences,
+    pub blobs_bundle: Option<Arc<BlobsBundle>>,
+    pub execution_requests: Option<Arc<ExecutionRequests>>,
+    pub parent_beacon_block_root: Option<B256>,
+    pub inclusion_list: Option<InclusionListWithMetadata>,
+    pub apply_blacklist: bool,
+}
+
+impl BlockSimRequest {
+    pub fn new(
+        registered_gas_limit: u64,
+        block: &SignedBidSubmission,
+        proposer_preferences: ValidatorPreferences,
+        parent_beacon_block_root: Option<B256>,
+        inclusion_list: Option<InclusionListWithMetadata>,
+    ) -> Self {
+        Self {
+            registered_gas_limit,
+            message: block.bid_trace().clone(),
+            execution_payload: block.execution_payload_ref().clone(),
+            signature: *block.signature(),
+            apply_blacklist: proposer_preferences.filtering.is_regional(),
+            proposer_preferences,
+            blobs_bundle: Some(block.blobs_bundle().clone()),
+            execution_requests: Some(block.execution_requests_ref().clone()),
+            parent_beacon_block_root,
+            inclusion_list,
+        }
     }
 }
 

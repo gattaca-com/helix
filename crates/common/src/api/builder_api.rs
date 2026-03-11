@@ -81,13 +81,13 @@ impl<'a> From<&'a InclusionListWithKey> for (&'a InclusionListWithMetadata, &'a 
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Encode, Decode)]
 pub struct InclusionListTxWithMetadata {
     pub hash: B256,
     pub bytes: Transaction,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Encode, Decode)]
 pub struct InclusionListWithMetadata {
     pub txs: Vec<InclusionListTxWithMetadata>,
 }

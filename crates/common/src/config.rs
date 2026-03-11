@@ -101,6 +101,7 @@ impl RelayConfig {
                 reg_workers: vec![],
                 tcp_bid_submissions_tile: 2,
                 decoder: vec![4],
+                simulator: 5,
             },
             gossip_payload_on_header: false,
             api_port: 4040,
@@ -151,6 +152,8 @@ pub struct CoresConfig {
     pub reg_workers: Vec<usize>,
     pub tcp_bid_submissions_tile: usize,
     pub decoder: Vec<usize>,
+    #[serde(default)]
+    pub simulator: usize,
 }
 
 impl Default for WebsiteConfig {
@@ -258,6 +261,9 @@ pub struct SimulatorConfig {
     /// roughly number of cores on simulator
     #[serde(default = "default_usize::<32>")]
     pub max_concurrent_tasks: usize,
+    /// If set, use the SSZ binary endpoint at this URL instead of JSON-RPC
+    #[serde(default)]
+    pub ssz_url: Option<String>,
 }
 
 fn default_namespace() -> String {

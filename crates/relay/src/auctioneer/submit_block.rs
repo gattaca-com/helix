@@ -2,11 +2,14 @@ use std::sync::atomic::Ordering;
 
 use alloy_primitives::{Address, B256, U256};
 use flux::timing::Nanos;
+use flux::spine::SpineProducers;
 use helix_common::{
     self, BuilderInfo, SubmissionTrace,
+    api::builder_api::InclusionListWithMetadata,
     bid_submission::OptimisticVersion,
     metrics::{BID_ADJUSTMENT_LATENCY, HYDRATION_CACHE_HITS},
     record_submission_step,
+    simulator::{SimRequest, SubmissionFormat},
 };
 use helix_types::{
     BidAdjustmentData, BlockValidationError, MergeableOrdersWithPref, SignedBidSubmission,
@@ -19,11 +22,14 @@ use crate::{
     auctioneer::{
         bid_adjustor::BidAdjustor,
         context::{Context, send_submission_result},
-        simulator::{BlockSimRequest, SimulatorRequest, manager::SimulationResult},
         types::{PayloadEntry, SlotData, Submission, SubmissionData, SubmissionRef},
     },
     housekeeper::PayloadAttributesUpdate,
-    spine::HelixSpineProducers,
+    simulator::{SimInboundPayload, SimulatorRequest, tile::SimulationResult},
+    spine::{
+        HelixSpineProducers,
+        messages::{ToSimKind, ToSimMsg},
+    },
 };
 
 impl<B: BidAdjustor> Context<B> {
@@ -58,11 +64,11 @@ impl<B: BidAdjustor> Context<B> {
                             .with_label_values(&[strategy])
                             .observe(start.elapsed().as_micros());
 
-                        self.store_data_and_sim(sim_request, adjusted_block, true);
+                        self.store_data_and_sim(sim_request, adjusted_block, true, producers);
                     }
                 }
 
-                self.store_data_and_sim(req, entry, false);
+                self.store_data_and_sim(req, entry, false, producers);
 
                 if self.config.block_merging_config.is_enabled &&
                     let Some(data) = merging_data
@@ -73,7 +79,7 @@ impl<B: BidAdjustor> Context<B> {
                     if is_top_bid {
                         self.block_merger.update_base_block(base_block);
                     }
-                    self.request_merged_block();
+                    self.request_merged_block(producers);
                 }
             }
 
@@ -116,7 +122,7 @@ impl<B: BidAdjustor> Context<B> {
                 if is_top_bid {
                     self.block_merger.update_base_block(*result.submission.block_hash());
                 }
-                self.request_merged_block();
+                self.request_merged_block(producers);
 
                 if need_send_result {
                     let block_hash = *result.submission.block_hash();
@@ -194,20 +200,20 @@ impl<B: BidAdjustor> Context<B> {
         record_submission_step("validated", start_val.elapsed());
         trace!("validated");
 
-        let (optimistic_version, is_top_bid) =
-            if self.sim_manager.can_process_optimistic_submission() &&
-                self.should_process_optimistically(&submission, &builder_info, slot_data)
-            {
-                let is_top_bid = self.bid_sorter.sort(
-                    submission_data.version,
-                    &submission,
-                    &mut submission_data.trace,
-                    true,
-                );
-                (OptimisticVersion::V1, is_top_bid)
-            } else {
-                (OptimisticVersion::NotOptimistic, false)
-            };
+        let (optimistic_version, is_top_bid) = if self.accept_optimistic.load(Ordering::Relaxed) &&
+            !self.failsafe_triggered.load(Ordering::Relaxed) &&
+            self.should_process_optimistically(&submission, &builder_info, slot_data)
+        {
+            let is_top_bid = self.bid_sorter.sort(
+                submission_data.version,
+                &submission,
+                &mut submission_data.trace,
+                true,
+            );
+            (OptimisticVersion::V1, is_top_bid)
+        } else {
+            (OptimisticVersion::NotOptimistic, false)
+        };
 
         let merging_data = submission_data.merging_data.map(|data| MergeData {
             is_top_bid,
@@ -229,6 +235,7 @@ impl<B: BidAdjustor> Context<B> {
             is_top_bid,
             trace: submission_data.trace,
             bid_adjustment_data: submission_data.bid_adjustment_data,
+            sim_bytes: submission_data.sim_bytes,
         };
 
         Ok((validated, optimistic_version, merging_data))
@@ -240,18 +247,30 @@ impl<B: BidAdjustor> Context<B> {
         slot_data: &SlotData,
         is_optimistic: bool,
     ) -> (SimulatorRequest, PayloadEntry) {
-        let request = BlockSimRequest::new(
-            slot_data.registration_data.entry.registration.message.gas_limit,
-            &validated.submission,
-            slot_data.registration_data.entry.preferences.clone(),
-            validated.payload_attributes.parent_beacon_block_root,
-            slot_data.il.clone(),
-        );
+        let request = SimRequest {
+            registered_gas_limit: slot_data.registration_data.entry.registration.message.gas_limit,
+            apply_blacklist: slot_data.registration_data.entry.preferences.filtering.is_regional(),
+            parent_beacon_block_root: validated
+                .payload_attributes
+                .parent_beacon_block_root
+                .unwrap_or_default(),
+            inclusion_list: slot_data
+                .il
+                .clone()
+                .unwrap_or(InclusionListWithMetadata { txs: vec![] }),
+            format: validated.sim_bytes.as_ref().map(|(_, f)| *f).unwrap_or_default(),
+            signed_bid_submission: match validated.sim_bytes {
+                Some((bytes, _)) => alloy_primitives::Bytes(bytes),
+                None => ssz::Encode::as_ssz_bytes(&validated.submission).into(),
+            },
+        };
 
         let req = SimulatorRequest {
             is_optimistic,
             submission_ref: validated.submission_ref,
             request,
+            builder_pubkey: *validated.submission.builder_public_key(),
+            bid_slot: validated.submission.slot().as_u64(),
             is_top_bid: validated.is_top_bid,
             submission: validated.submission.clone(),
             trace: validated.trace,
@@ -277,6 +296,7 @@ impl<B: BidAdjustor> Context<B> {
         req: SimulatorRequest,
         entry: PayloadEntry,
         fast_track: bool,
+        producers: &mut HelixSpineProducers,
     ) {
         let is_adjusted = entry.is_adjusted();
         let block_hash = *req.submission.block_hash();
@@ -291,7 +311,9 @@ impl<B: BidAdjustor> Context<B> {
 
         self.db.store_block_submission(sub_clone, req.trace, opt_version, is_adjusted, live_ts);
 
-        self.sim_manager.handle_sim_request(req, fast_track);
+        let ix =
+            self.sim_inbound.push(SimInboundPayload::SimRequest { req: Box::new(req), fast_track });
+        producers.produce(ToSimMsg { kind: ToSimKind::Request, ix, bid_slot: 0 });
     }
 
     fn should_process_optimistically(
@@ -317,9 +339,10 @@ impl<B: BidAdjustor> Context<B> {
         false
     }
 
-    fn request_merged_block(&mut self) {
+    fn request_merged_block(&mut self, producers: &mut HelixSpineProducers) {
         if let Some(merge_request) = self.block_merger.fetch_merge_request() {
-            self.sim_manager.handle_merge_request(merge_request);
+            let ix = self.sim_inbound.push(SimInboundPayload::MergeRequest(merge_request));
+            producers.produce(ToSimMsg { kind: ToSimKind::Request, ix, bid_slot: 0 });
         }
     }
 }
@@ -333,6 +356,7 @@ pub struct ValidatedData<'a> {
     pub is_top_bid: bool,
     pub trace: SubmissionTrace,
     pub bid_adjustment_data: Option<BidAdjustmentData>,
+    pub sim_bytes: Option<(bytes::Bytes, SubmissionFormat)>,
 }
 
 pub struct MergeData {
