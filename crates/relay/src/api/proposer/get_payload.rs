@@ -274,7 +274,13 @@ impl<A: Api> ProposerApi<A> {
 
         let payload_kind = self
             .auctioneer_handle
-            .get_payload(&self.chain_info, api_version, proposer_public_key, signed_blinded_block, *trace)
+            .get_payload(
+                &self.chain_info,
+                api_version,
+                proposer_public_key,
+                signed_blinded_block,
+                *trace,
+            )
             .map_err(|_| {
                 error!("failed sending request to worker");
                 ProposerApiError::InternalServerError
@@ -309,7 +315,7 @@ impl<A: Api> ProposerApi<A> {
                         ProposerApiError::InvalidFork | ProposerApiError::SigError(_) => {
                             // Bad request - cache the error
                             let _ = dedup_tx.send(Arc::new(None));
-                        },
+                        }
                         _ => {}
                     }
                     return Err(err);
