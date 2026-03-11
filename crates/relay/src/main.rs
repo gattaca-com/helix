@@ -199,6 +199,7 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
                     submissions.clone(),
                     future_results.clone(),
                     decoded.clone(),
+                    *core,
                 );
                 attach_tile(decoder_tile, spine, TileConfig::new(*core, ThreadPriority::OSDefault));
             }
