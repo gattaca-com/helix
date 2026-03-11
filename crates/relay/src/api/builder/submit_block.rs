@@ -62,6 +62,7 @@ impl<A: Api> BuilderApi<A> {
                 submission_ref: SubmissionRef::Http(future_ix),
                 trace,
                 expected_pubkey: None,
+                sent_at: Nanos::now(),
             }),
             Err(e) => {
                 tracing::error!("failed to write bid submission into dcache: {e}");
