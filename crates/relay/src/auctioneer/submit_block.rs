@@ -1,6 +1,7 @@
-use std::{sync::atomic::Ordering, time::Instant};
+use std::sync::atomic::Ordering;
 
 use alloy_primitives::{Address, B256, U256};
+use flux::timing::Nanos;
 use helix_common::{
     self, BuilderInfo, SubmissionTrace,
     bid_submission::OptimisticVersion,
@@ -47,7 +48,7 @@ impl<B: BidAdjustor> Context<B> {
                     entry.is_adjustable() &&
                     self.cache.adjustments_enabled.load(Ordering::Relaxed)
                 {
-                    let start = Instant::now();
+                    let start = Nanos::now();
                     if let Some((adjusted_block, sim_request, _, strategy)) =
                         self.bid_adjustor.try_apply_adjustments(&entry, slot_data, true)
                     {
@@ -55,7 +56,7 @@ impl<B: BidAdjustor> Context<B> {
 
                         BID_ADJUSTMENT_LATENCY
                             .with_label_values(&[strategy])
-                            .observe(start.elapsed().as_micros() as f64);
+                            .observe(start.elapsed().as_micros());
 
                         self.store_data_and_sim(sim_request, adjusted_block, true);
                     }
@@ -149,7 +150,7 @@ impl<B: BidAdjustor> Context<B> {
             Submission::Full(full) => (full, None),
             Submission::Dehydrated(dehydrated) => {
                 trace!("hydrating submission");
-                let start = Instant::now();
+                let start = Nanos::now();
                 let max_blobs_per_block = self.chain_info.max_blobs_per_block();
 
                 let hydrated =
@@ -180,7 +181,7 @@ impl<B: BidAdjustor> Context<B> {
             .record("builder_id", tracing::field::display(builder_info.builder_id()));
 
         trace!("validating submission");
-        let start_val = Instant::now();
+        let start_val = Nanos::now();
         let payload_attributes = self.validate_submission(
             &submission,
             submission_data.version,

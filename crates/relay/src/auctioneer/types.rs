@@ -46,17 +46,6 @@ use crate::{
     housekeeper::PayloadAttributesUpdate,
 };
 
-#[derive(Debug, Clone)]
-pub struct InternalBidSubmission {
-    pub header: InternalBidSubmissionHeader,
-    pub submission_ref: SubmissionRef,
-    pub trace: SubmissionTrace,
-    pub body: bytes::Bytes,
-    pub span: tracing::Span,
-    pub sent_at: Instant,
-    pub expected_pubkey: Option<BlsPublicKeyBytes>,
-}
-
 #[derive(Clone, Copy, Debug)]
 pub enum SubmissionRef {
     Http(usize),
@@ -155,6 +144,42 @@ impl InternalBidSubmissionHeader {
             compression: header.compression(),
             api_key: None,
         }
+    }
+
+    pub fn to_bytes(&self) -> SerialisedHeader {
+        let mut buf = [0u8; Self::MAX_SERIALISED_LEN];
+        buf[0..16].copy_from_slice(self.id.as_bytes());
+        buf[16] = self.sequence_number.is_some() as u8;
+        buf[17..21].copy_from_slice(&self.sequence_number.unwrap_or(0).to_le_bytes());
+        buf[21] = self.merge_type as u8;
+        buf[22] = self.flags.bits();
+        buf[23] = self.encoding as u8;
+        buf[24] = self.compression as u8;
+        let len = if let Some(key) = &self.api_key {
+            let b = key.as_str().as_bytes();
+            buf[25] = b.len() as u8;
+            buf[26..26 + b.len()].copy_from_slice(b);
+            26 + b.len()
+        } else {
+            buf[25] = 0;
+            26
+        };
+        SerialisedHeader { buf, len }
+    }
+
+    // 16 (id) + 1 (seq flag) + 4 (seq value) + 1 (merge_type) + 1 (flags) + 1 (encoding) + 1
+    // (compression) + 1 (key len) + 128 (api_key bytes)
+    pub const MAX_SERIALISED_LEN: usize = 154;
+}
+
+pub struct SerialisedHeader {
+    buf: [u8; InternalBidSubmissionHeader::MAX_SERIALISED_LEN],
+    len: usize,
+}
+
+impl SerialisedHeader {
+    pub fn as_slice(&self) -> &[u8] {
+        &self.buf[..self.len]
     }
 }
 

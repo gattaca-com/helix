@@ -26,9 +26,9 @@ pub use crate::{
         start_api_service,
     },
     auctioneer::{
-        Auctioneer, AuctioneerHandle, BidSorter, BlockSimRequest, Context, Event,
-        InternalBidSubmission, PayloadEntry, RegWorker, RegWorkerHandle, SimulatorClient,
-        SimulatorManager, SimulatorRequest, SlotData, SubmissionPayload,
+        Auctioneer, AuctioneerHandle, BidSorter, BlockSimRequest, Context, Event, PayloadEntry,
+        RegWorker, RegWorkerHandle, SimulatorClient, SimulatorManager, SimulatorRequest, SlotData,
+        SubmissionPayload,
     },
     beacon::start_beacon_client,
     bid_decoder::{DecoderTile, SubmissionDataWithSpan},

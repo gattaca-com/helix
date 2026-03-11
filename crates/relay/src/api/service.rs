@@ -5,7 +5,7 @@ use std::{
 };
 
 use flux::spine::StandaloneProducer;
-use flux_utils::SharedVector;
+use flux_utils::{DCache, SharedVector};
 use helix_common::{
     RelayConfig, api::builder_api::TopBidUpdate, chain_info::ChainInfo, local_cache::LocalCache,
     signing::RelaySigningContext,
@@ -15,7 +15,7 @@ use moka::sync::Cache;
 use tracing::{error, info};
 
 use crate::{
-    AuctioneerHandle, DbHandle, InternalBidSubmission, PostgresDatabaseService, RegWorkerHandle,
+    AuctioneerHandle, DbHandle, PostgresDatabaseService, RegWorkerHandle,
     api::{
         Api, FutureBidSubmissionResult, builder::api::BuilderApi, proposer::ProposerApi,
         router::build_router,
@@ -24,7 +24,7 @@ use crate::{
     gossip::{GrpcGossiperClientManager, process_gossip_messages},
     housekeeper::CurrentSlotInfo,
     network::api::RelayNetworkApi,
-    spine::messages::NewBidSubmissionIx,
+    spine::messages::NewBidSubmission,
 };
 
 pub(crate) const API_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
@@ -45,8 +45,8 @@ pub fn start_api_service<A: Api>(
     db_handle: DbHandle,
     auctioneer_handle: AuctioneerHandle,
     registrations_handle: RegWorkerHandle,
-    submissions: Arc<SharedVector<InternalBidSubmission>>,
-    bid_producer: StandaloneProducer<NewBidSubmissionIx>,
+    submissions: Arc<DCache>,
+    bid_producer: StandaloneProducer<NewBidSubmission>,
     future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
 ) {
     tokio::spawn(run_api_service::<A>(
@@ -87,8 +87,8 @@ pub async fn run_api_service<A: Api>(
     db_handle: DbHandle,
     auctioneer_handle: AuctioneerHandle,
     registrations_handle: RegWorkerHandle,
-    submissions: Arc<SharedVector<InternalBidSubmission>>,
-    bid_producer: StandaloneProducer<NewBidSubmissionIx>,
+    submissions: Arc<DCache>,
+    bid_producer: StandaloneProducer<NewBidSubmission>,
     future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
 ) {
     let gossiper = Arc::new(
