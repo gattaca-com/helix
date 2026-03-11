@@ -61,10 +61,10 @@ impl Tile<HelixSpine> for DecoderTile {
                         new_bid.expected_pubkey.as_ref(),
                     )
                 }) {
-                    Ok(Ok(submission)) => {
+                    Ok(Ok((submission, span))) => {
                         let ix = self.decoded.push(SubmissionDataWithSpan {
                             submission_data: submission,
-                            span: tracing::Span::current(),
+                            span,
                             sent_at,
                         });
                         producers.produce(DecodedSubmission { ix });
@@ -113,6 +113,14 @@ impl DecoderTile {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[tracing::instrument(skip_all,
+        fields(
+        id = tracing::field::Empty,
+        slot = tracing::field::Empty,
+        builder_pubkey = tracing::field::Empty,
+        builder_id = tracing::field::Empty,
+        block_hash = tracing::field::Empty,
+    ))]
     fn handle_block_submission(
         cache: &LocalCache,
         chain_info: &ChainInfo,
@@ -124,10 +132,9 @@ impl DecoderTile {
         mut trace: SubmissionTrace,
         sent_at: Nanos,
         expected_pubkey: Option<&BlsPublicKeyBytes>,
-    ) -> Result<SubmissionData, BuilderApiError> {
+    ) -> Result<(SubmissionData, tracing::Span), BuilderApiError> {
+        tracing::Span::current().record("id", tracing::field::display(header.id));
         record_submission_step("worker_recv", sent_at.elapsed());
-        // todo @nina - ?
-        // let guard = span.enter();
         trace!("received by worker");
         let (submission, withdrawals_root, version, merging_data, bid_adjustment_data) =
             Self::try_handle_block_submission(
@@ -141,7 +148,7 @@ impl DecoderTile {
                 &mut trace,
             )?;
 
-        tracing::Span::current().record("bid_slot", tracing::field::display(submission.bid_slot()));
+        tracing::Span::current().record("slot", tracing::field::display(submission.bid_slot()));
         tracing::Span::current()
             .record("block_hash", tracing::field::display(submission.block_hash()));
         tracing::Span::current()
@@ -182,7 +189,7 @@ impl DecoderTile {
             trace,
         };
 
-        Ok(submission_data)
+        Ok((submission_data, tracing::Span::current()))
     }
 
     #[allow(clippy::too_many_arguments, clippy::type_complexity)]
