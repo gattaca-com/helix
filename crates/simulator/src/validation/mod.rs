@@ -428,8 +428,8 @@ impl ValidationApi {
         &self,
         mut blobs_bundle: BlobsBundleV1,
     ) -> Result<Vec<B256>, ValidationApiError> {
-        if blobs_bundle.commitments.len() != blobs_bundle.proofs.len() ||
-            blobs_bundle.commitments.len() != blobs_bundle.blobs.len()
+        if blobs_bundle.commitments.len() != blobs_bundle.proofs.len()
+            || blobs_bundle.commitments.len() != blobs_bundle.blobs.len()
         {
             return Err(ValidationApiError::InvalidBlobsBundle);
         }
@@ -521,8 +521,8 @@ impl ValidationApi {
 
         // Check block size as per EIP-7934 (only applies when Osaka hardfork is active)
         let chain_spec = self.provider.chain_spec();
-        if chain_spec.is_osaka_active_at_timestamp(block.timestamp()) &&
-            block.rlp_length() > MAX_RLP_BLOCK_SIZE
+        if chain_spec.is_osaka_active_at_timestamp(block.timestamp())
+            && block.rlp_length() > MAX_RLP_BLOCK_SIZE
         {
             return Err(ValidationApiError::Consensus(ConsensusError::BlockTooLarge {
                 rlp_length: block.rlp_length(),
@@ -556,8 +556,8 @@ impl ValidationApi {
                 .sealed_header_by_hash(parent_hash)?
                 .ok_or_else(|| GetParentError::MissingParentBlock)?;
 
-            if latest_header.number().saturating_sub(parent_header.number()) >
-                self.validation_window
+            if latest_header.number().saturating_sub(parent_header.number())
+                > self.validation_window
             {
                 return Err(GetParentError::BlockTooOld);
             }

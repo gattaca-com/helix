@@ -243,9 +243,10 @@ mod tests {
 
         // Check that old messages still deserialize correctly
         let old_message = RawNetworkMessage::Other(NetworkMessage::InclusionList(
-            InclusionListMessage::Local(InclusionListMessageInfo::new(123, InclusionList {
-                txs: vec![Transaction(Bytes::from([0, 6, 5]))].into(),
-            })),
+            InclusionListMessage::Local(InclusionListMessageInfo::new(
+                123,
+                InclusionList { txs: vec![Transaction(Bytes::from([0, 6, 5]))].into() },
+            )),
         ));
         let serialized = serde_json::to_string(&old_message).unwrap();
         let _: NewRawNetworkMessage = serde_json::from_str(&serialized).unwrap();

@@ -155,12 +155,12 @@ impl Expiry<ProposerPayloadDeliveredParams, Vec<DeliveredPayloadsResponse>> for 
         _val: &Vec<DeliveredPayloadsResponse>,
         _now: Instant,
     ) -> Option<Duration> {
-        if key.slot.is_none() &&
-            key.cursor.is_none() &&
-            key.block_hash.is_none() &&
-            key.block_number.is_none() &&
-            key.proposer_pubkey.is_none() &&
-            key.builder_pubkey.is_none()
+        if key.slot.is_none()
+            && key.cursor.is_none()
+            && key.block_hash.is_none()
+            && key.block_number.is_none()
+            && key.proposer_pubkey.is_none()
+            && key.builder_pubkey.is_none()
         {
             Some(Duration::from_secs(12))
         } else {

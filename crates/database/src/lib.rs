@@ -99,8 +99,8 @@ async fn load_known_validators_with_snapshot(
     cache: &local_cache::LocalCache,
     snapshot_dir: Option<&std::path::Path>,
 ) {
-    if let Some(dir) = snapshot_dir &&
-        let Some(set) = snapshot::try_load_known_validators(dir).await
+    if let Some(dir) = snapshot_dir
+        && let Some(set) = snapshot::try_load_known_validators(dir).await
     {
         info!(count = set.len(), "using known_validators snapshot");
         *cache.known_validators_cache.write() = set;
@@ -120,8 +120,8 @@ async fn load_validator_registrations_with_snapshot(
     cache: &local_cache::LocalCache,
     snapshot_dir: Option<&std::path::Path>,
 ) {
-    if let Some(dir) = snapshot_dir &&
-        let Some(entries) = snapshot::try_load_validator_registrations(dir).await
+    if let Some(dir) = snapshot_dir
+        && let Some(entries) = snapshot::try_load_validator_registrations(dir).await
     {
         let count = entries.len();
         info!(count, "using validator_registrations snapshot");

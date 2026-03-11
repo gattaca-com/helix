@@ -41,11 +41,11 @@ use crate::{
         HEADER_API_KEY, HEADER_API_TOKEN, HEADER_HYDRATE, HEADER_IS_MERGEABLE, HEADER_MERGE_TYPE,
         HEADER_SEQUENCE, HEADER_WITH_ADJUSTMENTS, proposer::ProposerApiError,
     },
-    auctioneer::BlockMergeResult,
+    auctioneer::MergeResult,
     bid_decoder::{Encoding, SubmissionType},
     gossip::BroadcastPayloadParams,
     housekeeper::PayloadAttributesUpdate,
-    simulator::tile::SimulationResult,
+    simulator::tile::ValidationResult,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -122,8 +122,8 @@ impl InternalBidSubmissionHeader {
     ) -> MergeType {
         match header_map.get(HEADER_MERGE_TYPE) {
             None => {
-                if sub_type.is_some_and(|sub_type| sub_type == SubmissionType::Merge) ||
-                    matches!(header_map.get(HEADER_IS_MERGEABLE), Some(header) if header == HeaderValue::from_static("true"))
+                if sub_type.is_some_and(|sub_type| sub_type == SubmissionType::Merge)
+                    || matches!(header_map.get(HEADER_IS_MERGEABLE), Some(header) if header == HeaderValue::from_static("true"))
                 {
                     MergeType::Mergeable
                 } else {
@@ -519,8 +519,8 @@ pub enum Event {
         span: tracing::Span,
     },
     GossipPayload(BroadcastPayloadParams),
-    SimResult(SimulationResult),
-    MergeResult(BlockMergeResult),
+    SimResult(ValidationResult),
+    MergeResult(MergeResult),
 }
 
 impl Event {

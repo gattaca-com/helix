@@ -69,17 +69,17 @@ pub enum AuctioneerError {
 impl IntoResponse for AuctioneerError {
     fn into_response(self) -> Response {
         let code = match self {
-            AuctioneerError::UnexpectedValueType |
-            AuctioneerError::CryptoError(_) |
-            AuctioneerError::FromUtf8Error(_) |
-            AuctioneerError::ParseIntError(_) |
-            AuctioneerError::FromHexError(_) |
-            AuctioneerError::PastSlotAlreadyDelivered |
-            AuctioneerError::AnotherPayloadAlreadyDeliveredForSlot |
-            AuctioneerError::SszDeserializeError(_) |
-            AuctioneerError::SliceConversionError(_) |
-            AuctioneerError::ExecutionPayloadNotFound |
-            AuctioneerError::BuilderNotFound { .. } => StatusCode::BAD_REQUEST,
+            AuctioneerError::UnexpectedValueType
+            | AuctioneerError::CryptoError(_)
+            | AuctioneerError::FromUtf8Error(_)
+            | AuctioneerError::ParseIntError(_)
+            | AuctioneerError::FromHexError(_)
+            | AuctioneerError::PastSlotAlreadyDelivered
+            | AuctioneerError::AnotherPayloadAlreadyDeliveredForSlot
+            | AuctioneerError::SszDeserializeError(_)
+            | AuctioneerError::SliceConversionError(_)
+            | AuctioneerError::ExecutionPayloadNotFound
+            | AuctioneerError::BuilderNotFound { .. } => StatusCode::BAD_REQUEST,
         };
 
         (code, self.to_string()).into_response()
@@ -250,16 +250,16 @@ impl LocalCache {
         registration: &SignedValidatorRegistration,
     ) -> bool {
         if let Some(existing_entry) =
-            self.validator_registration_cache.get(&registration.message.pubkey) &&
-            existing_entry.registration_info.registration.message.timestamp >=
-                registration
+            self.validator_registration_cache.get(&registration.message.pubkey)
+            && existing_entry.registration_info.registration.message.timestamp
+                >= registration
                     .message
                     .timestamp
-                    .saturating_sub(VALIDATOR_REGISTRATION_UPDATE_INTERVAL) &&
-            existing_entry.registration_info.registration.message.fee_recipient ==
-                registration.message.fee_recipient &&
-            existing_entry.registration_info.registration.message.gas_limit ==
-                registration.message.gas_limit
+                    .saturating_sub(VALIDATOR_REGISTRATION_UPDATE_INTERVAL)
+            && existing_entry.registration_info.registration.message.fee_recipient
+                == registration.message.fee_recipient
+            && existing_entry.registration_info.registration.message.gas_limit
+                == registration.message.gas_limit
         {
             return false;
         }

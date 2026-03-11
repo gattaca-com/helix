@@ -134,43 +134,43 @@ impl IntoResponse for ProposerApiError {
     fn into_response(self) -> Response {
         let code =
             match self {
-                ProposerApiError::NoBidPrepared |
-                ProposerApiError::GetHeaderRequestTooLate { .. } => StatusCode::NO_CONTENT,
+                ProposerApiError::NoBidPrepared
+                | ProposerApiError::GetHeaderRequestTooLate { .. } => StatusCode::NO_CONTENT,
 
-                ProposerApiError::HyperError(_) |
-                ProposerApiError::AxumError(_) |
-                ProposerApiError::ToStrError(_) |
-                ProposerApiError::UnexpectedProposerIndex { .. } |
-                ProposerApiError::NoValidatorsCouldBeRegistered |
-                ProposerApiError::InvalidFork |
-                ProposerApiError::SerdeDecodeError(_) |
-                ProposerApiError::ProposerNotRegistered |
-                ProposerApiError::TimestampTooEarly { .. } |
-                ProposerApiError::TimestampTooFarInTheFuture { .. } |
-                ProposerApiError::RequestWrongSlot { .. } |
-                ProposerApiError::SlotTooNew |
-                ProposerApiError::GetPayloadRequestTooLate { .. } |
-                ProposerApiError::BlindedBlockAndPayloadHeaderMismatch |
-                ProposerApiError::UnsupportedBeaconChainVersion |
-                ProposerApiError::BeaconClientError(_) |
-                ProposerApiError::DatabaseError(_) |
-                ProposerApiError::AuctioneerError(_) |
-                ProposerApiError::EmptyRequest |
-                ProposerApiError::BlindedBlobsBundleLengthMismatch |
-                ProposerApiError::InternalSlotMismatchesWithSlotDuty { .. } |
-                ProposerApiError::InvalidBlindedBlockSlot { .. } |
-                ProposerApiError::BlobKzgCommitmentsMismatch |
-                ProposerApiError::SszError(_) |
-                ProposerApiError::SszDecodeError(_) |
-                ProposerApiError::SigError(_) |
-                ProposerApiError::DeliveringPayload |
-                ProposerApiError::GetPayloadAlreadyReceived |
-                ProposerApiError::RequestForPastSlot { .. } => StatusCode::BAD_REQUEST,
+                ProposerApiError::HyperError(_)
+                | ProposerApiError::AxumError(_)
+                | ProposerApiError::ToStrError(_)
+                | ProposerApiError::UnexpectedProposerIndex { .. }
+                | ProposerApiError::NoValidatorsCouldBeRegistered
+                | ProposerApiError::InvalidFork
+                | ProposerApiError::SerdeDecodeError(_)
+                | ProposerApiError::ProposerNotRegistered
+                | ProposerApiError::TimestampTooEarly { .. }
+                | ProposerApiError::TimestampTooFarInTheFuture { .. }
+                | ProposerApiError::RequestWrongSlot { .. }
+                | ProposerApiError::SlotTooNew
+                | ProposerApiError::GetPayloadRequestTooLate { .. }
+                | ProposerApiError::BlindedBlockAndPayloadHeaderMismatch
+                | ProposerApiError::UnsupportedBeaconChainVersion
+                | ProposerApiError::BeaconClientError(_)
+                | ProposerApiError::DatabaseError(_)
+                | ProposerApiError::AuctioneerError(_)
+                | ProposerApiError::EmptyRequest
+                | ProposerApiError::BlindedBlobsBundleLengthMismatch
+                | ProposerApiError::InternalSlotMismatchesWithSlotDuty { .. }
+                | ProposerApiError::InvalidBlindedBlockSlot { .. }
+                | ProposerApiError::BlobKzgCommitmentsMismatch
+                | ProposerApiError::SszError(_)
+                | ProposerApiError::SszDecodeError(_)
+                | ProposerApiError::SigError(_)
+                | ProposerApiError::DeliveringPayload
+                | ProposerApiError::GetPayloadAlreadyReceived
+                | ProposerApiError::RequestForPastSlot { .. } => StatusCode::BAD_REQUEST,
 
                 ProposerApiError::InvalidApiKey => StatusCode::UNAUTHORIZED,
 
-                ProposerApiError::InternalServerError |
-                ProposerApiError::NoExecutionPayloadFound => StatusCode::INTERNAL_SERVER_ERROR,
+                ProposerApiError::InternalServerError
+                | ProposerApiError::NoExecutionPayloadFound => StatusCode::INTERNAL_SERVER_ERROR,
 
                 ProposerApiError::ServiceUnavailableError => StatusCode::SERVICE_UNAVAILABLE,
 

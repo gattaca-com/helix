@@ -1,7 +1,7 @@
 use alloy_primitives::{Address, U256};
 use helix_common::{
     SimulatorConfig,
-    simulator::{BlockSimError, BlockSimRequest, SimRequest},
+    simulator::{BlockSimError, JsonValidationRequest, SszValidationRequest},
 };
 use helix_types::ForkName;
 use reqwest::{
@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use ssz::Encode;
 use tracing::{debug, error};
 
-use crate::simulator::{BlockMergeRequest, BlockMergeResponse};
+use crate::simulator::{BlockMergeResponse, MergeRequest};
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct JsonRpcError {
@@ -64,7 +64,7 @@ impl SimulatorClient {
     }
 
     pub async fn do_json_sim_request(
-        request: &BlockSimRequest,
+        request: &JsonValidationRequest,
         is_top_bid: bool,
         sim_method: &str,
         to_send: RequestBuilder,
@@ -101,7 +101,7 @@ impl SimulatorClient {
     }
 
     pub async fn do_sim_request(
-        ssz_req: &SimRequest,
+        ssz_req: &SszValidationRequest,
         is_top_bid: bool,
         to_send: RequestBuilder,
     ) -> Result<(), BlockSimError> {
@@ -159,7 +159,7 @@ impl SimulatorClient {
     }
 
     pub async fn do_merge_request(
-        request: &BlockMergeRequest,
+        request: &MergeRequest,
         to_send: RequestBuilder,
     ) -> Result<BlockMergeResponse, BlockSimError> {
         let rpc_payload = json!({
@@ -217,13 +217,16 @@ mod test {
 
     #[tokio::test]
     async fn balance_request() {
-        let sim_client = super::SimulatorClient::new(reqwest::Client::new(), SimulatorConfig {
-            url: "http://54.175.81.132:8545".into(),
-            namespace: "relay".into(),
-            is_merging_simulator: false,
-            max_concurrent_tasks: 1,
-            ssz_url: None,
-        });
+        let sim_client = super::SimulatorClient::new(
+            reqwest::Client::new(),
+            SimulatorConfig {
+                url: "http://54.175.81.132:8545".into(),
+                namespace: "relay".into(),
+                is_merging_simulator: false,
+                max_concurrent_tasks: 1,
+                ssz_url: None,
+            },
+        );
         let builder_address =
             super::Address::from_hex("0xD9d3A3f47a56a987A8119b15C994Bc126337dd27").unwrap();
         let builder_balance = sim_client.balance_request(&builder_address).await;

@@ -415,29 +415,33 @@ impl RouterConfig {
         }
 
         // Replace BuilderApi, ProposerApi, DataApi with their real routes
-        self.replace_condensed_with_real(Route::BuilderApi, &[
-            Route::GetValidators,
-            Route::SubmitBlock,
-            Route::GetTopBid,
-            Route::GetInclusionList,
-        ]);
+        self.replace_condensed_with_real(
+            Route::BuilderApi,
+            &[Route::GetValidators, Route::SubmitBlock, Route::GetTopBid, Route::GetInclusionList],
+        );
 
-        self.replace_condensed_with_real(Route::ProposerApi, &[
-            Route::Status,
-            Route::RegisterValidators,
-            Route::GetHeader,
-            Route::GetPayload,
-            Route::GetPayloadV2,
-        ]);
+        self.replace_condensed_with_real(
+            Route::ProposerApi,
+            &[
+                Route::Status,
+                Route::RegisterValidators,
+                Route::GetHeader,
+                Route::GetPayload,
+                Route::GetPayloadV2,
+            ],
+        );
 
-        self.replace_condensed_with_real(Route::DataApi, &[
-            Route::ProposerPayloadDelivered,
-            Route::ProposerHeaderDelivered,
-            Route::BuilderBidsReceived,
-            Route::ValidatorRegistration,
-            Route::DataAdjustments,
-            Route::MergedBlocks,
-        ]);
+        self.replace_condensed_with_real(
+            Route::DataApi,
+            &[
+                Route::ProposerPayloadDelivered,
+                Route::ProposerHeaderDelivered,
+                Route::BuilderBidsReceived,
+                Route::ValidatorRegistration,
+                Route::DataAdjustments,
+                Route::MergedBlocks,
+            ],
+        );
     }
 
     pub fn enable_relay_network(&mut self) {

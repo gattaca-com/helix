@@ -77,8 +77,8 @@ impl Encoding {
     pub fn from_accept(headers: &HeaderMap) -> Self {
         match headers.get(ACCEPT) {
             Some(header)
-                if header == HeaderValue::from_static(HEADER_SSZ) ||
-                    header == HeaderValue::from_static(HEADER_ACCEPT_SSZ) =>
+                if header == HeaderValue::from_static(HEADER_SSZ)
+                    || header == HeaderValue::from_static(HEADER_ACCEPT_SSZ) =>
             {
                 Encoding::Ssz
             }

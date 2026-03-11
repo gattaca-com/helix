@@ -67,11 +67,15 @@ impl Compression {
 
 impl std::fmt::Display for Compression {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", match self {
-            Compression::None => "NONE",
-            Compression::Gzip => "GZIP",
-            Compression::Zstd => "ZSTD",
-        })
+        write!(
+            f,
+            "{}",
+            match self {
+                Compression::None => "NONE",
+                Compression::Gzip => "GZIP",
+                Compression::Zstd => "ZSTD",
+            }
+        )
     }
 }
 

@@ -131,7 +131,7 @@ impl BlockSimError {
 }
 
 #[derive(Debug, Clone, Encode, Decode)]
-pub struct SimRequest {
+pub struct SszValidationRequest {
     pub apply_blacklist: bool,
     pub registered_gas_limit: u64,
     pub parent_beacon_block_root: B256,
@@ -142,7 +142,7 @@ pub struct SimRequest {
 
 // TODO: refactor this in a SignedBidSubmission + extra fields
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct BlockSimRequest {
+pub struct JsonValidationRequest {
     #[serde(with = "serde_utils::quoted_u64")]
     pub registered_gas_limit: u64,
     pub message: BidTrace,
@@ -156,7 +156,7 @@ pub struct BlockSimRequest {
     pub apply_blacklist: bool,
 }
 
-impl BlockSimRequest {
+impl JsonValidationRequest {
     pub fn new(
         registered_gas_limit: u64,
         block: &SignedBidSubmission,

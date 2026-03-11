@@ -105,7 +105,7 @@ impl AuctioneerHandle {
                             .is_err()
                         {
                             tracing::error!("failed to send get_payload to auctioneer");
-                            return Err(ChannelFull)
+                            return Err(ChannelFull);
                         }
                     }
                     Err(err) => {

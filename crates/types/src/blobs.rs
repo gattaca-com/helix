@@ -67,8 +67,8 @@ impl ssz::Decode for BlobsBundle {
 
         let raw = BlobsBundleRaw::from_ssz_bytes(bytes)?;
 
-        if raw.proofs.len() == raw.blobs.len() * CELLS_PER_EXT_BLOB &&
-            raw.commitments.len() == raw.blobs.len()
+        if raw.proofs.len() == raw.blobs.len() * CELLS_PER_EXT_BLOB
+            && raw.commitments.len() == raw.blobs.len()
         {
             Ok(Self { commitments: raw.commitments, proofs: raw.proofs, blobs: raw.blobs })
         } else {
@@ -113,8 +113,8 @@ impl BlobsBundle {
         &self,
         max_blobs_per_block: usize,
     ) -> Result<(), BlockValidationError> {
-        if self.commitments.len() != self.blobs.len() ||
-            self.proofs.len() != self.blobs.len() * CELLS_PER_EXT_BLOB
+        if self.commitments.len() != self.blobs.len()
+            || self.proofs.len() != self.blobs.len() * CELLS_PER_EXT_BLOB
         {
             return Err(BlockValidationError::BlobsError(BlobsError::BundleMismatch {
                 proofs: self.proofs.len(),

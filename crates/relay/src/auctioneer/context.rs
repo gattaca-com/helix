@@ -30,7 +30,7 @@ use crate::{
         block_merger::BlockMerger,
         types::{PayloadEntry, PendingPayload, SubmissionRef},
     },
-    simulator::{BlockMergeResponse, SimInboundPayload, tile::SimulationResult},
+    simulator::{BlockMergeResponse, SimRequest, tile::ValidationResult},
     spine::{
         HelixSpineProducers,
         messages::{SubmissionResultWithRef, ToSimKind, ToSimMsg},
@@ -61,7 +61,7 @@ pub struct Context<B: BidAdjustor> {
     pub completed_dry_run: bool,
     pub future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
     pub auctioneer_handle: AuctioneerHandle,
-    pub sim_inbound: Arc<SharedVector<SimInboundPayload>>,
+    pub sim_inbound: Arc<SharedVector<SimRequest>>,
     pub accept_optimistic: Arc<AtomicBool>,
     pub failsafe_triggered: Arc<AtomicBool>,
 }
@@ -75,7 +75,7 @@ impl<B: BidAdjustor> Context<B> {
     pub fn new(
         chain_info: ChainInfo,
         config: RelayConfig,
-        sim_inbound: Arc<SharedVector<SimInboundPayload>>,
+        sim_inbound: Arc<SharedVector<SimRequest>>,
         accept_optimistic: Arc<AtomicBool>,
         failsafe_triggered: Arc<AtomicBool>,
         db: DbHandle,
@@ -138,7 +138,7 @@ impl<B: BidAdjustor> Context<B> {
     /// 2. Store simulation to DB
     pub fn handle_simulation_result(
         &mut self,
-        result: SimulationResult,
+        result: ValidationResult,
         already_sent: bool,
         producers: &mut HelixSpineProducers,
     ) {

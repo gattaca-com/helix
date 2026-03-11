@@ -27,13 +27,13 @@ pub enum DataApiError {
 impl IntoResponse for DataApiError {
     fn into_response(self) -> Response {
         let code = match self {
-            DataApiError::SlotAndCursor |
-            DataApiError::MissingFilter |
-            DataApiError::LimitReached { .. } |
-            DataApiError::ValidatorRegistrationNotFound { .. } |
-            DataApiError::BlockNumberNotSupported |
-            DataApiError::OrderByNotSupported |
-            DataApiError::BuilderPubkeyNotSupported => StatusCode::BAD_REQUEST,
+            DataApiError::SlotAndCursor
+            | DataApiError::MissingFilter
+            | DataApiError::LimitReached { .. }
+            | DataApiError::ValidatorRegistrationNotFound { .. }
+            | DataApiError::BlockNumberNotSupported
+            | DataApiError::OrderByNotSupported
+            | DataApiError::BuilderPubkeyNotSupported => StatusCode::BAD_REQUEST,
 
             DataApiError::InternalServerError => StatusCode::INTERNAL_SERVER_ERROR,
         };

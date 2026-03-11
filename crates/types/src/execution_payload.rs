@@ -161,13 +161,13 @@ impl ForkVersionDecode for ExecutionPayload {
     /// SSZ decode with explicit fork variant.
     fn from_ssz_bytes_by_fork(bytes: &[u8], fork_name: ForkName) -> Result<Self, ssz::DecodeError> {
         let builder_bid = match fork_name {
-            ForkName::Altair |
-            ForkName::Base |
-            ForkName::Bellatrix |
-            ForkName::Capella |
-            ForkName::Deneb |
-            ForkName::Electra |
-            ForkName::Gloas => {
+            ForkName::Altair
+            | ForkName::Base
+            | ForkName::Bellatrix
+            | ForkName::Capella
+            | ForkName::Deneb
+            | ForkName::Electra
+            | ForkName::Gloas => {
                 return Err(ssz::DecodeError::BytesInvalid(format!(
                     "unsupported fork for ExecutionPayloadHeader: {fork_name}",
                 )));

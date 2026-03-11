@@ -1,6 +1,6 @@
 use alloy_rpc_types::beacon::relay::{BuilderBlockValidationRequestV5, SignedBidSubmissionV5};
 use axum::{Router, extract::State, http::StatusCode, response::IntoResponse, routing::post};
-use helix_common::simulator::{SimRequest, SubmissionFormat};
+use helix_common::simulator::{SszValidationRequest, SubmissionFormat};
 use ssz::Decode;
 use tokio::net::TcpListener;
 use tracing::error;
@@ -24,7 +24,7 @@ pub async fn run(api: ValidationApi, port: u16) {
 }
 
 async fn handler(State(api): State<ValidationApi>, body: axum::body::Bytes) -> impl IntoResponse {
-    let req = match SimRequest::from_ssz_bytes(&body) {
+    let req = match SszValidationRequest::from_ssz_bytes(&body) {
         Ok(r) => r,
         Err(e) => return (StatusCode::BAD_REQUEST, format!("ssz decode: {e:?}")).into_response(),
     };
@@ -34,8 +34,11 @@ async fn handler(State(api): State<ValidationApi>, body: axum::body::Bytes) -> i
             match SignedBidSubmissionV5::from_ssz_bytes(&req.signed_bid_submission) {
                 Ok(s) => s,
                 Err(e) => {
-                    return (StatusCode::BAD_REQUEST, format!("signed bid submission decode: {e:?}"))
-                        .into_response()
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        format!("signed bid submission decode: {e:?}"),
+                    )
+                        .into_response();
                 }
             }
         }

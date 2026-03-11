@@ -27,10 +27,9 @@ use helix_common::{
 use helix_relay::{
     Api, Auctioneer, AuctioneerHandle, BidSorter, BidSubmissionTcpListener, DbHandle, DecoderTile,
     DefaultBidAdjustor, FutureBidSubmissionResult, HelixSpine, RegWorker, RegWorkerHandle,
-    RelayNetworkManager, S3PayloadSaver, SimInboundPayload, SimOutboundPayload,
-    SimulatorTile, SubmissionDataWithSpan, WebsiteService, spawn_tokio_monitoring,
-    start_admin_service, start_api_service, start_beacon_client, start_db_service,
-    start_housekeeper,
+    RelayNetworkManager, S3PayloadSaver, SimRequest, SimResult, SimulatorTile,
+    SubmissionDataWithSpan, WebsiteService, spawn_tokio_monitoring, start_admin_service,
+    start_api_service, start_beacon_client, start_db_service, start_housekeeper,
 };
 use helix_types::BlsKeypair;
 use tikv_jemallocator::Jemalloc;
@@ -228,12 +227,10 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
                 ),
             );
 
-            let sim_inbound = Arc::new(SharedVector::<SimInboundPayload>::with_capacity(
-                MAX_SUBMISSIONS_PER_SLOT,
-            ));
-            let sim_outbound = Arc::new(SharedVector::<SimOutboundPayload>::with_capacity(
-                MAX_SUBMISSIONS_PER_SLOT,
-            ));
+            let sim_inbound =
+                Arc::new(SharedVector::<SimRequest>::with_capacity(MAX_SUBMISSIONS_PER_SLOT));
+            let sim_outbound =
+                Arc::new(SharedVector::<SimResult>::with_capacity(MAX_SUBMISSIONS_PER_SLOT));
 
             let (accept_optimistic, failsafe_triggered, sim_tile) = SimulatorTile::create(
                 config.simulators.clone(),

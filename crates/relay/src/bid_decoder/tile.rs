@@ -250,7 +250,10 @@ impl DecoderTile {
         let builder_pubkey = decoder.extract_builder_pubkey(body, with_mergeable_data)?;
         let skip_sigverify = if let Some(expected_pubkey) = expected_pubkey {
             if builder_pubkey != *expected_pubkey {
-                return Err(BuilderApiError::InvalidBuilderPubkey(*expected_pubkey, builder_pubkey));
+                return Err(BuilderApiError::InvalidBuilderPubkey(
+                    *expected_pubkey,
+                    builder_pubkey,
+                ));
             }
 
             true
@@ -285,9 +288,10 @@ impl DecoderTile {
 
         // For plain SSZ full submissions, capture the decompressed bytes so the
         // auctioneer can forward them to the simulator without re-encoding.
-        let sim_bytes = if !is_dehydrated &&
-            !with_mergeable_data &&
-            matches!(header.encoding, crate::bid_decoder::Encoding::Ssz)
+        let sim_bytes = if !is_dehydrated
+            && !with_mergeable_data
+            && !with_adjustments
+            && matches!(header.encoding, crate::bid_decoder::Encoding::Ssz)
         {
             Some((body.clone(), SubmissionFormat::FullSsz))
         } else {

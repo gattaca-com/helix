@@ -117,8 +117,8 @@ impl Cores {
     }
 
     fn remove(&mut self, thread: ThreadId) {
-        if let Some(core) = self.by_id.remove(&thread) &&
-            let Some(count) = self.counts.get_mut(&core)
+        if let Some(core) = self.by_id.remove(&thread)
+            && let Some(count) = self.counts.get_mut(&core)
         {
             *count -= 1
         }

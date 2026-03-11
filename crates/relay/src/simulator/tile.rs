@@ -18,7 +18,7 @@ use helix_common::{
     is_local_dev,
     metrics::SimulatorMetrics,
     record_submission_step,
-    simulator::{BlockSimError, BlockSimRequest, SubmissionFormat},
+    simulator::{BlockSimError, JsonValidationRequest, SubmissionFormat},
     spawn_tracked,
     validator_preferences::{Filtering, ValidatorPreferences},
 };
@@ -27,10 +27,8 @@ use ssz::Encode as _;
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    HelixSpine,
-    simulator::{
-        BlockMergeRequest, SimInboundPayload, SimOutboundPayload, client::SimulatorClient,
-    },
+    HelixSpine, SimRequest, ValidationRequest,
+    simulator::{MergeRequest, SimResult, client::SimulatorClient},
     spine::{
         HelixSpineProducers,
         messages::{FromSimMsg, ToSimKind, ToSimMsg},
@@ -48,8 +46,8 @@ pub struct SimulatorTile {
     /// Internal channel: async tasks notify the sim tile when work completes.
     task_tx: crossbeam_channel::Sender<SimTileInternalEvent>,
     rx: crossbeam_channel::Receiver<SimTileInternalEvent>,
-    sim_inbound: Arc<SharedVector<SimInboundPayload>>,
-    sim_outbound: Arc<SharedVector<SimOutboundPayload>>,
+    sim_requests: Arc<SharedVector<SimRequest>>,
+    sim_results: Arc<SharedVector<SimResult>>,
     /// If we have any synced simulator
     pub accept_optimistic: Arc<AtomicBool>,
     /// If we failed to demote a builder in the DB
@@ -74,12 +72,12 @@ impl Tile<HelixSpine> for SimulatorTile {
 
         // Consume inbound spine messages from the auctioneer.
         adapter.consume(|msg: ToSimMsg, _producers| match msg.kind {
-            ToSimKind::Request => match self.sim_inbound.get(msg.ix) {
+            ToSimKind::Request => match self.sim_requests.get(msg.ix) {
                 Some(payload) => match payload.as_ref() {
-                    SimInboundPayload::SimRequest { req, fast_track } => {
+                    SimRequest::Validate { req, fast_track } => {
                         self.handle_sim_request((**req).clone(), *fast_track);
                     }
-                    SimInboundPayload::MergeRequest(req) => {
+                    SimRequest::Merge(req) => {
                         self.handle_merge_request(req.clone());
                     }
                 },
@@ -99,8 +97,8 @@ impl Tile<HelixSpine> for SimulatorTile {
 impl SimulatorTile {
     pub fn create(
         configs: Vec<SimulatorConfig>,
-        sim_inbound: Arc<SharedVector<SimInboundPayload>>,
-        sim_outbound: Arc<SharedVector<SimOutboundPayload>>,
+        sim_requests: Arc<SharedVector<SimRequest>>,
+        sim_results: Arc<SharedVector<SimResult>>,
     ) -> (Arc<AtomicBool>, Arc<AtomicBool>, Self) {
         let (task_tx, rx) = crossbeam_channel::bounded(512);
 
@@ -158,8 +156,8 @@ impl SimulatorTile {
             local_telemetry: LocalTelemetry::default(),
             task_tx,
             rx,
-            sim_inbound,
-            sim_outbound,
+            sim_requests,
+            sim_results,
             accept_optimistic: accept_optimistic.clone(),
             failsafe_triggered: failsafe_triggered.clone(),
         };
@@ -177,7 +175,7 @@ impl SimulatorTile {
         self.accept_optimistic.store(new, Ordering::Relaxed);
     }
 
-    fn handle_sim_request(&mut self, req: crate::simulator::SimulatorRequest, fast_track: bool) {
+    fn handle_sim_request(&mut self, req: crate::simulator::ValidationRequest, fast_track: bool) {
         assert_eq!(req.bid_slot, self.last_bid_slot);
 
         self.local_telemetry.sims_reqs += 1;
@@ -194,7 +192,7 @@ impl SimulatorTile {
         }
     }
 
-    fn handle_merge_request(&mut self, req: BlockMergeRequest) {
+    fn handle_merge_request(&mut self, req: MergeRequest) {
         self.local_telemetry.merge_reqs += 1;
         if let Some(id) = self.next_client(|s| s.can_merge()) {
             let sim = &mut self.simulators[id];
@@ -205,7 +203,7 @@ impl SimulatorTile {
                 self.local_telemetry.max_in_flight.max(sim.pending);
             let timer = SimulatorMetrics::block_merge_timer(sim.client.endpoint());
             let task_tx = self.task_tx.clone();
-            let sim_outbound = self.sim_outbound.clone();
+            let sim_results = self.sim_results.clone();
             spawn_tracked!(async move {
                 debug!(bid_slot = %req.bid_slot, block_hash = %req.block_hash, "sending merge request");
                 let res = SimulatorClient::do_merge_request(&req, to_send).await;
@@ -216,7 +214,7 @@ impl SimulatorTile {
                 }
                 SimulatorMetrics::block_merge_status(res.is_ok());
 
-                let result_ix = sim_outbound.push(SimOutboundPayload::MergeResult((id, res)));
+                let result_ix = sim_results.push(SimResult::Merge((id, res)));
                 let _ = task_tx.try_send(SimTileInternalEvent::TaskDone {
                     id,
                     paused_until: None,
@@ -242,14 +240,14 @@ impl SimulatorTile {
 
         producers.produce(FromSimMsg { ix: result_ix });
 
-        if let Some(id) = self.next_client(|s| s.can_simulate()) &&
-            let Some(req) = self.priority_requests.next_req().or(self.requests.next_req())
+        if let Some(id) = self.next_client(|s| s.can_simulate())
+            && let Some(req) = self.priority_requests.next_req().or(self.requests.next_req())
         {
             self.spawn_sim(id, req);
         }
     }
 
-    fn spawn_sim(&mut self, id: usize, req: crate::simulator::SimulatorRequest) {
+    fn spawn_sim(&mut self, id: usize, req: ValidationRequest) {
         const PAUSE_DURATION: Duration = Duration::from_secs(60);
 
         let sim = &mut self.simulators[id];
@@ -268,7 +266,7 @@ impl SimulatorTile {
         self.local_telemetry.max_in_flight = self.local_telemetry.max_in_flight.max(sim.pending);
         let timer = SimulatorMetrics::timer(sim.client.endpoint());
         let task_tx = self.task_tx.clone();
-        let sim_outbound = self.sim_outbound.clone();
+        let sim_results = self.sim_results.clone();
         spawn_tracked!(async move {
             let start_sim = Instant::now();
             let block_hash = req.submission.block_hash();
@@ -289,7 +287,7 @@ impl SimulatorTile {
                     } else {
                         Filtering::Global
                     };
-                    let json_req = BlockSimRequest::new(
+                    let json_req = JsonValidationRequest::new(
                         req.request.registered_gas_limit,
                         &req.submission,
                         ValidatorPreferences { filtering, ..Default::default() },
@@ -354,7 +352,7 @@ impl SimulatorTile {
                 version: req.version,
             };
 
-            let result_ix = sim_outbound.push(SimOutboundPayload::SimResult((id, Some(inner))));
+            let result_ix = sim_results.push(SimResult::Validate((id, Some(inner))));
             let _ =
                 task_tx.try_send(SimTileInternalEvent::TaskDone { id, paused_until, result_ix });
         });
@@ -451,8 +449,8 @@ impl SimEntry {
 
     /// A lighter check to decide whether we should accept optimistic submissions
     fn can_simulate_light(&self) -> bool {
-        self.is_synced &&
-            match self.paused_until {
+        self.is_synced
+            && match self.paused_until {
                 Some(until) => Instant::now() > until,
                 None => true,
             }
@@ -484,7 +482,7 @@ struct LocalTelemetry {
 }
 
 // Sim id / Simulation Result, so we can use this for merging requests
-pub type SimulationResult = (usize, Option<SimulationResultInner>);
+pub type ValidationResult = (usize, Option<SimulationResultInner>);
 #[derive(Clone)]
 pub struct SimulationResultInner {
     pub result: Result<(), BlockSimError>,
@@ -531,7 +529,7 @@ fn jump_hash(mut key: u64, n: usize) -> usize {
 
 /// Pending requests, we only keep the last one for each builder.
 struct PendingRequests {
-    reqs: Vec<crate::simulator::SimulatorRequest>,
+    reqs: Vec<crate::simulator::ValidationRequest>,
 }
 
 impl PendingRequests {
@@ -541,7 +539,7 @@ impl PendingRequests {
 
     fn store(
         &mut self,
-        req: crate::simulator::SimulatorRequest,
+        req: crate::simulator::ValidationRequest,
         local_telemetry: &mut LocalTelemetry,
     ) {
         if let Some(i) = self.reqs.iter().position(|r| r.builder_pubkey == req.builder_pubkey) {
@@ -555,7 +553,7 @@ impl PendingRequests {
         local_telemetry.max_pending = local_telemetry.max_pending.max(self.reqs.len());
     }
 
-    fn next_req(&mut self) -> Option<crate::simulator::SimulatorRequest> {
+    fn next_req(&mut self) -> Option<crate::simulator::ValidationRequest> {
         let i = self.reqs.iter().enumerate().max_by_key(|(_, r)| r.sort_key()).map(|(i, _)| i)?;
         Some(self.reqs.swap_remove(i))
     }

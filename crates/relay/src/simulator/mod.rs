@@ -4,7 +4,7 @@ use alloy_primitives::{Address, B256, U256};
 use helix_common::{
     SubmissionTrace,
     bid_submission::OptimisticVersion,
-    simulator::{BlockSimError, SimRequest},
+    simulator::{BlockSimError, SszValidationRequest},
 };
 use helix_types::{
     BlsPublicKeyBytes, BuilderInclusionResult, ExecutionPayload, ExecutionRequests,
@@ -30,7 +30,7 @@ pub struct BlockMergeRequestRef<'a> {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct BlockMergeRequest {
+pub struct MergeRequest {
     pub bid_slot: u64,
     /// The serialized request
     pub request: serde_json::Value,
@@ -38,7 +38,7 @@ pub struct BlockMergeRequest {
     pub block_hash: B256,
 }
 
-pub type BlockMergeResult = (usize, Result<BlockMergeResponse, BlockSimError>);
+pub type MergeResult = (usize, Result<BlockMergeResponse, BlockSimError>);
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BlockMergeResponse {
@@ -54,9 +54,9 @@ pub struct BlockMergeResponse {
 }
 
 #[derive(Clone)]
-pub struct SimulatorRequest {
+pub struct ValidationRequest {
     pub is_optimistic: bool,
-    pub request: SimRequest,
+    pub request: SszValidationRequest,
     pub is_top_bid: bool,
     pub bid_slot: u64,
     pub builder_pubkey: BlsPublicKeyBytes,
@@ -69,18 +69,18 @@ pub struct SimulatorRequest {
 }
 
 /// Large payload stored in `SharedVector` for auctioneer → sim tile transfer.
-pub enum SimInboundPayload {
-    SimRequest { req: Box<SimulatorRequest>, fast_track: bool },
-    MergeRequest(BlockMergeRequest),
+pub enum SimRequest {
+    Validate { req: Box<ValidationRequest>, fast_track: bool },
+    Merge(MergeRequest),
 }
 
 /// Large payload stored in `SharedVector` for sim tile → auctioneer transfer.
-pub enum SimOutboundPayload {
-    SimResult(crate::simulator::tile::SimulationResult),
-    MergeResult(BlockMergeResult),
+pub enum SimResult {
+    Validate(crate::simulator::tile::ValidationResult),
+    Merge(MergeResult),
 }
 
-impl SimulatorRequest {
+impl ValidationRequest {
     pub fn on_receive_ns(&self) -> u64 {
         self.trace.receive_ns.0
     }

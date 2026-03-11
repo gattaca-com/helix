@@ -27,7 +27,7 @@ use tracing::{debug, error, info, trace, warn};
 use zstd::zstd_safe::WriteBuf;
 
 use crate::auctioneer::{
-    BlockMergeRequest, BlockMergeRequestRef, BlockMergeResponse, PayloadBidData,
+    BlockMergeRequestRef, BlockMergeResponse, MergeRequest, PayloadBidData,
     submit_block::MergeData, types::PayloadEntry,
 };
 
@@ -230,7 +230,7 @@ impl BlockMerger {
         }
     }
 
-    pub fn fetch_merge_request(&mut self) -> Option<BlockMergeRequest> {
+    pub fn fetch_merge_request(&mut self) -> Option<MergeRequest> {
         trace!("fetching merge request");
         self.fetch_merge_request_count += 1;
         if !self.should_request_merge() {
@@ -289,7 +289,7 @@ impl BlockMerger {
         trace!(count = self.trimmed_orders_buf.len(), "found orders");
         self.found_orders_count += 1;
 
-        let merge_request = BlockMergeRequest {
+        let merge_request = MergeRequest {
             bid_slot: base_block.slot,
             request: json!(BlockMergeRequestRef {
                 original_value: base_block.value,
@@ -360,8 +360,8 @@ impl BlockMerger {
             original_tx_count: original_payload.execution_payload.transactions.len(),
             merged_tx_count: response.execution_payload.transactions.len(),
             original_blob_count: original_payload.blobs_bundle.blobs.len(),
-            merged_blob_count: original_payload.blobs_bundle.blobs.len() +
-                response.appended_blobs.len(),
+            merged_blob_count: original_payload.blobs_bundle.blobs.len()
+                + response.appended_blobs.len(),
             builder_inclusions: response.builder_inclusions,
             trace,
         });
@@ -411,13 +411,13 @@ impl BlockMerger {
 
     fn should_request_merge(&self) -> bool {
         let start_time = Instant::now();
-        let has_new_data = self.best_mergeable_orders.has_new_orders() ||
-            (self.best_mergeable_orders.has_orders() && self.has_new_base_block);
+        let has_new_data = self.best_mergeable_orders.has_new_orders()
+            || (self.best_mergeable_orders.has_orders() && self.has_new_base_block);
         if !has_new_data {
             return false;
         }
-        let res = utcnow_ms().saturating_sub(self.last_merge_request_time_ms) >=
-            MERGE_REQUEST_INTERVAL_MS;
+        let res = utcnow_ms().saturating_sub(self.last_merge_request_time_ms)
+            >= MERGE_REQUEST_INTERVAL_MS;
         record_step("should_request_merge", start_time.elapsed());
         res
     }
@@ -679,11 +679,14 @@ fn blobs_bundle_to_hashmap(
         .into_iter()
         .zip(bundle.iter_blobs())
         .map(|(versioned_hash, (blob, commitment, proofs))| {
-            (versioned_hash, BlobWithMetadata {
-                commitment: *commitment,
-                proofs: proofs.to_vec(),
-                blob: blob.clone(),
-            })
+            (
+                versioned_hash,
+                BlobWithMetadata {
+                    commitment: *commitment,
+                    proofs: proofs.to_vec(),
+                    blob: blob.clone(),
+                },
+            )
         })
         .collect()
 }

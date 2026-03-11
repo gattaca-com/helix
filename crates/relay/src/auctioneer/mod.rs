@@ -54,7 +54,7 @@ use crate::{
     api::{FutureBidSubmissionResult, builder::error::BuilderApiError, proposer::ProposerApiError},
     auctioneer::types::PendingPayload,
     housekeeper::PayloadAttributesUpdate,
-    simulator::{SimInboundPayload, SimOutboundPayload},
+    simulator::{SimRequest, SimResult},
     spine::{
         HelixSpineProducers,
         messages::{DecodedSubmission, FromSimMsg},
@@ -68,7 +68,7 @@ pub use crate::{
         context::{Context, send_submission_result},
         types::{InternalBidSubmission, InternalBidSubmissionHeader, SubmissionRef},
     },
-    simulator::{SimulatorRequest, SimulatorTile, client::SimulatorClient, *},
+    simulator::{SimulatorTile, ValidationRequest, client::SimulatorClient, *},
 };
 
 pub struct Auctioneer<B: BidAdjustor> {
@@ -77,7 +77,7 @@ pub struct Auctioneer<B: BidAdjustor> {
     tel: Telemetry,
     event_rx: crossbeam_channel::Receiver<Event>,
     decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
-    sim_outbound: Arc<SharedVector<SimOutboundPayload>>,
+    sim_outbound: Arc<SharedVector<SimResult>>,
 }
 
 impl<B: BidAdjustor> Auctioneer<B> {
@@ -94,8 +94,8 @@ impl<B: BidAdjustor> Auctioneer<B> {
         future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
         decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
         auctioneer_handle: AuctioneerHandle,
-        sim_inbound: Arc<SharedVector<SimInboundPayload>>,
-        sim_outbound: Arc<SharedVector<SimOutboundPayload>>,
+        sim_inbound: Arc<SharedVector<SimRequest>>,
+        sim_outbound: Arc<SharedVector<SimResult>>,
         accept_optimistic: Arc<AtomicBool>,
         failsafe_triggered: Arc<AtomicBool>,
     ) -> Self {
@@ -147,10 +147,8 @@ impl<B: BidAdjustor> Tile<HelixSpine> for Auctioneer<B> {
                 return;
             };
             let event = match payload.as_ref() {
-                SimOutboundPayload::SimResult(sim_result) => Event::SimResult(sim_result.clone()),
-                SimOutboundPayload::MergeResult(merge_result) => {
-                    Event::MergeResult(merge_result.clone())
-                }
+                SimResult::Validate(sim_result) => Event::SimResult(sim_result.clone()),
+                SimResult::Merge(merge_result) => Event::MergeResult(merge_result.clone()),
             };
             self.state.step(event, &mut self.ctx, &mut self.tel, producers);
         });
@@ -274,8 +272,8 @@ impl State {
                 Ordering::Less => (),
                 Ordering::Equal => {
                     // check fork
-                    if let Some(update) = payload_attributes &&
-                        !slot_data.payload_attributes_map.contains_key(&update.parent_hash)
+                    if let Some(update) = payload_attributes
+                        && !slot_data.payload_attributes_map.contains_key(&update.parent_hash)
                     {
                         info!(bid_slot =% slot_data.bid_slot, received =? update.parent_hash, sorting =? slot_data.payload_attributes_map.keys(), "sorting for an additional fork");
 
@@ -328,8 +326,8 @@ impl State {
                         "gap in slot data received (broadcast)"
                     );
 
-                    if let Some(attributes) = &payload_attributes &&
-                        &attributes.parent_hash != block_hash
+                    if let Some(attributes) = &payload_attributes
+                        && &attributes.parent_hash != block_hash
                     {
                         warn!(
                             maybe_missed_slot =% slot_data.bid_slot,
@@ -393,8 +391,8 @@ impl State {
                     // proposer is on a different fork
                     warn!(req =% params.parent_hash, have =? slot_data.payload_attributes_map.keys(), "get header for unknown parent hash");
                     let _ = res_tx.send(Err(ProposerApiError::NoBidPrepared));
-                } else if slot_data.registration_data.entry.registration.message.pubkey !=
-                    params.pubkey
+                } else if slot_data.registration_data.entry.registration.message.pubkey
+                    != params.pubkey
                 {
                     warn!(req =% params.pubkey, this =% slot_data.registration_data.entry.registration.message.pubkey, "get header for mismatched proposer");
                     let _ = res_tx.send(Err(ProposerApiError::NoBidPrepared));
@@ -443,8 +441,8 @@ impl State {
             // sim result
             (State::Sorting(slot_data), Event::SimResult(mut result)) => {
                 let already_sent =
-                    result.1.as_ref().is_some_and(|r| r.submission.slot() == slot_data.bid_slot) &&
-                        ctx.sort_simulation_result(&mut result, producers);
+                    result.1.as_ref().is_some_and(|r| r.submission.slot() == slot_data.bid_slot)
+                        && ctx.sort_simulation_result(&mut result, producers);
 
                 ctx.handle_simulation_result(result, already_sent, producers);
             }
@@ -509,9 +507,9 @@ impl State {
 
             // gossiped payload, proposer equivocating?
             (State::Broadcasting { block_hash, slot_data }, Event::GossipPayload(payload)) => {
-                if *block_hash == payload.execution_payload.execution_payload.block_hash &&
-                    slot_data.bid_slot == payload.slot &&
-                    slot_data.proposer_pubkey() == &payload.proposer_pub_key
+                if *block_hash == payload.execution_payload.execution_payload.block_hash
+                    && slot_data.bid_slot == payload.slot
+                    && slot_data.proposer_pubkey() == &payload.proposer_pub_key
                 {
                     debug!("already broadcasting gossip payload");
                 } else {

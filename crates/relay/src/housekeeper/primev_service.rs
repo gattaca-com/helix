@@ -220,9 +220,9 @@ impl EthereumPrimevService {
             tuples
                 .iter()
                 .map(|token| {
-                    if let ethers::abi::Token::Tuple(values) = token &&
-                        values.len() >= 3 &&
-                        let (
+                    if let ethers::abi::Token::Tuple(values) = token
+                        && values.len() >= 3
+                        && let (
                             ethers::abi::Token::Bool(vanilla_opted_in),
                             ethers::abi::Token::Bool(avs_opted_in),
                             ethers::abi::Token::Bool(middleware_opted_in),
@@ -245,8 +245,8 @@ impl EthereumPrimevService {
         // Extract the public keys of validators that are opted into any Primev service
         let mut opted_in_validators = Vec::new();
         for (index, status) in opted_in_statuses.iter().enumerate() {
-            if (status.0 || status.1 || status.2) &&
-                let Some(duty) = proposer_duties.get(index)
+            if (status.0 || status.1 || status.2)
+                && let Some(duty) = proposer_duties.get(index)
             {
                 opted_in_validators.push(duty.pubkey);
             }

@@ -28,14 +28,14 @@ pub use crate::{
     },
     auctioneer::{
         Auctioneer, AuctioneerHandle, BidSorter, Context, Event, InternalBidSubmission,
-        PayloadEntry, RegWorker, RegWorkerHandle, SimulatorClient, SimulatorRequest, SimulatorTile,
-        SlotData, SubmissionPayload, SubmissionRef,
+        PayloadEntry, RegWorker, RegWorkerHandle, SimulatorClient, SimulatorTile, SlotData,
+        SubmissionPayload, SubmissionRef, ValidationRequest,
     },
     beacon::start_beacon_client,
     bid_decoder::{DecoderTile, SubmissionDataWithSpan},
     housekeeper::start_housekeeper,
     network::RelayNetworkManager,
-    simulator::{SimInboundPayload, SimOutboundPayload},
+    simulator::{SimRequest, SimResult},
     spine::HelixSpine,
     tcp_bid_recv::{
         BidSubmissionFlags, BidSubmissionHeader, BidSubmissionResponse, BidSubmissionTcpListener,
