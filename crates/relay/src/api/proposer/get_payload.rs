@@ -26,7 +26,7 @@ use crate::{
         Api,
         proposer::{CONSENSUS_VERSION_HEADER, error::ProposerApiError},
     },
-    auctioneer::{GetPayloadResultData, PayloadBidData},
+    auctioneer::{GetPayloadKind, GetPayloadResultData, PayloadBidData},
     beacon::types::BroadcastValidation,
     bid_decoder::{Encoding, HEADER_SSZ},
     gossip::{BroadcastGetPayloadParams, BroadcastPayloadParams},
@@ -34,6 +34,7 @@ use crate::{
 
 const GET_PAYLOAD_REQUEST_CUTOFF_MS: i64 = 4000;
 
+#[derive(Copy, Clone, Eq, PartialEq, Hash)]
 pub enum ProposerApiVersion {
     V1,
     V2,
@@ -271,22 +272,55 @@ impl<A: Api> ProposerApi<A> {
             return Err(ProposerApiError::RequestForPastSlot { request_slot: slot, head_slot });
         }
 
-        let Ok(rx) = self.auctioneer_handle.get_payload(
-            &self.chain_info,
-            proposer_public_key,
-            signed_blinded_block,
-            *trace,
-        ) else {
-            error!("failed sending request to worker");
-            return Err(ProposerApiError::InternalServerError);
+        let payload_kind = self
+            .auctioneer_handle
+            .get_payload(
+                &self.chain_info,
+                api_version,
+                proposer_public_key,
+                signed_blinded_block,
+                *trace,
+            )
+            .map_err(|_| {
+                error!("failed sending request to worker");
+                ProposerApiError::InternalServerError
+            })?;
+
+        // Dedup path: another caller is already processing this signature.
+        let (rx, dedup_tx) = match payload_kind {
+            GetPayloadKind::Dedup(fut) => {
+                info!("dedup get_payload, waiting for primary");
+                let result = fut.await.unwrap_or_else(|_| Arc::new(None));
+                let response = Arc::try_unwrap(result).unwrap_or_else(|arc| (*arc).clone());
+                return response.ok_or(ProposerApiError::InternalServerError);
+            }
+            GetPayloadKind::Primary { rx, dedup_tx } => (rx, dedup_tx),
         };
 
-        let GetPayloadResultData { to_proposer, to_publish, trace: new_trace, fork, bid } = rx
-            .await
-            .inspect_err(|err| {
+        // Primary path: process the payload and notify dedup waiters.
+        let result = match rx.await {
+            Ok(result) => result,
+            Err(err) => {
                 error!(%err, "failed to receive payload response from auctioneer");
-            })
-            .map_err(|_| ProposerApiError::InternalServerError)??;
+                let _ = dedup_tx.send(Arc::new(None));
+                return Err(ProposerApiError::InternalServerError);
+            }
+        };
+
+        let GetPayloadResultData { to_proposer, to_publish, trace: new_trace, fork, bid } =
+            match result {
+                Ok(data) => data,
+                Err(err) => {
+                    match err {
+                        ProposerApiError::InvalidFork | ProposerApiError::SigError(_) => {
+                            // Bad request - cache the error
+                            let _ = dedup_tx.send(Arc::new(None));
+                        }
+                        _ => {}
+                    }
+                    return Err(err);
+                }
+            };
 
         *trace = new_trace;
         info!("found payload for blinded signed block");
@@ -298,7 +332,6 @@ impl<A: Api> ProposerApi<A> {
         {
             warn!(error = %err, "get_payload was sent too late");
 
-            // Save too late request to db for debugging
             self.db.save_too_late_get_payload(
                 (head_slot + 1).into(),
                 proposer_public_key,
@@ -307,6 +340,7 @@ impl<A: Api> ProposerApi<A> {
                 trace.payload_fetched,
             );
 
+            let _ = dedup_tx.send(Arc::new(None));
             return Err(err);
         }
 
@@ -392,6 +426,9 @@ impl<A: Api> ProposerApi<A> {
                 sleep(Duration::from_millis(remaining_sleep_ms)).await;
             }
         }
+
+        // Notify dedup waiters with the successful response.
+        let _ = dedup_tx.send(Arc::new(Some(to_proposer.clone())));
 
         // Return response
         info!(?trace, timestamp = utcnow_ns(), "delivering payload");

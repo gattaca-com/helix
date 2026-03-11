@@ -172,7 +172,7 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
             top_bid_tx.clone(),
             relay_network_api.api(),
             db_handle.clone(),
-            auctioneer_handle,
+            auctioneer_handle.clone(),
             registrations_handle,
             submissions.clone(),
             bid_producer,
@@ -242,6 +242,7 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
                 auctioneer_core,
                 future_results,
                 decoded,
+                auctioneer_handle,
             );
             attach_tile(
                 auctioneer,
