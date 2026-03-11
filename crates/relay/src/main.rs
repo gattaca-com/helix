@@ -191,20 +191,17 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
         }
 
         if config.is_submission_instance {
-            // TODO multiple decoder tiles
-            let decoder_tile = DecoderTile::new(
-                local_cache.as_ref().clone(),
-                chain_info.as_ref().clone(),
-                config.clone(),
-                submissions.clone(),
-                future_results.clone(),
-                decoded.clone(),
-            );
-            attach_tile(
-                decoder_tile,
-                spine,
-                TileConfig::new(config.cores.decoder, ThreadPriority::OSDefault),
-            );
+            for core in &config.cores.decoder {
+                let decoder_tile = DecoderTile::new(
+                    local_cache.as_ref().clone(),
+                    chain_info.as_ref().clone(),
+                    config.clone(),
+                    submissions.clone(),
+                    future_results.clone(),
+                    decoded.clone(),
+                );
+                attach_tile(decoder_tile, spine, TileConfig::new(*core, ThreadPriority::OSDefault));
+            }
 
             if let Some(cfg) = config.s3_config.clone() {
                 let s3_saver = S3PayloadSaver::new(cfg, submissions.clone());

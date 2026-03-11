@@ -43,11 +43,11 @@ eyre = "0.6.12"
 aws-sdk-s3 = "=1.35.0"
 flate2 = "1.0"
 
-flux = { git = "https://github.com/gattaca-com/flux", rev = "a42ef4be64ea3a765782bcbd08cdcc1156e4251a" }
-flux-network = { package = "flux-network", git = "https://github.com/gattaca-com/flux", rev = "a42ef4be64ea3a765782bcbd08cdcc1156e4251a" }
-flux-utils = { package = "flux-utils", git = "https://github.com/gattaca-com/flux", rev = "a42ef4be64ea3a765782bcbd08cdcc1156e4251a" }
-flux-type-hash = { package = "type-hash", git = "https://github.com/gattaca-com/flux", rev = "a42ef4be64ea3a765782bcbd08cdcc1156e4251a" }
-flux-type-hash-derive = { package = "type-hash-derive", git = "https://github.com/gattaca-com/flux", rev = "a42ef4be64ea3a765782bcbd08cdcc1156e4251a" }
+flux = { git = "https://github.com/gattaca-com/flux", rev = "67322430e54abe9250bfafdc42ef11fde3405cfd" }
+flux-network = { package = "flux-network", git = "https://github.com/gattaca-com/flux", rev = "67322430e54abe9250bfafdc42ef11fde3405cfd" }
+flux-utils = { package = "flux-utils", git = "https://github.com/gattaca-com/flux", rev = "67322430e54abe9250bfafdc42ef11fde3405cfd" }
+flux-type-hash = { package = "type-hash", git = "https://github.com/gattaca-com/flux", rev = "67322430e54abe9250bfafdc42ef11fde3405cfd" }
+flux-type-hash-derive = { package = "type-hash-derive", git = "https://github.com/gattaca-com/flux", rev = "67322430e54abe9250bfafdc42ef11fde3405cfd" }
 
 futures = "0.3"
 futures-util = { version = "0.3", features = ["compat"] }

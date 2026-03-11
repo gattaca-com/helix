@@ -95,6 +95,11 @@ impl Tile<HelixSpine> for DecoderTile {
             },
         );
     }
+
+    fn try_init(&mut self, adapter: &mut flux::spine::SpineAdapter<HelixSpine>) -> bool {
+        adapter.set_collaborative_group::<NewBidSubmission>("decoder");
+        true
+    }
 }
 
 impl DecoderTile {
