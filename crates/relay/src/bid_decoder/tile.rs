@@ -1,7 +1,11 @@
 use std::sync::Arc;
 
 use alloy_primitives::B256;
-use flux::{spine::SpineProducers, tile::Tile, timing::Nanos};
+use flux::{
+    spine::SpineProducers,
+    tile::Tile,
+    timing::{InternalMessage, Nanos},
+};
 use flux_utils::{DCache, SharedVector};
 use helix_common::{
     RelayConfig, SubmissionTrace, chain_info::ChainInfo, local_cache::LocalCache,
@@ -44,26 +48,30 @@ pub struct DecoderTile {
 
 impl Tile<HelixSpine> for DecoderTile {
     fn loop_body(&mut self, adapter: &mut flux::spine::SpineAdapter<HelixSpine>) {
-        adapter.consume(|new_bid: NewBidSubmission, producers| {
-            match self.submissions.map(new_bid.dref, |payload| {
-                Self::handle_block_submission(
-                    &self.cache,
-                    &self.chain_info,
-                    &self.config,
-                    &new_bid.submission_ref,
-                    &new_bid.header,
-                    payload,
-                    &mut self.buffer,
-                    new_bid.trace,
-                    new_bid.sent_at,
-                    new_bid.expected_pubkey.as_ref(),
-                )
-            }) {
+        adapter.consume_internal_message(
+            |new_bid: &mut InternalMessage<NewBidSubmission>, producers| match self.submissions.map(
+                new_bid.dref,
+                |payload| {
+                    let sent_at = new_bid.tracking_timestamp().publish_t();
+                    Self::handle_block_submission(
+                        &self.cache,
+                        &self.chain_info,
+                        &self.config,
+                        &new_bid.submission_ref,
+                        &new_bid.header,
+                        payload,
+                        &mut self.buffer,
+                        new_bid.trace,
+                        sent_at,
+                        new_bid.expected_pubkey.as_ref(),
+                    )
+                },
+            ) {
                 Ok(Ok((submission, span))) => {
                     let ix = self.decoded.push(SubmissionDataWithSpan {
                         submission_data: submission,
                         span,
-                        sent_at: new_bid.sent_at,
+                        sent_at: new_bid.tracking_timestamp().publish_t(),
                     });
                     producers.produce(DecodedSubmission { ix });
                 }
@@ -84,8 +92,8 @@ impl Tile<HelixSpine> for DecoderTile {
                         Err(BuilderApiError::InternalError),
                     );
                 }
-            }
-        });
+            },
+        );
     }
 }
 

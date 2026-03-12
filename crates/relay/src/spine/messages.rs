@@ -1,4 +1,3 @@
-use flux::timing::Nanos;
 use flux_utils::{ArrayStr, DCacheRef};
 use helix_common::SubmissionTrace;
 use helix_tcp_types::Status;
@@ -17,9 +16,6 @@ pub struct NewBidSubmission {
     pub header: InternalBidSubmissionHeader,
     pub trace: SubmissionTrace,
     pub expected_pubkey: Option<BlsPublicKeyBytes>,
-    // TODO @nina - this is because http path uses StandaloneProducer
-    // which is currently unable to update it's ingestion timestamp
-    pub sent_at: Nanos,
 }
 
 #[derive(Debug, Clone, Copy)]

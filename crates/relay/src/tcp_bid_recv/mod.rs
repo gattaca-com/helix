@@ -132,7 +132,6 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                             submission_ref,
                             trace,
                             expected_pubkey: Some(*expected_pubkey),
-                            sent_at: Nanos::now(),
                         }),
                         Err(e) => {
                             tracing::error!("{e} failed to write the bid submission into dcache");
