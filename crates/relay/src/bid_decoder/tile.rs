@@ -44,6 +44,7 @@ pub struct DecoderTile {
     decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
     future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
     buffer: Vec<u8>,
+    core: usize,
 }
 
 impl Tile<HelixSpine> for DecoderTile {
@@ -95,6 +96,19 @@ impl Tile<HelixSpine> for DecoderTile {
             },
         );
     }
+
+    fn try_init(&mut self, adapter: &mut flux::spine::SpineAdapter<HelixSpine>) -> bool {
+        adapter.set_collaborative_group::<NewBidSubmission>("decoder");
+        true
+    }
+
+    fn teardown(self, _adapter: &mut flux::spine::SpineAdapter<HelixSpine>) {}
+
+    fn name(&self) -> flux::tile::TileName {
+        let mut name = flux_utils::short_typename::<Self>();
+        name.push_str_truncate(self.core.to_string().as_str());
+        name
+    }
 }
 
 impl DecoderTile {
@@ -105,6 +119,7 @@ impl DecoderTile {
         submissions: Arc<DCache>,
         future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
         decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
+        core: usize,
     ) -> Self {
         Self {
             chain_info,
@@ -114,6 +129,7 @@ impl DecoderTile {
             decoded,
             future_results,
             buffer: Vec::with_capacity(MAX_PAYLOAD_LENGTH),
+            core,
         }
     }
 
