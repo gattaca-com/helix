@@ -119,6 +119,8 @@ impl<B: BidAdjustor> Context<B> {
                 self.request_merged_block();
 
                 if need_send_result {
+                    let block_hash = *result.submission.block_hash();
+                    self.db.update_block_submission_live_ts(block_hash, Nanos::now().0);
                     send_submission_result(
                         producers,
                         &self.future_results,
@@ -283,7 +285,11 @@ impl<B: BidAdjustor> Context<B> {
         let sub_clone = req.submission.clone();
         let opt_version = req.optimistic_version();
 
-        self.db.store_block_submission(sub_clone, req.trace, opt_version, is_adjusted);
+        // For optimistic submissions the bid is live as soon as it is stored.
+        // For non-optimistic, live_ts is updated when the simulation result arrives.
+        let live_ts = if req.is_optimistic { Some(Nanos::now().0) } else { None };
+
+        self.db.store_block_submission(sub_clone, req.trace, opt_version, is_adjusted, live_ts);
 
         self.sim_manager.handle_sim_request(req, fast_track);
     }

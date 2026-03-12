@@ -82,6 +82,7 @@ impl FromRow for BidSubmissionDocument {
             num_txs: parse_i32_to_usize(row.get::<&str, i32>("num_txs"))?,
             timestamp: parse_i64_to_u64(row.get::<&str, i64>("submission_timestamp"))?,
             region: row.get::<&str, Option<&str>>("region").map(|s| s.to_string()),
+            live_ts: row.get::<&str, Option<i64>>("live_ts").and_then(|v| u64::try_from(v).ok()),
         })
     }
 }

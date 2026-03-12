@@ -98,14 +98,24 @@ impl DbHandle {
         trace: SubmissionTrace,
         optimistic_version: OptimisticVersion,
         is_adjusted: bool,
+        live_ts: Option<u64>,
     ) {
         if let Err(err) = self.batch_sender.try_send(PendingBlockSubmissionValue {
             submission,
             trace,
             optimistic_version,
             is_adjusted,
+            live_ts,
         }) {
             error!(%err, "failed to store block submission");
+        }
+    }
+
+    pub fn update_block_submission_live_ts(&self, block_hash: B256, live_ts: u64) {
+        if let Err(err) =
+            self.sender.try_send(DbRequest::UpdateBlockSubmissionLiveTs { block_hash, live_ts })
+        {
+            error!(%err, %block_hash, "failed to send UpdateBlockSubmissionLiveTs request");
         }
     }
 
