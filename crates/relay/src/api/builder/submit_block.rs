@@ -4,7 +4,10 @@ use axum::{
     Extension,
     response::{IntoResponse, Response},
 };
-use flux::{spine::SpineProducers, timing::Nanos};
+use flux::{
+    spine::SpineProducers,
+    timing::{IngestionTime, Nanos},
+};
 use flux_utils::ArrayStr;
 use helix_common::{
     self, RequestTimings, SubmissionTrace, api_provider::ApiProvider,
@@ -56,14 +59,16 @@ impl<A: Api> BuilderApi<A> {
         let future_ix = api.future_results.push(FutureBidSubmissionResult::new());
 
         match api.submissions.write(body.len(), |buf| buf.copy_from_slice(&body)) {
-            Ok(dref) => api.producer.produce(NewBidSubmission {
-                dref,
-                header,
-                submission_ref: SubmissionRef::Http(future_ix),
-                trace,
-                expected_pubkey: None,
-                sent_at: Nanos::now(),
-            }),
+            Ok(dref) => api.producer.produce_with_ingestion(
+                NewBidSubmission {
+                    dref,
+                    header,
+                    submission_ref: SubmissionRef::Http(future_ix),
+                    trace,
+                    expected_pubkey: None,
+                },
+                IngestionTime::now(),
+            ),
             Err(e) => {
                 tracing::error!("failed to write bid submission into dcache: {e}");
                 return StatusCode::INTERNAL_SERVER_ERROR.into_response()
