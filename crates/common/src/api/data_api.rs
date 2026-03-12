@@ -163,6 +163,7 @@ pub struct ReceivedBlocksResponseV2 {
     #[serde(with = "serde_utils::quoted_u64")]
     pub timestamp_ms: u64,
     pub region: Option<String>,
+    pub live_ts: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

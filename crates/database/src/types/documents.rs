@@ -69,6 +69,7 @@ pub struct BidSubmissionDocument {
     pub block_number: u64,
     pub num_txs: usize,
     pub region: Option<String>,
+    pub live_ts: Option<u64>,
 }
 
 impl From<BidSubmissionDocument> for ReceivedBlocksResponse {
@@ -110,6 +111,7 @@ impl From<BidSubmissionDocument> for ReceivedBlocksResponseV2 {
             timestamp: value.timestamp / 1_000_000_000,
             timestamp_ms: value.timestamp / 1_000_000,
             region: value.region,
+            live_ts: value.live_ts,
         }
     }
 }

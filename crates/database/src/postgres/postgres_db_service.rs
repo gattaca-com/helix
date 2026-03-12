@@ -107,6 +107,10 @@ pub enum DbRequest {
     SaveMergedBlocks {
         blocks: Vec<MergedBlock>,
     },
+    UpdateBlockSubmissionLiveTs {
+        block_hash: B256,
+        live_ts: u64,
+    },
 }
 
 pub struct PendingBlockSubmissionValue {
@@ -114,9 +118,10 @@ pub struct PendingBlockSubmissionValue {
     pub trace: SubmissionTrace,
     pub optimistic_version: OptimisticVersion,
     pub is_adjusted: bool,
+    pub live_ts: Option<u64>,
 }
 
-const BLOCK_SUBMISSION_FIELD_COUNT: usize = 17;
+const BLOCK_SUBMISSION_FIELD_COUNT: usize = 18;
 const MAINNET_VALIDATOR_COUNT: usize = 1_100_000;
 const DB_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 static DELIVERED_PAYLOADS_MIG_SLOT: AtomicU64 = AtomicU64::new(0);
@@ -654,6 +659,11 @@ impl PostgresDatabaseService {
                     error!(%err, "failed to save merged blocks");
                 }
             }
+            DbRequest::UpdateBlockSubmissionLiveTs { block_hash, live_ts } => {
+                if let Err(err) = self._update_block_submission_live_ts(block_hash, live_ts).await {
+                    error!(%err, %block_hash, "failed to update block submission live_ts");
+                }
+            }
         }
     }
 
@@ -878,6 +888,7 @@ impl PostgresDatabaseService {
                 optimistic_version: i16,
                 metadata: Option<&'a str>,
                 is_adjusted: bool,
+                live_ts: Option<i64>,
             }
 
             let mut structured_blocks: Vec<BlockParams> = Vec::with_capacity(chunk.len());
@@ -900,6 +911,7 @@ impl PostgresDatabaseService {
                     optimistic_version: item.optimistic_version as i16,
                     metadata: item.trace.metadata.as_deref(),
                     is_adjusted: item.is_adjusted,
+                    live_ts: item.live_ts.map(|v| v as i64),
                 });
             }
 
@@ -924,12 +936,13 @@ impl PostgresDatabaseService {
                 params.push(&blk.optimistic_version);
                 params.push(&blk.metadata);
                 params.push(&blk.is_adjusted);
+                params.push(&blk.live_ts);
             }
 
             // Build and execute INSERT for this chunk
             let num_cols = BLOCK_SUBMISSION_FIELD_COUNT;
             let mut sql = String::from(
-                "INSERT INTO block_submission (block_number, slot_number, parent_hash, block_hash, builder_pubkey, proposer_pubkey, proposer_fee_recipient, gas_limit, gas_used, value, num_txs, timestamp, first_seen, region_id, optimistic_version, metadata, is_adjusted) VALUES ",
+                "INSERT INTO block_submission (block_number, slot_number, parent_hash, block_hash, builder_pubkey, proposer_pubkey, proposer_fee_recipient, gas_limit, gas_used, value, num_txs, timestamp, first_seen, region_id, optimistic_version, metadata, is_adjusted, live_ts) VALUES ",
             );
             let clauses: Vec<String> = (0..structured_blocks.len())
                 .map(|i| {
@@ -981,6 +994,25 @@ impl PostgresDatabaseService {
 
         *last_processed_slot = tmp_last_processed_slot;
         record.record_success();
+        Ok(())
+    }
+
+    async fn _update_block_submission_live_ts(
+        &self,
+        block_hash: B256,
+        live_ts: u64,
+    ) -> Result<(), DatabaseError> {
+        self.pool
+            .get()
+            .await?
+            .execute(
+                "UPDATE block_submission SET live_ts = $1 WHERE block_hash = $2 AND live_ts IS NULL",
+                &[
+                &(live_ts as i64),
+                    &block_hash.as_slice(),
+                ],
+            )
+            .await?;
         Ok(())
     }
 }
@@ -1834,7 +1866,8 @@ impl PostgresDatabaseService {
                 block_submission.value submission_value,
                 block_submission.num_txs num_txs,
                 LEAST(block_submission.first_seen, header_submission.first_seen) submission_timestamp,
-                region.name region
+                region.name region,
+                block_submission.live_ts live_ts
             FROM
                 block_submission
             LEFT JOIN
@@ -1858,7 +1891,8 @@ impl PostgresDatabaseService {
                 header_submission.value submission_value,
                 header_submission.tx_count num_txs,
                 header_submission.first_seen submission_timestamp,
-                NULL::text region
+                NULL::text region,
+                NULL::bigint live_ts
             FROM
                 header_submission
         ",

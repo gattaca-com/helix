@@ -1,0 +1,2 @@
+ALTER TABLE block_submission
+ADD COLUMN IF NOT EXISTS live_ts BIGINT;
