@@ -62,6 +62,7 @@ impl<A: Api> BuilderApi<A> {
             Ok(dref) => api.producer.produce_with_ingestion(
                 NewBidSubmission {
                     dref,
+                    payload_offset: 0,
                     header,
                     submission_ref: SubmissionRef::Http(future_ix),
                     trace,

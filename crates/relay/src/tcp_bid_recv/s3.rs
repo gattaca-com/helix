@@ -43,7 +43,9 @@ impl S3PayloadSaver {
                 let header = r.header.to_bytes();
                 let header_slice = header.as_slice();
                 let header_len = header_slice.len() as u16;
-                match submissions.map(r.dref, |payload| {
+                let payload_offset = r.payload_offset;
+                match submissions.map(r.dref, |full_payload| {
+                    let payload = &full_payload[payload_offset..];
                     // format: [u16 LE header_len][header bytes][payload bytes]
                     let mut buf =
                         bytes::BytesMut::with_capacity(2 + header_slice.len() + payload.len());

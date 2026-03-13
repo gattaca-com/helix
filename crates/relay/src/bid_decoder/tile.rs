@@ -52,7 +52,8 @@ impl Tile<HelixSpine> for DecoderTile {
         adapter.consume_internal_message(
             |new_bid: &mut InternalMessage<NewBidSubmission>, producers| match self.submissions.map(
                 new_bid.dref,
-                |payload| {
+                |full_payload| {
+                    let payload = &full_payload[new_bid.payload_offset..];
                     let sent_at = new_bid.tracking_timestamp().publish_t();
                     Self::handle_block_submission(
                         &self.cache,

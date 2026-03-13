@@ -12,6 +12,7 @@ use crate::{
 #[derive(Debug, Clone, Copy)]
 pub struct NewBidSubmission {
     pub dref: DCacheRef,
+    pub payload_offset: usize,
     pub submission_ref: SubmissionRef,
     pub header: InternalBidSubmissionHeader,
     pub trace: SubmissionTrace,
