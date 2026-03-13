@@ -17,6 +17,8 @@ use tree_hash_derive::TreeHash;
 
 use crate::{BuilderValidatorPreferences, api::proposer_api::ValidatorRegistrationInfo};
 
+pub const MAX_PAYLOAD_LENGTH: usize = 1024 * 1024 * 20; // 20MB
+
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BuilderGetValidatorsResponseEntry {
     pub slot: Slot,

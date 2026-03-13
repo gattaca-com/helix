@@ -13,13 +13,14 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use bytes::Bytes;
-use helix_common::{BodyTimings, RequestTimings, metrics::ApiMetrics, utils::utcnow_ns};
+use helix_common::{
+    BodyTimings, RequestTimings, api::builder_api::MAX_PAYLOAD_LENGTH, metrics::ApiMetrics,
+    utils::utcnow_ns,
+};
 use http::header::CONTENT_LENGTH;
 use http_body::{Body as HttpBody, Frame};
 use http_body_util::Limited;
 use pin_project_lite::pin_project;
-
-use crate::api::builder::api::MAX_PAYLOAD_LENGTH;
 
 pin_project! {
     /// Timing wrapper that tracks latencies
@@ -140,8 +141,8 @@ async fn do_request(mut req: Request<Body>, next: Next, stats: Arc<BodyTimings>)
         .headers()
         .get(CONTENT_LENGTH)
         .and_then(|h| h.to_str().ok())
-        .and_then(|s| s.parse::<usize>().ok())
-        && len > MAX_PAYLOAD_LENGTH
+        .and_then(|s| s.parse::<usize>().ok()) &&
+        len > MAX_PAYLOAD_LENGTH
     {
         return StatusCode::PAYLOAD_TOO_LARGE.into_response();
     }

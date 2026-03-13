@@ -750,8 +750,8 @@ pub(crate) fn prepare_revenues(
     // We divide the revenue among the different bundle origins.
     for (origin, origin_revenue) in revenues {
         // Update the revenue, subtracting part of the payment cost
-        let actualized_revenue = (origin_revenue.revenue.widening_mul(expected_revenue)
-            / U512::from(total_revenue))
+        let actualized_revenue = (origin_revenue.revenue.widening_mul(expected_revenue) /
+            U512::from(total_revenue))
         .to();
         let builder_revenue = distribution_config.merged_builder_split(actualized_revenue);
         updated_revenues

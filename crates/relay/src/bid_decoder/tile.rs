@@ -8,31 +8,27 @@ use flux::{
 };
 use flux_utils::{DCache, SharedVector};
 use helix_common::{
-    RelayConfig, SubmissionTrace, chain_info::ChainInfo, local_cache::LocalCache,
-    record_submission_step, simulator::SubmissionFormat,
+    RelayConfig, SubmissionTrace,
+    api::builder_api::MAX_PAYLOAD_LENGTH,
+    chain_info::ChainInfo,
+    decoder::{SubmissionDecoder, SubmissionDecoderParams},
+    local_cache::LocalCache,
+    record_submission_step,
 };
 use helix_types::{
     BidAdjustmentData, BlockMergingData, BlsPublicKeyBytes, MergeableOrdersWithPref,
-    SubmissionVersion,
+    SignedBidSubmission, Submission, SubmissionVersion,
 };
 use tracing::trace;
 
 use crate::{
     HelixSpine,
-    api::{
-        FutureBidSubmissionResult,
-        builder::{api::MAX_PAYLOAD_LENGTH, error::BuilderApiError},
-    },
+    api::{FutureBidSubmissionResult, builder::error::BuilderApiError},
     auctioneer::{
-        InternalBidSubmissionHeader, Submission, SubmissionData, SubmissionRef,
-        get_mergeable_orders, send_submission_result,
+        InternalBidSubmissionHeader, SubmissionData, SubmissionRef, get_mergeable_orders,
+        send_submission_result,
     },
-    bid_decoder::{
-        SubmissionDataWithSpan,
-        decoder::{
-            DecodeFlags, SubmissionDecoder, decode_default, decode_dehydrated, decode_merge,
-        },
-    },
+    bid_decoder::SubmissionDataWithSpan,
     spine::messages::{DecodedSubmission, NewBidSubmission},
 };
 
@@ -74,6 +70,7 @@ impl Tile<HelixSpine> for DecoderTile {
                         submission_data: submission,
                         span,
                         sent_at: new_bid.tracking_timestamp().publish_t(),
+                        original_data_ref: new_bid.dref,
                     });
                     producers.produce(DecodedSubmission { ix });
                 }
@@ -158,17 +155,23 @@ impl DecoderTile {
         tracing::Span::current().record("id", tracing::field::display(header.id));
         record_submission_step("worker_recv", sent_at.elapsed());
         trace!("received by worker");
-        let (submission, withdrawals_root, version, merging_data, bid_adjustment_data, sim_bytes) =
-            Self::try_handle_block_submission(
-                cache,
-                chain_info,
-                config,
-                header,
-                expected_pubkey,
-                payload,
-                buffer,
-                &mut trace,
-            )?;
+        let (
+            submission,
+            withdrawals_root,
+            version,
+            merging_data,
+            bid_adjustment_data,
+            decoder_params,
+        ) = Self::try_handle_block_submission(
+            cache,
+            chain_info,
+            config,
+            header,
+            expected_pubkey,
+            payload,
+            buffer,
+            &mut trace,
+        )?;
 
         tracing::Span::current().record("slot", tracing::field::display(submission.bid_slot()));
         tracing::Span::current()
@@ -209,7 +212,7 @@ impl DecoderTile {
             bid_adjustment_data,
             withdrawals_root,
             trace,
-            sim_bytes,
+            decoder_params,
         };
 
         Ok((submission_data, tracing::Span::current()))
@@ -232,28 +235,35 @@ impl DecoderTile {
             SubmissionVersion,
             Option<BlockMergingData>,
             Option<BidAdjustmentData>,
-            Option<(bytes::Bytes, SubmissionFormat)>,
+            SubmissionDecoderParams,
         ),
         BuilderApiError,
     > {
-        let mut decoder = SubmissionDecoder::new(header.compression, header.encoding);
-        let body: &[u8] = match decoder.decompress(payload, buffer) {
-            None => payload,
-            Some(Ok(())) => buffer,
-            Some(Err(e)) => return Err(e),
-        };
-
         let with_mergeable_data = header.merge_type.is_some();
         let with_adjustments = header.flags.with_adjustments();
         let is_dehydrated = header.flags.is_dehydrated();
 
-        let builder_pubkey = decoder.extract_builder_pubkey(body, with_mergeable_data)?;
+        let decoder_params = SubmissionDecoderParams {
+            compression: header.compression,
+            encoding: header.encoding,
+            is_dehydrated,
+            merge_type: header.merge_type,
+            with_mergeable_data,
+            with_adjustments,
+            block_merging_dry_run: config.block_merging_config.is_dry_run,
+            fork_name: chain_info.current_fork_name(),
+        };
+
+        let mut decoder = SubmissionDecoder::new(&decoder_params);
+        let (mut submission, merging_data, bid_adjustment_data) =
+            decoder.decode(payload, buffer)?;
+
+        trace.decoded_ns = Nanos::now();
+
+        let builder_pubkey = *submission.builder_pubkey();
         let skip_sigverify = if let Some(expected_pubkey) = expected_pubkey {
             if builder_pubkey != *expected_pubkey {
-                return Err(BuilderApiError::InvalidBuilderPubkey(
-                    *expected_pubkey,
-                    builder_pubkey,
-                ));
+                return Err(BuilderApiError::InvalidBuilderPubkey(*expected_pubkey, builder_pubkey));
             }
 
             true
@@ -261,58 +271,52 @@ impl DecoderTile {
             header.api_key.is_some_and(|api_key| cache.validate_api_key(&api_key, &builder_pubkey))
         };
 
+        match submission {
+            Submission::Full(ref mut signed_bid_submission) => {
+                verify_and_validate(signed_bid_submission, skip_sigverify, chain_info)?;
+            }
+            Submission::Dehydrated { .. } => {
+                if !skip_sigverify {
+                    return Err(BuilderApiError::UntrustedBuilderOnDehydratedPayload);
+                }
+            }
+        }
+
+        let withdrawals_root = submission.withdrawal_root();
+
         trace!(
             ?header.sequence_number,
             is_dehydrated,
             skip_sigverify,
             with_mergeable_data,
             with_adjustments,
-            "processing payload"
+            "processed payload"
         );
 
-        let flags = DecodeFlags {
-            skip_sigverify,
-            merge_type: header.merge_type,
-            with_adjustments,
-            block_merging_dry_run: config.block_merging_config.is_dry_run,
-        };
-
-        let (submission, merging_data, bid_adjustment_data) = if is_dehydrated {
-            decode_dehydrated(&mut decoder, body, trace, chain_info, &flags)?
-        } else if with_mergeable_data {
-            decode_merge(&mut decoder, body, trace, chain_info, &flags)?
-
-        } else {
-            decode_default(&mut decoder, body, trace, chain_info, &flags)?
-        };
-
-        // For plain SSZ full submissions, capture the decompressed bytes so the
-        // auctioneer can forward them to the simulator without re-encoding.
-        let sim_bytes = if !is_dehydrated
-            && !with_mergeable_data
-            && !with_adjustments
-            && matches!(header.encoding, crate::bid_decoder::Encoding::Ssz)
-        {
-            Some((body.clone(), SubmissionFormat::FullSsz))
-        } else {
-            None
-        };
-
-        // For plain SSZ full submissions, capture the decompressed bytes so the
-        // auctioneer can forward them to the simulator without re-encoding.
-        let sim_bytes = if !is_dehydrated &&
-            !with_mergeable_data &&
-            matches!(header.encoding, crate::bid_decoder::Encoding::Ssz)
-        {
-            Some((body.clone(), SubmissionFormat::FullSsz))
-        } else {
-            None
-            
-        };
-
-        let withdrawals_root = submission.withdrawal_root();
-
         let version = SubmissionVersion::new(trace.receive_ns.0, header.sequence_number);
-        Ok((submission, withdrawals_root, version, merging_data, bid_adjustment_data, sim_bytes))
+        Ok((
+            submission,
+            withdrawals_root,
+            version,
+            merging_data,
+            bid_adjustment_data,
+            decoder_params,
+        ))
     }
+}
+
+fn verify_and_validate(
+    submission: &mut SignedBidSubmission,
+    skip_sigverify: bool,
+    chain_info: &ChainInfo,
+) -> Result<(), BuilderApiError> {
+    if !skip_sigverify {
+        trace!("verifying signature");
+        let start_sig = Nanos::now();
+        submission.verify_signature(chain_info.builder_domain)?;
+        trace!("signature ok");
+        record_submission_step("signature", start_sig.elapsed());
+    }
+    submission.validate_payload_ssz_lengths(chain_info.max_blobs_per_block())?;
+    Ok(())
 }

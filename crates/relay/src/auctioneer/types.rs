@@ -13,16 +13,15 @@ use helix_common::{
         builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
         proposer_api::GetHeaderParams,
     },
+    decoder::{Encoding, SubmissionDecoderParams, SubmissionType},
     metrics::BID_CREATION_LATENCY,
-    simulator::SubmissionFormat,
 };
 use helix_tcp_types::{BidSubmissionFlags, BidSubmissionHeader};
 use helix_types::{
-    BidAdjustmentData, BlsPublicKeyBytes, BuilderBid, Compression, DehydratedBidSubmission,
-    ExecutionPayload, ExecutionRequests, ForkName, GetPayloadResponse, MergeType,
-    MergeableOrdersWithPref, PayloadAndBlobs, SignedBidSubmission, SignedBlindedBeaconBlock,
-    SignedValidatorRegistration, Slot, SubmissionVersion, VersionedSignedProposal,
-    mock_public_key_bytes,
+    BidAdjustmentData, BlsPublicKeyBytes, BuilderBid, Compression, ExecutionPayload,
+    ExecutionRequests, ForkName, GetPayloadResponse, MergeType, MergeableOrdersWithPref,
+    PayloadAndBlobs, SignedBidSubmission, SignedBlindedBeaconBlock, SignedValidatorRegistration,
+    Slot, Submission, SubmissionVersion, VersionedSignedProposal, mock_public_key_bytes,
 };
 use http::{
     HeaderMap, HeaderValue,
@@ -42,7 +41,6 @@ use crate::{
         HEADER_SEQUENCE, HEADER_WITH_ADJUSTMENTS, proposer::ProposerApiError,
     },
     auctioneer::MergeResult,
-    bid_decoder::{Encoding, SubmissionType},
     gossip::BroadcastPayloadParams,
     housekeeper::PayloadAttributesUpdate,
     simulator::tile::ValidationResult,
@@ -122,8 +120,8 @@ impl InternalBidSubmissionHeader {
     ) -> MergeType {
         match header_map.get(HEADER_MERGE_TYPE) {
             None => {
-                if sub_type.is_some_and(|sub_type| sub_type == SubmissionType::Merge)
-                    || matches!(header_map.get(HEADER_IS_MERGEABLE), Some(header) if header == HeaderValue::from_static("true"))
+                if sub_type.is_some_and(|sub_type| sub_type == SubmissionType::Merge) ||
+                    matches!(header_map.get(HEADER_IS_MERGEABLE), Some(header) if header == HeaderValue::from_static("true"))
                 {
                     MergeType::Mergeable
                 } else {
@@ -202,9 +200,7 @@ pub struct SubmissionData {
     pub version: SubmissionVersion,
     pub withdrawals_root: B256,
     pub trace: SubmissionTrace,
-    /// Decompressed bytes to forward verbatim to the simulator, avoiding re-encoding.
-    /// `None` means the auctioneer must encode from `submission`.
-    pub sim_bytes: Option<(bytes::Bytes, SubmissionFormat)>,
+    pub decoder_params: SubmissionDecoderParams,
 }
 
 impl Deref for SubmissionData {
@@ -212,52 +208,6 @@ impl Deref for SubmissionData {
 
     fn deref(&self) -> &Self::Target {
         &self.submission
-    }
-}
-
-#[allow(clippy::large_enum_variant)]
-#[derive(Clone, Debug)]
-pub enum Submission {
-    // received after sigverify
-    Full(SignedBidSubmission),
-    // need to validate do the validate_payload_ssz_lengths
-    Dehydrated(DehydratedBidSubmission),
-}
-
-impl Submission {
-    pub fn bid_slot(&self) -> u64 {
-        match self {
-            Submission::Full(s) => s.slot().as_u64(),
-            Submission::Dehydrated(s) => s.slot(),
-        }
-    }
-
-    pub fn builder_pubkey(&self) -> &BlsPublicKeyBytes {
-        match self {
-            Submission::Full(s) => &s.message().builder_pubkey,
-            Submission::Dehydrated(s) => s.builder_pubkey(),
-        }
-    }
-
-    pub fn block_hash(&self) -> &B256 {
-        match self {
-            Submission::Full(s) => &s.message().block_hash,
-            Submission::Dehydrated(s) => s.block_hash(),
-        }
-    }
-
-    pub fn withdrawal_root(&self) -> B256 {
-        match self {
-            Submission::Full(s) => s.withdrawals_root(),
-            Submission::Dehydrated(s) => s.withdrawal_root(),
-        }
-    }
-
-    pub fn parent_hash(&self) -> &B256 {
-        match self {
-            Submission::Full(s) => s.parent_hash(),
-            Submission::Dehydrated(s) => s.parent_hash(),
-        }
     }
 }
 

@@ -30,7 +30,7 @@ use crate::{
         block_merger::BlockMerger,
         types::{PayloadEntry, PendingPayload, SubmissionRef},
     },
-    simulator::{BlockMergeResponse, SimRequest, tile::ValidationResult},
+    simulator::{SimRequest, tile::ValidationResult},
     spine::{
         HelixSpineProducers,
         messages::{SubmissionResultWithRef, ToSimKind, ToSimMsg},

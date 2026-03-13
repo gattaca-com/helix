@@ -1,22 +1,41 @@
 use std::collections::HashMap;
 
 use alloy_primitives::{Address, B256, U256};
+use flux_utils::DCacheRef;
 use helix_common::{
-    SubmissionTrace,
-    bid_submission::OptimisticVersion,
-    simulator::{BlockSimError, SszValidationRequest},
+    SubmissionTrace, api::builder_api::InclusionListWithMetadata,
+    bid_submission::OptimisticVersion, decoder::SubmissionDecoderParams, simulator::BlockSimError,
 };
 use helix_types::{
     BlsPublicKeyBytes, BuilderInclusionResult, ExecutionPayload, ExecutionRequests,
     MergeableOrderWithOrigin, MergedBlockTrace, SignedBidSubmission, SubmissionVersion,
 };
 
-use crate::auctioneer::SubmissionRef;
+use crate::{auctioneer::SubmissionRef, simulator::tile::ValidationResult};
 
 pub mod client;
 pub mod tile;
 
 pub use tile::SimulatorTile;
+
+#[derive(Debug, Clone)]
+pub struct ValidationRequest {
+    pub is_top_bid: bool,
+    pub is_optimistic: bool,
+    pub apply_blacklist: bool,
+    pub bid_slot: u64,
+    pub registered_gas_limit: u64,
+    pub builder_pubkey: BlsPublicKeyBytes,
+    pub parent_beacon_block_root: B256,
+    pub submission_ref: SubmissionRef,
+    pub version: SubmissionVersion,
+    pub tx_root: Option<B256>, // None if submission wasn't dehydrated
+    pub inclusion_list: InclusionListWithMetadata,
+    pub trace: SubmissionTrace,
+    pub submission: SignedBidSubmission,
+    pub original_data_ref: DCacheRef,
+    pub decoder_params: SubmissionDecoderParams,
+}
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct BlockMergeRequestRef<'a> {
@@ -53,21 +72,6 @@ pub struct BlockMergeResponse {
     pub trace: MergedBlockTrace,
 }
 
-#[derive(Clone)]
-pub struct ValidationRequest {
-    pub is_optimistic: bool,
-    pub request: SszValidationRequest,
-    pub is_top_bid: bool,
-    pub bid_slot: u64,
-    pub builder_pubkey: BlsPublicKeyBytes,
-    pub version: SubmissionVersion,
-    pub submission: SignedBidSubmission,
-    pub submission_ref: SubmissionRef,
-    pub trace: SubmissionTrace,
-    // only Some for dehydrated submissions
-    pub tx_root: Option<B256>,
-}
-
 /// Large payload stored in `SharedVector` for auctioneer → sim tile transfer.
 pub enum SimRequest {
     Validate { req: Box<ValidationRequest>, fast_track: bool },
@@ -76,7 +80,7 @@ pub enum SimRequest {
 
 /// Large payload stored in `SharedVector` for sim tile → auctioneer transfer.
 pub enum SimResult {
-    Validate(crate::simulator::tile::ValidationResult),
+    Validate(ValidationResult),
     Merge(MergeResult),
 }
 

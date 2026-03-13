@@ -8,6 +8,7 @@ pub mod bid_submission;
 pub mod builder_info;
 pub mod chain_info;
 pub mod config;
+pub mod decoder;
 pub mod local_cache;
 pub mod metrics;
 pub mod proposer;

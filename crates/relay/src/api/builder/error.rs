@@ -1,5 +1,5 @@
 use axum::response::{IntoResponse, Response};
-use helix_common::{local_cache::AuctioneerError, simulator::BlockSimError};
+use helix_common::{decoder::DecoderError, local_cache::AuctioneerError, simulator::BlockSimError};
 use helix_database::error::DatabaseError;
 use helix_types::{BlockValidationError, BlsPublicKeyBytes, HydrationError, SigError};
 use http::StatusCode;
@@ -18,7 +18,7 @@ pub enum BuilderApiError {
     IOError(#[from] std::io::Error),
 
     #[error("failed to decode payload")]
-    PayloadDecode,
+    PayloadDecode(#[from] DecoderError),
 
     #[error("block validation: {0}")]
     BidValidation(#[from] BlockValidationError),
@@ -83,25 +83,25 @@ impl IntoResponse for &BuilderApiError {
 impl BuilderApiError {
     pub fn http_status(&self) -> StatusCode {
         match self {
-            BuilderApiError::JsonDecodeError(_)
-            | BuilderApiError::IOError(_)
-            | BuilderApiError::SszDecode(_)
-            | BuilderApiError::PayloadDecode
-            | BuilderApiError::BidValidation(_)
-            | BuilderApiError::ProposerDutyNotFound
-            | BuilderApiError::HydrationError(_)
-            | BuilderApiError::SigError(_)
-            | BuilderApiError::SimOnNextSlot
-            | BuilderApiError::MergeableOrdersNotFound(_)
-            | BuilderApiError::InvalidBuilderPubkey(_, _)
-            | BuilderApiError::DeliveringPayload { .. } => StatusCode::BAD_REQUEST,
+            BuilderApiError::JsonDecodeError(_) |
+            BuilderApiError::IOError(_) |
+            BuilderApiError::SszDecode(_) |
+            BuilderApiError::PayloadDecode(_) |
+            BuilderApiError::BidValidation(_) |
+            BuilderApiError::ProposerDutyNotFound |
+            BuilderApiError::HydrationError(_) |
+            BuilderApiError::SigError(_) |
+            BuilderApiError::SimOnNextSlot |
+            BuilderApiError::MergeableOrdersNotFound(_) |
+            BuilderApiError::InvalidBuilderPubkey(_, _) |
+            BuilderApiError::DeliveringPayload { .. } => StatusCode::BAD_REQUEST,
 
-            BuilderApiError::InvalidApiKey
-            | BuilderApiError::UntrustedBuilderOnDehydratedPayload => StatusCode::UNAUTHORIZED,
+            BuilderApiError::InvalidApiKey |
+            BuilderApiError::UntrustedBuilderOnDehydratedPayload => StatusCode::UNAUTHORIZED,
 
-            BuilderApiError::InternalError
-            | BuilderApiError::AuctioneerError(_)
-            | BuilderApiError::DatabaseError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            BuilderApiError::InternalError |
+            BuilderApiError::AuctioneerError(_) |
+            BuilderApiError::DatabaseError(_) => StatusCode::INTERNAL_SERVER_ERROR,
 
             BuilderApiError::BlockSimulation(err) => match err {
                 BlockSimError::Timeout | BlockSimError::SimulationDropped => {
@@ -121,13 +121,13 @@ impl BuilderApiError {
     #[allow(clippy::match_like_matches_macro)]
     pub fn should_report(&self) -> bool {
         match self {
-            Self::DeliveringPayload { .. }
-            | Self::ProposerDutyNotFound
-            | Self::BidValidation(BlockValidationError::OutOfSequence { .. })
-            | Self::BidValidation(BlockValidationError::AlreadyProcessingNewerPayload)
-            | Self::BidValidation(BlockValidationError::SubmissionForWrongSlot { .. })
-            | Self::BidValidation(BlockValidationError::PrevRandaoMismatch { .. })
-            | Self::SimOnNextSlot => false,
+            Self::DeliveringPayload { .. } |
+            Self::ProposerDutyNotFound |
+            Self::BidValidation(BlockValidationError::OutOfSequence { .. }) |
+            Self::BidValidation(BlockValidationError::AlreadyProcessingNewerPayload) |
+            Self::BidValidation(BlockValidationError::SubmissionForWrongSlot { .. }) |
+            Self::BidValidation(BlockValidationError::PrevRandaoMismatch { .. }) |
+            Self::SimOnNextSlot => false,
 
             _ => true,
         }

@@ -216,7 +216,7 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
                 sock_addr,
                 local_cache.api_key_cache.clone(),
                 config.tcp_max_connections,
-                submissions,
+                submissions.clone(),
             );
             attach_tile(
                 block_submission_tcp_listener,
@@ -227,15 +227,16 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
                 ),
             );
 
-            let sim_inbound =
+            let sim_requests =
                 Arc::new(SharedVector::<SimRequest>::with_capacity(MAX_SUBMISSIONS_PER_SLOT));
-            let sim_outbound =
+            let sim_results =
                 Arc::new(SharedVector::<SimResult>::with_capacity(MAX_SUBMISSIONS_PER_SLOT));
 
             let (accept_optimistic, failsafe_triggered, sim_tile) = SimulatorTile::create(
                 config.simulators.clone(),
-                sim_inbound.clone(),
-                sim_outbound.clone(),
+                submissions.clone(),
+                sim_requests.clone(),
+                sim_results.clone(),
             );
             let sim_core = config.cores.simulator;
             attach_tile(sim_tile, spine, TileConfig::new(sim_core, ThreadPriority::OSDefault));
@@ -253,8 +254,8 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
                 future_results,
                 decoded,
                 auctioneer_handle,
-                sim_inbound,
-                sim_outbound,
+                sim_requests,
+                sim_results,
                 accept_optimistic,
                 failsafe_triggered,
             );

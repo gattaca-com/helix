@@ -1,19 +1,19 @@
 use std::sync::atomic::Ordering;
 
 use alloy_primitives::{Address, B256, U256};
-use flux::timing::Nanos;
-use flux::spine::SpineProducers;
+use flux::{spine::SpineProducers, timing::Nanos};
+use flux_utils::DCacheRef;
 use helix_common::{
     self, BuilderInfo, SubmissionTrace,
     api::builder_api::InclusionListWithMetadata,
     bid_submission::OptimisticVersion,
+    decoder::SubmissionDecoderParams,
     metrics::{BID_ADJUSTMENT_LATENCY, HYDRATION_CACHE_HITS},
     record_submission_step,
-    simulator::{SszValidationRequest, SubmissionFormat},
 };
 use helix_types::{
     BidAdjustmentData, BlockValidationError, MergeableOrdersWithPref, SignedBidSubmission,
-    SubmissionVersion,
+    Submission, SubmissionVersion,
 };
 use tracing::trace;
 
@@ -22,7 +22,7 @@ use crate::{
     auctioneer::{
         bid_adjustor::BidAdjustor,
         context::{Context, send_submission_result},
-        types::{PayloadEntry, SlotData, Submission, SubmissionData, SubmissionRef},
+        types::{PayloadEntry, SlotData, SubmissionData, SubmissionRef},
     },
     housekeeper::PayloadAttributesUpdate,
     simulator::{SimRequest, ValidationRequest, tile::ValidationResult},
@@ -35,6 +35,7 @@ use crate::{
 impl<B: BidAdjustor> Context<B> {
     pub(super) fn handle_submission(
         &mut self,
+        original_data_ref: DCacheRef,
         submission_data: &SubmissionData,
         slot_data: &SlotData,
         producers: &mut HelixSpineProducers,
@@ -47,12 +48,16 @@ impl<B: BidAdjustor> Context<B> {
                     send_submission_result(producers, &self.future_results, submission_ref, Ok(()));
                 };
 
-                let (req, entry) =
-                    self.prep_data_to_store_and_sim(validated, slot_data, is_optimistic);
+                let (req, entry) = self.prep_data_to_store_and_sim(
+                    original_data_ref,
+                    validated,
+                    slot_data,
+                    is_optimistic,
+                );
 
-                if !self.completed_dry_run
-                    && entry.is_adjustable()
-                    && self.cache.adjustments_enabled.load(Ordering::Relaxed)
+                if !self.completed_dry_run &&
+                    entry.is_adjustable() &&
+                    self.cache.adjustments_enabled.load(Ordering::Relaxed)
                 {
                     let start = Nanos::now();
                     if let Some((adjusted_block, sim_request, _, strategy)) =
@@ -70,8 +75,8 @@ impl<B: BidAdjustor> Context<B> {
 
                 self.store_data_and_sim(req, entry, false, producers);
 
-                if self.config.block_merging_config.is_enabled
-                    && let Some(data) = merging_data
+                if self.config.block_merging_config.is_enabled &&
+                    let Some(data) = merging_data
                 {
                     let base_block = data.block_hash;
                     let is_top_bid = data.is_top_bid;
@@ -200,9 +205,9 @@ impl<B: BidAdjustor> Context<B> {
         record_submission_step("validated", start_val.elapsed());
         trace!("validated");
 
-        let (optimistic_version, is_top_bid) = if self.accept_optimistic.load(Ordering::Relaxed)
-            && !self.failsafe_triggered.load(Ordering::Relaxed)
-            && self.should_process_optimistically(&submission, &builder_info, slot_data)
+        let (optimistic_version, is_top_bid) = if self.accept_optimistic.load(Ordering::Relaxed) &&
+            !self.failsafe_triggered.load(Ordering::Relaxed) &&
+            self.should_process_optimistically(&submission, &builder_info, slot_data)
         {
             let is_top_bid = self.bid_sorter.sort(
                 submission_data.version,
@@ -235,7 +240,7 @@ impl<B: BidAdjustor> Context<B> {
             is_top_bid,
             trace: submission_data.trace,
             bid_adjustment_data: submission_data.bid_adjustment_data,
-            sim_bytes: submission_data.sim_bytes,
+            decoder_params: submission_data.decoder_params,
         };
 
         Ok((validated, optimistic_version, merging_data))
@@ -243,39 +248,33 @@ impl<B: BidAdjustor> Context<B> {
 
     fn prep_data_to_store_and_sim(
         &mut self,
+        original_data_ref: DCacheRef,
         validated: ValidatedData,
         slot_data: &SlotData,
         is_optimistic: bool,
     ) -> (ValidationRequest, PayloadEntry) {
-        let request = SszValidationRequest {
-            registered_gas_limit: slot_data.registration_data.entry.registration.message.gas_limit,
+        let req = ValidationRequest {
+            is_top_bid: validated.is_top_bid,
+            is_optimistic,
             apply_blacklist: slot_data.registration_data.entry.preferences.filtering.is_regional(),
+            bid_slot: validated.submission.slot().as_u64(),
+            registered_gas_limit: slot_data.registration_data.entry.registration.message.gas_limit,
+            builder_pubkey: *validated.submission.builder_public_key(),
             parent_beacon_block_root: validated
                 .payload_attributes
                 .parent_beacon_block_root
                 .unwrap_or_default(),
+            submission_ref: validated.submission_ref,
+            version: validated.version,
+            tx_root: validated.tx_root,
             inclusion_list: slot_data
                 .il
                 .clone()
                 .unwrap_or(InclusionListWithMetadata { txs: vec![] }),
-            format: validated.sim_bytes.as_ref().map(|(_, f)| *f).unwrap_or_default(),
-            signed_bid_submission: match validated.sim_bytes {
-                Some((bytes, _)) => alloy_primitives::Bytes(bytes),
-                None => ssz::Encode::as_ssz_bytes(&validated.submission).into(),
-            },
-        };
-
-        let req = ValidationRequest {
-            is_optimistic,
-            submission_ref: validated.submission_ref,
-            request,
-            builder_pubkey: *validated.submission.builder_public_key(),
-            bid_slot: validated.submission.slot().as_u64(),
-            is_top_bid: validated.is_top_bid,
-            submission: validated.submission.clone(),
             trace: validated.trace,
-            tx_root: validated.tx_root,
-            version: validated.version,
+            submission: validated.submission.clone(),
+            original_data_ref,
+            decoder_params: validated.decoder_params,
         };
 
         let entry = PayloadEntry::new_submission(
@@ -326,8 +325,8 @@ impl<B: BidAdjustor> Context<B> {
         }
 
         if builder_info.is_optimistic && submission.message().value <= builder_info.collateral {
-            if slot_data.registration_data.entry.preferences.filtering.is_regional()
-                && !builder_info.can_process_regional_slot_optimistically()
+            if slot_data.registration_data.entry.preferences.filtering.is_regional() &&
+                !builder_info.can_process_regional_slot_optimistically()
             {
                 return false;
             }
@@ -355,7 +354,7 @@ pub struct ValidatedData<'a> {
     pub is_top_bid: bool,
     pub trace: SubmissionTrace,
     pub bid_adjustment_data: Option<BidAdjustmentData>,
-    pub sim_bytes: Option<(bytes::Bytes, SubmissionFormat)>,
+    pub decoder_params: SubmissionDecoderParams,
 }
 
 pub struct MergeData {

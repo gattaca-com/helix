@@ -100,8 +100,8 @@ impl<A: Api> BuilderApi<A> {
 }
 
 fn observe_client_to_server_latency(headers: &HeaderMap, receive_ns: u64) {
-    if let Some(send_ts) = headers.get(HEADER_SEND_TS)
-        && let Some(send_ts) = send_ts.to_str().ok().and_then(Nanos::from_rfc3339)
+    if let Some(send_ts) = headers.get(HEADER_SEND_TS) &&
+        let Some(send_ts) = send_ts.to_str().ok().and_then(Nanos::from_rfc3339)
     {
         SUB_CLIENT_TO_SERVER_LATENCY
             .with_label_values(&["http"])

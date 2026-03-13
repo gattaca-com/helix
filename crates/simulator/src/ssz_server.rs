@@ -1,6 +1,16 @@
 use alloy_rpc_types::beacon::relay::{BuilderBlockValidationRequestV5, SignedBidSubmissionV5};
-use axum::{Router, extract::State, http::StatusCode, response::IntoResponse, routing::post};
-use helix_common::simulator::{SszValidationRequest, SubmissionFormat};
+use axum::{
+    Router,
+    extract::State,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    routing::post,
+};
+use helix_common::{
+    decoder::{DecoderError, SubmissionDecoder},
+    simulator::SszValidationRequest,
+};
+use helix_types::Submission;
 use ssz::Decode;
 use tokio::net::TcpListener;
 use tracing::error;
@@ -23,30 +33,28 @@ pub async fn run(api: ValidationApi, port: u16) {
     }
 }
 
-async fn handler(State(api): State<ValidationApi>, body: axum::body::Bytes) -> impl IntoResponse {
-    let req = match SszValidationRequest::from_ssz_bytes(&body) {
-        Ok(r) => r,
-        Err(e) => return (StatusCode::BAD_REQUEST, format!("ssz decode: {e:?}")).into_response(),
-    };
+async fn handler(
+    State(api): State<ValidationApi>,
+    body: axum::body::Bytes,
+) -> Result<Response, DecoderError> {
+    let req = SszValidationRequest::from_ssz_bytes(&body)?;
 
-    let signed_bid_submission = match req.format {
-        SubmissionFormat::FullSsz => {
-            match SignedBidSubmissionV5::from_ssz_bytes(&req.signed_bid_submission) {
-                Ok(s) => s,
-                Err(e) => {
-                    return (
-                        StatusCode::BAD_REQUEST,
-                        format!("signed bid submission decode: {e:?}"),
-                    )
-                        .into_response();
+    let signed_bid_submission = match req.decoder_params {
+        Some(decode_params) => {
+            let mut buf = vec![];
+            let mut decoder = SubmissionDecoder::new(&decode_params);
+            let (submission, _, _) =
+                decoder.decode(req.signed_bid_submission.as_slice(), &mut buf)?;
+            match submission {
+                Submission::Full(s) => s.into(),
+                Submission::Dehydrated(_) => {
+                    // Simulator-side hydration cache not yet implemented.
+                    // Return 424 so the relay retries with full SSZ bytes.
+                    return Ok(StatusCode::FAILED_DEPENDENCY.into_response());
                 }
             }
         }
-        SubmissionFormat::DehydratedSsz => {
-            // Simulator-side hydration cache not yet implemented.
-            // Return 424 so the relay retries with full SSZ bytes.
-            return StatusCode::FAILED_DEPENDENCY.into_response();
-        }
+        None => SignedBidSubmissionV5::from_ssz_bytes(req.signed_bid_submission.as_slice())?,
     };
 
     let ext = ExtendedValidationRequestV5 {
@@ -59,8 +67,8 @@ async fn handler(State(api): State<ValidationApi>, body: axum::body::Bytes) -> i
         apply_blacklist: req.apply_blacklist,
     };
 
-    match api.validate_builder_submission_v5(ext).await {
+    Ok(match api.validate_builder_submission_v5(ext).await {
         Ok(()) => StatusCode::OK.into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, e.message().to_string()).into_response(),
-    }
+    })
 }

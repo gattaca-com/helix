@@ -46,19 +46,19 @@ pub(crate) enum ValidationApiError {
 impl From<ValidationApiError> for ErrorObject<'static> {
     fn from(error: ValidationApiError) -> Self {
         match error {
-            ValidationApiError::GasLimitMismatch(_)
-            | ValidationApiError::GasUsedMismatch(_)
-            | ValidationApiError::ParentHashMismatch(_)
-            | ValidationApiError::BlockHashMismatch(_)
-            | ValidationApiError::Blacklist(_)
-            | ValidationApiError::ProposerPayment
-            | ValidationApiError::InvalidBlobsBundle
-            | ValidationApiError::InclusionList
-            | ValidationApiError::Blob(_) => invalid_params_rpc_err(error.to_string()),
+            ValidationApiError::GasLimitMismatch(_) |
+            ValidationApiError::GasUsedMismatch(_) |
+            ValidationApiError::ParentHashMismatch(_) |
+            ValidationApiError::BlockHashMismatch(_) |
+            ValidationApiError::Blacklist(_) |
+            ValidationApiError::ProposerPayment |
+            ValidationApiError::InvalidBlobsBundle |
+            ValidationApiError::InclusionList |
+            ValidationApiError::Blob(_) => invalid_params_rpc_err(error.to_string()),
 
-            ValidationApiError::GetParent(_)
-            | ValidationApiError::Consensus(_)
-            | ValidationApiError::Provider(_) => internal_rpc_err(error.to_string()),
+            ValidationApiError::GetParent(_) |
+            ValidationApiError::Consensus(_) |
+            ValidationApiError::Provider(_) => internal_rpc_err(error.to_string()),
             ValidationApiError::Execution(err) => match err {
                 error @ BlockExecutionError::Validation(_) => {
                     invalid_params_rpc_err(error.to_string())

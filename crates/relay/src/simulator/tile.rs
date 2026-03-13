@@ -10,15 +10,16 @@ use std::{
 use flux::{
     spine::SpineProducers as _,
     tile::{Tile, TileName},
+    timing::Nanos,
 };
-use flux_utils::SharedVector;
+use flux_utils::{DCache, SharedVector};
 use helix_common::{
     SimulatorConfig, SubmissionTrace,
     bid_submission::OptimisticVersion,
     is_local_dev,
     metrics::SimulatorMetrics,
     record_submission_step,
-    simulator::{BlockSimError, JsonValidationRequest, SubmissionFormat},
+    simulator::{BlockSimError, JsonValidationRequest, SszValidationRequest},
     spawn_tracked,
     validator_preferences::{Filtering, ValidatorPreferences},
 };
@@ -37,6 +38,7 @@ use crate::{
 
 pub struct SimulatorTile {
     simulators: Vec<SimEntry>,
+    submissions: Arc<DCache>,
     /// Indices of simulators with an SSZ endpoint — static after construction.
     ssz_sim_indices: Vec<usize>,
     requests: PendingRequests,
@@ -97,6 +99,7 @@ impl Tile<HelixSpine> for SimulatorTile {
 impl SimulatorTile {
     pub fn create(
         configs: Vec<SimulatorConfig>,
+        submissions: Arc<DCache>,
         sim_requests: Arc<SharedVector<SimRequest>>,
         sim_results: Arc<SharedVector<SimResult>>,
     ) -> (Arc<AtomicBool>, Arc<AtomicBool>, Self) {
@@ -149,6 +152,7 @@ impl SimulatorTile {
 
         let tile = Self {
             simulators,
+            submissions,
             ssz_sim_indices,
             requests,
             priority_requests,
@@ -240,8 +244,8 @@ impl SimulatorTile {
 
         producers.produce(FromSimMsg { ix: result_ix });
 
-        if let Some(id) = self.next_client(|s| s.can_simulate())
-            && let Some(req) = self.priority_requests.next_req().or(self.requests.next_req())
+        if let Some(id) = self.next_client(|s| s.can_simulate()) &&
+            let Some(req) = self.priority_requests.next_req().or(self.requests.next_req())
         {
             self.spawn_sim(id, req);
         }
@@ -267,8 +271,9 @@ impl SimulatorTile {
         let timer = SimulatorMetrics::timer(sim.client.endpoint());
         let task_tx = self.task_tx.clone();
         let sim_results = self.sim_results.clone();
+        let subs_cache = self.submissions.clone();
         spawn_tracked!(async move {
-            let start_sim = Instant::now();
+            let start_sim = Nanos::now();
             let block_hash = req.submission.block_hash();
             debug!(%block_hash, "sending simulation request");
 
@@ -276,23 +281,20 @@ impl SimulatorTile {
             SimulatorMetrics::sim_count(optimistic_version.is_optimistic());
             let (mut res, ssz_retry) = match dispatch {
                 SimDispatch::Ssz { to_send, ssz_url, http } => {
+                    let request = create_ssz_request(&req, subs_cache);
                     let res =
-                        SimulatorClient::do_sim_request(&req.request, req.is_top_bid, to_send)
-                            .await;
-                    (res, Some((ssz_url, http)))
+                        SimulatorClient::do_sim_request(&request, req.is_top_bid, to_send).await;
+                    (res, Some((request, ssz_url, http)))
                 }
                 SimDispatch::Json { to_send, method } => {
-                    let filtering = if req.request.apply_blacklist {
-                        Filtering::Regional
-                    } else {
-                        Filtering::Global
-                    };
+                    let filtering =
+                        if req.apply_blacklist { Filtering::Regional } else { Filtering::Global };
                     let json_req = JsonValidationRequest::new(
-                        req.request.registered_gas_limit,
+                        req.registered_gas_limit,
                         &req.submission,
                         ValidatorPreferences { filtering, ..Default::default() },
-                        Some(req.request.parent_beacon_block_root),
-                        Some(req.request.inclusion_list.clone()),
+                        Some(req.parent_beacon_block_root),
+                        Some(req.inclusion_list.clone()),
                     );
                     let res = SimulatorClient::do_json_sim_request(
                         &json_req,
@@ -309,11 +311,10 @@ impl SimulatorTile {
             // can process the submission without a hydration cache entry.
             if matches!(res, Err(BlockSimError::HydrationMiss)) {
                 debug!(%block_hash, "hydration miss — retrying with full SSZ");
-                if let Some((ssz_url, http)) = ssz_retry {
+                if let Some((request, ssz_url, http)) = ssz_retry {
                     let to_send = http.post(format!("{ssz_url}/validate"));
-                    let mut retry_req = req.request.clone();
-                    retry_req.signed_bid_submission = req.submission.as_ssz_bytes().into();
-                    retry_req.format = SubmissionFormat::FullSsz;
+                    let mut retry_req = request.clone();
+                    retry_req.signed_bid_submission = req.submission.as_ssz_bytes();
                     res =
                         SimulatorClient::do_sim_request(&retry_req, req.is_top_bid, to_send).await;
                 } else {
@@ -449,8 +450,8 @@ impl SimEntry {
 
     /// A lighter check to decide whether we should accept optimistic submissions
     fn can_simulate_light(&self) -> bool {
-        self.is_synced
-            && match self.paused_until {
+        self.is_synced &&
+            match self.paused_until {
                 Some(until) => Instant::now() > until,
                 None => true,
             }
@@ -561,5 +562,43 @@ impl PendingRequests {
     /// Clear backlog of simulations from the previous bid slot.
     fn clear(&mut self, bid_slot: u64) {
         self.reqs.retain(|r| r.bid_slot >= bid_slot);
+    }
+}
+
+fn create_ssz_request(req: &ValidationRequest, cache: Arc<DCache>) -> SszValidationRequest {
+    // TODO: remove this when hydration cache is added to simulator
+    if req.decoder_params.is_dehydrated {
+        return SszValidationRequest {
+            apply_blacklist: req.apply_blacklist,
+            registered_gas_limit: req.registered_gas_limit,
+            parent_beacon_block_root: req.parent_beacon_block_root,
+            inclusion_list: req.inclusion_list.clone(),
+            decoder_params: None,
+            signed_bid_submission: req.submission.as_ssz_bytes(),
+        };
+    }
+
+    let mut bytes = Vec::with_capacity(req.original_data_ref.len);
+    match cache.read(req.original_data_ref, &mut bytes) {
+        Ok(_) => SszValidationRequest {
+            apply_blacklist: req.apply_blacklist,
+            registered_gas_limit: req.registered_gas_limit,
+            parent_beacon_block_root: req.parent_beacon_block_root,
+            inclusion_list: req.inclusion_list.clone(),
+            decoder_params: Some(req.decoder_params.clone()),
+            signed_bid_submission: bytes,
+        },
+        Err(_) => {
+            // In case of cache read failure, we fall back to sending the full SSZ bytes.
+            // This is not ideal but allows the simulation to proceed without a cache entry.
+            SszValidationRequest {
+                apply_blacklist: req.apply_blacklist,
+                registered_gas_limit: req.registered_gas_limit,
+                parent_beacon_block_root: req.parent_beacon_block_root,
+                inclusion_list: req.inclusion_list.clone(),
+                decoder_params: None,
+                signed_bid_submission: req.submission.as_ssz_bytes(),
+            }
+        }
     }
 }

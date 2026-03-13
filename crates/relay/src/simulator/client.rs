@@ -217,16 +217,13 @@ mod test {
 
     #[tokio::test]
     async fn balance_request() {
-        let sim_client = super::SimulatorClient::new(
-            reqwest::Client::new(),
-            SimulatorConfig {
-                url: "http://54.175.81.132:8545".into(),
-                namespace: "relay".into(),
-                is_merging_simulator: false,
-                max_concurrent_tasks: 1,
-                ssz_url: None,
-            },
-        );
+        let sim_client = super::SimulatorClient::new(reqwest::Client::new(), SimulatorConfig {
+            url: "http://54.175.81.132:8545".into(),
+            namespace: "relay".into(),
+            is_merging_simulator: false,
+            max_concurrent_tasks: 1,
+            ssz_url: None,
+        });
         let builder_address =
             super::Address::from_hex("0xD9d3A3f47a56a987A8119b15C994Bc126337dd27").unwrap();
         let builder_balance = sim_client.balance_request(&builder_address).await;

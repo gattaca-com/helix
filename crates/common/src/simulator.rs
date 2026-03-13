@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use alloy_primitives::{B256, Bytes};
+use alloy_primitives::B256;
 use helix_types::{
     BidTrace, BlobsBundle, BlsSignatureBytes, ExecutionPayload, ExecutionRequests,
     SignedBidSubmission,
@@ -8,7 +8,10 @@ use helix_types::{
 use ssz_derive::{Decode, Encode};
 use thiserror::Error;
 
-use crate::{ValidatorPreferences, api::builder_api::InclusionListWithMetadata};
+use crate::{
+    ValidatorPreferences, api::builder_api::InclusionListWithMetadata,
+    decoder::SubmissionDecoderParams,
+};
 
 /// Wire format of `signed_bid_submission` in `SimRequest`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -136,8 +139,8 @@ pub struct SszValidationRequest {
     pub registered_gas_limit: u64,
     pub parent_beacon_block_root: B256,
     pub inclusion_list: InclusionListWithMetadata,
-    pub format: SubmissionFormat,
-    pub signed_bid_submission: Bytes,
+    pub decoder_params: Option<SubmissionDecoderParams>,
+    pub signed_bid_submission: Vec<u8>,
 }
 
 // TODO: refactor this in a SignedBidSubmission + extra fields

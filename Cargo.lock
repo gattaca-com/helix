@@ -5567,6 +5567,7 @@ dependencies = [
  "ethereum_ssz",
  "ethereum_ssz_derive",
  "eyre",
+ "flate2",
  "flux",
  "flux-utils",
  "futures",
@@ -5587,6 +5588,7 @@ dependencies = [
  "serde_yaml",
  "sha2 0.10.9",
  "ssz_types",
+ "strum 0.27.2",
  "teloxide",
  "thiserror 1.0.69",
  "tokio",
@@ -5598,6 +5600,7 @@ dependencies = [
  "tree_hash_derive",
  "url",
  "uuid 1.19.0",
+ "zstd 0.13.3",
 ]
 
 [[package]]
