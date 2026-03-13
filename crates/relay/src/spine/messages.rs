@@ -62,3 +62,26 @@ impl SubmissionResultWithRef {
 pub struct DecodedSubmission {
     pub ix: usize,
 }
+
+/// Auctioneer → SimulatorTile: spine signal for a new sim/merge request or slot transition.
+#[derive(Debug, Clone, Copy)]
+pub struct ToSimMsg {
+    pub kind: ToSimKind,
+    /// Index into `SharedVector<SimInboundPayload>` (unused for `NewSlot`).
+    pub ix: usize,
+    /// Slot number; only meaningful for `NewSlot`.
+    pub bid_slot: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToSimKind {
+    /// SimRequest or MergeRequest stored at `ix`.
+    Request,
+    NewSlot,
+}
+
+/// SimulatorTile → Auctioneer: index into `SharedVector<SimOutboundPayload>`.
+#[derive(Debug, Clone, Copy)]
+pub struct FromSimMsg {
+    pub ix: usize,
+}

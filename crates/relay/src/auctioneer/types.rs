@@ -13,15 +13,15 @@ use helix_common::{
         builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
         proposer_api::GetHeaderParams,
     },
+    decoder::{Encoding, SubmissionDecoderParams, SubmissionType},
     metrics::BID_CREATION_LATENCY,
 };
 use helix_tcp_types::{BidSubmissionFlags, BidSubmissionHeader};
 use helix_types::{
-    BidAdjustmentData, BlsPublicKeyBytes, BuilderBid, Compression, DehydratedBidSubmission,
-    ExecutionPayload, ExecutionRequests, ForkName, GetPayloadResponse, MergeType,
-    MergeableOrdersWithPref, PayloadAndBlobs, SignedBidSubmission, SignedBlindedBeaconBlock,
-    SignedValidatorRegistration, Slot, SubmissionVersion, VersionedSignedProposal,
-    mock_public_key_bytes,
+    BidAdjustmentData, BlsPublicKeyBytes, BuilderBid, Compression, ExecutionPayload,
+    ExecutionRequests, ForkName, GetPayloadResponse, MergeType, MergeableOrdersWithPref,
+    PayloadAndBlobs, SignedBidSubmission, SignedBlindedBeaconBlock, SignedValidatorRegistration,
+    Slot, Submission, SubmissionVersion, VersionedSignedProposal, mock_public_key_bytes,
 };
 use http::{
     HeaderMap, HeaderValue,
@@ -40,10 +40,10 @@ use crate::{
         HEADER_API_KEY, HEADER_API_TOKEN, HEADER_HYDRATE, HEADER_IS_MERGEABLE, HEADER_MERGE_TYPE,
         HEADER_SEQUENCE, HEADER_WITH_ADJUSTMENTS, proposer::ProposerApiError,
     },
-    auctioneer::{BlockMergeResult, simulator::manager::SimulationResult},
-    bid_decoder::{Encoding, SubmissionType},
+    auctioneer::MergeResult,
     gossip::BroadcastPayloadParams,
     housekeeper::PayloadAttributesUpdate,
+    simulator::tile::ValidationResult,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -200,6 +200,7 @@ pub struct SubmissionData {
     pub version: SubmissionVersion,
     pub withdrawals_root: B256,
     pub trace: SubmissionTrace,
+    pub decoder_params: SubmissionDecoderParams,
 }
 
 impl Deref for SubmissionData {
@@ -207,52 +208,6 @@ impl Deref for SubmissionData {
 
     fn deref(&self) -> &Self::Target {
         &self.submission
-    }
-}
-
-#[allow(clippy::large_enum_variant)]
-#[derive(Clone, Debug)]
-pub enum Submission {
-    // received after sigverify
-    Full(SignedBidSubmission),
-    // need to validate do the validate_payload_ssz_lengths
-    Dehydrated(DehydratedBidSubmission),
-}
-
-impl Submission {
-    pub fn bid_slot(&self) -> u64 {
-        match self {
-            Submission::Full(s) => s.slot().as_u64(),
-            Submission::Dehydrated(s) => s.slot(),
-        }
-    }
-
-    pub fn builder_pubkey(&self) -> &BlsPublicKeyBytes {
-        match self {
-            Submission::Full(s) => &s.message().builder_pubkey,
-            Submission::Dehydrated(s) => s.builder_pubkey(),
-        }
-    }
-
-    pub fn block_hash(&self) -> &B256 {
-        match self {
-            Submission::Full(s) => &s.message().block_hash,
-            Submission::Dehydrated(s) => s.block_hash(),
-        }
-    }
-
-    pub fn withdrawal_root(&self) -> B256 {
-        match self {
-            Submission::Full(s) => s.withdrawals_root(),
-            Submission::Dehydrated(s) => s.withdrawal_root(),
-        }
-    }
-
-    pub fn parent_hash(&self) -> &B256 {
-        match self {
-            Submission::Full(s) => s.parent_hash(),
-            Submission::Dehydrated(s) => s.parent_hash(),
-        }
     }
 }
 
@@ -514,12 +469,8 @@ pub enum Event {
         span: tracing::Span,
     },
     GossipPayload(BroadcastPayloadParams),
-    SimResult(SimulationResult),
-    SimulatorSync {
-        id: usize,
-        is_synced: bool,
-    },
-    MergeResult(BlockMergeResult),
+    SimResult(ValidationResult),
+    MergeResult(MergeResult),
 }
 
 impl Event {
@@ -531,7 +482,6 @@ impl Event {
             Event::GetPayload { .. } => "GetPayload",
             Event::GossipPayload(_) => "GossipPayload",
             Event::SimResult(_) => "SimResult",
-            Event::SimulatorSync { .. } => "SimulatorSync",
             Event::MergeResult(_) => "MergeResult",
         }
     }

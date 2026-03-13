@@ -27,9 +27,9 @@ use helix_common::{
 use helix_relay::{
     Api, Auctioneer, AuctioneerHandle, BidSorter, BidSubmissionTcpListener, DbHandle, DecoderTile,
     DefaultBidAdjustor, FutureBidSubmissionResult, HelixSpine, RegWorker, RegWorkerHandle,
-    RelayNetworkManager, S3PayloadSaver, SubmissionDataWithSpan, WebsiteService,
-    spawn_tokio_monitoring, start_admin_service, start_api_service, start_beacon_client,
-    start_db_service, start_housekeeper,
+    RelayNetworkManager, S3PayloadSaver, SimRequest, SimResult, SimulatorTile,
+    SubmissionDataWithSpan, WebsiteService, spawn_tokio_monitoring, start_admin_service,
+    start_api_service, start_beacon_client, start_db_service, start_housekeeper,
 };
 use helix_types::BlsKeypair;
 use tikv_jemallocator::Jemalloc;
@@ -216,7 +216,7 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
                 sock_addr,
                 local_cache.api_key_cache.clone(),
                 config.tcp_max_connections,
-                submissions,
+                submissions.clone(),
             );
             attach_tile(
                 block_submission_tcp_listener,
@@ -227,6 +227,20 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
                 ),
             );
 
+            let sim_requests =
+                Arc::new(SharedVector::<SimRequest>::with_capacity(MAX_SUBMISSIONS_PER_SLOT));
+            let sim_results =
+                Arc::new(SharedVector::<SimResult>::with_capacity(MAX_SUBMISSIONS_PER_SLOT));
+
+            let (accept_optimistic, failsafe_triggered, sim_tile) = SimulatorTile::create(
+                config.simulators.clone(),
+                submissions.clone(),
+                sim_requests.clone(),
+                sim_results.clone(),
+            );
+            let sim_core = config.cores.simulator;
+            attach_tile(sim_tile, spine, TileConfig::new(sim_core, ThreadPriority::OSDefault));
+
             let auctioneer_core = config.cores.auctioneer;
             let auctioneer = Auctioneer::new(
                 chain_info.as_ref().clone(),
@@ -235,12 +249,15 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
                 BidSorter::new(top_bid_tx),
                 local_cache.as_ref().clone(),
                 DefaultBidAdjustor {},
-                event_tx,
                 event_rx,
                 auctioneer_core,
                 future_results,
                 decoded,
                 auctioneer_handle,
+                sim_requests,
+                sim_results,
+                accept_optimistic,
+                failsafe_triggered,
             );
             attach_tile(
                 auctioneer,

@@ -7,9 +7,21 @@ use strum::{AsRefStr, EnumString};
 
 #[repr(u8)]
 #[derive(
-    Debug, Default, Clone, Copy, PartialEq, Eq, EnumString, AsRefStr, Serialize, Deserialize,
+    Debug,
+    Default,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    EnumString,
+    AsRefStr,
+    Serialize,
+    Deserialize,
+    ssz_derive::Encode,
+    ssz_derive::Decode,
 )]
 #[strum(serialize_all = "snake_case", ascii_case_insensitive)]
+#[ssz(enum_behaviour = "tag")]
 pub enum MergeType {
     #[default]
     None = 0,
@@ -38,8 +50,21 @@ impl TryFrom<u8> for MergeType {
 
 #[repr(u8)]
 #[derive(
-    Debug, Eq, PartialEq, Clone, Copy, Serialize, Deserialize, Hash, PartialOrd, Ord, Default,
+    Debug,
+    Eq,
+    PartialEq,
+    Clone,
+    Copy,
+    Serialize,
+    Deserialize,
+    Hash,
+    PartialOrd,
+    Ord,
+    Default,
+    ssz_derive::Encode,
+    ssz_derive::Decode,
 )]
+#[ssz(enum_behaviour = "tag")]
 pub enum Compression {
     #[default]
     None = 0,

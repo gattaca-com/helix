@@ -5,6 +5,7 @@ mod bid_decoder;
 mod gossip;
 mod housekeeper;
 mod network;
+mod simulator;
 mod spine;
 mod tcp_bid_recv;
 mod website;
@@ -26,14 +27,15 @@ pub use crate::{
         start_api_service,
     },
     auctioneer::{
-        Auctioneer, AuctioneerHandle, BidSorter, BlockSimRequest, Context, Event, PayloadEntry,
-        RegWorker, RegWorkerHandle, SimulatorClient, SimulatorManager, SimulatorRequest, SlotData,
-        SubmissionPayload, SubmissionRef,
+        Auctioneer, AuctioneerHandle, BidSorter, Context, Event, PayloadEntry, RegWorker,
+        RegWorkerHandle, SimulatorClient, SimulatorTile, SlotData, SubmissionPayload,
+        SubmissionRef, ValidationRequest,
     },
     beacon::start_beacon_client,
     bid_decoder::{DecoderTile, SubmissionDataWithSpan},
     housekeeper::start_housekeeper,
     network::RelayNetworkManager,
+    simulator::{SimRequest, SimResult},
     spine::HelixSpine,
     tcp_bid_recv::{
         BidSubmissionFlags, BidSubmissionHeader, BidSubmissionResponse, BidSubmissionTcpListener,

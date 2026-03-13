@@ -9,6 +9,7 @@ use helix_common::{
     api::proposer_api::GetHeaderParams,
     api_provider::{ApiProvider, TimingResult},
     chain_info::ChainInfo,
+    decoder::{Encoding, HEADER_SSZ},
     metrics::{BID_SIGNING_LATENCY, HEADER_TIMEOUT_FETCH, HEADER_TIMEOUT_SLEEP},
     signing::RelaySigningContext,
     spawn_tracked,
@@ -20,15 +21,10 @@ use ssz::Encode;
 use tracing::{Instrument, debug, error, info, trace, warn};
 
 use super::ProposerApi;
-use crate::{
-    api::{
-        Api,
-        proposer::{
-            CONSENSUS_VERSION_HEADER, GET_HEADER_REQUEST_CUTOFF_MS, error::ProposerApiError,
-        },
-        router::Terminating,
-    },
-    bid_decoder::{Encoding, HEADER_SSZ},
+use crate::api::{
+    Api,
+    proposer::{CONSENSUS_VERSION_HEADER, GET_HEADER_REQUEST_CUTOFF_MS, error::ProposerApiError},
+    router::Terminating,
 };
 
 impl<A: Api> ProposerApi<A> {

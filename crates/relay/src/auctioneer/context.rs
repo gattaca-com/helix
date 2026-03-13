@@ -1,6 +1,9 @@
 use std::{
     ops::{Deref, DerefMut},
-    sync::{Arc, atomic::Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Instant,
 };
 
@@ -25,10 +28,13 @@ use crate::{
         bid_adjustor::BidAdjustor,
         bid_sorter::BidSorter,
         block_merger::BlockMerger,
-        simulator::manager::{SimulationResult, SimulatorManager},
         types::{PayloadEntry, PendingPayload, SubmissionRef},
     },
-    spine::{HelixSpineProducers, messages::SubmissionResultWithRef},
+    simulator::{SimRequest, tile::ValidationResult},
+    spine::{
+        HelixSpineProducers,
+        messages::{SubmissionResultWithRef, ToSimKind, ToSimMsg},
+    },
 };
 
 // Context that is only valid for a given slot
@@ -41,7 +47,6 @@ pub struct SlotContext {
     pub version: FxHashMap<BlsPublicKeyBytes, SubmissionVersion>,
     pub hydration_cache: HydrationCache,
     pub payloads: FxHashMap<B256, PayloadEntry>,
-    pub sim_manager: SimulatorManager,
     pub block_merger: BlockMerger,
 }
 
@@ -56,6 +61,9 @@ pub struct Context<B: BidAdjustor> {
     pub completed_dry_run: bool,
     pub future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
     pub auctioneer_handle: AuctioneerHandle,
+    pub sim_inbound: Arc<SharedVector<SimRequest>>,
+    pub accept_optimistic: Arc<AtomicBool>,
+    pub failsafe_triggered: Arc<AtomicBool>,
 }
 
 const EXPECTED_PAYLOADS_PER_SLOT: usize = 5000;
@@ -67,7 +75,9 @@ impl<B: BidAdjustor> Context<B> {
     pub fn new(
         chain_info: ChainInfo,
         config: RelayConfig,
-        sim_manager: SimulatorManager,
+        sim_inbound: Arc<SharedVector<SimRequest>>,
+        accept_optimistic: Arc<AtomicBool>,
+        failsafe_triggered: Arc<AtomicBool>,
         db: DbHandle,
         bid_sorter: BidSorter,
         cache: LocalCache,
@@ -87,7 +97,6 @@ impl<B: BidAdjustor> Context<B> {
         let block_merger = BlockMerger::new(0, chain_info.clone(), cache.clone(), config.clone());
 
         let slot_context = SlotContext {
-            sim_manager,
             bid_slot: Slot::new(0),
             pending_payload: None,
             bid_sorter,
@@ -114,6 +123,9 @@ impl<B: BidAdjustor> Context<B> {
             completed_dry_run: false,
             future_results,
             auctioneer_handle,
+            sim_inbound,
+            accept_optimistic,
+            failsafe_triggered,
         }
     }
 
@@ -126,14 +138,11 @@ impl<B: BidAdjustor> Context<B> {
     /// 2. Store simulation to DB
     pub fn handle_simulation_result(
         &mut self,
-        result: SimulationResult,
+        result: ValidationResult,
         already_sent: bool,
         producers: &mut HelixSpineProducers,
     ) {
-        let (id, result) = result;
-
-        let paused_until = result.as_ref().and_then(|r| r.paused_until);
-        self.sim_manager.handle_task_response(id, paused_until);
+        let (_id, result) = result;
 
         let Some(result) = result else {
             return;
@@ -171,7 +180,7 @@ impl<B: BidAdjustor> Context<B> {
 
                     let reason = err.to_string();
                     let bid_slot = result.submission.slot();
-                    let failsafe_triggered = self.sim_manager.failsafe_triggered.clone();
+                    let failsafe_triggered = self.failsafe_triggered.clone();
 
                     self.db.db_demote_builder(
                         bid_slot.as_u64(),
@@ -198,7 +207,7 @@ impl<B: BidAdjustor> Context<B> {
         }
     }
 
-    pub fn on_new_slot(&mut self, bid_slot: Slot) {
+    pub fn on_new_slot(&mut self, bid_slot: Slot, producers: &mut HelixSpineProducers) {
         self.bid_slot = bid_slot;
         if let Some(pending) = self.pending_payload.take() {
             let _ = pending
@@ -223,7 +232,13 @@ impl<B: BidAdjustor> Context<B> {
 
         self.version.clear();
         self.hydration_cache.clear();
-        self.sim_manager.on_new_slot(bid_slot.as_u64());
+
+        producers.produce(ToSimMsg {
+            kind: ToSimKind::NewSlot,
+            ix: 0,
+            bid_slot: bid_slot.as_u64(),
+        });
+
         self.block_merger.on_new_slot(bid_slot.as_u64());
         self.bid_adjustor.on_new_slot(bid_slot.as_u64());
         self.auctioneer_handle.clear_inflight_payloads();

@@ -18,6 +18,7 @@ use alloy_rpc_types::{
 };
 use async_trait::async_trait;
 use dashmap::DashSet;
+use helix_common::api::builder_api::InclusionListWithMetadata;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc, types::ErrorObject};
 use reth_ethereum::{
     Block, EthPrimitives, Receipt, TransactionSigned,
@@ -51,7 +52,6 @@ use tracing::{info, warn};
 
 use crate::{
     common::{RethConsensus, RethPayloadValidator, RethProvider},
-    inclusion::types::InclusionList,
     validation::error::{GetParentError, ValidationApiError},
 };
 
@@ -147,7 +147,7 @@ impl ValidationApi {
         message: BidTrace,
         _registered_gas_limit: u64,
         apply_blacklist: bool,
-        inclusion_list: Option<InclusionList>,
+        inclusion_list: Option<InclusionListWithMetadata>,
     ) -> Result<(), ValidationApiError> {
         self.validate_message_against_header(block.sealed_header(), &message)?;
 
@@ -236,7 +236,7 @@ impl ValidationApi {
         &self,
         block: &RecoveredBlock<Block>,
         post_state: State<DB>,
-        inclusion_list: &InclusionList,
+        inclusion_list: &InclusionListWithMetadata,
     ) -> Result<(), ValidationApiError>
     where
         DB: Database + Debug,
@@ -250,9 +250,7 @@ impl ValidationApi {
         // collect which inclusion‐list hashes appeared in the block
         let mut included_hashes = HashSet::new();
         for tx in block.body().transactions() {
-            if let Some(req) =
-                inclusion_list.txs.iter().find(|t| t.hash.as_slice() == tx.tx_hash().as_slice())
-            {
+            if let Some(req) = inclusion_list.txs.iter().find(|t| t.hash == *tx.tx_hash()) {
                 included_hashes.insert(req.hash);
             }
         }
@@ -698,7 +696,7 @@ pub struct ExtendedValidationRequestV4 {
     #[serde(flatten)]
     pub base: BuilderBlockValidationRequestV4,
 
-    pub inclusion_list: Option<InclusionList>,
+    pub inclusion_list: Option<InclusionListWithMetadata>,
 
     #[serde(default)]
     pub apply_blacklist: bool,
@@ -710,7 +708,7 @@ pub struct ExtendedValidationRequestV5 {
     #[serde(flatten)]
     pub base: BuilderBlockValidationRequestV5,
 
-    pub inclusion_list: Option<InclusionList>,
+    pub inclusion_list: Option<InclusionListWithMetadata>,
 
     #[serde(default)]
     pub apply_blacklist: bool,

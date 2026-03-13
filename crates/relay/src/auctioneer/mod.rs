@@ -5,7 +5,6 @@ mod context;
 mod get_header;
 mod get_payload;
 mod handle;
-mod simulator;
 mod submit_block;
 mod types;
 mod validation;
@@ -13,7 +12,7 @@ mod worker;
 
 use std::{
     cmp::Ordering,
-    sync::Arc,
+    sync::{Arc, atomic::AtomicBool},
     time::{Duration, Instant},
 };
 
@@ -33,30 +32,33 @@ use helix_common::{
 use helix_database::handle::DbHandle;
 use helix_types::Slot;
 use rustc_hash::FxHashMap;
-pub use simulator::*;
 use tracing::{debug, error, info, trace, warn};
 pub use types::{
-    Event, GetPayloadResultData, PayloadBidData, PayloadEntry, SlotData, Submission,
-    SubmissionData, SubmissionPayload,
+    Event, GetPayloadResultData, PayloadBidData, PayloadEntry, SlotData, SubmissionData,
+    SubmissionPayload,
 };
 pub use worker::RegWorker;
 
-pub use crate::auctioneer::{
-    bid_adjustor::{BidAdjustor, DefaultBidAdjustor},
-    bid_sorter::BidSorter,
-    block_merger::get_mergeable_orders,
-    context::{Context, send_submission_result},
-    simulator::{
-        BlockSimRequest, SimulatorRequest, client::SimulatorClient, manager::SimulatorManager,
-    },
-    types::{InternalBidSubmissionHeader, SubmissionRef},
-};
 use crate::{
     HelixSpine, SubmissionDataWithSpan,
     api::{FutureBidSubmissionResult, builder::error::BuilderApiError, proposer::ProposerApiError},
     auctioneer::types::PendingPayload,
     housekeeper::PayloadAttributesUpdate,
-    spine::{HelixSpineProducers, messages::DecodedSubmission},
+    simulator::{SimRequest, SimResult},
+    spine::{
+        HelixSpineProducers,
+        messages::{DecodedSubmission, FromSimMsg},
+    },
+};
+pub use crate::{
+    auctioneer::{
+        bid_adjustor::{BidAdjustor, DefaultBidAdjustor},
+        bid_sorter::BidSorter,
+        block_merger::get_mergeable_orders,
+        context::{Context, send_submission_result},
+        types::{InternalBidSubmissionHeader, SubmissionRef},
+    },
+    simulator::{SimulatorTile, ValidationRequest, client::SimulatorClient, *},
 };
 
 pub struct Auctioneer<B: BidAdjustor> {
@@ -65,6 +67,7 @@ pub struct Auctioneer<B: BidAdjustor> {
     tel: Telemetry,
     event_rx: crossbeam_channel::Receiver<Event>,
     decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
+    sim_results: Arc<SharedVector<SimResult>>,
 }
 
 impl<B: BidAdjustor> Auctioneer<B> {
@@ -76,19 +79,22 @@ impl<B: BidAdjustor> Auctioneer<B> {
         bid_sorter: BidSorter,
         local_cache: LocalCache,
         bid_adjustor: B,
-        event_tx: crossbeam_channel::Sender<Event>,
         event_rx: crossbeam_channel::Receiver<Event>,
         id: usize,
         future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
         decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
         auctioneer_handle: AuctioneerHandle,
+        sim_requests: Arc<SharedVector<SimRequest>>,
+        sim_results: Arc<SharedVector<SimResult>>,
+        accept_optimistic: Arc<AtomicBool>,
+        failsafe_triggered: Arc<AtomicBool>,
     ) -> Self {
-        let sim_manager = SimulatorManager::new(config.simulators.clone(), event_tx.clone());
-
         let ctx = Context::new(
             chain_info,
             config,
-            sim_manager,
+            sim_requests,
+            accept_optimistic,
+            failsafe_triggered,
             db,
             bid_sorter,
             local_cache,
@@ -102,6 +108,7 @@ impl<B: BidAdjustor> Auctioneer<B> {
             tel: Telemetry::new(format!("auctioneer_{id}")),
             event_rx,
             decoded,
+            sim_results,
         }
     }
 }
@@ -122,6 +129,18 @@ impl<B: BidAdjustor> Tile<HelixSpine> for Auctioneer<B> {
                     tracing::error!(?submission, "no submission found");
                 }
             }
+        });
+
+        adapter.consume(|msg: FromSimMsg, producers| {
+            let Some(payload) = self.sim_results.get(msg.ix) else {
+                tracing::error!(?msg, "sim outbound payload not found");
+                return;
+            };
+            let event = match payload.as_ref() {
+                SimResult::Validate(sim_result) => Event::SimResult(sim_result.clone()),
+                SimResult::Merge(merge_result) => Event::MergeResult(merge_result.clone()),
+            };
+            self.state.step(event, &mut self.ctx, &mut self.tel, producers);
         });
 
         self.tel.telemetry(&self.event_rx);
@@ -226,7 +245,7 @@ impl State {
                             );
                         }
 
-                        ctx.on_new_slot(bid_slot);
+                        ctx.on_new_slot(bid_slot, producers);
                         (registration_data, FxHashMap::default(), il)
                     }
                 };
@@ -271,7 +290,7 @@ impl State {
                         "gap in slot data received (sort)"
                     );
 
-                    ctx.on_new_slot(bid_slot);
+                    ctx.on_new_slot(bid_slot, producers);
                     // another relay delivered the payload
                     *self = Self::process_slot_data(
                         bid_slot,
@@ -307,7 +326,7 @@ impl State {
                             "new slot while broacasting different block, was the slot missed?");
                     }
 
-                    ctx.on_new_slot(bid_slot);
+                    ctx.on_new_slot(bid_slot, producers);
                     *self = Self::process_slot_data(
                         bid_slot,
                         FxHashMap::default(),
@@ -318,11 +337,6 @@ impl State {
                     );
                 }
             },
-
-            // simulator sync status
-            (_, Event::SimulatorSync { id, is_synced }) => {
-                ctx.sim_manager.handle_sync_status(id, is_synced);
-            }
 
             // late sim result
             (State::Broadcasting { .. } | State::Slot { .. }, Event::SimResult(result)) => {
@@ -343,7 +357,12 @@ impl State {
                 let _guard = submission_data.span.enter();
                 trace!("received in auctioneer");
 
-                ctx.handle_submission(&submission_data.submission_data, slot_data, producers);
+                ctx.handle_submission(
+                    submission_data.original_data_ref,
+                    &submission_data.submission_data,
+                    slot_data,
+                    producers,
+                );
 
                 trace!("finished processing");
                 drop(_guard);
@@ -373,7 +392,7 @@ impl State {
                     warn!(req =% params.pubkey, this =% slot_data.registration_data.entry.registration.message.pubkey, "get header for mismatched proposer");
                     let _ = res_tx.send(Err(ProposerApiError::NoBidPrepared));
                 } else {
-                    ctx.handle_get_header(params, slot_data, res_tx)
+                    ctx.handle_get_header(params, slot_data, res_tx, producers)
                 }
 
                 trace!("finished processing");

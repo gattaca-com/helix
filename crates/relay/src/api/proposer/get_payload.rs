@@ -6,6 +6,7 @@ use helix_common::{
     Filtering, GetPayloadTrace, RequestTimings,
     api_provider::ApiProvider,
     chain_info::ChainInfo,
+    decoder::{Encoding, HEADER_SSZ},
     spawn_tracked,
     utils::{extract_request_id, utcnow_ns},
 };
@@ -28,7 +29,6 @@ use crate::{
     },
     auctioneer::{GetPayloadKind, GetPayloadResultData, PayloadBidData},
     beacon::types::BroadcastValidation,
-    bid_decoder::{Encoding, HEADER_SSZ},
     gossip::{BroadcastGetPayloadParams, BroadcastPayloadParams},
 };
 

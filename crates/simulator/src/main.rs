@@ -1,6 +1,7 @@
 mod block_merging;
 mod common;
 mod inclusion;
+mod ssz_server;
 mod state_recorder;
 mod validation;
 
@@ -63,6 +64,11 @@ fn main() {
                         let block_merging_api =
                             BlockMergingApi::new(validation_api.clone(), args.clone().into());
                         ctx.modules.merge_configured(block_merging_api.into_rpc())?;
+                    }
+
+                    if let Some(port) = args.sim_ssz_port {
+                        let api = validation_api.clone();
+                        tokio::spawn(crate::ssz_server::run(api, port));
                     }
 
                     ctx.modules.merge_configured(validation_api.into_rpc())?;
@@ -131,6 +137,10 @@ struct CliExt {
 
     #[arg(long)]
     pub validate_merged_blocks: bool,
+
+    /// If set, start an SSZ binary validation endpoint on this port
+    #[arg(long)]
+    pub sim_ssz_port: Option<u16>,
 }
 
 impl From<CliExt> for BlockMergingConfig {

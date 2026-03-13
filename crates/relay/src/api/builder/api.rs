@@ -13,8 +13,6 @@ use crate::{
     spine::messages::NewBidSubmission,
 };
 
-pub(crate) const MAX_PAYLOAD_LENGTH: usize = 1024 * 1024 * 20; // 20MB
-
 pub struct BuilderApi<A: Api> {
     pub local_cache: Arc<LocalCache>,
     pub db: DbHandle,

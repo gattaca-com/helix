@@ -1,4 +1,4 @@
-use crate::auctioneer::{PayloadEntry, SimulatorRequest, types::SlotData};
+use crate::auctioneer::{PayloadEntry, ValidationRequest, types::SlotData};
 
 pub trait BidAdjustor: Send + Sync + 'static {
     fn try_apply_adjustments(
@@ -6,7 +6,7 @@ pub trait BidAdjustor: Send + Sync + 'static {
         bid: &PayloadEntry,
         slot_data: &SlotData,
         is_dry_run: bool,
-    ) -> Option<(PayloadEntry, SimulatorRequest, bool, &str)>;
+    ) -> Option<(PayloadEntry, ValidationRequest, bool, &str)>;
 
     fn on_new_slot(&mut self, bid_slot: u64);
 }
@@ -19,7 +19,7 @@ impl BidAdjustor for DefaultBidAdjustor {
         _bid: &PayloadEntry,
         _slot_data: &SlotData,
         _is_dry_run: bool,
-    ) -> Option<(PayloadEntry, SimulatorRequest, bool, &str)> {
+    ) -> Option<(PayloadEntry, ValidationRequest, bool, &str)> {
         None
     }
 

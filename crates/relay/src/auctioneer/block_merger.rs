@@ -27,7 +27,7 @@ use tracing::{debug, error, info, trace, warn};
 use zstd::zstd_safe::WriteBuf;
 
 use crate::auctioneer::{
-    BlockMergeRequest, BlockMergeRequestRef, BlockMergeResponse, PayloadBidData,
+    BlockMergeRequestRef, BlockMergeResponse, MergeRequest, PayloadBidData,
     submit_block::MergeData, types::PayloadEntry,
 };
 
@@ -230,7 +230,7 @@ impl BlockMerger {
         }
     }
 
-    pub fn fetch_merge_request(&mut self) -> Option<BlockMergeRequest> {
+    pub fn fetch_merge_request(&mut self) -> Option<MergeRequest> {
         trace!("fetching merge request");
         self.fetch_merge_request_count += 1;
         if !self.should_request_merge() {
@@ -289,7 +289,7 @@ impl BlockMerger {
         trace!(count = self.trimmed_orders_buf.len(), "found orders");
         self.found_orders_count += 1;
 
-        let merge_request = BlockMergeRequest {
+        let merge_request = MergeRequest {
             bid_slot: base_block.slot,
             request: json!(BlockMergeRequestRef {
                 original_value: base_block.value,

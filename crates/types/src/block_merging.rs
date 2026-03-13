@@ -2,7 +2,7 @@ use std::{collections::HashMap, hash::Hash};
 
 use alloy_primitives::{Address, B256, Bytes, U256};
 use lh_test_random::TestRandom;
-use lh_types::{ForkName, test_utils::TestRandom};
+use lh_types::test_utils::TestRandom;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
@@ -17,15 +17,6 @@ use crate::{
 pub struct SignedBidSubmissionWithMergingData {
     pub submission: SignedBidSubmission,
     pub merging_data: BlockMergingData,
-}
-
-impl SignedBidSubmissionWithMergingData {
-    pub fn maybe_upgrade_to_fulu(self, fork: ForkName) -> Self {
-        Self {
-            submission: self.submission.maybe_upgrade_to_fulu(fork),
-            merging_data: self.merging_data,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, PartialEq, Eq)]

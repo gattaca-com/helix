@@ -1,5 +1,5 @@
 use axum::response::{IntoResponse, Response};
-use helix_common::{local_cache::AuctioneerError, simulator::BlockSimError};
+use helix_common::{decoder::DecoderError, local_cache::AuctioneerError, simulator::BlockSimError};
 use helix_database::error::DatabaseError;
 use helix_types::{BlockValidationError, BlsPublicKeyBytes, HydrationError, SigError};
 use http::StatusCode;
@@ -18,7 +18,7 @@ pub enum BuilderApiError {
     IOError(#[from] std::io::Error),
 
     #[error("failed to decode payload")]
-    PayloadDecode,
+    PayloadDecode(#[from] DecoderError),
 
     #[error("block validation: {0}")]
     BidValidation(#[from] BlockValidationError),
@@ -86,7 +86,7 @@ impl BuilderApiError {
             BuilderApiError::JsonDecodeError(_) |
             BuilderApiError::IOError(_) |
             BuilderApiError::SszDecode(_) |
-            BuilderApiError::PayloadDecode |
+            BuilderApiError::PayloadDecode(_) |
             BuilderApiError::BidValidation(_) |
             BuilderApiError::ProposerDutyNotFound |
             BuilderApiError::HydrationError(_) |
