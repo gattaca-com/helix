@@ -64,7 +64,7 @@ where
 pub fn init_runtime(relay_config: &RelayConfig) {
     let config = &relay_config.cores;
     if relay_config.is_submission_instance {
-        assert!(!config.sub_workers.is_empty(), "need at least 1 submission worker core");
+        assert!(!config.decoder.is_empty(), "need at least 1 decoder core");
     }
 
     if relay_config.is_registration_instance {

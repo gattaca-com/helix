@@ -138,6 +138,7 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
 
     spawn_tokio_monitoring();
 
+    HelixSpine::remove_all_files();
     let spine = HelixSpine::new(None);
     spine.start(None, Some(termination_grace_period), |spine| {
         start_admin_service(local_cache.clone(), expect_env_var(ADMIN_TOKEN_ENV_VAR));

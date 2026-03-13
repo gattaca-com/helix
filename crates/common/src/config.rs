@@ -98,7 +98,6 @@ impl RelayConfig {
             cores: CoresConfig {
                 auctioneer: 1,
                 tokio: vec![],
-                sub_workers: vec![],
                 reg_workers: vec![],
                 tcp_bid_submissions_tile: 2,
                 decoder: vec![4],
@@ -148,8 +147,6 @@ pub struct WebsiteConfig {
 pub struct CoresConfig {
     pub auctioneer: usize,
     pub tokio: Vec<usize>,
-    /// Submissions / GetPayload
-    pub sub_workers: Vec<usize>,
     /// Registrations
     pub reg_workers: Vec<usize>,
     pub tcp_bid_submissions_tile: usize,
