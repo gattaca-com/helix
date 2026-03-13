@@ -4,7 +4,7 @@ use dashmap::DashMap;
 use flux::{spine::FluxSpine, tile::Tile, timing::Nanos};
 use flux_network::{
     Token,
-    tcp::{PollEvent, SendBehavior, TcpConnector, TcpTelemetry},
+    tcp::{MessagePayload, PollEvent, SendBehavior, TcpConnector, TcpTelemetry},
 };
 use flux_utils::DCache;
 use helix_common::{SubmissionTrace, metrics::SUB_CLIENT_TO_SERVER_LATENCY, utils::utcnow_ns};
@@ -53,7 +53,8 @@ impl BidSubmissionTcpListener {
     ) -> Self {
         let mut listener = TcpConnector::default()
             .with_telemetry(TcpTelemetry::Enabled { app_name: HelixSpine::app_name() })
-            .with_socket_buf_size(64 * 1024 * 1024); // 64MB
+            .with_socket_buf_size(64 * 1024 * 1024) // 64MB
+            .with_dcache(submissions.clone());
 
         listener.listen_at(listener_addr).expect("failed to initialise the TCP listener");
 
@@ -82,10 +83,18 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                 self.registered.remove(&token);
             }
             PollEvent::Message { token, payload, send_ts } => {
+                let MessagePayload::Cached(dref) = payload else {
+                    tracing::error!("expected dcache-backed payload; dcache not configured");
+                    return;
+                };
+
                 if let Some(expected_pubkey) = self.registered.get(&token) {
-                    let header = match BidSubmissionHeader::try_from(payload) {
-                        Ok(header) => header,
-                        Err(e) => {
+                    let header = match self
+                        .submissions
+                        .map(dref, |bytes| BidSubmissionHeader::try_from(bytes))
+                    {
+                        Ok(Ok(header)) => header,
+                        Ok(Err(e)) => {
                             tracing::error!("{e} failed to parse the bid submission header");
                             self.submission_errors.push((
                                 token,
@@ -93,7 +102,16 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                                 None,
                                 BidSubmissionError::ParseError(e),
                             ));
-
+                            return;
+                        }
+                        Err(e) => {
+                            tracing::error!("{e} dcache read failed for tcp header");
+                            self.submission_errors.push((
+                                token,
+                                None,
+                                None,
+                                BidSubmissionError::InternalError,
+                            ));
                             return;
                         }
                     };
@@ -108,7 +126,6 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                         block_hash = tracing::field::Empty,
                     )
                     .entered();
-                    let body = &payload[BID_SUB_HEADER_SIZE..];
 
                     let submission_ref =
                         SubmissionRef::Tcp { id, token, seq_num: header.sequence_number };
@@ -124,29 +141,17 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                         ..Default::default()
                     };
 
-                    match self.submissions.write(body.len(), |buffer| buffer.copy_from_slice(body))
-                    {
-                        Ok(dref) => adapter.produce(NewBidSubmission {
-                            dref,
-                            header: InternalBidSubmissionHeader::from_tcp_header(id, header),
-                            submission_ref,
-                            trace,
-                            expected_pubkey: Some(*expected_pubkey),
-                        }),
-                        Err(e) => {
-                            tracing::error!("{e} failed to write the bid submission into dcache");
-                            self.submission_errors.push((
-                                token,
-                                Some(header.sequence_number),
-                                Some(id),
-                                BidSubmissionError::InternalError,
-                            ));
-                        }
-                    }
+                    adapter.produce(NewBidSubmission {
+                        dref,
+                        payload_offset: BID_SUB_HEADER_SIZE,
+                        header: InternalBidSubmissionHeader::from_tcp_header(id, header),
+                        submission_ref,
+                        trace,
+                        expected_pubkey: Some(*expected_pubkey),
+                    });
                 } else {
-                    let registration_message = RegistrationMsg::from_ssz_bytes(payload);
-                    match registration_message {
-                        Ok(msg) => {
+                    match self.submissions.map(dref, RegistrationMsg::from_ssz_bytes) {
+                        Ok(Ok(msg)) => {
                             let api_key = Uuid::from_bytes(msg.api_key).to_string();
                             if self
                                 .api_key_cache
@@ -163,8 +168,12 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                                 self.to_disconnect.push(token);
                             }
                         }
-                        Err(e) => {
+                        Ok(Err(e)) => {
                             tracing::error!(err=?e, "invalid registration message");
+                            self.to_disconnect.push(token);
+                        }
+                        Err(e) => {
+                            tracing::error!("{e} dcache read failed for registration message");
                             self.to_disconnect.push(token);
                         }
                     }
