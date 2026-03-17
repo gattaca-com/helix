@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use alloy_primitives::B256;
 use flux::{
-    spine::SpineProducers,
+    spine::DCacheRead,
     tile::Tile,
     timing::{InternalMessage, Nanos},
 };
@@ -45,54 +45,58 @@ pub struct DecoderTile {
 
 impl Tile<HelixSpine> for DecoderTile {
     fn loop_body(&mut self, adapter: &mut flux::spine::SpineAdapter<HelixSpine>) {
-        adapter.consume_internal_message(
-            |new_bid: &mut InternalMessage<NewBidSubmission>, producers| match self.submissions.map(
-                new_bid.dref,
-                |full_payload| {
-                    let payload = &full_payload[new_bid.payload_offset..];
-                    let sent_at = new_bid.tracking_timestamp().publish_t();
-                    Self::handle_block_submission(
-                        &self.cache,
-                        &self.chain_info,
-                        &self.config,
-                        &new_bid.submission_ref,
-                        &new_bid.header,
-                        payload,
-                        &mut self.buffer,
-                        new_bid.trace,
-                        sent_at,
-                        new_bid.expected_pubkey.as_ref(),
-                    )
-                },
-            ) {
-                Ok(Ok((submission, span))) => {
+        match adapter.consume_dcache_collaborative_internal_message(
+            &self.submissions,
+            |new_bid: &InternalMessage<NewBidSubmission>, full_payload| {
+                let payload = &full_payload[new_bid.payload_offset..];
+                let sent_at = new_bid.tracking_timestamp().publish_t();
+                Self::handle_block_submission(
+                    &self.cache,
+                    &self.chain_info,
+                    &self.config,
+                    &new_bid.submission_ref,
+                    &new_bid.header,
+                    payload,
+                    &mut self.buffer,
+                    new_bid.trace,
+                    sent_at,
+                    new_bid.expected_pubkey.as_ref(),
+                )
+            },
+        ) {
+            DCacheRead::Ok((new_bid, result)) => match result {
+                Ok((submission, span)) => {
                     let ix = self.decoded.push(SubmissionDataWithSpan {
                         submission_data: submission,
                         span,
                         sent_at: new_bid.tracking_timestamp().publish_t(),
                         original_data_ref: new_bid.dref,
                     });
-                    producers.produce(DecodedSubmission { ix });
+                    adapter.produce(DecodedSubmission { ix });
                 }
-                Ok(Err(e)) => {
+                Err(e) => {
                     send_submission_result(
-                        producers,
+                        &mut adapter.producers,
                         &self.future_results,
                         new_bid.submission_ref,
                         Err(e),
                     );
                 }
-                Err(e) => {
-                    tracing::error!(%e, "dcache read failed");
-                    send_submission_result(
-                        producers,
-                        &self.future_results,
-                        new_bid.submission_ref,
-                        Err(BuilderApiError::InternalError),
-                    );
-                }
             },
-        );
+            DCacheRead::Lost(new_bid) => {
+                tracing::error!("dcache read failed");
+                send_submission_result(
+                    &mut adapter.producers,
+                    &self.future_results,
+                    new_bid.submission_ref,
+                    Err(BuilderApiError::InternalError),
+                );
+            }
+            DCacheRead::SpedPast => {
+                tracing::error!("submissions consumer got sped past");
+            }
+            DCacheRead::Empty => {}
+        }
     }
 
     fn try_init(&mut self, adapter: &mut flux::spine::SpineAdapter<HelixSpine>) -> bool {
