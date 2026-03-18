@@ -49,7 +49,7 @@ impl<A: Api> BuilderApi<A> {
 
 pub struct TopBidTile {
     new_connections: Receiver<RawWebSocket>,
-    connections: Vec<RawWebSocket>,
+    connections: Vec<(RawWebSocket, TopBidMetrics)>,
     last_send: Nanos,
 }
 
@@ -63,20 +63,18 @@ impl Tile<HelixSpine> for TopBidTile {
     fn loop_body(&mut self, adapter: &mut flux::spine::SpineAdapter<HelixSpine>) {
         // add any new connections
         while let Ok(web_socket) = self.new_connections.try_recv() {
-            let _ = TopBidMetrics::connection();
-            self.connections.push(web_socket);
+            let metric = TopBidMetrics::connection();
+            self.connections.push((web_socket, metric));
         }
 
         // send top bids - note that `send` call is non-blocking.
         adapter.consume(|top_bid: TopBidUpdate, _producers| {
-            TopBidMetrics::top_bid_update_count();
-
             let mut i = 0;
             while i < self.connections.len() {
-                match self.connections[i].send(Message::Binary(top_bid.as_ssz_bytes_fast().into())) {
+                match self.connections[i].0.send(Message::Binary(top_bid.as_ssz_bytes_fast().into())) {
                     Ok(_) => i += 1,
                     Err(e) => {
-                        error!(error=?e, peer=?self.connections[i].get_ref().peer_addr(), "Failed to send bid. Disconnecting.");
+                        error!(error=?e, peer=?self.connections[i].0.get_ref().peer_addr(), "Failed to send bid. Disconnecting.");
                         self.connections.swap_remove(i);
                     }
                 }
@@ -88,10 +86,10 @@ impl Tile<HelixSpine> for TopBidTile {
             // Send a ping
             let mut i = 0;
             while i < self.connections.len() {
-                match self.connections[i].send(Message::Ping(Bytes::new())) {
+                match self.connections[i].0.send(Message::Ping(Bytes::new())) {
                     Ok(_) => i += 1,
                     Err(e) => {
-                        error!(error=?e, peer=?self.connections[i].get_ref().peer_addr(), "Failed to send ping. Disconnecting.");
+                        error!(error=?e, peer=?self.connections[i].0.get_ref().peer_addr(), "Failed to send ping. Disconnecting.");
                         self.connections.swap_remove(i);
                     }
                 }
@@ -102,12 +100,12 @@ impl Tile<HelixSpine> for TopBidTile {
         // Read incoming
         let mut i = 0;
         while i < self.connections.len() {
-            match self.connections[i].read() {
+            match self.connections[i].0.read() {
                 Ok(msg) => match msg {
-                    Message::Ping(data) => match self.connections[i].send(Message::Ping(data)) {
+                    Message::Ping(data) => match self.connections[i].0.send(Message::Pong(data)) {
                         Ok(_) => i += 1,
                         Err(e) => {
-                            error!(error=?e, peer=?self.connections[i].get_ref().peer_addr(), "Failed to send pong. Disconnecting.");
+                            error!(error=?e, peer=?self.connections[i].0.get_ref().peer_addr(), "Failed to send pong. Disconnecting.");
                             self.connections.swap_remove(i);
                         }
                     },
@@ -121,7 +119,7 @@ impl Tile<HelixSpine> for TopBidTile {
                     i += 1;
                 }
                 Err(e) => {
-                    error!(error=?e, peer=?self.connections[i].get_ref().peer_addr(), "Failed to read. Disconnecting.");
+                    error!(error=?e, peer=?self.connections[i].0.get_ref().peer_addr(), "Failed to read. Disconnecting.");
                     self.connections.swap_remove(i);
                 }
             }
