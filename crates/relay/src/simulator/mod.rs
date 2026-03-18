@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use alloy_primitives::{Address, B256, U256};
-use flux_utils::DCacheRef;
 use helix_common::{
     SubmissionTrace, api::builder_api::InclusionListWithMetadata,
     bid_submission::OptimisticVersion, decoder::SubmissionDecoderParams, simulator::BlockSimError,
@@ -33,8 +32,7 @@ pub struct ValidationRequest {
     pub inclusion_list: InclusionListWithMetadata,
     pub trace: SubmissionTrace,
     pub submission: SignedBidSubmission,
-    pub original_data_ref: DCacheRef,
-    pub decoder_params: SubmissionDecoderParams,
+    pub decoder_params: Option<SubmissionDecoderParams>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

@@ -358,7 +358,6 @@ impl State {
                 trace!("received in auctioneer");
 
                 ctx.handle_submission(
-                    submission_data.original_data_ref,
                     &submission_data.submission_data,
                     slot_data,
                     producers,

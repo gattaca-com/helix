@@ -2,7 +2,6 @@ use std::sync::atomic::Ordering;
 
 use alloy_primitives::{Address, B256, U256};
 use flux::{spine::SpineProducers, timing::Nanos};
-use flux_utils::DCacheRef;
 use helix_common::{
     self, BuilderInfo, SubmissionTrace,
     api::builder_api::InclusionListWithMetadata,
@@ -35,7 +34,6 @@ use crate::{
 impl<B: BidAdjustor> Context<B> {
     pub(super) fn handle_submission(
         &mut self,
-        original_data_ref: DCacheRef,
         submission_data: &SubmissionData,
         slot_data: &SlotData,
         producers: &mut HelixSpineProducers,
@@ -49,7 +47,6 @@ impl<B: BidAdjustor> Context<B> {
                 };
 
                 let (req, entry) = self.prep_data_to_store_and_sim(
-                    original_data_ref,
                     validated,
                     slot_data,
                     is_optimistic,
@@ -240,7 +237,7 @@ impl<B: BidAdjustor> Context<B> {
             is_top_bid,
             trace: submission_data.trace,
             bid_adjustment_data: submission_data.bid_adjustment_data,
-            decoder_params: submission_data.decoder_params,
+            decoder_params: None, // For now we will allways set decoder_params to None
         };
 
         Ok((validated, optimistic_version, merging_data))
@@ -248,7 +245,6 @@ impl<B: BidAdjustor> Context<B> {
 
     fn prep_data_to_store_and_sim(
         &mut self,
-        original_data_ref: DCacheRef,
         validated: ValidatedData,
         slot_data: &SlotData,
         is_optimistic: bool,
@@ -273,7 +269,6 @@ impl<B: BidAdjustor> Context<B> {
                 .unwrap_or(InclusionListWithMetadata { txs: vec![] }),
             trace: validated.trace,
             submission: validated.submission.clone(),
-            original_data_ref,
             decoder_params: validated.decoder_params,
         };
 
@@ -354,7 +349,7 @@ pub struct ValidatedData<'a> {
     pub is_top_bid: bool,
     pub trace: SubmissionTrace,
     pub bid_adjustment_data: Option<BidAdjustmentData>,
-    pub decoder_params: SubmissionDecoderParams,
+    pub decoder_params: Option<SubmissionDecoderParams>,
 }
 
 pub struct MergeData {

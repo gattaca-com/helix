@@ -565,40 +565,49 @@ impl PendingRequests {
     }
 }
 
-fn create_ssz_request(req: &ValidationRequest, cache: Arc<DCache>) -> SszValidationRequest {
-    // TODO: remove this when hydration cache is added to simulator
-    if req.decoder_params.is_dehydrated {
-        return SszValidationRequest {
-            apply_blacklist: req.apply_blacklist,
-            registered_gas_limit: req.registered_gas_limit,
-            parent_beacon_block_root: req.parent_beacon_block_root,
-            inclusion_list: req.inclusion_list.clone(),
-            decoder_params: None,
-            signed_bid_submission: req.submission.as_ssz_bytes(),
-        };
-    }
+fn create_ssz_request(req: &ValidationRequest, _cache: Arc<DCache>) -> SszValidationRequest {
+    match &req.decoder_params {
+        Some(_params) => {
 
-    let mut bytes = Vec::with_capacity(req.original_data_ref.len);
-    match cache.read(req.original_data_ref, &mut bytes) {
-        Ok(_) => SszValidationRequest {
-            apply_blacklist: req.apply_blacklist,
-            registered_gas_limit: req.registered_gas_limit,
-            parent_beacon_block_root: req.parent_beacon_block_root,
-            inclusion_list: req.inclusion_list.clone(),
-            decoder_params: Some(req.decoder_params.clone()),
-            signed_bid_submission: bytes,
+            //TODO: return to this when we're ready to send network bytes direct to the sim.
+            // For now we will allways set decoder_params to None and send reserialize submissions as SSZ bytes
+            // So this branch is unreachable.
+
+            unimplemented!("SSZ decoder params not yet supported in sim tile");
+
+            // let mut bytes = Vec::with_capacity(req.original_data_ref.len);
+            // match cache.read(req.original_data_ref, &mut bytes) {
+            //     Ok(_) => SszValidationRequest {
+            //         apply_blacklist: req.apply_blacklist,
+            //         registered_gas_limit: req.registered_gas_limit,
+            //         parent_beacon_block_root: req.parent_beacon_block_root,
+            //         inclusion_list: req.inclusion_list.clone(),
+            //         decoder_params: Some(params),
+            //         signed_bid_submission: bytes,
+            //     },
+            //     Err(_) => {
+            //         SszValidationRequest {
+            //             apply_blacklist: req.apply_blacklist,
+            //             registered_gas_limit: req.registered_gas_limit,
+            //             parent_beacon_block_root: req.parent_beacon_block_root,
+            //             inclusion_list: req.inclusion_list.clone(),
+            //             decoder_params: None,
+            //             signed_bid_submission: req.submission.as_ssz_bytes(),
+            //         }
+            //     }
+            // }
         },
-        Err(_) => {
-            // In case of cache read failure, we fall back to sending the full SSZ bytes.
-            // This is not ideal but allows the simulation to proceed without a cache entry.
-            SszValidationRequest {
+        None => {
+            // If we don't have decoder params, we can't create a cache reference, so we must send the full SSZ.
+            return SszValidationRequest {
                 apply_blacklist: req.apply_blacklist,
                 registered_gas_limit: req.registered_gas_limit,
                 parent_beacon_block_root: req.parent_beacon_block_root,
                 inclusion_list: req.inclusion_list.clone(),
                 decoder_params: None,
                 signed_bid_submission: req.submission.as_ssz_bytes(),
-            }
+            };
         }
+        
     }
 }
