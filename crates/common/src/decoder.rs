@@ -467,88 +467,9 @@ fn gzip_size_hint(buf: &[u8]) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use alloy_primitives::hex::FromHex;
-    use helix_types::{
-        MergeType, SignedBidSubmission, SignedBidSubmissionWithMergingData, TestRandomSeed,
-    };
-    use ssz::Encode;
+    use helix_types::MergeType;
 
     use super::*;
-
-    // #[test]
-    // fn test_get_builder_pubkey() {
-    //     let expected =
-    // BlsPublicKeyBytes::from_hex("
-    // 0x81f8ed149a60b16f4b22ba759f0a5420caa753768341bb41b27c15eb9b219afa5494f7d7b72d18c1a1b2904c66d2a30c"
-    // ).unwrap();
-
-    //     let data_json =
-    //         include_bytes!("../../../types/src/testdata/signed-bid-submission-fulu-2.json");
-    //     let decoder = SubmissionDecoder {
-    //         compression: Compression::Gzip,
-    //         encoding: Encoding::Json,
-    //         bytes_before_decompress: 0,
-    //         bytes_after_decompress: 0,
-    //         estimated_decompress: 0,
-    //         decompress_latency: Default::default(),
-    //         decode_latency: Default::default(),
-    //     };
-
-    //     let pubkey = decoder.extract_builder_pubkey(data_json, false).unwrap();
-    //     assert_eq!(pubkey, expected);
-
-    //     let data_ssz =
-    // include_bytes!("../../../types/src/testdata/signed-bid-submission-fulu.ssz");
-    //     let decoder = SubmissionDecoder {
-    //         compression: Compression::Gzip,
-    //         encoding: Encoding::Ssz,
-    //         bytes_before_decompress: 0,
-    //         bytes_after_decompress: 0,
-    //         estimated_decompress: 0,
-    //         decompress_latency: Default::default(),
-    //         decode_latency: Default::default(),
-    //     };
-
-    //     let pubkey = decoder.extract_builder_pubkey(data_ssz, false).unwrap();
-    //     assert_eq!(pubkey, expected);
-    // }
-
-    // #[test]
-    // fn test_get_builder_pubkey_merging() {
-    //     let sub = SignedBidSubmission::test_random();
-    //     let sub = SignedBidSubmissionWithMergingData {
-    //         submission: sub,
-    //         merging_data: Default::default(),
-    //     };
-
-    //     let data_json = serde_json::to_vec(&sub).unwrap();
-    //     let decoder = SubmissionDecoder {
-    //         compression: Compression::Gzip,
-    //         encoding: Encoding::Json,
-    //         bytes_before_decompress: 0,
-    //         bytes_after_decompress: 0,
-    //         estimated_decompress: 0,
-    //         decompress_latency: Default::default(),
-    //         decode_latency: Default::default(),
-    //     };
-
-    //     let pubkey_json = decoder.extract_builder_pubkey(data_json.as_slice(), true).unwrap();
-
-    //     let data_ssz = sub.as_ssz_bytes();
-    //     let decoder = SubmissionDecoder {
-    //         compression: Compression::Gzip,
-    //         encoding: Encoding::Ssz,
-    //         bytes_before_decompress: 0,
-    //         bytes_after_decompress: 0,
-    //         estimated_decompress: 0,
-    //         decompress_latency: Default::default(),
-    //         decode_latency: Default::default(),
-    //     };
-
-    //     let pubkey_ssz = decoder.extract_builder_pubkey(data_ssz.as_slice(), true).unwrap();
-
-    //     assert_eq!(pubkey_json, pubkey_ssz)
-    // }
 
     #[test]
     fn test_submission_type_serialization() {

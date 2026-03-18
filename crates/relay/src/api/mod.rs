@@ -10,6 +10,7 @@ pub use crate::auctioneer::{BidAdjustor, DefaultBidAdjustor};
 
 pub mod admin_service;
 pub mod builder;
+pub mod extract;
 pub mod integration_tests;
 pub mod middleware;
 pub mod proposer;

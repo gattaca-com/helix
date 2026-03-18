@@ -8,6 +8,7 @@ mod submit_block;
 
 mod top_bid;
 
+pub use top_bid::TopBidTile;
 pub use types::*;
 
 // #[cfg(test)]

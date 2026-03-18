@@ -23,8 +23,8 @@ use tokio::time::Instant;
 
 pub use crate::{
     api::{
-        Api, BidAdjustor, DefaultBidAdjustor, FutureBidSubmissionResult, start_admin_service,
-        start_api_service,
+        Api, BidAdjustor, DefaultBidAdjustor, FutureBidSubmissionResult, builder::TopBidTile,
+        start_admin_service, start_api_service,
     },
     auctioneer::{
         Auctioneer, AuctioneerHandle, BidSorter, Context, Event, PayloadEntry, RegWorker,

@@ -40,6 +40,7 @@ http-body.workspace = true
 http-body-util.workspace = true
 httpmock.workspace = true
 hyper.workspace = true
+hyper-util.workspace = true
 mockito.workspace = true
 moka.workspace = true
 num-format.workspace = true

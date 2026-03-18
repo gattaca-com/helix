@@ -41,7 +41,7 @@ impl<B: BidAdjustor> Context<B> {
         producers: &mut HelixSpineProducers,
     ) {
         let submission_ref = submission_data.submission_ref;
-        match self.validate_and_sort(submission_data.clone(), slot_data) {
+        match self.validate_and_sort(submission_data.clone(), slot_data, producers) {
             Ok((validated, optimistic_version, merging_data)) => {
                 let is_optimistic = optimistic_version.is_optimistic();
                 if is_optimistic {
@@ -106,7 +106,7 @@ impl<B: BidAdjustor> Context<B> {
         let need_send_result = !result.optimistic_version.is_optimistic();
         match &result.result {
             Err(err) if err.is_demotable() => {
-                self.bid_sorter.demote(*result.submission.builder_public_key());
+                self.bid_sorter.demote(*result.submission.builder_public_key(), producers);
                 if need_send_result {
                     send_submission_result(
                         producers,
@@ -123,6 +123,7 @@ impl<B: BidAdjustor> Context<B> {
                     &result.submission,
                     &mut result.trace,
                     false,
+                    producers,
                 );
                 if is_top_bid {
                     self.block_merger.update_base_block(*result.submission.block_hash());
@@ -149,6 +150,7 @@ impl<B: BidAdjustor> Context<B> {
         &mut self,
         mut submission_data: SubmissionData,
         slot_data: &'a SlotData,
+        producers: &mut HelixSpineProducers,
     ) -> Result<(ValidatedData<'a>, OptimisticVersion, Option<MergeData>), BuilderApiError> {
         if submission_data.bid_slot() != self.bid_slot.as_u64() {
             return Err(BuilderApiError::BidValidation(
@@ -214,6 +216,7 @@ impl<B: BidAdjustor> Context<B> {
                 &submission,
                 &mut submission_data.trace,
                 true,
+                producers,
             );
             (OptimisticVersion::V1, is_top_bid)
         } else {

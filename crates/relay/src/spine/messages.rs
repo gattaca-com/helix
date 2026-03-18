@@ -1,5 +1,7 @@
 use flux_utils::{ArrayStr, DCacheRef};
 use helix_common::SubmissionTrace;
+// Re-export as also used as spine message.
+pub use helix_common::api::builder_api::TopBidUpdate;
 use helix_tcp_types::Status;
 use helix_types::BlsPublicKeyBytes;
 use http::StatusCode;
@@ -19,9 +21,9 @@ pub struct NewBidSubmission {
     pub expected_pubkey: Option<BlsPublicKeyBytes>,
 }
 
-impl Into<DCacheRef> for NewBidSubmission {
-    fn into(self) -> DCacheRef {
-        self.dref
+impl From<NewBidSubmission> for DCacheRef {
+    fn from(val: NewBidSubmission) -> Self {
+        val.dref
     }
 }
 

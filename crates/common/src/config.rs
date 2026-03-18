@@ -102,6 +102,7 @@ impl RelayConfig {
                 tcp_bid_submissions_tile: 2,
                 decoder: vec![4],
                 simulator: 5,
+                top_bid: 1,
             },
             gossip_payload_on_header: false,
             api_port: 4040,
@@ -154,6 +155,8 @@ pub struct CoresConfig {
     pub decoder: Vec<usize>,
     #[serde(default)]
     pub simulator: usize,
+    #[serde(default)]
+    pub top_bid: usize,
 }
 
 impl Default for WebsiteConfig {

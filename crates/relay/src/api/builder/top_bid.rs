@@ -1,26 +1,30 @@
-use std::{sync::Arc, time::Duration};
+use std::{io::ErrorKind, sync::Arc};
 
-use axum::{
-    Extension,
-    extract::ws::{Message, WebSocket, WebSocketUpgrade},
-    response::IntoResponse,
-};
+use axum::{Extension, response::IntoResponse};
 use bytes::Bytes;
-use futures::StreamExt;
+use crossbeam_channel::Receiver;
+use flux::{tile::Tile, timing::Nanos};
 use helix_common::{self, api::builder_api::TopBidUpdate, metrics::TopBidMetrics};
 use hyper::HeaderMap;
-use tokio::time::{self};
+use tokio_tungstenite::tungstenite::{Error as WebSocketError, Message};
 use tracing::{debug, error};
 
 use super::api::BuilderApi;
-use crate::api::{Api, HEADER_API_KEY, HEADER_API_TOKEN, builder::error::BuilderApiError};
+use crate::{
+    HelixSpine,
+    api::{
+        Api, HEADER_API_KEY, HEADER_API_TOKEN,
+        builder::error::BuilderApiError,
+        extract::raw_web_socket::{RawWebSocket, RawWebSocketUpgrade},
+    },
+};
 
 impl<A: Api> BuilderApi<A> {
     #[tracing::instrument(skip_all)]
     pub async fn get_top_bid(
         Extension(api): Extension<Arc<BuilderApi<A>>>,
         headers: HeaderMap,
-        ws: WebSocketUpgrade,
+        ws: RawWebSocketUpgrade,
     ) -> Result<impl IntoResponse, BuilderApiError> {
         let Some(api_key) = headers
             .get(HEADER_API_KEY)
@@ -34,79 +38,93 @@ impl<A: Api> BuilderApi<A> {
             return Err(BuilderApiError::InvalidApiKey);
         }
 
-        let sub = api.top_bid_tx.subscribe();
-        Ok(ws.on_upgrade(move |socket| push_top_bids(socket, sub)))
+        let sender = api.web_socket_connections.clone();
+        Ok(ws.on_upgrade(move |socket| {
+            if let Err(e) = sender.try_send(socket) {
+                tracing::error!(error=?e, "failed to send new web socket connection to top bid tile");
+            }
+        }))
     }
 }
 
-/// `push_top_bids` manages a WebSocket connection to continuously send the top auction bids to a
-/// client.
-///
-/// - Periodically fetches the latest auction bids via a stream and sends them to the client in ssz
-///   format.
-/// - Sends a ping message every 10 seconds to maintain the connection's liveliness.
-/// - Terminates the connection on sending failures or if a bid stream error occurs, ensuring clean
-///   disconnection.
-///
-/// This function operates in an asynchronous loop until the WebSocket connection is closed either
-/// due to an error or when the auction ends. It returns after the socket has been closed, logging
-/// the closure status.
-async fn push_top_bids(
-    mut socket: WebSocket,
-    mut bid_stream: tokio::sync::broadcast::Receiver<TopBidUpdate>,
-) {
-    let _conn = TopBidMetrics::connection();
-    let mut interval = time::interval(Duration::from_secs(10));
+pub struct TopBidTile {
+    new_connections: Receiver<RawWebSocket>,
+    connections: Vec<RawWebSocket>,
+    last_send: Nanos,
+}
 
-    loop {
-        tokio::select! {
-            Ok(bid) = bid_stream.recv() => {
-                if socket.send(Message::Binary(bid.as_ssz_bytes_fast().into())).await.is_err() {
-                    error!("Failed to send bid. Disconnecting.");
-                    break;
+impl TopBidTile {
+    pub fn new(new_connections: Receiver<RawWebSocket>) -> Self {
+        Self { new_connections, connections: vec![], last_send: Nanos::now() }
+    }
+}
+
+impl Tile<HelixSpine> for TopBidTile {
+    fn loop_body(&mut self, adapter: &mut flux::spine::SpineAdapter<HelixSpine>) {
+        // add any new connections
+        while let Ok(web_socket) = self.new_connections.try_recv() {
+            let _ = TopBidMetrics::connection();
+            self.connections.push(web_socket);
+        }
+
+        // send top bids - note that `send` call is non-blocking.
+        adapter.consume(|top_bid: TopBidUpdate, _producers| {
+            TopBidMetrics::top_bid_update_count();
+
+            let mut i = 0;
+            while i < self.connections.len() {
+                match self.connections[i].send(Message::Binary(top_bid.as_ssz_bytes_fast().into())) {
+                    Ok(_) => i += 1,
+                    Err(e) => {
+                        error!(error=?e, peer=?self.connections[i].get_ref().peer_addr(), "Failed to send bid. Disconnecting.");
+                        self.connections.swap_remove(i);
+                    }
                 }
-            },
+            }
+            self.last_send = Nanos::now();
+        });
 
-            _ = interval.tick() => {
-                if socket.send(Message::Ping(Bytes::new())).await.is_err() {
-                    error!("Failed to send ping.");
-                    break;
+        if self.last_send.elapsed() > Nanos::from_secs(10) {
+            // Send a ping
+            let mut i = 0;
+            while i < self.connections.len() {
+                match self.connections[i].send(Message::Ping(Bytes::new())) {
+                    Ok(_) => i += 1,
+                    Err(e) => {
+                        error!(error=?e, peer=?self.connections[i].get_ref().peer_addr(), "Failed to send ping. Disconnecting.");
+                        self.connections.swap_remove(i);
+                    }
                 }
-            },
+            }
+            self.last_send = Nanos::now();
+        }
 
-            msg = socket.next() => {
-                match msg {
-                    Some(Ok(Message::Ping(data))) => {
-                        if socket.send(Message::Pong(data)).await.is_err() {
-                            error!("Failed to respond to ping.");
-                            break;
+        // Read incoming
+        let mut i = 0;
+        while i < self.connections.len() {
+            match self.connections[i].read() {
+                Ok(msg) => match msg {
+                    Message::Ping(data) => match self.connections[i].send(Message::Ping(data)) {
+                        Ok(_) => i += 1,
+                        Err(e) => {
+                            error!(error=?e, peer=?self.connections[i].get_ref().peer_addr(), "Failed to send pong. Disconnecting.");
+                            self.connections.swap_remove(i);
                         }
                     },
-                    Some(Ok(Message::Pong(_))) => {
-                        debug!("Received pong response.");
-                    },
-                    Some(Ok(Message::Close(_))) => {
+                    Message::Close(_) => {
                         debug!("Received close frame.");
-                        break;
-                    },
-                    Some(Ok(Message::Binary(_))) => {
-                        debug!("Received Binary frame.");
-                    },
-                    Some(Ok(Message::Text(_))) => {
-                        debug!("Received Text frame.");
-                    },
-                    Some(Err(e)) => {
-                        error!("Error in WebSocket connection: {}", e);
-                        break;
-                    },
-                    None => {
-                        error!("WebSocket connection closed by the other side.");
-                        break;
+                        self.connections.swap_remove(i);
                     }
+                    _ => i += 1,
+                },
+                Err(WebSocketError::Io(e)) if e.kind() == ErrorKind::WouldBlock => {
+                    i += 1;
+                }
+                Err(e) => {
+                    error!(error=?e, peer=?self.connections[i].get_ref().peer_addr(), "Failed to read. Disconnecting.");
+                    self.connections.swap_remove(i);
                 }
             }
         }
     }
-
-    debug!("Socket connection closed gracefully.");
 }

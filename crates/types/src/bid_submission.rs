@@ -750,7 +750,7 @@ mod tests {
     use ssz::Encode;
 
     use super::*;
-    use crate::test_utils::{test_decode_json, test_encode_decode_json, test_encode_decode_ssz};
+    use crate::test_utils::{test_encode_decode_json, test_encode_decode_ssz};
 
     #[test]
     // from the relay API spec, adding the blob and the proposer_pubkey field
