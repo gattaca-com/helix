@@ -19,6 +19,12 @@ pub struct NewBidSubmission {
     pub expected_pubkey: Option<BlsPublicKeyBytes>,
 }
 
+impl Into<DCacheRef> for NewBidSubmission {
+    fn into(self) -> DCacheRef {
+        self.dref
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct SubmissionResultWithRef {
     pub sub_ref: SubmissionRef,
