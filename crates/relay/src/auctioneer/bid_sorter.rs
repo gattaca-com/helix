@@ -4,6 +4,7 @@ use std::{
 };
 
 use alloy_primitives::{Address, B256, U256};
+use flux::spine::SpineProducers;
 use helix_common::{
     SubmissionTrace,
     api::builder_api::TopBidUpdate,
@@ -14,6 +15,8 @@ use helix_common::{
 use helix_types::{BlsPublicKeyBytes, SignedBidSubmission, SubmissionVersion};
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::{info, trace};
+
+use crate::spine::HelixSpineProducers;
 
 #[derive(Clone, Copy, Debug)]
 pub struct BidEntry {
@@ -78,7 +81,7 @@ impl ForkState {
         bid_slot: u64,
         trace: Option<&mut SubmissionTrace>,
         is_optimistic: bool,
-        top_bid_tx: &tokio::sync::broadcast::Sender<TopBidUpdate>,
+        producers: &mut HelixSpineProducers,
     ) {
         let mut best = None;
 
@@ -94,7 +97,7 @@ impl ForkState {
         }
 
         if let Some((best_pk, best_bid)) = best {
-            self.update_top_bid(bid_slot, best_pk, *best_bid, trace, is_optimistic, top_bid_tx);
+            self.update_top_bid(bid_slot, best_pk, *best_bid, trace, is_optimistic, producers);
         } else {
             self.curr_bid = None;
         }
@@ -107,7 +110,7 @@ impl ForkState {
         bid: BidEntry,
         trace: Option<&mut SubmissionTrace>,
         is_optimistic: bool,
-        top_bid_tx: &tokio::sync::broadcast::Sender<TopBidUpdate>,
+        producers: &mut HelixSpineProducers,
     ) {
         let now_ns = utcnow_ns();
 
@@ -122,7 +125,8 @@ impl ForkState {
             value: bid.value,
         };
 
-        let _ = top_bid_tx.send(top_bid_update);
+        producers.produce(top_bid_update);
+
         trace!(?builder_pubkey, value =? bid.value, "updating best bid");
         self.curr_bid = Some((builder_pubkey, bid));
 
@@ -145,8 +149,6 @@ impl ForkState {
 }
 
 pub struct BidSorter {
-    /// Sender for ws updates, TopBidUpdate SSZ encoded
-    top_bid_tx: tokio::sync::broadcast::Sender<TopBidUpdate>,
     /// Head slot + 1
     curr_bid_slot: u64,
     /// Parent hash -> fork state
@@ -157,9 +159,8 @@ pub struct BidSorter {
 }
 
 impl BidSorter {
-    pub fn new(top_bid_tx: tokio::sync::broadcast::Sender<TopBidUpdate>) -> Self {
+    pub fn new() -> Self {
         Self {
-            top_bid_tx,
             curr_bid_slot: 0,
             forks: FxHashMap::default(),
             demotions: FxHashSet::with_capacity_and_hasher(50, Default::default()),
@@ -174,6 +175,7 @@ impl BidSorter {
         submission: &SignedBidSubmission,
         trace: &mut SubmissionTrace,
         is_optimistic: bool,
+        producers: &mut HelixSpineProducers,
     ) -> bool {
         trace!(is_optimistic, "sorting submission");
 
@@ -183,7 +185,7 @@ impl BidSorter {
         let builder_pubkey = bid_trace.builder_pubkey;
 
         let start = Instant::now();
-        let is_top_bid = self.process_header(builder_pubkey, bid, trace, is_optimistic);
+        let is_top_bid = self.process_header(builder_pubkey, bid, trace, is_optimistic, producers);
         let process_latency = start.elapsed();
 
         // telemetry
@@ -194,12 +196,12 @@ impl BidSorter {
         is_top_bid
     }
 
-    pub fn demote(&mut self, demoted: BlsPublicKeyBytes) {
+    pub fn demote(&mut self, demoted: BlsPublicKeyBytes, producers: &mut HelixSpineProducers) {
         if !self.demotions.insert(demoted) {
             // already demoted
             return;
         }
-        self.process_demotion(demoted);
+        self.process_demotion(demoted, producers);
     }
 
     pub fn get_header(&self, parent_hash: &B256) -> Option<B256> {
@@ -212,6 +214,7 @@ impl BidSorter {
         new_bid: BidEntry,
         trace: &mut SubmissionTrace,
         is_optimistic: bool,
+        producers: &mut HelixSpineProducers,
     ) -> bool {
         let state = self.forks.entry(new_bid.parent_hash).or_default();
         match state.bids.entry(new_pubkey) {
@@ -241,7 +244,7 @@ impl BidSorter {
                         new_bid,
                         Some(trace),
                         is_optimistic,
-                        &self.top_bid_tx,
+                        producers,
                     );
 
                     true
@@ -252,7 +255,7 @@ impl BidSorter {
                         self.curr_bid_slot,
                         Some(trace),
                         is_optimistic,
-                        &self.top_bid_tx,
+                        producers,
                     );
 
                     false
@@ -269,7 +272,7 @@ impl BidSorter {
                     new_bid,
                     Some(trace),
                     is_optimistic,
-                    &self.top_bid_tx,
+                    producers,
                 );
 
                 true
@@ -279,7 +282,11 @@ impl BidSorter {
 
     /// This is only for in-slot demotions. For builder that were demoted in a past slot we don't
     /// expect to receive optimistic bids here
-    fn process_demotion(&mut self, demoted: BlsPublicKeyBytes) {
+    fn process_demotion(
+        &mut self,
+        demoted: BlsPublicKeyBytes,
+        producers: &mut HelixSpineProducers,
+    ) {
         for state in self.forks.values_mut() {
             // remove entire entry for this builder
             if state.bids.remove(&demoted).is_none() {
@@ -289,7 +296,7 @@ impl BidSorter {
             if let Some((curr, _)) = &state.curr_bid &&
                 *curr == demoted
             {
-                state.traverse_update_top_bid(self.curr_bid_slot, None, false, &self.top_bid_tx);
+                state.traverse_update_top_bid(self.curr_bid_slot, None, false, producers);
             }
         }
     }

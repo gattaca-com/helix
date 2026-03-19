@@ -4,11 +4,11 @@ use std::{
     time::Duration,
 };
 
+use crossbeam_channel::Sender;
 use flux::spine::StandaloneProducer;
 use flux_utils::{DCache, SharedVector};
 use helix_common::{
-    RelayConfig, api::builder_api::TopBidUpdate, chain_info::ChainInfo, local_cache::LocalCache,
-    signing::RelaySigningContext,
+    RelayConfig, chain_info::ChainInfo, local_cache::LocalCache, signing::RelaySigningContext,
 };
 use helix_data_api::{BidsCache, DataApi, DeliveredPayloadsCache, SelectiveExpiry};
 use moka::sync::Cache;
@@ -17,8 +17,8 @@ use tracing::{error, info};
 use crate::{
     AuctioneerHandle, DbHandle, PostgresDatabaseService, RegWorkerHandle,
     api::{
-        Api, FutureBidSubmissionResult, builder::api::BuilderApi, proposer::ProposerApi,
-        router::build_router,
+        Api, FutureBidSubmissionResult, builder::api::BuilderApi,
+        extract::raw_web_socket::RawWebSocket, proposer::ProposerApi, router::build_router,
     },
     beacon::multi_beacon_client::MultiBeaconClient,
     gossip::{GrpcGossiperClientManager, process_gossip_messages},
@@ -40,7 +40,6 @@ pub fn start_api_service<A: Api>(
     api_provider: Arc<A::ApiProvider>,
     known_validators_loaded: Arc<AtomicBool>,
     terminating: Arc<AtomicBool>,
-    top_bid_tx: tokio::sync::broadcast::Sender<TopBidUpdate>,
     relay_network_api: RelayNetworkApi,
     db_handle: DbHandle,
     auctioneer_handle: AuctioneerHandle,
@@ -48,6 +47,7 @@ pub fn start_api_service<A: Api>(
     submissions: Arc<DCache>,
     bid_producer: StandaloneProducer<NewBidSubmission>,
     future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
+    web_socket_connections: Sender<RawWebSocket>,
 ) {
     tokio::spawn(run_api_service::<A>(
         config.clone(),
@@ -60,7 +60,6 @@ pub fn start_api_service<A: Api>(
         api_provider,
         known_validators_loaded,
         terminating.clone(),
-        top_bid_tx.clone(),
         relay_network_api,
         db_handle.clone(),
         auctioneer_handle,
@@ -68,6 +67,7 @@ pub fn start_api_service<A: Api>(
         submissions,
         bid_producer,
         future_results,
+        web_socket_connections,
     ));
 }
 
@@ -82,7 +82,6 @@ pub async fn run_api_service<A: Api>(
     api_provider: Arc<A::ApiProvider>,
     known_validators_loaded: Arc<AtomicBool>,
     terminating: Arc<AtomicBool>,
-    top_bid_tx: tokio::sync::broadcast::Sender<TopBidUpdate>,
     relay_network_api: RelayNetworkApi,
     db_handle: DbHandle,
     auctioneer_handle: AuctioneerHandle,
@@ -90,6 +89,7 @@ pub async fn run_api_service<A: Api>(
     submissions: Arc<DCache>,
     bid_producer: StandaloneProducer<NewBidSubmission>,
     future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
+    web_socket_connections: Sender<RawWebSocket>,
 ) {
     let gossiper = Arc::new(
         GrpcGossiperClientManager::new(config.relays.iter().map(|cfg| cfg.url.clone()).collect())
@@ -106,12 +106,12 @@ pub async fn run_api_service<A: Api>(
         db_handle.clone(),
         config.clone(),
         current_slot_info.clone(),
-        top_bid_tx,
         auctioneer_handle.clone(),
         api_provider.clone(),
         submissions,
         bid_producer,
         future_results,
+        web_socket_connections,
     );
     let builder_api = Arc::new(builder_api);
 

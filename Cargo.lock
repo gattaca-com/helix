@@ -5686,6 +5686,7 @@ dependencies = [
  "http-body-util",
  "httpmock",
  "hyper 1.8.1",
+ "hyper-util",
  "mockito",
  "moka",
  "num-format",

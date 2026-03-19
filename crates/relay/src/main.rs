@@ -28,8 +28,9 @@ use helix_relay::{
     Api, Auctioneer, AuctioneerHandle, BidSorter, BidSubmissionTcpListener, DbHandle, DecoderTile,
     DefaultBidAdjustor, FutureBidSubmissionResult, HelixSpine, RegWorker, RegWorkerHandle,
     RelayNetworkManager, S3PayloadSaver, SimRequest, SimResult, SimulatorTile,
-    SubmissionDataWithSpan, WebsiteService, spawn_tokio_monitoring, start_admin_service,
-    start_api_service, start_beacon_client, start_db_service, start_housekeeper,
+    SubmissionDataWithSpan, TopBidTile, WebsiteService, spawn_tokio_monitoring,
+    start_admin_service, start_api_service, start_beacon_client, start_db_service,
+    start_housekeeper,
 };
 use helix_types::BlsKeypair;
 use tikv_jemallocator::Jemalloc;
@@ -146,9 +147,9 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
         let auctioneer_handle = AuctioneerHandle::new(event_tx.clone());
         let registrations_handle = RegWorkerHandle::new(reg_worker_tx);
 
-        let (top_bid_tx, _) = tokio::sync::broadcast::channel(100);
+        let (web_socket_send, web_socket_recv) = crossbeam_channel::bounded(1024);
 
-        let submissions: Arc<DCache> = Arc::from(DCache::new(config.dcache_capacity));
+        let submissions: Arc<DCache> = DCache::new(config.dcache_capacity);
         let future_results = Arc::new(SharedVector::<FutureBidSubmissionResult>::with_capacity(
             MAX_SUBMISSIONS_PER_SLOT,
         ));
@@ -168,7 +169,6 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
             Arc::new(DefaultApiProvider {}),
             known_validators_loaded,
             terminating.clone(),
-            top_bid_tx.clone(),
             relay_network_api.api(),
             db_handle.clone(),
             auctioneer_handle.clone(),
@@ -176,6 +176,7 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
             submissions.clone(),
             bid_producer,
             future_results.clone(),
+            web_socket_send,
         );
 
         if config.website.enabled {
@@ -227,6 +228,12 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
                 ),
             );
 
+            attach_tile(
+                TopBidTile::new(web_socket_recv),
+                spine,
+                TileConfig::new(config.cores.top_bid, flux::utils::ThreadPriority::High),
+            );
+
             let sim_requests =
                 Arc::new(SharedVector::<SimRequest>::with_capacity(MAX_SUBMISSIONS_PER_SLOT));
             let sim_results =
@@ -246,7 +253,7 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
                 chain_info.as_ref().clone(),
                 config,
                 db_handle.clone(),
-                BidSorter::new(top_bid_tx),
+                BidSorter::new(),
                 local_cache.as_ref().clone(),
                 DefaultBidAdjustor {},
                 event_rx,

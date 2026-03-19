@@ -23,4 +23,8 @@ pub struct HelixSpine {
     /// SimulatorTile → Auctioneer.
     #[queue(size(2usize.pow(16)))]
     pub from_sim: SpineQueue<messages::FromSimMsg>,
+
+    /// Auctioneer → TopBidTile.
+    #[queue(size(2usize.pow(16)))]
+    pub top_bid: SpineQueue<messages::TopBidUpdate>,
 }
