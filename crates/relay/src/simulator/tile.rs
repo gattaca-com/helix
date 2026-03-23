@@ -12,7 +12,7 @@ use flux::{
     tile::{Tile, TileName},
     timing::Nanos,
 };
-use flux_utils::{DCache, SharedVector};
+use flux_utils::SharedVector;
 use helix_common::{
     SimulatorConfig, SubmissionTrace,
     bid_submission::OptimisticVersion,
@@ -38,7 +38,6 @@ use crate::{
 
 pub struct SimulatorTile {
     simulators: Vec<SimEntry>,
-    submissions: Arc<DCache>,
     /// Indices of simulators with an SSZ endpoint — static after construction.
     ssz_sim_indices: Vec<usize>,
     requests: PendingRequests,
@@ -99,7 +98,6 @@ impl Tile<HelixSpine> for SimulatorTile {
 impl SimulatorTile {
     pub fn create(
         configs: Vec<SimulatorConfig>,
-        submissions: Arc<DCache>,
         sim_requests: Arc<SharedVector<SimRequest>>,
         sim_results: Arc<SharedVector<SimResult>>,
     ) -> (Arc<AtomicBool>, Arc<AtomicBool>, Self) {
@@ -152,7 +150,6 @@ impl SimulatorTile {
 
         let tile = Self {
             simulators,
-            submissions,
             ssz_sim_indices,
             requests,
             priority_requests,
@@ -271,7 +268,6 @@ impl SimulatorTile {
         let timer = SimulatorMetrics::timer(sim.client.endpoint());
         let task_tx = self.task_tx.clone();
         let sim_results = self.sim_results.clone();
-        let subs_cache = self.submissions.clone();
         spawn_tracked!(async move {
             let start_sim = Nanos::now();
             let block_hash = req.submission.block_hash();
@@ -281,7 +277,7 @@ impl SimulatorTile {
             SimulatorMetrics::sim_count(optimistic_version.is_optimistic());
             let (mut res, ssz_retry) = match dispatch {
                 SimDispatch::Ssz { to_send, ssz_url, http } => {
-                    let request = create_ssz_request(&req, subs_cache);
+                    let request = create_ssz_request(&req);
                     let res =
                         SimulatorClient::do_sim_request(&request, req.is_top_bid, to_send).await;
                     (res, Some((request, ssz_url, http)))
@@ -565,13 +561,12 @@ impl PendingRequests {
     }
 }
 
-fn create_ssz_request(req: &ValidationRequest, _cache: Arc<DCache>) -> SszValidationRequest {
+fn create_ssz_request(req: &ValidationRequest) -> SszValidationRequest {
     match &req.decoder_params {
         Some(_params) => {
-
             //TODO: return to this when we're ready to send network bytes direct to the sim.
-            // For now we will allways set decoder_params to None and send reserialize submissions as SSZ bytes
-            // So this branch is unreachable.
+            // For now we will allways set decoder_params to None and send reserialize submissions
+            // as SSZ bytes So this branch is unreachable.
 
             unimplemented!("SSZ decoder params not yet supported in sim tile");
 
@@ -596,9 +591,10 @@ fn create_ssz_request(req: &ValidationRequest, _cache: Arc<DCache>) -> SszValida
             //         }
             //     }
             // }
-        },
+        }
         None => {
-            // If we don't have decoder params, we can't create a cache reference, so we must send the full SSZ.
+            // If we don't have decoder params, we can't create a cache reference, so we must send
+            // the full SSZ.
             return SszValidationRequest {
                 apply_blacklist: req.apply_blacklist,
                 registered_gas_limit: req.registered_gas_limit,
@@ -608,6 +604,5 @@ fn create_ssz_request(req: &ValidationRequest, _cache: Arc<DCache>) -> SszValida
                 signed_bid_submission: req.submission.as_ssz_bytes(),
             };
         }
-        
     }
 }

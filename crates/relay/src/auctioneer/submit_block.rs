@@ -46,11 +46,8 @@ impl<B: BidAdjustor> Context<B> {
                     send_submission_result(producers, &self.future_results, submission_ref, Ok(()));
                 };
 
-                let (req, entry) = self.prep_data_to_store_and_sim(
-                    validated,
-                    slot_data,
-                    is_optimistic,
-                );
+                let (req, entry) =
+                    self.prep_data_to_store_and_sim(validated, slot_data, is_optimistic);
 
                 if !self.completed_dry_run &&
                     entry.is_adjustable() &&

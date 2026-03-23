@@ -1,4 +1,4 @@
-use flux_utils::{ArrayStr, DCacheRef};
+use flux_utils::ArrayStr;
 use helix_common::SubmissionTrace;
 // Re-export as also used as spine message.
 pub use helix_common::api::builder_api::TopBidUpdate;
@@ -13,18 +13,11 @@ use crate::{
 
 #[derive(Debug, Clone, Copy)]
 pub struct NewBidSubmission {
-    pub dref: DCacheRef,
     pub payload_offset: usize,
     pub submission_ref: SubmissionRef,
     pub header: InternalBidSubmissionHeader,
     pub trace: SubmissionTrace,
     pub expected_pubkey: Option<BlsPublicKeyBytes>,
-}
-
-impl From<NewBidSubmission> for DCacheRef {
-    fn from(val: NewBidSubmission) -> Self {
-        val.dref
-    }
 }
 
 #[derive(Debug, Clone, Copy)]

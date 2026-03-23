@@ -4,9 +4,9 @@ use dashmap::DashMap;
 use flux::{spine::FluxSpine, tile::Tile, timing::Nanos};
 use flux_network::{
     Token,
-    tcp::{MessagePayload, PollEvent, SendBehavior, TcpConnector, TcpTelemetry},
+    tcp::{PollEvent, SendBehavior, TcpConnector, TcpTelemetry},
 };
-use flux_utils::DCache;
+use flux_utils::DCachePtr;
 use helix_common::{SubmissionTrace, metrics::SUB_CLIENT_TO_SERVER_LATENCY, utils::utcnow_ns};
 use helix_tcp_types::BID_SUB_HEADER_SIZE;
 use helix_types::BlsPublicKeyBytes;
@@ -41,7 +41,6 @@ pub struct BidSubmissionTcpListener {
     to_disconnect: Vec<Token>,
     registered: HashMap<Token, BlsPublicKeyBytes>,
     submission_errors: Vec<SubmissionError>,
-    submissions: Arc<DCache>,
 }
 
 impl BidSubmissionTcpListener {
@@ -49,13 +48,12 @@ impl BidSubmissionTcpListener {
         listener_addr: SocketAddr,
         api_key_cache: Arc<DashMap<String, Vec<BlsPublicKeyBytes>>>,
         max_connections: usize,
-        submissions: Arc<DCache>,
+        dcache_ptr: DCachePtr,
     ) -> Self {
         let mut listener = TcpConnector::default()
             .with_telemetry(TcpTelemetry::Enabled { app_name: HelixSpine::app_name() })
             .with_socket_buf_size(64 * 1024 * 1024) // 64MB
-            .with_dcache(submissions.clone());
-
+            .with_dcache(dcache_ptr);
         listener.listen_at(listener_addr).expect("failed to initialise the TCP listener");
 
         Self {
@@ -64,37 +62,31 @@ impl BidSubmissionTcpListener {
             to_disconnect: Vec::with_capacity(max_connections),
             registered: HashMap::with_capacity(max_connections),
             submission_errors: Vec::with_capacity(max_connections),
-            submissions,
         }
     }
 }
 
 impl Tile<HelixSpine> for BidSubmissionTcpListener {
     fn loop_body(&mut self, adapter: &mut flux::spine::SpineAdapter<HelixSpine>) {
-        self.listener.poll_with(|event| match event {
+        self.listener.poll_with_produce(&mut adapter.producers, |event| match event {
             PollEvent::Accept { listener: _, stream, peer_addr } => {
                 tracing::trace!("connected to new peer {:?} with token {:?}", peer_addr, stream);
+                None
             }
             PollEvent::Reconnect { token } => {
                 tracing::trace!("reconnected to peer with token {:?}", token);
+                None
             }
             PollEvent::Disconnect { token } => {
                 tracing::trace!("disconnected from peer with token {:?}", token);
                 self.registered.remove(&token);
+                None
             }
             PollEvent::Message { token, payload, send_ts } => {
-                let MessagePayload::Cached(dref) = payload else {
-                    tracing::error!("expected dcache-backed payload; dcache not configured");
-                    return;
-                };
-
                 if let Some(expected_pubkey) = self.registered.get(&token) {
-                    let header = match self
-                        .submissions
-                        .map(dref, |bytes| BidSubmissionHeader::try_from(bytes))
-                    {
-                        Ok(Ok(header)) => header,
-                        Ok(Err(e)) => {
+                    let header = match BidSubmissionHeader::try_from(payload) {
+                        Ok(header) => header,
+                        Err(e) => {
                             tracing::error!("{e} failed to parse the bid submission header");
                             self.submission_errors.push((
                                 token,
@@ -102,17 +94,7 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                                 None,
                                 BidSubmissionError::ParseError(e),
                             ));
-                            return;
-                        }
-                        Err(e) => {
-                            tracing::error!("{e} dcache read failed for tcp header");
-                            self.submission_errors.push((
-                                token,
-                                None,
-                                None,
-                                BidSubmissionError::InternalError,
-                            ));
-                            return;
+                            return None;
                         }
                     };
 
@@ -141,17 +123,16 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                         ..Default::default()
                     };
 
-                    adapter.produce(NewBidSubmission {
-                        dref,
+                    Some(NewBidSubmission {
                         payload_offset: BID_SUB_HEADER_SIZE,
                         header: InternalBidSubmissionHeader::from_tcp_header(id, header),
                         submission_ref,
                         trace,
                         expected_pubkey: Some(*expected_pubkey),
-                    });
+                    })
                 } else {
-                    match self.submissions.map(dref, RegistrationMsg::from_ssz_bytes) {
-                        Ok(Ok(msg)) => {
+                    match RegistrationMsg::from_ssz_bytes(payload) {
+                        Ok(msg) => {
                             let api_key = Uuid::from_bytes(msg.api_key).to_string();
                             if self
                                 .api_key_cache
@@ -168,15 +149,12 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                                 self.to_disconnect.push(token);
                             }
                         }
-                        Ok(Err(e)) => {
+                        Err(e) => {
                             tracing::error!(err=?e, "invalid registration message");
                             self.to_disconnect.push(token);
                         }
-                        Err(e) => {
-                            tracing::error!("{e} dcache read failed for registration message");
-                            self.to_disconnect.push(token);
-                        }
                     }
+                    None
                 }
             }
         });

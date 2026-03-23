@@ -13,7 +13,7 @@ use flux::{
     tile::{TileConfig, TileName, attach_tile},
     utils::ThreadPriority,
 };
-use flux_utils::{DCache, SharedVector};
+use flux_utils::SharedVector;
 use helix_common::{
     RelayConfig,
     api_provider::DefaultApiProvider,
@@ -26,8 +26,8 @@ use helix_common::{
 };
 use helix_relay::{
     Api, Auctioneer, AuctioneerHandle, BidSorter, BidSubmissionTcpListener, DbHandle, DecoderTile,
-    DefaultBidAdjustor, FutureBidSubmissionResult, HelixSpine, RegWorker, RegWorkerHandle,
-    RelayNetworkManager, S3PayloadSaver, SimRequest, SimResult, SimulatorTile,
+    DefaultBidAdjustor, FutureBidSubmissionResult, HelixSpine, NewBidSubmission, RegWorker,
+    RegWorkerHandle, RelayNetworkManager, S3PayloadSaver, SimRequest, SimResult, SimulatorTile,
     SubmissionDataWithSpan, TopBidTile, WebsiteService, spawn_tokio_monitoring,
     start_admin_service, start_api_service, start_beacon_client, start_db_service,
     start_housekeeper,
@@ -149,7 +149,6 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
 
         let (web_socket_send, web_socket_recv) = crossbeam_channel::bounded(1024);
 
-        let submissions: Arc<DCache> = DCache::new(config.dcache_capacity);
         let future_results = Arc::new(SharedVector::<FutureBidSubmissionResult>::with_capacity(
             MAX_SUBMISSIONS_PER_SLOT,
         ));
@@ -157,7 +156,8 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
             MAX_SUBMISSIONS_PER_SLOT,
         ));
 
-        let bid_producer = spine.spine.standalone_producer_for(TileName::from_str_truncate("Api"));
+        let bid_producer =
+            spine.spine.standalone_dcache_producer_for(TileName::from_str_truncate("Api"));
         start_api_service::<ApiProd>(
             config.clone(),
             db.clone(),
@@ -173,7 +173,6 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
             db_handle.clone(),
             auctioneer_handle.clone(),
             registrations_handle,
-            submissions.clone(),
             bid_producer,
             future_results.clone(),
             web_socket_send,
@@ -198,7 +197,6 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
                     local_cache.as_ref().clone(),
                     chain_info.as_ref().clone(),
                     config.clone(),
-                    submissions.clone(),
                     future_results.clone(),
                     decoded.clone(),
                     *core,
@@ -207,7 +205,7 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
             }
 
             if let Some(cfg) = config.s3_config.clone() {
-                let s3_saver = S3PayloadSaver::new(cfg, submissions.clone());
+                let s3_saver = S3PayloadSaver::new(cfg);
                 attach_tile(s3_saver, spine, TileConfig::background(None, None));
             }
 
@@ -217,7 +215,7 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
                 sock_addr,
                 local_cache.api_key_cache.clone(),
                 config.tcp_max_connections,
-                submissions.clone(),
+                spine.spine.dcache_ptr_for::<NewBidSubmission>(),
             );
             attach_tile(
                 block_submission_tcp_listener,
@@ -241,7 +239,6 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
 
             let (accept_optimistic, failsafe_triggered, sim_tile) = SimulatorTile::create(
                 config.simulators.clone(),
-                submissions.clone(),
                 sim_requests.clone(),
                 sim_results.clone(),
             );
