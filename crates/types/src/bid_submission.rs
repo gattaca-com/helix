@@ -110,6 +110,69 @@ impl Submission {
             Submission::Dehydrated(s) => s.parent_hash(),
         }
     }
+
+    pub fn slot(&self) -> Slot {
+        match self {
+            Submission::Full(s) => s.slot(),
+            Submission::Dehydrated(s) => Slot::from(s.slot()),
+        }
+    }
+
+    pub fn fork_name(&self) -> ForkName {
+        match self {
+            Submission::Full(s) => s.fork_name(),
+            Submission::Dehydrated(s) => s.fork_name(),
+        }
+    }
+
+    pub fn timestamp(&self) -> u64 {
+        match self {
+            Submission::Full(s) => s.timestamp(),
+            Submission::Dehydrated(s) => s.timestamp(),
+        }
+    }
+
+    pub fn prev_randao(&self) -> &B256 {
+        match self {
+            Submission::Full(s) => s.prev_randao(),
+            Submission::Dehydrated(s) => s.prev_randao(),
+        }
+    }
+
+    pub fn proposer_fee_recipient(&self) -> &Address {
+        match self {
+            Submission::Full(s) => s.proposer_fee_recipient(),
+            Submission::Dehydrated(s) => s.proposer_fee_recipient(),
+        }
+    }
+
+    pub fn block_number(&self) -> u64 {
+        match self {
+            Submission::Full(s) => s.block_number(),
+            Submission::Dehydrated(s) => s.block_number(),
+        }
+    }
+
+    pub fn fee_recipient(&self) -> Address {
+        match self {
+            Submission::Full(s) => s.fee_recipient(),
+            Submission::Dehydrated(s) => s.fee_recipient(),
+        }
+    }
+
+    pub fn bid_trace(&self) -> &BidTrace {
+        match self {
+            Submission::Full(s) => s.bid_trace(),
+            Submission::Dehydrated(s) => s.bid_trace(),
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), BlockValidationError> {
+        match self {
+            Submission::Full(s) => s.validate(),
+            Submission::Dehydrated(s) => s.validate(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Encode)]
@@ -737,6 +800,9 @@ pub enum BlockValidationError {
 
     #[error("builder not in proposer's trusted list: {proposer_trusted_builders:?}")]
     BuilderNotInProposersTrustedList { proposer_trusted_builders: Vec<String> },
+
+    #[error("cannot hydrate: missing transactions or blobs in cache")]
+    CannotHydrate,
 
     #[error("ssz_error: {0:?}")]
     SszError(SszError),

@@ -16,6 +16,7 @@ use flux_utils::SharedVector;
 use helix_common::{
     SimulatorConfig, SubmissionTrace,
     bid_submission::OptimisticVersion,
+    chain_info::ChainInfo,
     is_local_dev,
     metrics::SimulatorMetrics,
     record_submission_step,
@@ -23,12 +24,14 @@ use helix_common::{
     spawn_tracked,
     validator_preferences::{Filtering, ValidatorPreferences},
 };
-use helix_types::{BlsPublicKeyBytes, SignedBidSubmission, SubmissionVersion};
+use helix_types::{BlsPublicKeyBytes, SimHydrationCache, SignedBidSubmission, Submission};
 use ssz::Encode as _;
 use tracing::{debug, error, info, warn};
 
 use crate::{
     HelixSpine, SimRequest, ValidationRequest,
+    auctioneer::Bid,
+    bid_decoder::SubmissionDataWithSpan,
     simulator::{MergeRequest, SimResult, client::SimulatorClient},
     spine::{
         HelixSpineProducers,
@@ -49,6 +52,9 @@ pub struct SimulatorTile {
     rx: crossbeam_channel::Receiver<SimTileInternalEvent>,
     sim_requests: Arc<SharedVector<SimRequest>>,
     sim_results: Arc<SharedVector<SimResult>>,
+    decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
+    hydration_cache: SimHydrationCache,
+    chain_info: ChainInfo,
     /// If we have any synced simulator
     pub accept_optimistic: Arc<AtomicBool>,
     /// If we failed to demote a builder in the DB
@@ -100,6 +106,8 @@ impl SimulatorTile {
         configs: Vec<SimulatorConfig>,
         sim_requests: Arc<SharedVector<SimRequest>>,
         sim_results: Arc<SharedVector<SimResult>>,
+        decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
+        chain_info: ChainInfo,
     ) -> (Arc<AtomicBool>, Arc<AtomicBool>, Self) {
         let (task_tx, rx) = crossbeam_channel::bounded(512);
 
@@ -159,6 +167,9 @@ impl SimulatorTile {
             rx,
             sim_requests,
             sim_results,
+            decoded,
+            hydration_cache: SimHydrationCache::new(),
+            chain_info,
             accept_optimistic: accept_optimistic.clone(),
             failsafe_triggered: failsafe_triggered.clone(),
         };
@@ -177,19 +188,24 @@ impl SimulatorTile {
     }
 
     fn handle_sim_request(&mut self, req: crate::simulator::ValidationRequest, fast_track: bool) {
-        assert_eq!(req.bid_slot, self.last_bid_slot);
+        let Some(decoded_data) = self.decoded.get(req.decoded_ix) else {
+            error!(ix = req.decoded_ix, "decoded submission not found in ring");
+            return;
+        };
+        let builder_pubkey = *decoded_data.submission_data.submission.builder_pubkey();
+        assert_eq!(decoded_data.submission_data.submission.bid_slot(), self.last_bid_slot);
 
         self.local_telemetry.sims_reqs += 1;
 
-        let sim_id = self.select_simulator(&req.builder_pubkey);
+        let sim_id = self.select_simulator(&builder_pubkey);
 
         if let Some(id) = sim_id {
             self.local_telemetry.sims_sent_immediately += 1;
             self.spawn_sim(id, req)
         } else if fast_track {
-            self.priority_requests.store(req, &mut self.local_telemetry)
+            self.priority_requests.store(req, builder_pubkey, &mut self.local_telemetry)
         } else {
-            self.requests.store(req, &mut self.local_telemetry)
+            self.requests.store(req, builder_pubkey, &mut self.local_telemetry)
         }
     }
 
@@ -250,6 +266,45 @@ impl SimulatorTile {
 
     fn spawn_sim(&mut self, id: usize, req: ValidationRequest) {
         const PAUSE_DURATION: Duration = Duration::from_secs(60);
+        
+        let Some(decoded_data) = self.decoded.get(req.decoded_ix) else {
+            error!(ix = req.decoded_ix, "decoded submission not found in ring");
+            // Balance pending so handle_task_response can route the next request.
+            let sim = &mut self.simulators[id];
+            sim.pending += 1;
+            let result_ix = self.sim_results.push(SimResult::Validate((id, None)));
+            let _ = self.task_tx.try_send(SimTileInternalEvent::TaskDone {
+                id,
+                paused_until: None,
+                result_ix,
+            });
+            return;
+        };
+
+        let (submission, tx_root) = match decoded_data.submission_data.submission.clone() {
+            Submission::Full(s) => (s, None),
+            Submission::Dehydrated(d) => {
+                match self.hydration_cache.hydrate(d, self.chain_info.max_blobs_per_block()) {
+                    Ok(h) => (h.submission, h.tx_root),
+                    Err(e) => {
+                        error!(%e, "hydration failed in sim tile");
+                        let sim = &mut self.simulators[id];
+                        sim.pending += 1;
+                        let result_ix = self.sim_results.push(SimResult::Validate((id, None)));
+                        let _ = self.task_tx.try_send(SimTileInternalEvent::TaskDone {
+                            id,
+                            paused_until: None,
+                            result_ix,
+                        });
+                        return;
+                    }
+                }
+            }
+        };
+
+        let version = decoded_data.submission_data.version;
+        let trace = decoded_data.submission_data.trace;
+        let submission_ref = decoded_data.submission_data.submission_ref;
 
         let sim = &mut self.simulators[id];
         let dispatch = if let Some(url) = &sim.client.ssz_url {
@@ -259,7 +314,7 @@ impl SimulatorTile {
                 http: sim.client.client.clone(),
             }
         } else {
-            let (builder, method) = sim.client.sim_request_builder(req.submission.fork_name());
+            let (builder, method) = sim.client.sim_request_builder(submission.fork_name());
             SimDispatch::Json { to_send: builder, method: method.to_owned() }
         };
         sim.pending += 1;
@@ -270,14 +325,14 @@ impl SimulatorTile {
         let sim_results = self.sim_results.clone();
         spawn_tracked!(async move {
             let start_sim = Nanos::now();
-            let block_hash = req.submission.block_hash();
+            let block_hash = submission.block_hash();
             debug!(%block_hash, "sending simulation request");
 
             let optimistic_version = req.optimistic_version();
             SimulatorMetrics::sim_count(optimistic_version.is_optimistic());
             let (mut res, ssz_retry) = match dispatch {
                 SimDispatch::Ssz { to_send, ssz_url, http } => {
-                    let request = create_ssz_request(&req);
+                    let request = create_ssz_request(&req, &submission);
                     let res =
                         SimulatorClient::do_sim_request(&request, req.is_top_bid, to_send).await;
                     (res, Some((request, ssz_url, http)))
@@ -287,7 +342,7 @@ impl SimulatorTile {
                         if req.apply_blacklist { Filtering::Regional } else { Filtering::Global };
                     let json_req = JsonValidationRequest::new(
                         req.registered_gas_limit,
-                        &req.submission,
+                        &submission,
                         ValidatorPreferences { filtering, ..Default::default() },
                         Some(req.parent_beacon_block_root),
                         Some(req.inclusion_list.clone()),
@@ -310,7 +365,7 @@ impl SimulatorTile {
                 if let Some((request, ssz_url, http)) = ssz_retry {
                     let to_send = http.post(format!("{ssz_url}/validate"));
                     let mut retry_req = request.clone();
-                    retry_req.signed_bid_submission = req.submission.as_ssz_bytes();
+                    retry_req.signed_bid_submission = submission.as_ssz_bytes();
                     res =
                         SimulatorClient::do_sim_request(&retry_req, req.is_top_bid, to_send).await;
                 } else {
@@ -330,9 +385,8 @@ impl SimulatorTile {
                 None
             };
 
-            if let Some(got) = req.tx_root {
-                let expected = req.submission.transactions_root();
-
+            if let Some(got) = tx_root {
+                let expected = submission.transactions_root();
                 if expected != got {
                     res = Err(BlockSimError::InvalidTxRoot { got, expected })
                 }
@@ -340,13 +394,13 @@ impl SimulatorTile {
 
             record_submission_step("simulation", start_sim.elapsed());
 
+            let bid = Bid::new(version, &submission);
             let inner = SimulationResultInner {
-                submission_ref: req.submission_ref,
+                submission_ref,
                 result: res,
-                submission: req.submission,
-                trace: req.trace,
+                bid,
+                trace,
                 optimistic_version,
-                version: req.version,
             };
 
             let result_ix = sim_results.push(SimResult::Validate((id, Some(inner))));
@@ -394,8 +448,9 @@ impl SimulatorTile {
         }
 
         self.last_bid_slot = bid_slot;
-        self.requests.clear(bid_slot);
-        self.priority_requests.clear(bid_slot);
+        self.requests.clear();
+        self.priority_requests.clear();
+        self.hydration_cache.clear();
         let now = Instant::now();
         for s in self.simulators.iter_mut() {
             if s.paused_until.is_some_and(|until| until < now) {
@@ -484,10 +539,9 @@ pub type ValidationResult = (usize, Option<SimulationResultInner>);
 pub struct SimulationResultInner {
     pub result: Result<(), BlockSimError>,
     pub submission_ref: crate::auctioneer::SubmissionRef,
-    pub submission: SignedBidSubmission,
+    pub bid: Bid,
     pub trace: SubmissionTrace,
     pub optimistic_version: OptimisticVersion,
-    pub version: SubmissionVersion,
 }
 
 enum SimDispatch {
@@ -526,7 +580,7 @@ fn jump_hash(mut key: u64, n: usize) -> usize {
 
 /// Pending requests, we only keep the last one for each builder.
 struct PendingRequests {
-    reqs: Vec<crate::simulator::ValidationRequest>,
+    reqs: Vec<(crate::simulator::ValidationRequest, BlsPublicKeyBytes)>,
 }
 
 impl PendingRequests {
@@ -537,72 +591,43 @@ impl PendingRequests {
     fn store(
         &mut self,
         req: crate::simulator::ValidationRequest,
+        builder_pubkey: BlsPublicKeyBytes,
         local_telemetry: &mut LocalTelemetry,
     ) {
-        if let Some(i) = self.reqs.iter().position(|r| r.builder_pubkey == req.builder_pubkey) {
-            if req.on_receive_ns() > self.reqs[i].on_receive_ns() {
-                self.reqs[i] = req;
+        if let Some(i) = self.reqs.iter().position(|(_, pk)| *pk == builder_pubkey) {
+            if req.on_receive_ns() > self.reqs[i].0.on_receive_ns() {
+                self.reqs[i].0 = req;
             }
             local_telemetry.sims_reqs_dropped += 1;
         } else {
-            self.reqs.push(req);
+            self.reqs.push((req, builder_pubkey));
         }
         local_telemetry.max_pending = local_telemetry.max_pending.max(self.reqs.len());
     }
 
     fn next_req(&mut self) -> Option<crate::simulator::ValidationRequest> {
-        let i = self.reqs.iter().enumerate().max_by_key(|(_, r)| r.sort_key()).map(|(i, _)| i)?;
-        Some(self.reqs.swap_remove(i))
+        let i =
+            self.reqs.iter().enumerate().max_by_key(|(_, (r, _))| r.sort_key()).map(|(i, _)| i)?;
+        Some(self.reqs.swap_remove(i).0)
     }
 
     /// Clear backlog of simulations from the previous bid slot.
-    fn clear(&mut self, bid_slot: u64) {
-        self.reqs.retain(|r| r.bid_slot >= bid_slot);
+    /// All pending requests are always for `last_bid_slot` (asserted on intake).
+    fn clear(&mut self) {
+        self.reqs.clear();
     }
 }
 
-fn create_ssz_request(req: &ValidationRequest) -> SszValidationRequest {
-    match &req.decoder_params {
-        Some(_params) => {
-            //TODO: return to this when we're ready to send network bytes direct to the sim.
-            // For now we will allways set decoder_params to None and send reserialize submissions
-            // as SSZ bytes So this branch is unreachable.
-
-            unimplemented!("SSZ decoder params not yet supported in sim tile");
-
-            // let mut bytes = Vec::with_capacity(req.original_data_ref.len);
-            // match cache.read(req.original_data_ref, &mut bytes) {
-            //     Ok(_) => SszValidationRequest {
-            //         apply_blacklist: req.apply_blacklist,
-            //         registered_gas_limit: req.registered_gas_limit,
-            //         parent_beacon_block_root: req.parent_beacon_block_root,
-            //         inclusion_list: req.inclusion_list.clone(),
-            //         decoder_params: Some(params),
-            //         signed_bid_submission: bytes,
-            //     },
-            //     Err(_) => {
-            //         SszValidationRequest {
-            //             apply_blacklist: req.apply_blacklist,
-            //             registered_gas_limit: req.registered_gas_limit,
-            //             parent_beacon_block_root: req.parent_beacon_block_root,
-            //             inclusion_list: req.inclusion_list.clone(),
-            //             decoder_params: None,
-            //             signed_bid_submission: req.submission.as_ssz_bytes(),
-            //         }
-            //     }
-            // }
-        }
-        None => {
-            // If we don't have decoder params, we can't create a cache reference, so we must send
-            // the full SSZ.
-            return SszValidationRequest {
-                apply_blacklist: req.apply_blacklist,
-                registered_gas_limit: req.registered_gas_limit,
-                parent_beacon_block_root: req.parent_beacon_block_root,
-                inclusion_list: req.inclusion_list.clone(),
-                decoder_params: None,
-                signed_bid_submission: req.submission.as_ssz_bytes(),
-            };
-        }
+fn create_ssz_request(
+    req: &ValidationRequest,
+    submission: &SignedBidSubmission,
+) -> SszValidationRequest {
+    SszValidationRequest {
+        apply_blacklist: req.apply_blacklist,
+        registered_gas_limit: req.registered_gas_limit,
+        parent_beacon_block_root: req.parent_beacon_block_root,
+        inclusion_list: req.inclusion_list.clone(),
+        decoder_params: None,
+        signed_bid_submission: submission.as_ssz_bytes(),
     }
 }

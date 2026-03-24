@@ -148,8 +148,8 @@ impl<B: BidAdjustor> Context<B> {
             return;
         };
 
-        let builder = *result.submission.builder_public_key();
-        let block_hash = *result.submission.block_hash();
+        let builder = result.bid.builder_pubkey;
+        let block_hash = result.bid.block_hash;
 
         let is_adjusted = self.payloads.get(&block_hash).is_some_and(|bid| bid.is_adjusted());
 
@@ -157,10 +157,6 @@ impl<B: BidAdjustor> Context<B> {
             if err.is_demotable() {
                 if is_adjusted {
                     warn!(%builder, %block_hash, %err, "block simulation resulted in an error. Disabling adjustments...");
-                    debug!(
-                        "invalid adjusted block header: {:?}",
-                        result.submission.execution_payload_ref().to_header(None, None)
-                    );
 
                     if !self.cache.adjustments_enabled.load(Ordering::Relaxed) {
                         warn!(%block_hash, "adjustments already disabled");
@@ -179,11 +175,11 @@ impl<B: BidAdjustor> Context<B> {
                     SimulatorMetrics::demotion_count();
 
                     let reason = err.to_string();
-                    let bid_slot = result.submission.slot();
+                    let bid_slot = result.bid.bid_slot;
                     let failsafe_triggered = self.failsafe_triggered.clone();
 
                     self.db.db_demote_builder(
-                        bid_slot.as_u64(),
+                        bid_slot,
                         builder,
                         block_hash,
                         reason,

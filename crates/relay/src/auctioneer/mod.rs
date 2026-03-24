@@ -53,7 +53,7 @@ use crate::{
 pub use crate::{
     auctioneer::{
         bid_adjustor::{BidAdjustor, DefaultBidAdjustor},
-        bid_sorter::BidSorter,
+        bid_sorter::{Bid, BidSorter},
         block_merger::get_mergeable_orders,
         context::{Context, send_submission_result},
         types::{InternalBidSubmissionHeader, SubmissionRef},
@@ -121,8 +121,8 @@ impl<B: BidAdjustor> Tile<HelixSpine> for Auctioneer<B> {
 
         adapter.consume(|submission: DecodedSubmission, producers| {
             match self.decoded.get(submission.ix) {
-                Some(submission) => {
-                    let event = Event::Submission { submission_data: submission };
+                Some(submission_data) => {
+                    let event = Event::Submission { submission_data, decoded_ix: submission.ix };
                     self.state.step(event, &mut self.ctx, &mut self.tel, producers);
                 }
                 None => {
@@ -351,13 +351,18 @@ impl State {
             ///////////// VALID STATES / EVENTS /////////////
 
             // submission
-            (State::Sorting(slot_data), Event::Submission { submission_data }) => {
+            (State::Sorting(slot_data), Event::Submission { submission_data, decoded_ix }) => {
                 record_submission_step("loop_recv", submission_data.sent_at.elapsed());
 
                 let _guard = submission_data.span.enter();
                 trace!("received in auctioneer");
 
-                ctx.handle_submission(&submission_data.submission_data, slot_data, producers);
+                ctx.handle_submission(
+                    &submission_data.submission_data,
+                    decoded_ix,
+                    slot_data,
+                    producers,
+                );
 
                 trace!("finished processing");
                 drop(_guard);
@@ -430,9 +435,11 @@ impl State {
 
             // sim result
             (State::Sorting(slot_data), Event::SimResult(mut result)) => {
-                let already_sent =
-                    result.1.as_ref().is_some_and(|r| r.submission.slot() == slot_data.bid_slot) &&
-                        ctx.sort_simulation_result(&mut result, producers);
+                let already_sent = result
+                    .1
+                    .as_ref()
+                    .is_some_and(|r| r.bid.bid_slot == slot_data.bid_slot.as_u64()) &&
+                    ctx.sort_simulation_result(&mut result, producers);
 
                 ctx.handle_simulation_result(result, already_sent, producers);
             }

@@ -2,15 +2,15 @@ use std::collections::HashMap;
 
 use alloy_primitives::{Address, B256, U256};
 use helix_common::{
-    SubmissionTrace, api::builder_api::InclusionListWithMetadata,
-    bid_submission::OptimisticVersion, decoder::SubmissionDecoderParams, simulator::BlockSimError,
+    api::builder_api::InclusionListWithMetadata, bid_submission::OptimisticVersion,
+    simulator::BlockSimError,
 };
 use helix_types::{
-    BlsPublicKeyBytes, BuilderInclusionResult, ExecutionPayload, ExecutionRequests,
-    MergeableOrderWithOrigin, MergedBlockTrace, SignedBidSubmission, SubmissionVersion,
+    BuilderInclusionResult, ExecutionPayload, ExecutionRequests, MergeableOrderWithOrigin,
+    MergedBlockTrace,
 };
 
-use crate::{auctioneer::SubmissionRef, simulator::tile::ValidationResult};
+use crate::simulator::tile::ValidationResult;
 
 pub mod client;
 pub mod tile;
@@ -22,17 +22,11 @@ pub struct ValidationRequest {
     pub is_top_bid: bool,
     pub is_optimistic: bool,
     pub apply_blacklist: bool,
-    pub bid_slot: u64,
     pub registered_gas_limit: u64,
-    pub builder_pubkey: BlsPublicKeyBytes,
     pub parent_beacon_block_root: B256,
-    pub submission_ref: SubmissionRef,
-    pub version: SubmissionVersion,
-    pub tx_root: Option<B256>, // None if submission wasn't dehydrated
     pub inclusion_list: InclusionListWithMetadata,
-    pub trace: SubmissionTrace,
-    pub submission: SignedBidSubmission,
-    pub decoder_params: Option<SubmissionDecoderParams>,
+    pub decoded_ix: usize,
+    pub receive_ns: u64,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -84,7 +78,7 @@ pub enum SimResult {
 
 impl ValidationRequest {
     pub fn on_receive_ns(&self) -> u64 {
-        self.trace.receive_ns.0
+        self.receive_ns
     }
 
     // TODO: use a "score" eg how close to top bid even if below

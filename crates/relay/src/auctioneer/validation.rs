@@ -1,23 +1,21 @@
 use alloy_primitives::B256;
 use helix_common::BuilderInfo;
-use helix_types::{
-    BlockValidationError, BlsPublicKeyBytes, SignedBidSubmission, SubmissionVersion,
-};
+use helix_types::{BlockValidationError, BlsPublicKeyBytes, Submission, SubmissionVersion};
 
 use crate::{
-    auctioneer::{bid_adjustor::BidAdjustor, context::Context, types::SlotData},
+    auctioneer::{bid_adjustor::BidAdjustor, context::Context, types::{SlotData, SubmissionData}},
     housekeeper::PayloadAttributesUpdate,
 };
 
 impl<B: BidAdjustor> Context<B> {
     pub fn validate_submission<'a>(
         &mut self,
-        submission: &SignedBidSubmission,
-        version: SubmissionVersion,
-        withdrawals_root: &B256,
+        submission_data: &SubmissionData,
         builder_info: &BuilderInfo,
         slot_data: &'a SlotData,
     ) -> Result<&'a PayloadAttributesUpdate, BlockValidationError> {
+        let submission = &submission_data.submission;
+
         if submission.slot() != self.bid_slot {
             return Err(BlockValidationError::SubmissionForWrongSlot {
                 expected: self.bid_slot,
@@ -34,8 +32,19 @@ impl<B: BidAdjustor> Context<B> {
             });
         };
 
-        self.staleness_check(submission.builder_public_key(), version)?;
-        self.validate_submission_data(submission, withdrawals_root, slot_data, payload_attributes)?;
+        if let helix_types::Submission::Dehydrated(ref dehydrated) = *submission {
+            if !self.hydration_cache.can_hydrate(dehydrated, self.chain_info.max_blobs_per_block()) {
+                return Err(BlockValidationError::CannotHydrate);
+            }
+        }
+
+        self.staleness_check(submission.builder_pubkey(), submission_data.version)?;
+        self.validate_submission_data(
+            submission,
+            &submission_data.withdrawals_root,
+            slot_data,
+            payload_attributes,
+        )?;
         check_if_trusted_builder(builder_info, slot_data)?;
 
         Ok(payload_attributes)
@@ -43,7 +52,7 @@ impl<B: BidAdjustor> Context<B> {
 
     fn validate_submission_data(
         &self,
-        payload: &SignedBidSubmission,
+        payload: &Submission,
         withdrawals_root: &B256,
         slot_data: &SlotData,
         payload_attributes: &PayloadAttributesUpdate,
