@@ -26,13 +26,14 @@ use helix_common::{
 };
 use helix_relay::{
     Api, Auctioneer, AuctioneerHandle, BidSorter, BidSubmissionTcpListener, DbHandle, DecoderTile,
-    DefaultBidAdjustor, FutureBidSubmissionResult, HelixSpine, NewBidSubmission, RegWorker,
-    RegWorkerHandle, RelayNetworkManager, S3PayloadSaver, SimRequest, SimResult, SimulatorTile,
-    SubmissionDataWithSpan, TopBidTile, WebsiteService, spawn_tokio_monitoring,
+    DefaultBidAdjustor, FutureBidSubmissionResult, HelixSpine, HelixSpineConfig, NewBidSubmission,
+    RegWorker, RegWorkerHandle, RelayNetworkManager, S3PayloadSaver, SimRequest, SimResult,
+    SimulatorTile, SubmissionDataWithSpan, TopBidTile, WebsiteService, spawn_tokio_monitoring,
     start_admin_service, start_api_service, start_beacon_client, start_db_service,
     start_housekeeper,
 };
 use helix_types::BlsKeypair;
+use serde::Deserialize;
 use tikv_jemallocator::Jemalloc;
 use tokio::signal::unix::{SignalKind, signal};
 use tracing::{error, info};
@@ -51,8 +52,23 @@ impl Api for ApiProd {
     type ApiProvider = DefaultApiProvider;
 }
 
+#[derive(Deserialize)]
+pub struct RelayConfigExt {
+    #[serde(flatten)]
+    pub config: RelayConfig,
+    pub spine_config: HelixSpineConfig,
+}
+
+impl AsRef<RelayConfig> for RelayConfigExt {
+    fn as_ref(&self) -> &RelayConfig {
+        &self.config
+    }
+}
+
 fn main() {
-    let config = load_config();
+    let config: RelayConfigExt = load_config();
+    let RelayConfigExt { config, spine_config } = config;
+
     init_runtime(&config);
 
     let keypair = load_keypair();
@@ -76,7 +92,7 @@ fn main() {
     init_panic_hook(app_id, config.discord_webhook_url.clone(), config.logging.dir_path());
 
     block_on(start_metrics_server(&config));
-    match block_on(run(instance_id, config, keypair)) {
+    match block_on(run(instance_id, config, spine_config, keypair)) {
         Ok(_) => info!("relay exited"),
         Err(err) => {
             error!(%err, "relay exited with error");
@@ -85,7 +101,12 @@ fn main() {
     }
 }
 
-async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
+async fn run(
+    instance_id: String,
+    config: RelayConfig,
+    spine_config: HelixSpineConfig,
+    keypair: BlsKeypair,
+) -> eyre::Result<()> {
     let beacon_client = start_beacon_client(&config);
     let chain_info = Arc::new(beacon_client.load_chain_info().await);
 
@@ -140,7 +161,7 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
     spawn_tokio_monitoring();
 
     HelixSpine::remove_all_files();
-    let spine = HelixSpine::new(None);
+    let spine = HelixSpine::new_with_config(None, spine_config);
     spine.start(None, Some(termination_grace_period), |spine| {
         start_admin_service(local_cache.clone(), expect_env_var(ADMIN_TOKEN_ENV_VAR));
 

@@ -36,7 +36,7 @@ pub use crate::{
     housekeeper::start_housekeeper,
     network::RelayNetworkManager,
     simulator::{SimRequest, SimResult},
-    spine::{HelixSpine, messages::NewBidSubmission},
+    spine::{HelixSpine, HelixSpineConfig, messages::NewBidSubmission},
     tcp_bid_recv::{
         BidSubmissionFlags, BidSubmissionHeader, BidSubmissionResponse, BidSubmissionTcpListener,
         RegistrationMsg, S3PayloadSaver,
