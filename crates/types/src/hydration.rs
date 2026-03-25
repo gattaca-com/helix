@@ -451,10 +451,14 @@ impl HydrationCache {
     ) -> bool {
         match submission {
             DehydratedBidSubmission::Fulu(s) => {
-                match self.caches.get(&s.message.builder_pubkey) {
-                    Some(cache) => s.can_hydrate_inner(&cache.transactions, &cache.blobs_fulu, max_blobs_per_block),
-                    None => false,
-                }
+                let empty_txs = FxHashMap::default();
+                let empty_blobs = FxHashMap::default();
+                let (txs, blobs) = self
+                    .caches
+                    .get(&s.message.builder_pubkey)
+                    .map(|c| (&c.transactions, &c.blobs_fulu))
+                    .unwrap_or((&empty_txs, &empty_blobs));
+                s.can_hydrate_inner(txs, blobs, max_blobs_per_block)
             }
         }
     }
@@ -467,9 +471,7 @@ impl HydrationCache {
         match submission {
             DehydratedBidSubmission::Fulu(s) => {
                 let pubkey = s.message.builder_pubkey;
-                let Some(entry) = self.caches.get_mut(&pubkey) else {
-                    return Err(HydrationError::MissingBuilderCache { pubkey });
-                };
+                let entry = self.caches.entry(pubkey).or_default();
                 s.hydrate_inner(&mut entry.transactions, &mut entry.blobs_fulu, max_blobs_per_block)
             }
         }
@@ -514,6 +516,4 @@ pub enum HydrationError {
     #[error("too many blobs: blobs {blobs}, max {max}")]
     TooManyBlobs { blobs: usize, max: usize },
 
-    #[error("no cache for builder {pubkey}")]
-    MissingBuilderCache { pubkey: BlsPublicKeyBytes },
 }
