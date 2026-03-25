@@ -56,7 +56,7 @@ impl Api for ApiProd {
 pub struct RelayConfigExt {
     #[serde(flatten)]
     pub config: RelayConfig,
-    pub spine_config: HelixSpineConfig,
+    pub spine_config: Option<HelixSpineConfig>,
 }
 
 impl AsRef<RelayConfig> for RelayConfigExt {
@@ -104,7 +104,7 @@ fn main() {
 async fn run(
     instance_id: String,
     config: RelayConfig,
-    spine_config: HelixSpineConfig,
+    spine_config: Option<HelixSpineConfig>,
     keypair: BlsKeypair,
 ) -> eyre::Result<()> {
     let beacon_client = start_beacon_client(&config);
@@ -161,7 +161,12 @@ async fn run(
     spawn_tokio_monitoring();
 
     HelixSpine::remove_all_files();
-    let spine = HelixSpine::new_with_config(None, spine_config);
+    let spine = if let Some(spine_config) = spine_config {
+        HelixSpine::new_with_config(None, spine_config)
+    } else {
+        HelixSpine::new(None)
+    };
+
     spine.start(None, Some(termination_grace_period), |spine| {
         start_admin_service(local_cache.clone(), expect_env_var(ADMIN_TOKEN_ENV_VAR));
 
