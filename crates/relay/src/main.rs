@@ -13,7 +13,7 @@ use flux::{
     tile::{TileConfig, TileName, attach_tile},
     utils::ThreadPriority,
 };
-use flux_utils::{DCache, SharedVector};
+use flux_utils::SharedVector;
 use helix_common::{
     RelayConfig,
     api_provider::DefaultApiProvider,
@@ -26,13 +26,14 @@ use helix_common::{
 };
 use helix_relay::{
     Api, Auctioneer, AuctioneerHandle, BidSorter, BidSubmissionTcpListener, DbHandle, DecoderTile,
-    DefaultBidAdjustor, FutureBidSubmissionResult, HelixSpine, RegWorker, RegWorkerHandle,
-    RelayNetworkManager, S3PayloadSaver, SimRequest, SimResult, SimulatorTile,
-    SubmissionDataWithSpan, TopBidTile, WebsiteService, spawn_tokio_monitoring,
+    DefaultBidAdjustor, FutureBidSubmissionResult, HelixSpine, HelixSpineConfig, NewBidSubmission,
+    RegWorker, RegWorkerHandle, RelayNetworkManager, S3PayloadSaver, SimRequest, SimResult,
+    SimulatorTile, SubmissionDataWithSpan, TopBidTile, WebsiteService, spawn_tokio_monitoring,
     start_admin_service, start_api_service, start_beacon_client, start_db_service,
     start_housekeeper,
 };
 use helix_types::BlsKeypair;
+use serde::Deserialize;
 use tikv_jemallocator::Jemalloc;
 use tokio::signal::unix::{SignalKind, signal};
 use tracing::{error, info};
@@ -51,8 +52,23 @@ impl Api for ApiProd {
     type ApiProvider = DefaultApiProvider;
 }
 
+#[derive(Deserialize)]
+pub struct RelayConfigExt {
+    #[serde(flatten)]
+    pub config: RelayConfig,
+    pub spine_config: Option<HelixSpineConfig>,
+}
+
+impl AsRef<RelayConfig> for RelayConfigExt {
+    fn as_ref(&self) -> &RelayConfig {
+        &self.config
+    }
+}
+
 fn main() {
-    let config = load_config();
+    let config: RelayConfigExt = load_config();
+    let RelayConfigExt { config, spine_config } = config;
+
     init_runtime(&config);
 
     let keypair = load_keypair();
@@ -76,7 +92,7 @@ fn main() {
     init_panic_hook(app_id, config.discord_webhook_url.clone(), config.logging.dir_path());
 
     block_on(start_metrics_server(&config));
-    match block_on(run(instance_id, config, keypair)) {
+    match block_on(run(instance_id, config, spine_config, keypair)) {
         Ok(_) => info!("relay exited"),
         Err(err) => {
             error!(%err, "relay exited with error");
@@ -85,7 +101,12 @@ fn main() {
     }
 }
 
-async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
+async fn run(
+    instance_id: String,
+    config: RelayConfig,
+    spine_config: Option<HelixSpineConfig>,
+    keypair: BlsKeypair,
+) -> eyre::Result<()> {
     let beacon_client = start_beacon_client(&config);
     let chain_info = Arc::new(beacon_client.load_chain_info().await);
 
@@ -140,7 +161,12 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
     spawn_tokio_monitoring();
 
     HelixSpine::remove_all_files();
-    let spine = HelixSpine::new(None);
+    let spine = if let Some(spine_config) = spine_config {
+        HelixSpine::new_with_config(None, spine_config)
+    } else {
+        HelixSpine::new(None)
+    };
+
     spine.start(None, Some(termination_grace_period), |spine| {
         start_admin_service(local_cache.clone(), expect_env_var(ADMIN_TOKEN_ENV_VAR));
 
@@ -149,7 +175,6 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
 
         let (web_socket_send, web_socket_recv) = crossbeam_channel::bounded(1024);
 
-        let submissions: Arc<DCache> = DCache::new(config.dcache_capacity);
         let future_results = Arc::new(SharedVector::<FutureBidSubmissionResult>::with_capacity(
             MAX_SUBMISSIONS_PER_SLOT,
         ));
@@ -157,7 +182,8 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
             MAX_SUBMISSIONS_PER_SLOT,
         ));
 
-        let bid_producer = spine.spine.standalone_producer_for(TileName::from_str_truncate("Api"));
+        let bid_producer =
+            spine.spine.standalone_dcache_producer_for(TileName::from_str_truncate("Api"));
         start_api_service::<ApiProd>(
             config.clone(),
             db.clone(),
@@ -173,7 +199,6 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
             db_handle.clone(),
             auctioneer_handle.clone(),
             registrations_handle,
-            submissions.clone(),
             bid_producer,
             future_results.clone(),
             web_socket_send,
@@ -198,7 +223,6 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
                     local_cache.as_ref().clone(),
                     chain_info.as_ref().clone(),
                     config.clone(),
-                    submissions.clone(),
                     future_results.clone(),
                     decoded.clone(),
                     *core,
@@ -207,7 +231,7 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
             }
 
             if let Some(cfg) = config.s3_config.clone() {
-                let s3_saver = S3PayloadSaver::new(cfg, submissions.clone());
+                let s3_saver = S3PayloadSaver::new(cfg);
                 attach_tile(s3_saver, spine, TileConfig::background(None, None));
             }
 
@@ -217,7 +241,7 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
                 sock_addr,
                 local_cache.api_key_cache.clone(),
                 config.tcp_max_connections,
-                submissions.clone(),
+                spine.spine.dcache_ptr_for::<NewBidSubmission>(),
             );
             attach_tile(
                 block_submission_tcp_listener,
@@ -241,7 +265,6 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
 
             let (accept_optimistic, failsafe_triggered, sim_tile) = SimulatorTile::create(
                 config.simulators.clone(),
-                submissions.clone(),
                 sim_requests.clone(),
                 sim_results.clone(),
             );

@@ -357,11 +357,7 @@ impl State {
                 let _guard = submission_data.span.enter();
                 trace!("received in auctioneer");
 
-                ctx.handle_submission(
-                    &submission_data.submission_data,
-                    slot_data,
-                    producers,
-                );
+                ctx.handle_submission(&submission_data.submission_data, slot_data, producers);
 
                 trace!("finished processing");
                 drop(_guard);

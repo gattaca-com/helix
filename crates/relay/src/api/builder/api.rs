@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use axum::{Extension, http::StatusCode, response::IntoResponse};
 use crossbeam_channel::Sender;
-use flux::spine::StandaloneProducer;
-use flux_utils::{DCache, SharedVector};
+use flux::spine::StandaloneDCacheProducer;
+use flux_utils::SharedVector;
 use helix_common::{RelayConfig, local_cache::LocalCache};
 use helix_database::handle::DbHandle;
 
@@ -21,8 +21,7 @@ pub struct BuilderApi<A: Api> {
     pub relay_config: Arc<RelayConfig>,
     pub auctioneer_handle: AuctioneerHandle,
     pub api_provider: Arc<A::ApiProvider>,
-    pub submissions: Arc<DCache>,
-    pub producer: StandaloneProducer<NewBidSubmission>,
+    pub producer: StandaloneDCacheProducer<NewBidSubmission>,
     pub future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
     pub web_socket_connections: Sender<RawWebSocket>,
 }
@@ -35,8 +34,7 @@ impl<A: Api> BuilderApi<A> {
         curr_slot_info: CurrentSlotInfo,
         auctioneer_handle: AuctioneerHandle,
         api_provider: Arc<A::ApiProvider>,
-        submissions: Arc<DCache>,
-        producer: StandaloneProducer<NewBidSubmission>,
+        producer: StandaloneDCacheProducer<NewBidSubmission>,
         future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
         web_socket_connections: Sender<RawWebSocket>,
     ) -> Self {
@@ -47,7 +45,6 @@ impl<A: Api> BuilderApi<A> {
             curr_slot_info,
             auctioneer_handle,
             api_provider,
-            submissions,
             producer,
             future_results,
             web_socket_connections,

@@ -2,11 +2,11 @@ use std::sync::Arc;
 
 use alloy_primitives::B256;
 use flux::{
-    spine::DCacheRead,
+    spine::{DCacheRead, SpineProducers},
     tile::Tile,
     timing::{InternalMessage, Nanos},
 };
-use flux_utils::{DCache, SharedVector};
+use flux_utils::SharedVector;
 use helix_common::{
     RelayConfig, SubmissionTrace,
     api::builder_api::MAX_PAYLOAD_LENGTH,
@@ -36,7 +36,6 @@ pub struct DecoderTile {
     chain_info: ChainInfo,
     cache: LocalCache,
     config: RelayConfig,
-    submissions: Arc<DCache>,
     decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
     future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
     buffer: Vec<u8>,
@@ -45,8 +44,7 @@ pub struct DecoderTile {
 
 impl Tile<HelixSpine> for DecoderTile {
     fn loop_body(&mut self, adapter: &mut flux::spine::SpineAdapter<HelixSpine>) {
-        match adapter.consume_dcache_collaborative_internal_message(
-            &self.submissions,
+        adapter.consume_with_dcache_collaborative_internal_message(
             |new_bid: &InternalMessage<NewBidSubmission>, full_payload| {
                 let payload = &full_payload[new_bid.payload_offset..];
                 let sent_at = new_bid.tracking_timestamp().publish_t();
@@ -63,44 +61,44 @@ impl Tile<HelixSpine> for DecoderTile {
                     new_bid.expected_pubkey.as_ref(),
                 )
             },
-        ) {
-            DCacheRead::Ok((new_bid, result)) => match result {
-                Ok((submission, span)) => {
-                    let ix = self.decoded.push(SubmissionDataWithSpan {
-                        submission_data: submission,
-                        span,
-                        sent_at: new_bid.tracking_timestamp().publish_t(),
-                        original_data_ref: new_bid.dref,
-                    });
-                    adapter.produce(DecodedSubmission { ix });
-                }
-                Err(e) => {
+            |res, producers| match res {
+                DCacheRead::Ok((new_bid, result)) => match result {
+                    Ok((submission, span)) => {
+                        let ix = self.decoded.push(SubmissionDataWithSpan {
+                            submission_data: submission,
+                            span,
+                            sent_at: new_bid.tracking_timestamp().publish_t(),
+                        });
+                        producers.produce(DecodedSubmission { ix });
+                    }
+                    Err(e) => {
+                        send_submission_result(
+                            producers,
+                            &self.future_results,
+                            new_bid.submission_ref,
+                            Err(e),
+                        );
+                    }
+                },
+                DCacheRead::Lost(new_bid) | DCacheRead::NoRef(new_bid) => {
+                    tracing::error!("dcache read failed");
                     send_submission_result(
-                        &mut adapter.producers,
+                        producers,
                         &self.future_results,
                         new_bid.submission_ref,
-                        Err(e),
+                        Err(BuilderApiError::InternalError),
                     );
                 }
+                DCacheRead::SpedPast => {
+                    tracing::error!("submissions consumer got sped past");
+                }
+                DCacheRead::Empty => {}
             },
-            DCacheRead::Lost(new_bid) => {
-                tracing::error!("dcache read failed");
-                send_submission_result(
-                    &mut adapter.producers,
-                    &self.future_results,
-                    new_bid.submission_ref,
-                    Err(BuilderApiError::InternalError),
-                );
-            }
-            DCacheRead::SpedPast => {
-                tracing::error!("submissions consumer got sped past");
-            }
-            DCacheRead::Empty => {}
-        }
+        );
     }
 
     fn try_init(&mut self, adapter: &mut flux::spine::SpineAdapter<HelixSpine>) -> bool {
-        adapter.set_collaborative_group::<NewBidSubmission>("decoder");
+        adapter.set_collaborative_group_dcache::<NewBidSubmission>("decoder");
         true
     }
 
@@ -118,7 +116,6 @@ impl DecoderTile {
         cache: LocalCache,
         chain_info: ChainInfo,
         config: RelayConfig,
-        submissions: Arc<DCache>,
         future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
         decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
         core: usize,
@@ -127,7 +124,6 @@ impl DecoderTile {
             chain_info,
             cache,
             config,
-            submissions,
             decoded,
             future_results,
             buffer: Vec::with_capacity(MAX_PAYLOAD_LENGTH),

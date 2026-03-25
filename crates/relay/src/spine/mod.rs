@@ -7,7 +7,7 @@ use flux::{communication::ShmemData, spine::SpineQueue, spine_derive::from_spine
 pub struct HelixSpine {
     pub tile_info: ShmemData<TileInfo>,
 
-    #[queue(size(2usize.pow(16)))]
+    #[queue(size(2usize.pow(10)), mtu(1024))]
     pub to_decode: SpineQueue<messages::NewBidSubmission>,
 
     #[queue(size(2usize.pow(16)))]

@@ -4,10 +4,7 @@ use axum::{
     Extension,
     response::{IntoResponse, Response},
 };
-use flux::{
-    spine::SpineProducers,
-    timing::{IngestionTime, Nanos},
-};
+use flux::timing::{IngestionTime, Nanos};
 use flux_utils::ArrayStr;
 use helix_common::{
     self, RequestTimings, SubmissionTrace, api_provider::ApiProvider,
@@ -58,22 +55,21 @@ impl<A: Api> BuilderApi<A> {
 
         let future_ix = api.future_results.push(FutureBidSubmissionResult::new());
 
-        match api.submissions.write(body.len(), |buf| buf.copy_from_slice(&body)) {
-            Ok(dref) => api.producer.produce_with_ingestion(
-                NewBidSubmission {
-                    dref,
-                    payload_offset: 0,
-                    header,
-                    submission_ref: SubmissionRef::Http(future_ix),
-                    trace,
-                    expected_pubkey: None,
-                },
-                IngestionTime::now(),
-            ),
-            Err(e) => {
-                tracing::error!("failed to write bid submission into dcache: {e}");
-                return StatusCode::INTERNAL_SERVER_ERROR.into_response()
-            }
+        let new_bid = NewBidSubmission {
+            payload_offset: 0,
+            header,
+            submission_ref: SubmissionRef::Http(future_ix),
+            trace,
+            expected_pubkey: None,
+        };
+
+        if let Err(e) = api.producer.produce_with_ingestion(
+            new_bid,
+            Some((body.len(), |buf: &mut [u8]| buf.copy_from_slice(&body))),
+            IngestionTime::now(),
+        ) {
+            tracing::error!("failed to write the request payload: {e}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
 
         let Some(future) = api.future_results.get(future_ix) else {

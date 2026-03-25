@@ -5,8 +5,8 @@ use std::{
 };
 
 use crossbeam_channel::Sender;
-use flux::spine::StandaloneProducer;
-use flux_utils::{DCache, SharedVector};
+use flux::spine::StandaloneDCacheProducer;
+use flux_utils::SharedVector;
 use helix_common::{
     RelayConfig, chain_info::ChainInfo, local_cache::LocalCache, signing::RelaySigningContext,
 };
@@ -44,8 +44,7 @@ pub fn start_api_service<A: Api>(
     db_handle: DbHandle,
     auctioneer_handle: AuctioneerHandle,
     registrations_handle: RegWorkerHandle,
-    submissions: Arc<DCache>,
-    bid_producer: StandaloneProducer<NewBidSubmission>,
+    bid_producer: StandaloneDCacheProducer<NewBidSubmission>,
     future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
     web_socket_connections: Sender<RawWebSocket>,
 ) {
@@ -64,7 +63,6 @@ pub fn start_api_service<A: Api>(
         db_handle.clone(),
         auctioneer_handle,
         registrations_handle,
-        submissions,
         bid_producer,
         future_results,
         web_socket_connections,
@@ -86,8 +84,7 @@ pub async fn run_api_service<A: Api>(
     db_handle: DbHandle,
     auctioneer_handle: AuctioneerHandle,
     registrations_handle: RegWorkerHandle,
-    submissions: Arc<DCache>,
-    bid_producer: StandaloneProducer<NewBidSubmission>,
+    bid_producer: StandaloneDCacheProducer<NewBidSubmission>,
     future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
     web_socket_connections: Sender<RawWebSocket>,
 ) {
@@ -108,7 +105,6 @@ pub async fn run_api_service<A: Api>(
         current_slot_info.clone(),
         auctioneer_handle.clone(),
         api_provider.clone(),
-        submissions,
         bid_producer,
         future_results,
         web_socket_connections,

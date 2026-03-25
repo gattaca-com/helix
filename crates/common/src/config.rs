@@ -67,9 +67,6 @@ pub struct RelayConfig {
     pub s3_config: Option<S3Config>,
     /// Directory for local cache snapshots (bincode). Enables fast startup.
     pub snapshot_dir: Option<PathBuf>,
-    /// 128mb
-    #[serde(default = "default_usize::<134217728>")]
-    pub dcache_capacity: usize,
 }
 
 impl RelayConfig {
@@ -110,7 +107,6 @@ impl RelayConfig {
             tcp_max_connections: 512,
             s3_config: None,
             snapshot_dir: None,
-            dcache_capacity: 1024 * 1024 * 128,
         }
     }
 }
