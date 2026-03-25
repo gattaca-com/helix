@@ -190,6 +190,8 @@ impl SimulatorTile {
     fn handle_sim_request(&mut self, req: crate::simulator::ValidationRequest, fast_track: bool) {
         let Some(decoded_data) = self.decoded.get(req.decoded_ix) else {
             error!(ix = req.decoded_ix, "decoded submission not found in ring");
+            let result_ix = self.sim_results.push(SimResult::Validate((0, None)));
+            producers.produce(FromSimMsg { ix: result_ix });
             return;
         };
         let builder_pubkey = *decoded_data.submission_data.submission.builder_pubkey();
