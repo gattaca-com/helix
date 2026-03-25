@@ -435,11 +435,9 @@ impl State {
 
             // sim result
             (State::Sorting(slot_data), Event::SimResult(mut result)) => {
-                let already_sent = result
-                    .1
-                    .as_ref()
-                    .is_some_and(|r| r.bid.bid_slot == slot_data.bid_slot.as_u64()) &&
-                    ctx.sort_simulation_result(&mut result, producers);
+                let already_sent = result.1.as_ref().is_some_and(|r| {
+                    r.bid.as_ref().is_some_and(|b| b.slot == slot_data.bid_slot.as_u64())
+                }) && ctx.sort_simulation_result(&mut result, producers);
 
                 ctx.handle_simulation_result(result, already_sent, producers);
             }

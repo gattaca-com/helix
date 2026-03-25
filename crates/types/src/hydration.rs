@@ -10,7 +10,7 @@ use tracing::trace;
 use tree_hash::TreeHash;
 
 use crate::{
-    BidTrace, Blob, BlobsBundle, BlsPublicKeyBytes, BlsSignatureBytes, BlockValidationError,
+    BidTrace, Blob, BlobsBundle, BlockValidationError, BlsPublicKeyBytes, BlsSignatureBytes,
     ExecutionPayload, SignedBidSubmission,
     bid_adjustment_data::BidAdjustmentData,
     bid_submission,
@@ -230,11 +230,6 @@ impl DehydratedBidSubmissionFulu {
         txs: &FxHashMap<u64, Transaction>,
         blobs: &FxHashMap<KzgCommitment, (Vec<KzgProof>, Blob)>,
         max_blobs_per_block: usize,
-    fn can_hydrate_inner(
-        &self,
-        txs: &FxHashMap<u64, Transaction>,
-        blobs: &FxHashMap<KzgCommitment, (Vec<KzgProof>, Blob)>,
-        max_blobs_per_block: usize,
     ) -> bool {
         if self.blobs_bundle.commitments.len() > max_blobs_per_block {
             return false;
@@ -265,7 +260,6 @@ impl DehydratedBidSubmissionFulu {
         }
 
         true
-    }
     }
 
     fn hydrate_inner(
@@ -457,15 +451,10 @@ impl HydrationCache {
     ) -> bool {
         match submission {
             DehydratedBidSubmission::Fulu(s) => {
-                let (txs, blobs) = match self.caches.get(&s.message.builder_pubkey) {
-                    Some(cache) => (&cache.transactions, &cache.blobs_fulu),
-                    None => return s.can_hydrate_inner(
-                        &FxHashMap::default(),
-                        &FxHashMap::default(),
-                        max_blobs_per_block,
-                    ),
-                };
-                s.can_hydrate_inner(txs, blobs, max_blobs_per_block)
+                match self.caches.get(&s.message.builder_pubkey) {
+                    Some(cache) => s.can_hydrate_inner(&cache.transactions, &cache.blobs_fulu, max_blobs_per_block),
+                    None => false,
+                }
             }
         }
     }
@@ -477,7 +466,10 @@ impl HydrationCache {
     ) -> Result<HydratedData, HydrationError> {
         match submission {
             DehydratedBidSubmission::Fulu(s) => {
-                let entry = self.caches.entry(s.message.builder_pubkey).or_default();
+                let pubkey = s.message.builder_pubkey;
+                let Some(entry) = self.caches.get_mut(&pubkey) else {
+                    return Err(HydrationError::MissingBuilderCache { pubkey });
+                };
                 s.hydrate_inner(&mut entry.transactions, &mut entry.blobs_fulu, max_blobs_per_block)
             }
         }
@@ -521,4 +513,7 @@ pub enum HydrationError {
 
     #[error("too many blobs: blobs {blobs}, max {max}")]
     TooManyBlobs { blobs: usize, max: usize },
+
+    #[error("no cache for builder {pubkey}")]
+    MissingBuilderCache { pubkey: BlsPublicKeyBytes },
 }

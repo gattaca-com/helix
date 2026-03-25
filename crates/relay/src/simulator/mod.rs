@@ -10,7 +10,7 @@ use helix_types::{
     MergedBlockTrace,
 };
 
-use crate::simulator::tile::ValidationResult;
+use crate::{SubmissionRef, simulator::tile::ValidationResult};
 
 pub mod client;
 pub mod tile;
@@ -27,6 +27,7 @@ pub struct ValidationRequest {
     pub inclusion_list: InclusionListWithMetadata,
     pub decoded_ix: usize,
     pub receive_ns: u64,
+    pub submission_ref: SubmissionRef,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

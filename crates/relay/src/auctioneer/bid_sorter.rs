@@ -1,5 +1,6 @@
 use std::{
-    collections::hash_map::Entry, time::{Duration, Instant}
+    collections::hash_map::Entry,
+    time::{Duration, Instant},
 };
 
 use alloy_primitives::{Address, B256, U256};
@@ -21,7 +22,7 @@ use crate::{auctioneer::SubmissionData, spine::HelixSpineProducers};
 pub struct Bid {
     pub version: SubmissionVersion,
     pub value: U256,
-    pub bid_slot: u64,
+    pub slot: u64,
     pub block_hash: B256,
     pub builder_pubkey: BlsPublicKeyBytes,
     pub block_number: u64,
@@ -36,7 +37,7 @@ impl Bid {
         Self {
             version,
             value: bid_trace.value,
-            bid_slot: bid_trace.slot,
+            slot: bid_trace.slot,
             block_hash: bid_trace.block_hash,
             builder_pubkey: bid_trace.builder_pubkey,
             block_number: submission.block_number(),
@@ -51,7 +52,7 @@ impl Bid {
         Self {
             version: submission.version,
             value: bid_trace.value,
-            bid_slot: bid_trace.slot,
+            slot: bid_trace.slot,
             block_hash: bid_trace.block_hash,
             builder_pubkey: bid_trace.builder_pubkey,
             block_number: submission.block_number(),
@@ -128,7 +129,7 @@ impl ForkState {
 
         let top_bid_update = TopBidUpdate {
             timestamp: now_ns / 1_000_000,
-            slot: bid.bid_slot,
+            slot: bid.slot,
             block_number: bid.block_number,
             block_hash: bid.block_hash,
             parent_hash: bid.parent_hash,
@@ -195,7 +196,7 @@ impl BidSorter {
         producers: &mut HelixSpineProducers,
     ) -> bool {
         trace!(is_optimistic, "sorting submission");
-        assert_eq!(bid.bid_slot, self.curr_bid_slot);
+        assert_eq!(bid.slot, self.curr_bid_slot);
 
         let start = Instant::now();
         let is_top_bid = self.process_bid(bid, trace, is_optimistic, producers);

@@ -24,7 +24,7 @@ use helix_common::{
     spawn_tracked,
     validator_preferences::{Filtering, ValidatorPreferences},
 };
-use helix_types::{BlsPublicKeyBytes, SimHydrationCache, SignedBidSubmission, Submission};
+use helix_types::{BlsPublicKeyBytes, SignedBidSubmission, SimHydrationCache, Submission};
 use ssz::Encode as _;
 use tracing::{debug, error, info, warn};
 
@@ -78,11 +78,11 @@ impl Tile<HelixSpine> for SimulatorTile {
         }
 
         // Consume inbound spine messages from the auctioneer.
-        adapter.consume(|msg: ToSimMsg, _producers| match msg.kind {
+        adapter.consume(|msg: ToSimMsg, producers| match msg.kind {
             ToSimKind::Request => match self.sim_requests.get(msg.ix) {
                 Some(payload) => match payload.as_ref() {
                     SimRequest::Validate { req, fast_track } => {
-                        self.handle_sim_request((**req).clone(), *fast_track);
+                        self.handle_sim_request((**req).clone(), *fast_track, producers);
                     }
                     SimRequest::Merge(req) => {
                         self.handle_merge_request(req.clone());
@@ -187,10 +187,16 @@ impl SimulatorTile {
         self.accept_optimistic.store(new, Ordering::Relaxed);
     }
 
-    fn handle_sim_request(&mut self, req: crate::simulator::ValidationRequest, fast_track: bool) {
+    fn handle_sim_request(
+        &mut self,
+        req: crate::simulator::ValidationRequest,
+        fast_track: bool,
+        producers: &mut HelixSpineProducers,
+    ) {
         let Some(decoded_data) = self.decoded.get(req.decoded_ix) else {
             error!(ix = req.decoded_ix, "decoded submission not found in ring");
-            let result_ix = self.sim_results.push(SimResult::Validate((0, None)));
+            let result_ix =
+                self.sim_results.push(SimResult::Validate((0, Some(infra_error(&req)))));
             producers.produce(FromSimMsg { ix: result_ix });
             return;
         };
@@ -268,13 +274,14 @@ impl SimulatorTile {
 
     fn spawn_sim(&mut self, id: usize, req: ValidationRequest) {
         const PAUSE_DURATION: Duration = Duration::from_secs(60);
-        
+
         let Some(decoded_data) = self.decoded.get(req.decoded_ix) else {
             error!(ix = req.decoded_ix, "decoded submission not found in ring");
             // Balance pending so handle_task_response can route the next request.
             let sim = &mut self.simulators[id];
             sim.pending += 1;
-            let result_ix = self.sim_results.push(SimResult::Validate((id, None)));
+            let result_ix =
+                self.sim_results.push(SimResult::Validate((id, Some(infra_error(&req)))));
             let _ = self.task_tx.try_send(SimTileInternalEvent::TaskDone {
                 id,
                 paused_until: None,
@@ -292,7 +299,9 @@ impl SimulatorTile {
                         error!(%e, "hydration failed in sim tile");
                         let sim = &mut self.simulators[id];
                         sim.pending += 1;
-                        let result_ix = self.sim_results.push(SimResult::Validate((id, None)));
+                        let result_ix = self
+                            .sim_results
+                            .push(SimResult::Validate((id, Some(infra_error(&req)))));
                         let _ = self.task_tx.try_send(SimTileInternalEvent::TaskDone {
                             id,
                             paused_until: None,
@@ -399,9 +408,8 @@ impl SimulatorTile {
             let bid = Bid::new(version, &submission);
             let inner = SimulationResultInner {
                 submission_ref,
-                result: res,
-                bid,
-                trace,
+                result: res.map(|()| trace),
+                bid: Some(bid),
                 optimistic_version,
             };
 
@@ -539,11 +547,12 @@ struct LocalTelemetry {
 pub type ValidationResult = (usize, Option<SimulationResultInner>);
 #[derive(Clone)]
 pub struct SimulationResultInner {
-    pub result: Result<(), BlockSimError>,
     pub submission_ref: crate::auctioneer::SubmissionRef,
-    pub bid: Bid,
-    pub trace: SubmissionTrace,
     pub optimistic_version: OptimisticVersion,
+    /// None for infra errors where simulation never ran (no decoded data available).
+    pub bid: Option<Bid>,
+    /// Ok carries the trace; Err carries the simulation failure.
+    pub result: Result<SubmissionTrace, BlockSimError>,
 }
 
 enum SimDispatch {
@@ -617,6 +626,15 @@ impl PendingRequests {
     /// All pending requests are always for `last_bid_slot` (asserted on intake).
     fn clear(&mut self) {
         self.reqs.clear();
+    }
+}
+
+fn infra_error(req: &ValidationRequest) -> SimulationResultInner {
+    SimulationResultInner {
+        submission_ref: req.submission_ref,
+        optimistic_version: req.optimistic_version(),
+        bid: None,
+        result: Err(BlockSimError::RpcError),
     }
 }
 

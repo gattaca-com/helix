@@ -42,22 +42,19 @@ impl<B: BidAdjustor> Context<B> {
 
         trace!("validating submission");
         let start_val = Nanos::now();
-        let payload_attributes = match self.validate_submission(
-            &submission_data,
-            &builder_info,
-            slot_data,
-        ) {
-            Ok(v) => v,
-            Err(e) => {
-                send_submission_result(
-                    producers,
-                    &self.future_results,
-                    submission_ref,
-                    Err(BuilderApiError::BidValidation(e)),
-                );
-                return;
-            }
-        };
+        let payload_attributes =
+            match self.validate_submission(submission_data, &builder_info, slot_data) {
+                Ok(v) => v,
+                Err(e) => {
+                    send_submission_result(
+                        producers,
+                        &self.future_results,
+                        submission_ref,
+                        Err(BuilderApiError::BidValidation(e)),
+                    );
+                    return;
+                }
+            };
         record_submission_step("validated", start_val.elapsed());
         trace!("validated");
 
@@ -90,6 +87,7 @@ impl<B: BidAdjustor> Context<B> {
             inclusion_list: slot_data.il.clone().unwrap_or_default(),
             decoded_ix,
             receive_ns: submission_data.trace.receive_ns.0,
+            submission_ref,
         };
 
         self.send_to_sim(req, false, producers);
@@ -182,9 +180,11 @@ impl<B: BidAdjustor> Context<B> {
         };
 
         let need_send_result = !result.optimistic_version.is_optimistic();
-        match &result.result {
+        match &mut result.result {
             Err(err) if err.is_demotable() => {
-                self.bid_sorter.demote(result.bid.builder_pubkey, producers);
+                if let Some(bid) = &result.bid {
+                    self.bid_sorter.demote(bid.builder_pubkey, producers);
+                }
                 if need_send_result {
                     send_submission_result(
                         producers,
@@ -195,10 +195,22 @@ impl<B: BidAdjustor> Context<B> {
                 }
             }
 
-            Ok(_) | Err(_) => {
-                let block_hash = result.bid.block_hash;
-                let is_top_bid =
-                    self.bid_sorter.sort(result.bid, &mut result.trace, false, producers);
+            Err(_) => {
+                // Non-demotable error — validity unknown, do not sort or update the top bid.
+                if need_send_result {
+                    send_submission_result(
+                        producers,
+                        &self.future_results,
+                        result.submission_ref,
+                        Err(BuilderApiError::InternalError),
+                    );
+                }
+            }
+
+            Ok(trace) => {
+                let bid = result.bid.as_mut().expect("bid always Some on Ok path");
+                let block_hash = bid.block_hash;
+                let is_top_bid = self.bid_sorter.sort(*bid, trace, false, producers);
                 if is_top_bid {
                     self.block_merger.update_base_block(block_hash);
                 }
@@ -285,8 +297,7 @@ impl<B: BidAdjustor> Context<B> {
                 let start = Nanos::now();
                 let max_blobs_per_block = self.chain_info.max_blobs_per_block();
 
-                let hydrated =
-                    self.hydration_cache.hydrate(dehydrated, max_blobs_per_block)?;
+                let hydrated = self.hydration_cache.hydrate(dehydrated, max_blobs_per_block)?;
 
                 trace!(
                     tx_cache_hits = hydrated.tx_cache_hits,
