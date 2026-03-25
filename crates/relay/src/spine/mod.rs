@@ -27,4 +27,7 @@ pub struct HelixSpine {
     /// Auctioneer → TopBidTile.
     #[queue(size(2usize.pow(16)))]
     pub top_bid: SpineQueue<messages::TopBidUpdate>,
+
+    #[queue(size(2usize.pow(16)))]
+    pub bid_update: SpineQueue<messages::BidUpdate>,
 }

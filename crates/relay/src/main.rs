@@ -26,9 +26,9 @@ use helix_common::{
     utils::{init_panic_hook, init_tracing_log},
 };
 use helix_relay::{
-    Api, Auctioneer, AuctioneerHandle, BidSorter, BidSubmissionTcpListener, DbHandle, DecoderTile,
-    DefaultBidAdjustor, FutureBidSubmissionResult, HelixSpine, HelixSpineConfig, NewBidSubmission,
-    RegWorker, RegWorkerHandle, RelayNetworkManager, S3PayloadSaver, SimRequest, SimResult,
+    Api, Auctioneer, AuctioneerHandle, BidSorter, BidSubmissionTcpListener, DataGatherer, DbHandle,
+    DecoderTile, DefaultBidAdjustor, FutureBidSubmissionResult, HelixSpine, HelixSpineConfig,
+    NewBidSubmission, RegWorker, RegWorkerHandle, RelayNetworkManager, SimRequest, SimResult,
     SimulatorTile, SubmissionDataWithSpan, TopBidTile, WebsiteService, spawn_tokio_monitoring,
     start_admin_service, start_api_service, start_beacon_client, start_db_service,
     start_housekeeper,
@@ -223,6 +223,20 @@ async fn run(
         }
 
         if config.is_submission_instance {
+            if config.clickhouse.is_some() || config.s3_config.is_some() {
+                let data_gatherer = DataGatherer::new(
+                    decoded.clone(),
+                    instance_id.clone(),
+                    config.clickhouse.as_ref(),
+                    config.s3_config.clone(),
+                );
+                attach_tile(
+                    data_gatherer,
+                    spine,
+                    TileConfig::new(config.cores.data_gatherer, ThreadPriority::OSDefault),
+                );
+            }
+
             for core in &config.cores.decoder {
                 let decoder_tile = DecoderTile::new(
                     local_cache.as_ref().clone(),
@@ -234,11 +248,6 @@ async fn run(
                     *core,
                 );
                 attach_tile(decoder_tile, spine, TileConfig::new(*core, ThreadPriority::OSDefault));
-            }
-
-            if let Some(cfg) = config.s3_config.clone() {
-                let s3_saver = S3PayloadSaver::new(cfg);
-                attach_tile(s3_saver, spine, TileConfig::background(None, None));
             }
 
             let sock_addr =

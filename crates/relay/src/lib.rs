@@ -2,6 +2,7 @@ mod api;
 mod auctioneer;
 mod beacon;
 mod bid_decoder;
+mod data_gatherer;
 mod gossip;
 mod housekeeper;
 mod network;
@@ -33,13 +34,14 @@ pub use crate::{
     },
     beacon::start_beacon_client,
     bid_decoder::{DecoderTile, SubmissionDataWithSpan},
+    data_gatherer::DataGatherer,
     housekeeper::start_housekeeper,
     network::RelayNetworkManager,
     simulator::{SimRequest, SimResult},
     spine::{HelixSpine, HelixSpineConfig, messages::NewBidSubmission},
     tcp_bid_recv::{
         BidSubmissionFlags, BidSubmissionHeader, BidSubmissionResponse, BidSubmissionTcpListener,
-        RegistrationMsg, S3PayloadSaver,
+        RegistrationMsg,
     },
     website::WebsiteService,
 };

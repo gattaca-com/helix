@@ -22,7 +22,7 @@ use crate::{
     simulator::{SimRequest, ValidationRequest, tile::ValidationResult},
     spine::{
         HelixSpineProducers,
-        messages::{ToSimKind, ToSimMsg},
+        messages::{BidEvent, BidUpdate, ToSimKind, ToSimMsg},
     },
 };
 
@@ -217,7 +217,9 @@ impl<B: BidAdjustor> Context<B> {
                 self.request_merged_block(producers);
 
                 if need_send_result {
-                    self.db.update_block_submission_live_ts(block_hash, Nanos::now().0);
+                    let now = Nanos::now();
+                    producers.produce(BidUpdate { block_hash, event: BidEvent::Live(now) });
+                    self.db.update_block_submission_live_ts(block_hash, now.0);
                     send_submission_result(
                         producers,
                         &self.future_results,

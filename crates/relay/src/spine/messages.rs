@@ -1,3 +1,5 @@
+use alloy_primitives::B256;
+use flux::timing::Nanos;
 use flux_utils::ArrayStr;
 use helix_common::SubmissionTrace;
 // Re-export as also used as spine message.
@@ -86,4 +88,15 @@ pub enum ToSimKind {
 #[derive(Debug, Clone, Copy)]
 pub struct FromSimMsg {
     pub ix: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum BidEvent {
+    Live(Nanos),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct BidUpdate {
+    pub block_hash: B256,
+    pub event: BidEvent,
 }

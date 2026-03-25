@@ -515,5 +515,4 @@ pub enum HydrationError {
 
     #[error("too many blobs: blobs {blobs}, max {max}")]
     TooManyBlobs { blobs: usize, max: usize },
-
 }
