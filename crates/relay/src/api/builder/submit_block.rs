@@ -55,17 +55,19 @@ impl<A: Api> BuilderApi<A> {
 
         let future_ix = api.future_results.push(FutureBidSubmissionResult::new());
 
+        let ix = api.submission_payloads.push(body);
         let new_bid = NewBidSubmission {
             payload_offset: 0,
             header,
             submission_ref: SubmissionRef::Http(future_ix),
             trace,
             expected_pubkey: None,
+            http_submission_ix: Some(ix),
         };
 
-        if let Err(e) = api.producer.produce_with_ingestion(
+        if let Err(e) = api.producer.produce_with_ingestion::<fn(&mut [u8])>(
             new_bid,
-            Some((body.len(), |buf: &mut [u8]| buf.copy_from_slice(&body))),
+            None,
             IngestionTime::now(),
         ) {
             tracing::error!("failed to write the request payload: {e}");

@@ -18,6 +18,7 @@ pub struct NewBidSubmission {
     pub header: InternalBidSubmissionHeader,
     pub trace: SubmissionTrace,
     pub expected_pubkey: Option<BlsPublicKeyBytes>,
+    pub http_submission_ix: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy)]

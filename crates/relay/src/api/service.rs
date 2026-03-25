@@ -4,6 +4,7 @@ use std::{
     time::Duration,
 };
 
+use bytes::Bytes;
 use crossbeam_channel::Sender;
 use flux::spine::StandaloneDCacheProducer;
 use flux_utils::SharedVector;
@@ -46,6 +47,7 @@ pub fn start_api_service<A: Api>(
     registrations_handle: RegWorkerHandle,
     bid_producer: StandaloneDCacheProducer<NewBidSubmission>,
     future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
+    http_submissions: Arc<SharedVector<Bytes>>,
     web_socket_connections: Sender<RawWebSocket>,
 ) {
     tokio::spawn(run_api_service::<A>(
@@ -65,6 +67,7 @@ pub fn start_api_service<A: Api>(
         registrations_handle,
         bid_producer,
         future_results,
+        http_submissions,
         web_socket_connections,
     ));
 }
@@ -86,6 +89,7 @@ pub async fn run_api_service<A: Api>(
     registrations_handle: RegWorkerHandle,
     bid_producer: StandaloneDCacheProducer<NewBidSubmission>,
     future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
+    http_submissions: Arc<SharedVector<Bytes>>,
     web_socket_connections: Sender<RawWebSocket>,
 ) {
     let gossiper = Arc::new(
@@ -107,6 +111,7 @@ pub async fn run_api_service<A: Api>(
         api_provider.clone(),
         bid_producer,
         future_results,
+        http_submissions,
         web_socket_connections,
     );
     let builder_api = Arc::new(builder_api);

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use axum::{Extension, http::StatusCode, response::IntoResponse};
+use bytes::Bytes;
 use crossbeam_channel::Sender;
 use flux::spine::StandaloneDCacheProducer;
 use flux_utils::SharedVector;
@@ -23,6 +24,7 @@ pub struct BuilderApi<A: Api> {
     pub api_provider: Arc<A::ApiProvider>,
     pub producer: StandaloneDCacheProducer<NewBidSubmission>,
     pub future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
+    pub submission_payloads: Arc<SharedVector<Bytes>>,
     pub web_socket_connections: Sender<RawWebSocket>,
 }
 
@@ -36,6 +38,7 @@ impl<A: Api> BuilderApi<A> {
         api_provider: Arc<A::ApiProvider>,
         producer: StandaloneDCacheProducer<NewBidSubmission>,
         future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
+        submission_payloads: Arc<SharedVector<Bytes>>,
         web_socket_connections: Sender<RawWebSocket>,
     ) -> Self {
         Self {
@@ -47,6 +50,7 @@ impl<A: Api> BuilderApi<A> {
             api_provider,
             producer,
             future_results,
+            submission_payloads,
             web_socket_connections,
         }
     }
