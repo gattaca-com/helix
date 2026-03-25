@@ -1,6 +1,6 @@
 use std::{hash::Hasher, sync::Arc};
 
-use alloy_primitives::{Address, B256};
+use alloy_primitives::{Address, B256, U256};
 use lh_types::{ForkName, ForkVersionDecode};
 use rustc_hash::{FxHashMap, FxHasher};
 use serde::{Deserialize, Serialize};
@@ -10,8 +10,8 @@ use tracing::trace;
 use tree_hash::TreeHash;
 
 use crate::{
-    BidTrace, Blob, BlobsBundle, BlsPublicKeyBytes, BlsSignatureBytes, ExecutionPayload,
-    SignedBidSubmission,
+    BidTrace, Blob, BlobsBundle, BlockValidationError, BlsPublicKeyBytes, BlsSignatureBytes,
+    ExecutionPayload, SignedBidSubmission,
     bid_adjustment_data::BidAdjustmentData,
     bid_submission,
     fields::{ExecutionRequests, KzgCommitment, KzgProof, Transaction},
@@ -68,7 +68,7 @@ impl DehydratedBidSubmission {
 
     pub fn fee_recipient(&self) -> Address {
         match self {
-            DehydratedBidSubmission::Fulu(s) => s.message.proposer_fee_recipient,
+            DehydratedBidSubmission::Fulu(s) => s.execution_payload.fee_recipient,
         }
     }
 
@@ -84,13 +84,76 @@ impl DehydratedBidSubmission {
         }
     }
 
-    pub fn hydrate(
-        self,
-        hydration_cache: &mut HydrationCache,
-        max_blobs_per_block: usize,
-    ) -> Result<HydratedData, HydrationError> {
+    pub fn fork_name(&self) -> lh_types::ForkName {
         match self {
-            DehydratedBidSubmission::Fulu(s) => s.hydrate(hydration_cache, max_blobs_per_block),
+            DehydratedBidSubmission::Fulu(_) => lh_types::ForkName::Fulu,
+        }
+    }
+
+    pub fn timestamp(&self) -> u64 {
+        match self {
+            DehydratedBidSubmission::Fulu(s) => s.execution_payload.timestamp,
+        }
+    }
+
+    pub fn prev_randao(&self) -> &B256 {
+        match self {
+            DehydratedBidSubmission::Fulu(s) => &s.execution_payload.prev_randao,
+        }
+    }
+
+    pub fn proposer_fee_recipient(&self) -> &Address {
+        match self {
+            DehydratedBidSubmission::Fulu(s) => &s.message.proposer_fee_recipient,
+        }
+    }
+
+    pub fn block_number(&self) -> u64 {
+        match self {
+            DehydratedBidSubmission::Fulu(s) => s.execution_payload.block_number,
+        }
+    }
+
+    pub fn bid_trace(&self) -> &BidTrace {
+        match self {
+            DehydratedBidSubmission::Fulu(s) => &s.message,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), BlockValidationError> {
+        match self {
+            DehydratedBidSubmission::Fulu(s) => {
+                let msg = &s.message;
+                let ep = &s.execution_payload;
+                if msg.parent_hash != ep.parent_hash {
+                    return Err(BlockValidationError::ParentHashMismatch {
+                        message: msg.parent_hash,
+                        payload: ep.parent_hash,
+                    });
+                }
+                if msg.block_hash != ep.block_hash {
+                    return Err(BlockValidationError::BlockHashMismatch {
+                        message: msg.block_hash,
+                        payload: ep.block_hash,
+                    });
+                }
+                if msg.gas_limit != ep.gas_limit {
+                    return Err(BlockValidationError::GasLimitMismatch {
+                        message: msg.gas_limit,
+                        payload: ep.gas_limit,
+                    });
+                }
+                if msg.gas_used != ep.gas_used {
+                    return Err(BlockValidationError::GasUsedMismatch {
+                        message: msg.gas_used,
+                        payload: ep.gas_used,
+                    });
+                }
+                if msg.value == U256::ZERO {
+                    return Err(BlockValidationError::ZeroValueBlock);
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -162,15 +225,49 @@ struct BlobItemFulu {
 }
 
 impl DehydratedBidSubmissionFulu {
-    /// Hydrates the bid submission, adds new orders to the cache. Returns the hydrated bid
-    /// submission and the number of tx cache hits and blob cache hits.
-    pub fn hydrate(
+    fn can_hydrate_inner(
+        &self,
+        txs: &FxHashMap<u64, Transaction>,
+        blobs: &FxHashMap<KzgCommitment, (Vec<KzgProof>, Blob)>,
+        max_blobs_per_block: usize,
+    ) -> bool {
+        if self.blobs_bundle.commitments.len() > max_blobs_per_block {
+            return false;
+        }
+
+        /// Max size of the rlp encoded tx sig (v 1 byte, s,r 32 bytes each with a leading
+        /// rlp length prefix)
+        const TX_KEY_SIZE: usize = 67;
+
+        for tx in &self.execution_payload.transactions {
+            if tx.len() == std::mem::size_of::<u64>() {
+                let bytes = tx.as_ref().try_into().unwrap();
+                let hash = u64::from_le_bytes(bytes);
+                if !txs.contains_key(&hash) {
+                    return false;
+                }
+            } else if tx.len() < TX_KEY_SIZE {
+                return false;
+            }
+        }
+
+        for commitment in &self.blobs_bundle.commitments {
+            if !blobs.contains_key(commitment) &&
+                !self.blobs_bundle.new_items.iter().any(|b| &b.commitment == commitment)
+            {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    fn hydrate_inner(
         mut self,
-        hydration_cache: &mut HydrationCache,
+        txs: &mut FxHashMap<u64, Transaction>,
+        blobs: &mut FxHashMap<KzgCommitment, (Vec<KzgProof>, Blob)>,
         max_blobs_per_block: usize,
     ) -> Result<HydratedData, HydrationError> {
-        let order_cache = hydration_cache.caches.entry(self.message.builder_pubkey).or_default();
-
         // avoid short-circuiting the loop to maximize cache population
         let mut last_err = Ok(());
 
@@ -183,7 +280,7 @@ impl DehydratedBidSubmissionFulu {
                 // hashed transaction, hydrate it
                 let bytes = tx.as_ref().try_into().unwrap();
                 let hash = u64::from_le_bytes(bytes);
-                let Some(cached_tx) = order_cache.transactions.get(&hash) else {
+                let Some(cached_tx) = txs.get(&hash) else {
                     last_err = Err(HydrationError::UnknownTxHash { index, hash });
                     continue;
                 };
@@ -204,7 +301,7 @@ impl DehydratedBidSubmissionFulu {
                 let last_slice = &tx[tx.len() - TX_KEY_SIZE..];
                 hasher.write(last_slice);
                 let hash = hasher.finish();
-                order_cache.transactions.insert(hash, tx.clone());
+                txs.insert(hash, tx.clone());
                 trace!("Inserted tx into cache: index {}, hash {}", index, hash);
             };
         }
@@ -214,7 +311,7 @@ impl DehydratedBidSubmissionFulu {
         let mut blob_cache_hits: usize = 0;
         let new_blobs = self.blobs_bundle.new_items.len();
         for blob_item in self.blobs_bundle.new_items {
-            order_cache.blobs_fulu.insert(blob_item.commitment, (blob_item.proof, blob_item.blob));
+            blobs.insert(blob_item.commitment, (blob_item.proof, blob_item.blob));
         }
 
         if self.blobs_bundle.commitments.len() > max_blobs_per_block {
@@ -228,7 +325,7 @@ impl DehydratedBidSubmissionFulu {
 
         let mut sidecar = BlobsBundle::with_capacity(self.blobs_bundle.commitments.len());
         for (index, commitment) in self.blobs_bundle.commitments.into_iter().enumerate() {
-            let Some((proofs, blob)) = order_cache.blobs_fulu.get(&commitment) else {
+            let Some((proofs, blob)) = blobs.get(&commitment) else {
                 return Err(HydrationError::UnknownBlobHashFulu { commitment, index });
             };
 
@@ -256,13 +353,36 @@ impl DehydratedBidSubmissionFulu {
 }
 
 struct Cache {
-    // hash -> transaction bytes
     transactions: FxHashMap<u64, Transaction>,
-    // commitment -> proofs / blob
     blobs_fulu: FxHashMap<KzgCommitment, (Vec<KzgProof>, Blob)>,
 }
 
 impl Cache {
+    fn new() -> Self {
+        Self {
+            transactions: FxHashMap::with_capacity_and_hasher(10_000, Default::default()),
+            blobs_fulu: FxHashMap::with_capacity_and_hasher(1_000, Default::default()),
+        }
+    }
+
+    fn clear(&mut self) {
+        self.transactions.clear();
+        self.blobs_fulu.clear();
+    }
+}
+
+impl Default for Cache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub struct SimHydrationCache {
+    transactions: FxHashMap<u64, Transaction>,
+    blobs_fulu: FxHashMap<KzgCommitment, (Vec<KzgProof>, Blob)>,
+}
+
+impl SimHydrationCache {
     pub fn new() -> Self {
         Self {
             transactions: FxHashMap::with_capacity_and_hasher(10_000, Default::default()),
@@ -270,13 +390,45 @@ impl Cache {
         }
     }
 
+    pub fn can_hydrate(
+        &self,
+        submission: &DehydratedBidSubmission,
+        max_blobs_per_block: usize,
+    ) -> bool {
+        match submission {
+            DehydratedBidSubmission::Fulu(s) => {
+                s.can_hydrate_inner(&self.transactions, &self.blobs_fulu, max_blobs_per_block)
+            }
+        }
+    }
+
+    pub fn hydrate(
+        &mut self,
+        submission: DehydratedBidSubmission,
+        max_blobs_per_block: usize,
+    ) -> Result<HydratedData, HydrationError> {
+        match submission {
+            DehydratedBidSubmission::Fulu(s) => {
+                s.hydrate_inner(&mut self.transactions, &mut self.blobs_fulu, max_blobs_per_block)
+            }
+        }
+    }
+
     pub fn clear(&mut self) {
         self.transactions.clear();
         self.blobs_fulu.clear();
     }
+
+    pub fn tx_count(&self) -> usize {
+        self.transactions.len()
+    }
+
+    pub fn blob_count(&self) -> usize {
+        self.blobs_fulu.len()
+    }
 }
 
-impl Default for Cache {
+impl Default for SimHydrationCache {
     fn default() -> Self {
         Self::new()
     }
@@ -290,6 +442,39 @@ pub struct HydrationCache {
 impl HydrationCache {
     pub fn new() -> Self {
         Self { caches: FxHashMap::with_capacity_and_hasher(200, Default::default()) }
+    }
+
+    pub fn can_hydrate(
+        &self,
+        submission: &DehydratedBidSubmission,
+        max_blobs_per_block: usize,
+    ) -> bool {
+        match submission {
+            DehydratedBidSubmission::Fulu(s) => {
+                let empty_txs = FxHashMap::default();
+                let empty_blobs = FxHashMap::default();
+                let (txs, blobs) = self
+                    .caches
+                    .get(&s.message.builder_pubkey)
+                    .map(|c| (&c.transactions, &c.blobs_fulu))
+                    .unwrap_or((&empty_txs, &empty_blobs));
+                s.can_hydrate_inner(txs, blobs, max_blobs_per_block)
+            }
+        }
+    }
+
+    pub fn hydrate(
+        &mut self,
+        submission: DehydratedBidSubmission,
+        max_blobs_per_block: usize,
+    ) -> Result<HydratedData, HydrationError> {
+        match submission {
+            DehydratedBidSubmission::Fulu(s) => {
+                let pubkey = s.message.builder_pubkey;
+                let entry = self.caches.entry(pubkey).or_default();
+                s.hydrate_inner(&mut entry.transactions, &mut entry.blobs_fulu, max_blobs_per_block)
+            }
+        }
     }
 
     pub fn clear(&mut self) {
@@ -330,4 +515,5 @@ pub enum HydrationError {
 
     #[error("too many blobs: blobs {blobs}, max {max}")]
     TooManyBlobs { blobs: usize, max: usize },
+
 }

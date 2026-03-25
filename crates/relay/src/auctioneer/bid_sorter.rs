@@ -16,32 +16,48 @@ use helix_types::{BlsPublicKeyBytes, SignedBidSubmission, SubmissionVersion};
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::{info, trace};
 
-use crate::spine::HelixSpineProducers;
+use crate::{auctioneer::SubmissionData, spine::HelixSpineProducers};
 
 #[derive(Clone, Copy, Debug)]
-pub struct BidEntry {
-    version: SubmissionVersion,
-    value: U256,
-
-    block_hash: B256,
-
-    block_number: u64,
-    parent_hash: B256,
-    fee_recipient: Address,
+pub struct Bid {
+    pub version: SubmissionVersion,
+    pub value: U256,
+    pub slot: u64,
+    pub block_hash: B256,
+    pub builder_pubkey: BlsPublicKeyBytes,
+    pub block_number: u64,
+    pub parent_hash: B256,
+    pub fee_recipient: Address,
 }
 
-impl BidEntry {
-    fn new(version: SubmissionVersion, submission: &SignedBidSubmission) -> Self {
+impl Bid {
+    pub fn new(version: SubmissionVersion, submission: &SignedBidSubmission) -> Self {
         let bid_trace = submission.bid_trace();
-        let payload = submission.execution_payload_ref();
 
         Self {
             version,
             value: bid_trace.value,
-            block_hash: payload.block_hash,
-            block_number: payload.block_number,
-            parent_hash: payload.parent_hash,
-            fee_recipient: payload.fee_recipient,
+            slot: bid_trace.slot,
+            block_hash: bid_trace.block_hash,
+            builder_pubkey: bid_trace.builder_pubkey,
+            block_number: submission.block_number(),
+            parent_hash: bid_trace.parent_hash,
+            fee_recipient: submission.fee_recipient(),
+        }
+    }
+
+    pub fn from_submission_data(submission: &SubmissionData) -> Self {
+        let bid_trace = submission.bid_trace();
+
+        Self {
+            version: submission.version,
+            value: bid_trace.value,
+            slot: bid_trace.slot,
+            block_hash: bid_trace.block_hash,
+            builder_pubkey: bid_trace.builder_pubkey,
+            block_number: submission.block_number(),
+            parent_hash: bid_trace.parent_hash,
+            fee_recipient: submission.fee_recipient(),
         }
     }
 }
@@ -55,9 +71,9 @@ struct BidSorterTelemetry {
 
 struct ForkState {
     /// All bid entries for the current slot, used for sorting
-    bids: FxHashMap<BlsPublicKeyBytes, BidEntry>,
+    bids: FxHashMap<BlsPublicKeyBytes, Bid>,
     /// Current best bid
-    curr_bid: Option<(BlsPublicKeyBytes, BidEntry)>,
+    curr_bid: Option<Bid>,
 
     // telemetry
     subs: u32,
@@ -78,26 +94,25 @@ impl Default for ForkState {
 impl ForkState {
     fn traverse_update_top_bid(
         &mut self,
-        bid_slot: u64,
         trace: Option<&mut SubmissionTrace>,
         is_optimistic: bool,
         producers: &mut HelixSpineProducers,
     ) {
         let mut best = None;
 
-        for (pk, bid) in self.bids.iter() {
+        for bid in self.bids.values() {
             let Some(curr_best) = best else {
-                best = Some((*pk, bid));
+                best = Some(bid);
                 continue;
             };
 
-            if bid.value > curr_best.1.value {
-                best = Some((*pk, bid))
+            if bid.value > curr_best.value {
+                best = Some(bid);
             }
         }
 
-        if let Some((best_pk, best_bid)) = best {
-            self.update_top_bid(bid_slot, best_pk, *best_bid, trace, is_optimistic, producers);
+        if let Some(best_bid) = best {
+            self.update_top_bid(*best_bid, trace, is_optimistic, producers);
         } else {
             self.curr_bid = None;
         }
@@ -105,9 +120,7 @@ impl ForkState {
 
     fn update_top_bid(
         &mut self,
-        bid_slot: u64,
-        builder_pubkey: BlsPublicKeyBytes,
-        bid: BidEntry,
+        bid: Bid,
         trace: Option<&mut SubmissionTrace>,
         is_optimistic: bool,
         producers: &mut HelixSpineProducers,
@@ -116,19 +129,19 @@ impl ForkState {
 
         let top_bid_update = TopBidUpdate {
             timestamp: now_ns / 1_000_000,
-            slot: bid_slot,
+            slot: bid.slot,
             block_number: bid.block_number,
             block_hash: bid.block_hash,
             parent_hash: bid.parent_hash,
-            builder_pubkey,
+            builder_pubkey: bid.builder_pubkey,
             fee_recipient: bid.fee_recipient,
             value: bid.value,
         };
 
         producers.produce(top_bid_update);
 
-        trace!(?builder_pubkey, value =? bid.value, "updating best bid");
-        self.curr_bid = Some((builder_pubkey, bid));
+        trace!(?bid.builder_pubkey, value =? bid.value, "updating best bid");
+        self.curr_bid = Some(bid);
 
         if let Some(trace) = trace {
             if is_optimistic {
@@ -158,6 +171,12 @@ pub struct BidSorter {
     local_telemetry: BidSorterTelemetry,
 }
 
+impl Default for BidSorter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BidSorter {
     pub fn new() -> Self {
         Self {
@@ -171,21 +190,16 @@ impl BidSorter {
     /// Sort the bid and returns whether it became the top bid
     pub fn sort(
         &mut self,
-        version: SubmissionVersion,
-        submission: &SignedBidSubmission,
+        bid: Bid,
         trace: &mut SubmissionTrace,
         is_optimistic: bool,
         producers: &mut HelixSpineProducers,
     ) -> bool {
         trace!(is_optimistic, "sorting submission");
-
-        let bid_trace = submission.bid_trace();
-        assert_eq!(bid_trace.slot, self.curr_bid_slot);
-        let bid = BidEntry::new(version, submission);
-        let builder_pubkey = bid_trace.builder_pubkey;
+        assert_eq!(bid.slot, self.curr_bid_slot);
 
         let start = Instant::now();
-        let is_top_bid = self.process_header(builder_pubkey, bid, trace, is_optimistic, producers);
+        let is_top_bid = self.process_bid(bid, trace, is_optimistic, producers);
         let process_latency = start.elapsed();
 
         // telemetry
@@ -205,19 +219,18 @@ impl BidSorter {
     }
 
     pub fn get_header(&self, parent_hash: &B256) -> Option<B256> {
-        self.forks.get(parent_hash).and_then(|s| s.curr_bid.as_ref().map(|b| b.1.block_hash))
+        self.forks.get(parent_hash).and_then(|s| s.curr_bid.as_ref().map(|b| b.block_hash))
     }
 
-    fn process_header(
+    fn process_bid(
         &mut self,
-        new_pubkey: BlsPublicKeyBytes,
-        new_bid: BidEntry,
+        new_bid: Bid,
         trace: &mut SubmissionTrace,
         is_optimistic: bool,
         producers: &mut HelixSpineProducers,
     ) -> bool {
         let state = self.forks.entry(new_bid.parent_hash).or_default();
-        match state.bids.entry(new_pubkey) {
+        match state.bids.entry(new_bid.builder_pubkey) {
             Entry::Occupied(mut entry) => {
                 let entry = entry.get_mut();
                 if entry.version >= new_bid.version {
@@ -236,27 +249,15 @@ impl BidSorter {
 
         state.subs += 1;
         match &state.curr_bid {
-            Some((curr_pubkey, curr_bid)) => {
+            Some(curr_bid) => {
                 if new_bid.value > curr_bid.value {
-                    state.update_top_bid(
-                        self.curr_bid_slot,
-                        new_pubkey,
-                        new_bid,
-                        Some(trace),
-                        is_optimistic,
-                        producers,
-                    );
+                    state.update_top_bid(new_bid, Some(trace), is_optimistic, producers);
 
                     true
-                } else if new_pubkey == *curr_pubkey {
+                } else if new_bid.builder_pubkey == curr_bid.builder_pubkey {
                     // this was a cancel, need to check all other bids
                     trace!("cancel submission, traversing");
-                    state.traverse_update_top_bid(
-                        self.curr_bid_slot,
-                        Some(trace),
-                        is_optimistic,
-                        producers,
-                    );
+                    state.traverse_update_top_bid(Some(trace), is_optimistic, producers);
 
                     false
                 } else {
@@ -266,14 +267,7 @@ impl BidSorter {
             }
 
             None => {
-                state.update_top_bid(
-                    self.curr_bid_slot,
-                    new_pubkey,
-                    new_bid,
-                    Some(trace),
-                    is_optimistic,
-                    producers,
-                );
+                state.update_top_bid(new_bid, Some(trace), is_optimistic, producers);
 
                 true
             }
@@ -293,10 +287,10 @@ impl BidSorter {
                 continue;
             }
 
-            if let Some((curr, _)) = &state.curr_bid &&
-                *curr == demoted
+            if let Some(curr_bid) = &state.curr_bid &&
+                curr_bid.builder_pubkey == demoted
             {
-                state.traverse_update_top_bid(self.curr_bid_slot, None, false, producers);
+                state.traverse_update_top_bid(None, false, producers);
             }
         }
     }

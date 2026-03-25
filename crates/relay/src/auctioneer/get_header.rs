@@ -57,7 +57,8 @@ impl<B: BidAdjustor> Context<B> {
                     .with_label_values(&[strategy])
                     .observe(start.elapsed().as_micros() as f64);
 
-                self.store_data_and_sim(sim_request, adjusted_bid.clone(), true, producers);
+                self.store_data(adjusted_bid.clone(), sim_request.is_optimistic);
+                self.send_to_sim(sim_request, true, producers);
 
                 if is_adjustable_slot {
                     return Ok(adjusted_bid);

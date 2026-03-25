@@ -267,6 +267,8 @@ async fn run(
                 config.simulators.clone(),
                 sim_requests.clone(),
                 sim_results.clone(),
+                decoded.clone(),
+                chain_info.as_ref().clone(),
             );
             let sim_core = config.cores.simulator;
             attach_tile(sim_tile, spine, TileConfig::new(sim_core, ThreadPriority::OSDefault));

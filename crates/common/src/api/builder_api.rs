@@ -89,7 +89,7 @@ pub struct InclusionListTxWithMetadata {
     pub bytes: Transaction,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq, Encode, Decode)]
 pub struct InclusionListWithMetadata {
     pub txs: Vec<InclusionListTxWithMetadata>,
 }

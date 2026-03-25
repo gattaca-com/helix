@@ -148,53 +148,50 @@ impl<B: BidAdjustor> Context<B> {
             return;
         };
 
-        let builder = *result.submission.builder_public_key();
-        let block_hash = *result.submission.block_hash();
+        if let Some(bid) = &result.bid {
+            let builder = bid.builder_pubkey;
+            let block_hash = bid.block_hash;
+            let is_adjusted = self.payloads.get(&block_hash).is_some_and(|b| b.is_adjusted());
 
-        let is_adjusted = self.payloads.get(&block_hash).is_some_and(|bid| bid.is_adjusted());
+            if let Err(err) = result.result.as_ref() {
+                if err.is_demotable() {
+                    if is_adjusted {
+                        warn!(%builder, %block_hash, %err, "block simulation resulted in an error. Disabling adjustments...");
 
-        if let Err(err) = result.result.as_ref() {
-            if err.is_demotable() {
-                if is_adjusted {
-                    warn!(%builder, %block_hash, %err, "block simulation resulted in an error. Disabling adjustments...");
-                    debug!(
-                        "invalid adjusted block header: {:?}",
-                        result.submission.execution_payload_ref().to_header(None, None)
-                    );
+                        if !self.cache.adjustments_enabled.load(Ordering::Relaxed) {
+                            warn!(%block_hash, "adjustments already disabled");
+                        } else {
+                            SimulatorMetrics::disable_adjustments();
+                            self.cache.adjustments_enabled.store(false, Ordering::Relaxed);
+                            self.db.disable_adjustments(
+                                block_hash,
+                                self.cache.adjustments_failsafe_trigger.clone(),
+                                self.cache.adjustments_enabled.clone(),
+                            );
+                        }
+                    } else if self.cache.demote_builder(&builder) {
+                        warn!(%builder, %block_hash, %err, "Block simulation resulted in an error. Demoting builder...");
 
-                    if !self.cache.adjustments_enabled.load(Ordering::Relaxed) {
-                        warn!(%block_hash, "adjustments already disabled");
-                    } else {
-                        SimulatorMetrics::disable_adjustments();
-                        self.cache.adjustments_enabled.store(false, Ordering::Relaxed);
-                        self.db.disable_adjustments(
+                        SimulatorMetrics::demotion_count();
+
+                        let reason = err.to_string();
+                        let bid_slot = bid.slot;
+                        let failsafe_triggered = self.failsafe_triggered.clone();
+
+                        self.db.db_demote_builder(
+                            bid_slot,
+                            builder,
                             block_hash,
-                            self.cache.adjustments_failsafe_trigger.clone(),
-                            self.cache.adjustments_enabled.clone(),
+                            reason,
+                            failsafe_triggered,
                         );
+                    } else {
+                        warn!(%err, %builder, %block_hash, "builder already demoted, skipping demotion");
                     }
-                } else if self.cache.demote_builder(&builder) {
-                    warn!(%builder, %block_hash, %err, "Block simulation resulted in an error. Demoting builder...");
-
-                    SimulatorMetrics::demotion_count();
-
-                    let reason = err.to_string();
-                    let bid_slot = result.submission.slot();
-                    let failsafe_triggered = self.failsafe_triggered.clone();
-
-                    self.db.db_demote_builder(
-                        bid_slot.as_u64(),
-                        builder,
-                        block_hash,
-                        reason,
-                        failsafe_triggered,
-                    );
-                } else {
-                    warn!(%err, %builder, %block_hash, "builder already demoted, skipping demotion");
                 }
+            } else if is_adjusted {
+                debug!(%builder, %block_hash, "adjusted block passed simulator validation!");
             }
-        } else if is_adjusted {
-            debug!(%builder, %block_hash,"adjusted block passed simulator validation!");
         }
 
         if !already_sent && !result.optimistic_version.is_optimistic() {
