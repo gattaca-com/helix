@@ -230,10 +230,19 @@ impl DehydratedBidSubmissionFulu {
         txs: &FxHashMap<u64, Transaction>,
         blobs: &FxHashMap<KzgCommitment, (Vec<KzgProof>, Blob)>,
         max_blobs_per_block: usize,
+    fn can_hydrate_inner(
+        &self,
+        txs: &FxHashMap<u64, Transaction>,
+        blobs: &FxHashMap<KzgCommitment, (Vec<KzgProof>, Blob)>,
+        max_blobs_per_block: usize,
     ) -> bool {
         if self.blobs_bundle.commitments.len() > max_blobs_per_block {
             return false;
         }
+
+        /// Max size of the rlp encoded tx sig (v 1 byte, s,r 32 bytes each with a leading
+        /// rlp length prefix)
+        const TX_KEY_SIZE: usize = 67;
 
         for tx in &self.execution_payload.transactions {
             if tx.len() == std::mem::size_of::<u64>() {
@@ -242,6 +251,8 @@ impl DehydratedBidSubmissionFulu {
                 if !txs.contains_key(&hash) {
                     return false;
                 }
+            } else if tx.len() < TX_KEY_SIZE {
+                return false;
             }
         }
 
@@ -254,6 +265,7 @@ impl DehydratedBidSubmissionFulu {
         }
 
         true
+    }
     }
 
     fn hydrate_inner(
