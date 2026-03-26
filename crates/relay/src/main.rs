@@ -7,6 +7,7 @@ use std::{
     time::Duration,
 };
 
+use bytes::Bytes;
 use eyre::eyre;
 use flux::{
     spine::FluxSpine,
@@ -175,6 +176,9 @@ async fn run(
 
         let (web_socket_send, web_socket_recv) = crossbeam_channel::bounded(1024);
 
+        let http_submissions =
+            Arc::new(SharedVector::<Bytes>::with_capacity(MAX_SUBMISSIONS_PER_SLOT));
+
         let future_results = Arc::new(SharedVector::<FutureBidSubmissionResult>::with_capacity(
             MAX_SUBMISSIONS_PER_SLOT,
         ));
@@ -201,6 +205,7 @@ async fn run(
             registrations_handle,
             bid_producer,
             future_results.clone(),
+            http_submissions.clone(),
             web_socket_send,
         );
 
@@ -225,6 +230,7 @@ async fn run(
                     config.clone(),
                     future_results.clone(),
                     decoded.clone(),
+                    http_submissions.clone(),
                     *core,
                 );
                 attach_tile(decoder_tile, spine, TileConfig::new(*core, ThreadPriority::OSDefault));

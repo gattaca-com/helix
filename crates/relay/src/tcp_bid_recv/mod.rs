@@ -129,6 +129,7 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                         submission_ref,
                         trace,
                         expected_pubkey: Some(*expected_pubkey),
+                        http_submission_ix: None,
                     })
                 } else {
                     match RegistrationMsg::from_ssz_bytes(payload) {
