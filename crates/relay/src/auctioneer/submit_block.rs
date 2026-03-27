@@ -22,7 +22,7 @@ use crate::{
     simulator::{SimRequest, ValidationRequest, tile::ValidationResult},
     spine::{
         HelixSpineProducers,
-        messages::{ToSimKind, ToSimMsg},
+        messages::{BidEvent, BidUpdate, ToSimKind, ToSimMsg},
     },
 };
 
@@ -122,7 +122,7 @@ impl<B: BidAdjustor> Context<B> {
         );
 
         self.try_adjustments_dry_run(&entry, slot_data, producers);
-        self.store_data(entry, is_optimistic);
+        self.store_data(entry, is_optimistic, producers);
         self.try_merge_block(merging_data, producers);
     }
 
@@ -164,7 +164,7 @@ impl<B: BidAdjustor> Context<B> {
                     .with_label_values(&[strategy])
                     .observe(start.elapsed().as_micros());
 
-                self.store_data(adjusted_block, sim_request.is_optimistic);
+                self.store_data(adjusted_block, sim_request.is_optimistic, producers);
                 self.send_to_sim(sim_request, true, producers);
             }
         }
@@ -217,6 +217,7 @@ impl<B: BidAdjustor> Context<B> {
                 self.request_merged_block(producers);
 
                 if need_send_result {
+                    producers.produce(BidUpdate { block_hash, event: BidEvent::Live });
                     self.db.update_block_submission_live_ts(block_hash, Nanos::now().0);
                     send_submission_result(
                         producers,
@@ -231,7 +232,12 @@ impl<B: BidAdjustor> Context<B> {
         need_send_result
     }
 
-    pub fn store_data(&mut self, entry: PayloadEntry, is_optimistic: bool) {
+    pub fn store_data(
+        &mut self,
+        entry: PayloadEntry,
+        is_optimistic: bool,
+        producers: &mut HelixSpineProducers,
+    ) {
         let block_hash = *entry.block_hash();
         let is_adjusted = entry.is_adjusted();
 
@@ -243,7 +249,12 @@ impl<B: BidAdjustor> Context<B> {
             };
             // For optimistic submissions the bid is live as soon as it is stored.
             // For non-optimistic, live_ts is updated when the simulation result arrives.
-            let live_ts = if is_optimistic { Some(Nanos::now().0) } else { None };
+            let live_ts = if is_optimistic {
+                producers.produce(BidUpdate { block_hash, event: BidEvent::Live });
+                Some(Nanos::now().0)
+            } else {
+                None
+            };
             self.db.store_block_submission(
                 s.signed_bid_submission.clone(),
                 s.submission_trace,

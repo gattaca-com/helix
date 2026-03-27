@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use alloy_eips::{Decodable2718, eip2718::Eip2718Error};
 use alloy_primitives::{Address, B256, Bytes, U256};
 use alloy_rpc_types::{beacon::requests::ExecutionRequestsV4, engine::ExecutionPayloadV3};
+use helix_common::expect_env_var;
 use helix_types::{BuilderInclusionResult, MergedBlockTrace};
 use reth_ethereum::{evm::EthEvmConfig, primitives::SignedTransaction, provider::ProviderError};
 use reth_node_builder::ConfigureEvm;
@@ -36,7 +37,7 @@ pub(crate) struct PrivateKeySigner(
 );
 
 pub fn load_signer() -> PrivateKeySigner {
-    let signing_key_str = std::env::var("RELAY_KEY").expect("could not find RELAY_KEY in env");
+    let signing_key_str = expect_env_var("RELAY_KEY");
     let signing_key = signing_key_str
         .parse::<alloy_signer_local::PrivateKeySigner>()
         .expect("failed to parse RELAY_KEY");

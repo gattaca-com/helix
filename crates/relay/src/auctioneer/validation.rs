@@ -36,11 +36,11 @@ impl<B: BidAdjustor> Context<B> {
             });
         };
 
-        if let helix_types::Submission::Dehydrated(ref dehydrated) = *submission
-            && !self.hydration_cache.can_hydrate(dehydrated, self.chain_info.max_blobs_per_block())
-            {
-                return Err(BlockValidationError::CannotHydrate);
-            }
+        if let helix_types::Submission::Dehydrated(ref dehydrated) = *submission &&
+            !self.hydration_cache.can_hydrate(dehydrated, self.chain_info.max_blobs_per_block())
+        {
+            return Err(BlockValidationError::CannotHydrate);
+        }
 
         self.staleness_check(submission.builder_pubkey(), submission_data.version)?;
         self.validate_submission_data(

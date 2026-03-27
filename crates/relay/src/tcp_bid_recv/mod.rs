@@ -19,13 +19,11 @@ use crate::{
     spine::messages::{NewBidSubmission, SubmissionResultWithRef},
 };
 
-mod s3;
 pub mod types;
 
 pub use helix_tcp_types::{
     BidSubmissionFlags, BidSubmissionHeader, BidSubmissionResponse, RegistrationMsg,
 };
-pub use s3::S3PayloadSaver;
 
 pub use crate::tcp_bid_recv::types::{
     BidSubmissionError, response_from_bid_submission_error, response_from_submission_result,

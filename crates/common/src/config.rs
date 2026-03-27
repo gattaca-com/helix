@@ -43,10 +43,8 @@ pub struct RelayConfig {
     /// Configuration for block merging parameters.
     #[serde(default)]
     pub block_merging_config: BlockMergingConfig,
-    #[serde(default)]
     pub primev_config: Option<PrimevConfig>,
     pub discord_webhook_url: Option<Url>,
-    #[serde(default)]
     pub alerts_config: Option<AlertsConfig>,
     pub inclusion_list: Option<InclusionListConfig>,
     pub is_submission_instance: bool,
@@ -63,10 +61,17 @@ pub struct RelayConfig {
     pub tcp_port: u16,
     #[serde(default = "default_usize::<512>")]
     pub tcp_max_connections: usize,
-    #[serde(default)]
     pub s3_config: Option<S3Config>,
     /// Directory for local cache snapshots (bincode). Enables fast startup.
     pub snapshot_dir: Option<PathBuf>,
+    pub clickhouse: Option<ClickhouseConfig>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct ClickhouseConfig {
+    pub url: String,
+    pub database: String,
+    pub user: String,
 }
 
 impl RelayConfig {
@@ -100,6 +105,7 @@ impl RelayConfig {
                 decoder: vec![4],
                 simulator: 5,
                 top_bid: 1,
+                data_gatherer: 3,
             },
             gossip_payload_on_header: false,
             api_port: 4040,
@@ -107,6 +113,7 @@ impl RelayConfig {
             tcp_max_connections: 512,
             s3_config: None,
             snapshot_dir: None,
+            clickhouse: None,
         }
     }
 }
@@ -153,6 +160,8 @@ pub struct CoresConfig {
     pub simulator: usize,
     #[serde(default)]
     pub top_bid: usize,
+    #[serde(default)]
+    pub data_gatherer: usize,
 }
 
 impl Default for WebsiteConfig {
@@ -261,7 +270,6 @@ pub struct SimulatorConfig {
     #[serde(default = "default_usize::<32>")]
     pub max_concurrent_tasks: usize,
     /// If set, use the SSZ binary endpoint at this URL instead of JSON-RPC
-    #[serde(default)]
     pub ssz_url: Option<String>,
 }
 
