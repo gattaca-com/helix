@@ -1,6 +1,6 @@
 #![allow(clippy::future_not_send)]
 
-use std::{future::Future, time::Duration};
+use std::{collections::hash_map::Entry, future::Future, time::Duration};
 
 use alloy_primitives::B256;
 use flux_utils::ArrayStr;
@@ -89,6 +89,10 @@ impl ClickhouseData {
         self.map.get_mut(hash)
     }
 
+    pub fn entry(&mut self, hash: B256) -> Entry<'_, B256, BlockInfo> {
+        self.map.entry(hash)
+    }
+
     pub fn publish_snapshot(
         &mut self,
         new_slot: u64,
@@ -102,6 +106,10 @@ impl ClickhouseData {
             .extract_if(|_, v| v.slot < new_slot)
             .map(|(hash, info)| BlockInfoRow::from(self.instance_id, hash, info))
             .collect::<Vec<BlockInfoRow>>();
+
+        if rows.is_empty() {
+            return None;
+        }
 
         let client = self.client.clone();
         Some(async move {

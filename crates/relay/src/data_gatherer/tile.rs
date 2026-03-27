@@ -6,7 +6,7 @@ use flux_utils::SharedVector;
 use helix_common::{
     S3Config, api::builder_api::TopBidUpdate, config::ClickhouseConfig, decoder::Encoding,
 };
-use helix_types::{BlsPublicKeyBytes, MergeType};
+use helix_types::{BlsPublicKeyBytes, Compression, MergeType};
 
 use crate::{
     HelixSpine, SubmissionDataWithSpan,
@@ -124,25 +124,27 @@ impl Tile<HelixSpine> for DataGatherer {
                 }
 
                 let is_mergeable = matches!(bid.header.merge_type, MergeType::Mergeable);
-                if let Some((slot, block_hash, builder_pubkey)) =
-                    Self::extract_block_hash_and_pubkey(bid.header.encoding, payload, is_mergeable)
-                {
-                    max_slot = max_slot.max(slot);
-                    if let Some(ch) = self.ch.as_mut() {
-                        ch.insert(block_hash, BlockInfo {
-                            builder_pubkey,
-                            slot,
-                            is_dehydrated: bid.header.flags.is_dehydrated(),
-                            received_ns: bid.trace.receive_ns.0 as i64,
-                            read_body_ns: bid.trace.read_body_ns.0 as i64,
-                            ..Default::default()
-                        });
+                if let Compression::None = bid.header.compression {
+                    if let Some((slot, block_hash, builder_pubkey)) =
+                        Self::extract_block_hash_and_pubkey(bid.header.encoding, payload, is_mergeable)
+                    {
+                        max_slot = max_slot.max(slot);
+                        if let Some(ch) = self.ch.as_mut() {
+                            ch.insert(block_hash, BlockInfo {
+                                builder_pubkey,
+                                slot,
+                                is_dehydrated: bid.header.flags.is_dehydrated(),
+                                received_ns: bid.trace.receive_ns.0 as i64,
+                                read_body_ns: bid.trace.read_body_ns.0 as i64,
+                                ..Default::default()
+                            });
+                        }
+                    } else {
+                        tracing::error!(
+                            "failed to extract builder_pubkey & block hash from submission with id {}",
+                            bid.header.id
+                        );
                     }
-                } else {
-                    tracing::error!(
-                        "failed to extract builder_pubkey & block hash from submission with id {}",
-                        bid.header.id
-                    );
                 }
             },
             |_, _| {},
@@ -151,9 +153,18 @@ impl Tile<HelixSpine> for DataGatherer {
         adapter.consume_internal_message(|msg: &mut InternalMessage<DecodedSubmission>, _| {
             if let Some(bid) = self.decoded.get(msg.ix) {
                 max_slot = max_slot.max(bid.submission_data.bid_slot());
-                if let Some(ch) = self.ch.as_mut() &&
-                    let Some(info) = ch.get_mut(bid.submission_data.block_hash())
-                {
+                if let Some(ch) = self.ch.as_mut() {
+                    let info =
+                        ch.entry(*bid.submission_data.block_hash()).or_insert_with(|| BlockInfo {
+                            builder_pubkey: *bid.submission_data.builder_pubkey(),
+                            slot: bid.submission_data.bid_slot(),
+                            is_dehydrated: bid.submission_data.decoder_params.is_dehydrated,
+                            received_ns: bid.submission_data.trace.receive_ns.0 as i64,
+                            read_body_ns: bid.submission_data.trace.read_body_ns.0 as i64,
+                            decoded_ns: None,
+                            live_ns: None,
+                            top_bid_ns: None,
+                        });
                     info.decoded_ns = Some(msg.ingestion_time().real().0 as i64);
                 }
             }
