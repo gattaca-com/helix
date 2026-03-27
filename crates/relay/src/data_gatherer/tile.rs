@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration, u64};
 
 use alloy_primitives::B256;
 use flux::{spine::SpineAdapter, tile::Tile, timing::InternalMessage};
@@ -7,36 +7,21 @@ use helix_common::{
     S3Config, api::builder_api::TopBidUpdate, config::ClickhouseConfig, decoder::Encoding,
 };
 use helix_types::{BlsPublicKeyBytes, MergeType};
-use rustc_hash::FxHashMap;
 
 use crate::{
     HelixSpine, SubmissionDataWithSpan,
     data_gatherer::{
-        clickhouse::{BlockInfoRow, ClickhouseData},
+        clickhouse::{BlockInfo, ClickhouseData},
         s3::S3Data,
     },
     spine::messages::{BidEvent, BidUpdate, DecodedSubmission, NewBidSubmission},
 };
 
-#[derive(Default)]
-struct BlockInfo {
-    builder_pubkey: BlsPublicKeyBytes,
-    slot: u64,
-    is_dehydrated: bool,
-    received_ns: i64,
-    read_body_ns: i64,
-    decoded_ns: Option<i64>,
-    live_ns: Option<i64>,
-    top_bid_ns: Option<i64>,
-}
-
 pub struct DataGatherer {
     decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
-    map: FxHashMap<B256, BlockInfo>,
     ch: Option<ClickhouseData>,
     s3: Option<S3Data>,
     current_slot: u64,
-    instance_id: String,
     rt: tokio::runtime::Runtime,
 }
 
@@ -53,41 +38,19 @@ impl DataGatherer {
             .expect("failed to build data gatherer runtime");
         Self {
             decoded,
-            map: FxHashMap::with_capacity_and_hasher(5000, Default::default()),
-            ch: ch_config.map(ClickhouseData::new),
+            ch: ch_config.map(|cfg| ClickhouseData::new(cfg, instance_id)),
             s3: s3_config.map(S3Data::new),
             current_slot: 0,
-            instance_id,
             rt,
         }
     }
 
     pub fn on_new_slot(&mut self, new_slot: u64) {
         self.current_slot = new_slot;
-
-        if let Some(ch) = self.ch.as_mut() {
-            let rows = self
-                .map
-                .extract_if(|_, v| v.slot < new_slot)
-                .map(|(hash, info)| Self::make_row(self.instance_id.clone(), hash, info));
-            self.rt.block_on(ch.publish(rows));
-        } else {
-            self.map.retain(|_, v| v.slot >= new_slot);
-        }
-    }
-
-    fn make_row(instance_id: String, hash: B256, info: BlockInfo) -> BlockInfoRow {
-        BlockInfoRow {
-            instance_id,
-            slot: info.slot,
-            block_hash: hash.to_string(),
-            is_dehydrated: info.is_dehydrated,
-            received_ns: info.received_ns,
-            read_body_ns: info.read_body_ns,
-            decoded_ns: info.decoded_ns,
-            live_ns: info.live_ns,
-            top_bid_ns: info.top_bid_ns,
-            builder_pubkey: info.builder_pubkey.to_string(),
+        if let Some(ch) = self.ch.as_mut() &&
+            let Some(future) = ch.publish_snapshot(new_slot)
+        {
+            self.rt.spawn(future);
         }
     }
 
@@ -155,8 +118,9 @@ impl Tile<HelixSpine> for DataGatherer {
 
         adapter.consume_with_dcache_internal_message(
             |bid: &InternalMessage<NewBidSubmission>, payload| {
+                let payload = &payload[bid.payload_offset..];
                 if let Some(s3) = self.s3.as_ref() {
-                    self.rt.spawn(s3.upload_task(bid.header, payload, bid.payload_offset));
+                    self.rt.spawn(s3.upload_task(bid.header, payload));
                 }
 
                 let is_mergeable = matches!(bid.header.merge_type, MergeType::Mergeable);
@@ -164,17 +128,16 @@ impl Tile<HelixSpine> for DataGatherer {
                     Self::extract_block_hash_and_pubkey(bid.header.encoding, payload, is_mergeable)
                 {
                     max_slot = max_slot.max(slot);
-
-                    let info = BlockInfo {
-                        builder_pubkey,
-                        slot,
-                        is_dehydrated: bid.header.flags.is_dehydrated(),
-                        received_ns: bid.trace.receive_ns.0 as i64,
-                        read_body_ns: bid.trace.read_body_ns.0 as i64,
-                        ..Default::default()
-                    };
-
-                    self.map.insert(block_hash, info);
+                    if let Some(ch) = self.ch.as_mut() {
+                        ch.insert(block_hash, BlockInfo {
+                            builder_pubkey,
+                            slot,
+                            is_dehydrated: bid.header.flags.is_dehydrated(),
+                            received_ns: bid.trace.receive_ns.0 as i64,
+                            read_body_ns: bid.trace.read_body_ns.0 as i64,
+                            ..Default::default()
+                        });
+                    }
                 } else {
                     tracing::error!(
                         "failed to extract builder_pubkey & block hash from submission with id {}",
@@ -188,23 +151,32 @@ impl Tile<HelixSpine> for DataGatherer {
         adapter.consume_internal_message(|msg: &mut InternalMessage<DecodedSubmission>, _| {
             if let Some(bid) = self.decoded.get(msg.ix) {
                 max_slot = max_slot.max(bid.submission_data.bid_slot());
-                if let Some(info) = self.map.get_mut(bid.submission_data.block_hash()) {
+                if let Some(ch) = self.ch.as_mut() &&
+                    let Some(info) = ch.get_mut(bid.submission_data.block_hash())
+                {
                     info.decoded_ns = Some(msg.ingestion_time().real().0 as i64);
                 }
             }
         });
 
-        adapter.consume(|msg: BidUpdate, _| {
-            if let Some(info) = self.map.get_mut(&msg.block_hash) {
-                let BidEvent::Live(nanos) = msg.event;
-                info.live_ns = Some(nanos.0 as i64);
+        adapter.consume_internal_message(|msg: &mut InternalMessage<BidUpdate>, _| {
+            if let Some(ch) = self.ch.as_mut() &&
+                let Some(info) = ch.get_mut(&msg.block_hash)
+            {
+                // todo @nina - will we ever need other events?
+                #[allow(irrefutable_let_patterns)]
+                if let BidEvent::Live = msg.event {
+                    info.live_ns = Some(msg.ingestion_time().real().0 as i64);
+                }
             }
         });
 
-        adapter.consume(|msg: TopBidUpdate, _| {
+        adapter.consume_internal_message(|msg: &mut InternalMessage<TopBidUpdate>, _| {
             max_slot = max_slot.max(msg.slot);
-            if let Some(info) = self.map.get_mut(&msg.block_hash) {
-                info.top_bid_ns = Some(msg.timestamp as i64);
+            if let Some(ch) = self.ch.as_mut() &&
+                let Some(info) = ch.get_mut(&msg.block_hash)
+            {
+                info.top_bid_ns = Some(msg.ingestion_time().real().0 as i64);
             }
         });
 
@@ -212,19 +184,16 @@ impl Tile<HelixSpine> for DataGatherer {
             self.on_new_slot(max_slot);
         }
 
-        // drive spawned S3 upload tasks
+        // drive spawned S3 and clickhouse tasks
         self.rt.block_on(tokio::time::sleep(Duration::from_micros(500)));
     }
 
     fn teardown(mut self, adapter: &mut SpineAdapter<HelixSpine>) {
         self.loop_body(adapter);
-        if let Some(ch) = self.ch.as_mut() {
-            let instance_id = self.instance_id.clone();
-            let rows = self
-                .map
-                .into_iter()
-                .map(move |(hash, info)| Self::make_row(instance_id.clone(), hash, info));
-            self.rt.block_on(ch.publish(rows));
+        if let Some(mut ch) = self.ch &&
+            let Some(fut) = ch.publish_snapshot(u64::MAX)
+        {
+            self.rt.block_on(fut);
         }
     }
 }

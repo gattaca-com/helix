@@ -85,12 +85,11 @@ fn main() {
         instance_id.clone(),
     ));
 
-    let app_id = config
-        .instance_id
-        .clone()
-        .unwrap_or_else(|| format!("RELAY-{}", config.postgres.region_name));
-
-    init_panic_hook(app_id, config.discord_webhook_url.clone(), config.logging.dir_path());
+    init_panic_hook(
+        instance_id.clone(),
+        config.discord_webhook_url.clone(),
+        config.logging.dir_path(),
+    );
 
     block_on(start_metrics_server(&config));
     match block_on(run(instance_id, config, spine_config, keypair)) {
@@ -226,7 +225,7 @@ async fn run(
             if config.clickhouse.is_some() || config.s3_config.is_some() {
                 let data_gatherer = DataGatherer::new(
                     decoded.clone(),
-                    instance_id.clone(),
+                    instance_id,
                     config.clickhouse.as_ref(),
                     config.s3_config.clone(),
                 );

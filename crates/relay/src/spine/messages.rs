@@ -1,5 +1,4 @@
 use alloy_primitives::B256;
-use flux::timing::Nanos;
 use flux_utils::ArrayStr;
 use helix_common::SubmissionTrace;
 // Re-export as also used as spine message.
@@ -92,7 +91,7 @@ pub struct FromSimMsg {
 
 #[derive(Debug, Clone, Copy)]
 pub enum BidEvent {
-    Live(Nanos),
+    Live,
 }
 
 #[derive(Debug, Clone, Copy)]
