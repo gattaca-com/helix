@@ -1,22 +1,21 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use axum::{Router, routing::get};
-use helix_common::{RelayConfig, local_cache::LocalCache};
+use helix_common::{
+    CurrentSlotInfo, RelayConfig,
+    beacon::{create_beacon_client, load_chain_info},
+};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use parking_lot::RwLock;
-use tokio::{net::TcpListener, sync::broadcast};
+use tokio::net::TcpListener;
 use tracing::{debug, error, info};
 
 use crate::{
-    housekeeper::{ChainEventUpdater, CurrentSlotInfo},
-    start_beacon_client,
-    website::{
-        handlers,
-        models::DeliveredPayload,
-        postgres_db_website::WebsiteDatabaseService,
-        state::{AppState, CachedTemplates},
-        templates::IndexTemplate,
-    },
+    handlers,
+    models::DeliveredPayload,
+    postgres_db_website::WebsiteDatabaseService,
+    state::{AppState, CachedTemplates},
+    templates::IndexTemplate,
 };
 
 pub struct WebsiteService;
@@ -40,11 +39,9 @@ impl WebsiteService {
     ) -> Result<(), Box<dyn std::error::Error>> {
         info!("Starting WebsiteService");
 
-        let multi_beacon_client = start_beacon_client(&config);
-        let chain_info = multi_beacon_client.load_chain_info().await;
-        let chain_info = Arc::new(chain_info);
+        let multi_beacon_client = create_beacon_client(&config);
+        let chain_info = Arc::new(load_chain_info(&multi_beacon_client).await);
 
-        // Website state
         let current_slot_info = CurrentSlotInfo::new();
         let state = Arc::new(AppState {
             db_pool: db.clone(),
@@ -58,31 +55,9 @@ impl WebsiteService {
             current_slot_info: current_slot_info.clone(),
         });
 
-        let chain_updater = ChainEventUpdater::new(
-            Arc::new(LocalCache::new()),
-            chain_info,
-            current_slot_info,
-            crossbeam_channel::bounded(0).0,
-        );
-        info!("ChainEventUpdater initialized");
-
-        let (head_event_tx, head_event_rx) = broadcast::channel(100);
-        multi_beacon_client.subscribe_to_head_events(head_event_tx).await;
-        let (payload_attributes_tx, payload_attributes_rx) = broadcast::channel(100);
-        multi_beacon_client.subscribe_to_payload_attributes_events(payload_attributes_tx).await;
-
-        // Spawn the ChainEventUpdater task
-        tokio::spawn(async move {
-            info!("Starting ChainEventUpdater");
-            chain_updater.start(head_event_rx, payload_attributes_rx).await;
-            error!("ChainEventUpdater unexpectedly stopped");
-        });
-
-        // Start handling chain updates
         let update_state = state.clone();
         tokio::spawn(async move {
             loop {
-                // Update templates on new slot
                 if let Err(err) = Self::update_templates(&update_state).await {
                     error!(%err, "error updating templates");
                 };
@@ -90,7 +65,6 @@ impl WebsiteService {
             }
         });
 
-        // Start website service
         let app = Router::new().route("/", get(handlers::index)).with_state(state);
 
         let addr: String =
@@ -107,7 +81,6 @@ impl WebsiteService {
     async fn update_templates(state: &Arc<AppState>) -> Result<(), Box<dyn std::error::Error>> {
         debug!("Updating templates");
 
-        // Fetch latest data
         let num_network_validators = match state.db_pool.get_num_network_validators().await {
             Ok(val) => val,
             Err(e) => {
@@ -144,14 +117,12 @@ impl WebsiteService {
         };
         debug!("Fetched num_delivered_payloads: {}", num_delivered_payloads);
 
-        // Sort payloads for different views
         let mut payloads_by_value_desc = recent_payloads.clone();
         payloads_by_value_desc.sort_by(|a, b| b.bid_trace.value.cmp(&a.bid_trace.value));
 
         let mut payloads_by_value_asc = recent_payloads.clone();
         payloads_by_value_asc.sort_by(|a, b| a.bid_trace.value.cmp(&b.bid_trace.value));
 
-        // Generate templates for different sorting orders
         let default_template = Self::generate_template(
             state,
             &recent_payloads,
@@ -180,7 +151,6 @@ impl WebsiteService {
         )
         .await?;
 
-        // Update all cached templates
         let mut cached_templates = state.cached_templates.write();
         cached_templates.default = default_template;
         cached_templates.by_value_desc = by_value_desc_template;

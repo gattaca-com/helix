@@ -79,14 +79,10 @@ impl RelayNetworkManager {
         self.network_config.is_enabled && !self.network_config.peers.is_empty()
     }
 
-    pub async fn share_inclusion_list(
-        &self,
-        slot: u64,
-        inclusion_list: InclusionList,
-    ) -> Option<InclusionList> {
+    pub async fn share_inclusion_list(&self, slot: u64, inclusion_list: InclusionList) {
         // Skip consensus if disabled
         if !self.is_enabled() {
-            return Some(inclusion_list);
+            return;
         }
         let (result_tx, result_rx) = oneshot::channel();
         let event =
@@ -99,15 +95,26 @@ impl RelayNetworkManager {
         if let Err(err) = self.api_events_tx.send(event).await {
             // If API service is unavailable, just return the original IL and log a warning
             warn!("failed to send inclusion list to network API");
-            match err.0 {
-                NetworkEvent::InclusionList(InclusionListEvent::Local(event)) => {
-                    return Some(event.inclusion_list);
-                }
-                _ => unreachable!("the returned value is an inclusion list event"),
-            }
         }
         // If API service drops the channel, return None and log a warning
-        result_rx.await.inspect_err(|_| warn!("response channel was dropped")).ok().flatten()
+        // result_rx.await.inspect_err(|_| warn!("response channel was dropped")).ok().flatten()
+    }
+
+    /// Non-blocking send — drops the event if the channel is full.
+    pub fn try_share_inclusion_list(&self, slot: u64, inclusion_list: InclusionList) {
+        if !self.is_enabled() {
+            return;
+        }
+        let (result_tx, _) = oneshot::channel();
+        let event =
+            NetworkEvent::InclusionList(InclusionListEvent::Local(InclusionListEventInfo {
+                slot,
+                inclusion_list,
+                result_tx,
+            }));
+        if let Err(_) = self.api_events_tx.try_send(event) {
+            warn!("network channel full, dropping inclusion list share");
+        }
     }
 }
 

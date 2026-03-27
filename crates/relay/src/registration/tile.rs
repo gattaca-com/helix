@@ -4,18 +4,13 @@ use flux::{
     tile::{Tile, TileName},
     utils::{ShortTypename, short_typename},
 };
-use helix_common::{
-    chain_info::ChainInfo,
-    metrics::{WORKER_QUEUE_LEN, WORKER_TASK_COUNT, WORKER_TASK_LATENCY_US, WORKER_UTIL},
-    utils::{utcnow_ns, utcnow_sec},
-};
+use helix_common::{chain_info::ChainInfo, utils::utcnow_ns};
 use helix_types::SignedValidatorRegistration;
 
-use crate::{HelixSpine, api::proposer::ProposerApiError, auctioneer::types::RegWorkerJob};
+use crate::{HelixSpine, api::proposer::ProposerApiError, registration::handle::RegWorkerJob};
 
-pub struct Telemetry {
+struct Telemetry {
     work: Duration,
-    // spin or wait
     spin: Duration,
     next_record: Instant,
     loop_start: Instant,
@@ -26,6 +21,8 @@ impl Telemetry {
     const REPORT_FREQ: Duration = Duration::from_millis(500);
 
     fn telemetry<T>(&mut self, id: &str, queue_type: &str, rx: &crossbeam_channel::Receiver<T>) {
+        use helix_common::metrics::{WORKER_QUEUE_LEN, WORKER_UTIL};
+
         let now = Instant::now();
         let loop_elapsed = now.duration_since(self.loop_start);
 
@@ -61,15 +58,14 @@ impl Default for Telemetry {
             spin: Default::default(),
             next_record: Instant::now() +
                 Self::REPORT_FREQ +
-                Duration::from_millis(utcnow_ns() % 10 * 5), // to scatter worker reports
+                Duration::from_millis(utcnow_ns() % 10 * 5),
             loop_start: Instant::now(),
             loop_worked: Default::default(),
         }
     }
 }
 
-/// Worker to process registrations verifications
-pub struct RegWorker {
+pub struct RegistrationTile {
     core_id: usize,
     id: ShortTypename,
     chain_info: ChainInfo,
@@ -77,7 +73,7 @@ pub struct RegWorker {
     rx: crossbeam_channel::Receiver<RegWorkerJob>,
 }
 
-impl RegWorker {
+impl RegistrationTile {
     pub fn new(
         core_id: usize,
         chain_info: ChainInfo,
@@ -87,29 +83,28 @@ impl RegWorker {
         Self { core_id, id, chain_info, tel: Default::default(), rx }
     }
 
-    fn handle_task(&mut self, task: RegWorkerJob) {
+    fn handle_reg_task(&mut self, task: RegWorkerJob) {
+        use helix_common::metrics::{WORKER_TASK_COUNT, WORKER_TASK_LATENCY_US};
+
         let start_task = Instant::now();
+        let completed = self.process_reg_task(task);
+        let tag = if completed { "RegistrationBatch" } else { "RegistrationBatch_Aborted" };
 
-        let completed = self._handle_task(task);
-        let task_tag = if completed { "RegistrationBatch" } else { "RegistrationBatch_Aborted" };
+        let dur = start_task.elapsed();
+        self.tel.loop_worked += dur;
 
-        let task_dur = start_task.elapsed();
-        self.tel.loop_worked += task_dur;
-
-        WORKER_TASK_COUNT.with_label_values(&[task_tag, &self.id]).inc();
-        WORKER_TASK_LATENCY_US
-            .with_label_values(&[task_tag, &self.id])
-            .observe(task_dur.as_micros() as f64);
+        WORKER_TASK_COUNT.with_label_values(&[tag, &self.id]).inc();
+        WORKER_TASK_LATENCY_US.with_label_values(&[tag, &self.id]).observe(dur.as_micros() as f64);
     }
 
-    /// Returns whether the task was completed
-    fn _handle_task(&self, RegWorkerJob { regs, range, res_tx }: RegWorkerJob) -> bool {
+    /// Returns whether the task completed (false = caller dropped the result channel).
+    fn process_reg_task(&self, RegWorkerJob { regs, range, res_tx }: RegWorkerJob) -> bool {
+        use helix_common::metrics::{WORKER_TASK_COUNT, WORKER_TASK_LATENCY_US};
+
         let mut res = Vec::with_capacity(range.len());
 
         for i in range {
             if res_tx.is_closed() {
-                // validator dropped the request so no point in processing more
-                // a single signature check takes 1-5ms so it's ok to check this every time
                 return false;
             }
 
@@ -128,12 +123,11 @@ impl RegWorker {
     }
 }
 
-impl Tile<HelixSpine> for RegWorker {
+impl Tile<HelixSpine> for RegistrationTile {
     fn loop_body(&mut self, _adapter: &mut flux::spine::SpineAdapter<HelixSpine>) {
         if let Ok(task) = self.rx.recv_timeout(Duration::from_millis(50)) {
-            self.handle_task(task);
+            self.handle_reg_task(task);
         }
-
         self.tel.telemetry(&self.id, "registration", &self.rx);
     }
 
@@ -142,39 +136,25 @@ impl Tile<HelixSpine> for RegWorker {
     }
 }
 
-/// Validate a single registration.
 fn validate_registration(
     chain_info: &ChainInfo,
     registration: &SignedValidatorRegistration,
 ) -> Result<(), ProposerApiError> {
-    validate_registration_time(chain_info, registration)?;
-    registration.verify_signature(chain_info.builder_domain)?;
+    use helix_common::utils::utcnow_sec;
 
-    Ok(())
-}
-
-/// Validates the timestamp in a `SignedValidatorRegistration` message.
-///
-/// - Ensures the timestamp is not too early (before genesis time)
-/// - Ensures the timestamp is not too far in the future (current time + 10 seconds).
-fn validate_registration_time(
-    chain_info: &ChainInfo,
-    registration: &SignedValidatorRegistration,
-) -> Result<(), ProposerApiError> {
-    let registration_timestamp = registration.message.timestamp;
-    let registration_timestamp_upper_bound = utcnow_sec() + 10;
-
-    if registration_timestamp < chain_info.genesis_time_in_secs {
+    let ts = registration.message.timestamp;
+    if ts < chain_info.genesis_time_in_secs {
         return Err(ProposerApiError::TimestampTooEarly {
-            timestamp: registration_timestamp,
+            timestamp: ts,
             min_timestamp: chain_info.genesis_time_in_secs,
         });
-    } else if registration_timestamp > registration_timestamp_upper_bound {
+    }
+    if ts > utcnow_sec() + 10 {
         return Err(ProposerApiError::TimestampTooFarInTheFuture {
-            timestamp: registration_timestamp,
-            max_timestamp: registration_timestamp_upper_bound,
+            timestamp: ts,
+            max_timestamp: utcnow_sec() + 10,
         });
     }
-
+    registration.verify_signature(chain_info.builder_domain)?;
     Ok(())
 }

@@ -1,5 +1,6 @@
 use helix_types::{BlsPublicKeyBytes, SignedValidatorRegistration, Slot};
 use serde::{Deserialize, Serialize};
+
 use crate::{Filtering, ValidatorPreferences};
 
 pub const GET_HEADER_REQUEST_CUTOFF_MS: i64 = 3200;

@@ -1,10 +1,12 @@
 use std::{collections::HashMap, time::Duration};
 
+use futures::StreamExt;
 use helix_common::{
     BeaconClientConfig,
     api::{
         builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
     },
+    beacon::BeaconClient,
 };
 use helix_types::{BlsPublicKeyBytes, SignedValidatorRegistration, Slot};
 use reqwest::{Error, Response};
@@ -12,8 +14,6 @@ use serde::{Deserialize, Serialize};
 use tokio::{sync::mpsc::channel, time::sleep};
 use tracing::{error, info};
 use url::Url;
-
-use crate::beacon::beacon_client::BeaconClient;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct BuilderGetValidatorsResponseEntryExternal {
@@ -128,18 +128,13 @@ async fn run() {
     let beacon_client =
         BeaconClient::new(BeaconClientConfig { url: Url::parse("http://localhost:5052").unwrap() });
 
-    let (head_event_sender, mut head_event_receiver) =
-        tokio::sync::broadcast::channel::<crate::beacon::types::HeadEventData>(100);
-
-    tokio::spawn(async move {
-        if let Err(err) = beacon_client.subscribe_to_head_events(head_event_sender).await {
-            error!("Error subscribing to head events: {err}");
-        }
-    });
+    let head_stream =
+        beacon_client.sse_stream::<helix_common::beacon::types::HeadEventData>("head");
+    tokio::pin!(head_stream);
 
     let mut first_fetch_complete = false;
     // Process registrations each half epoch
-    while let Ok(head_event) = head_event_receiver.recv().await {
+    while let Some(head_event) = head_stream.next().await {
         info!("New head event: {}", head_event.slot);
         if head_event.slot % 5 != 0 && first_fetch_complete {
             continue;

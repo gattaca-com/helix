@@ -57,9 +57,7 @@ pub struct IndexedError {
 impl fmt::Display for ApiError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ErrorMessage { message, .. } => {
-                write!(f, "{message}")
-            }
+            Self::ErrorMessage { message, .. } => write!(f, "{message}"),
             Self::IndexedError { message, failures, .. } => {
                 write!(f, "{message}: ")?;
                 for failure in failures {

@@ -7,7 +7,7 @@ use axum::{
 };
 use tracing::info;
 
-use crate::website::state::AppState;
+use crate::state::AppState;
 
 pub async fn index(
     State(state): State<Arc<AppState>>,
@@ -16,7 +16,6 @@ pub async fn index(
     info!("Handling website request");
     let order_by = params.get("order_by").map(|s| s.as_str());
 
-    // Await the read lock on cached_templates
     let cached_templates = state.cached_templates.read();
 
     let template = match order_by {

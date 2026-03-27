@@ -1,15 +1,14 @@
 mod api;
 mod auctioneer;
-mod beacon;
 mod bid_decoder;
 mod data_gatherer;
 mod gossip;
 mod housekeeper;
 mod network;
+mod registration;
 mod simulator;
 mod spine;
 mod tcp_bid_recv;
-mod website;
 
 use std::time::Duration;
 
@@ -28,22 +27,23 @@ pub use crate::{
         start_admin_service, start_api_service,
     },
     auctioneer::{
-        Auctioneer, AuctioneerHandle, BidSorter, Context, Event, PayloadEntry, RegWorker,
-        RegWorkerHandle, SimulatorClient, SimulatorTile, SlotData, SubmissionPayload,
-        SubmissionRef, ValidationRequest,
+        Auctioneer, AuctioneerHandle, BidSorter, Context, Event, PayloadEntry, SimulatorClient,
+        SimulatorTile, SlotData, SubmissionPayload, SubmissionRef, ValidationRequest,
     },
-    beacon::start_beacon_client,
     bid_decoder::{DecoderTile, SubmissionDataWithSpan},
     data_gatherer::DataGatherer,
-    housekeeper::start_housekeeper,
+    housekeeper::{SlotUpdate, HousekeeperTile},
     network::RelayNetworkManager,
+    registration::{RegWorkerHandle, RegistrationTile},
     simulator::{SimRequest, SimResult},
-    spine::{HelixSpine, HelixSpineConfig, messages::NewBidSubmission},
+    spine::{
+        HelixSpine, HelixSpineConfig,
+        messages::{NewBidSubmission, SlotMsg},
+    },
     tcp_bid_recv::{
         BidSubmissionFlags, BidSubmissionHeader, BidSubmissionResponse, BidSubmissionTcpListener,
         RegistrationMsg,
     },
-    website::WebsiteService,
 };
 
 pub fn spawn_tokio_monitoring() {

@@ -30,4 +30,8 @@ pub struct HelixSpine {
 
     #[queue(size(2usize.pow(16)))]
     pub bid_update: SpineQueue<messages::BidUpdate>,
+
+    /// HousekeeperTile → all consumers.
+    #[queue(size(2usize.pow(6)))]
+    pub housekeeper_slot: SpineQueue<messages::SlotMsg>,
 }

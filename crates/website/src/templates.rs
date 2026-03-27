@@ -1,8 +1,7 @@
 use askama::Template;
 
-use crate::website::models::DeliveredPayload;
+use crate::models::DeliveredPayload;
 
-//Askama filters
 pub mod filters {
     use alloy_primitives::{U256, utils::format_ether};
     use askama::Result;
@@ -16,7 +15,7 @@ pub mod filters {
     }
 
     pub fn wei_to_eth(wei: &U256) -> Result<String> {
-        Ok(format!("{:.6}", format_ether(*wei))) // Format to 6 decimal places
+        Ok(format!("{:.6}", format_ether(*wei)))
     }
 }
 
@@ -41,5 +40,5 @@ pub struct IndexTemplate {
     pub bellatrix_fork_version: String,
     pub genesis_fork_version: String,
     pub genesis_validators_root: String,
-    pub builder_signing_domain: String, /* pub beacon_proposer_signing_domain: String //May be irrelevant? */
+    pub builder_signing_domain: String,
 }

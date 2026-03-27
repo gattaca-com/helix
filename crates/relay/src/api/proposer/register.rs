@@ -6,21 +6,21 @@ use axum::{
     http::{HeaderMap, StatusCode},
 };
 use helix_common::{
-    PreferencesHeader, ValidatorPreferences, api::proposer_api::ValidatorRegistrationInfo, api_provider::ApiProvider, metrics::{
+    PreferencesHeader,
+    api::proposer_api::ValidatorRegistrationInfo,
+    api_provider::ApiProvider,
+    metrics::{
         REGISTRATIONS_INVALID, REGISTRATIONS_SKIPPED, REGISTRATIONS_TO_CHECK_COUNT,
         REGISTRATIONS_UNKNOWN,
-    }, utils::extract_request_id, validator_preferences
+    },
+    utils::extract_request_id,
 };
 use helix_types::SignedValidatorRegistration;
 use tokio::{task::JoinSet, time::Instant};
 use tracing::{error, info, trace};
 
 use super::ProposerApi;
-use crate::api::{
-    Api,
-    proposer::error::ProposerApiError,
-    router::KnownValidatorsLoaded,
-};
+use crate::api::{Api, proposer::error::ProposerApiError, router::KnownValidatorsLoaded};
 
 impl<A: Api> ProposerApi<A> {
     /// Registers a batch of validators to the relay.
@@ -51,7 +51,12 @@ impl<A: Api> ProposerApi<A> {
             return Err(ProposerApiError::ServiceUnavailableError);
         }
 
-        let validator_preferences = proposer_api.api_provider.get_preferences(&headers, &query_prefs, proposer_api.validator_preferences.clone(), &registrations);
+        let validator_preferences = proposer_api.api_provider.get_preferences(
+            &headers,
+            &query_prefs,
+            proposer_api.validator_preferences.clone(),
+            &registrations,
+        );
 
         let user_agent = proposer_api.api_provider.get_metadata(&headers);
 

@@ -2,6 +2,7 @@ use alloy_primitives::{Address, U256};
 use helix_common::{Filtering, GetPayloadTrace};
 use helix_types::{BlsPublicKeyBytes, PayloadAndBlobs};
 
+#[derive(Clone)]
 pub struct SavePayloadParams {
     pub slot: u64,
     pub builder_pub_key: BlsPublicKeyBytes,

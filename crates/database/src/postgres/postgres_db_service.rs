@@ -45,6 +45,7 @@ use crate::{
     },
 };
 
+#[derive(Clone)]
 pub enum DbRequest {
     SaveTooLateGetPayload {
         slot: u64,
@@ -117,6 +118,7 @@ pub enum DbRequest {
     },
 }
 
+#[derive(Clone)]
 pub struct PendingBlockSubmissionValue {
     pub submission: SignedBidSubmission,
     pub trace: SubmissionTrace,

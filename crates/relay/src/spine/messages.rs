@@ -99,3 +99,9 @@ pub struct BidUpdate {
     pub block_hash: B256,
     pub event: BidEvent,
 }
+
+/// HousekeeperTile → all consumers: index into `SharedVector<SlotUpdate>`.
+#[derive(Debug, Clone, Copy)]
+pub struct SlotMsg {
+    pub ix: usize,
+}

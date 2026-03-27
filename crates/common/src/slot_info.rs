@@ -1,24 +1,46 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, ops::Deref, sync::Arc};
 
 use alloy_primitives::{B256, Bytes};
-use helix_common::{
-    api::builder_api::{BuilderGetValidatorsResponse, BuilderGetValidatorsResponseEntry},
-    chain_info::ChainInfo,
-};
 use helix_types::Slot;
 use parking_lot::RwLock;
 use tracing::{error, info};
 
-use crate::housekeeper::{PayloadAttributesUpdate, SlotUpdate};
+use crate::{
+    api::builder_api::{BuilderGetValidatorsResponse, BuilderGetValidatorsResponseEntry},
+    beacon::types::PayloadAttributes,
+    chain_info::ChainInfo,
+};
 
-/// All information that is refreshed every slot. This is thread safe and can be cloned/shared
+/// Payload for a new payload attribute event sent to subscribers.
+#[derive(Clone, Debug, Default)]
+pub struct PayloadAttributesUpdate {
+    pub slot: Slot,
+    pub parent_hash: B256,
+    pub withdrawals_root: B256,
+    pub payload_attributes: PayloadAttributes,
+}
+
+impl Deref for PayloadAttributesUpdate {
+    type Target = PayloadAttributes;
+
+    fn deref(&self) -> &Self::Target {
+        &self.payload_attributes
+    }
+}
+
+/// Payload for head event updates sent to subscribers.
+#[derive(Clone, Debug, Default)]
+pub struct SlotDuties {
+    pub slot: Slot,
+    pub next_duty: Option<BuilderGetValidatorsResponseEntry>,
+    pub new_duties: Option<Vec<BuilderGetValidatorsResponseEntry>>,
+}
+
+/// All information that is refreshed every slot. Thread-safe and cheaply cloneable.
 #[derive(Clone)]
 pub struct CurrentSlotInfo {
-    /// Information about the current head slot and next proposer duty
-    // TODO: split this into a AtomicU64?
     curr_slot_info: Arc<RwLock<(u64, Option<BuilderGetValidatorsResponseEntry>)>>,
     proposer_duties_response: Arc<RwLock<Option<Bytes>>>,
-    /// Parent hash / slot -> payload attributes
     payload_attributes: Arc<RwLock<HashMap<(B256, Slot), PayloadAttributesUpdate>>>,
 }
 
@@ -58,9 +80,7 @@ impl CurrentSlotInfo {
         self.payload_attributes.read().get(&(parent_hash, slot)).cloned()
     }
 
-    /// Handle a new slot update.
-    /// Updates the next proposer duty and prepares the get_validators() response.
-    pub fn handle_new_slot(&self, slot_update: SlotUpdate, chain_info: &ChainInfo) {
+    pub fn handle_new_slot(&self, slot_update: SlotDuties, chain_info: &ChainInfo) {
         let epoch = slot_update.slot.epoch(chain_info.slots_per_epoch());
 
         info!(
@@ -102,17 +122,13 @@ impl CurrentSlotInfo {
             "updated payload attributes",
         );
 
-        // Discard payload attributes if already known
         let payload_attributes_key = &(payload_attributes.parent_hash, payload_attributes.slot);
         let mut all_payload_attributes = self.payload_attributes.write();
         if all_payload_attributes.contains_key(payload_attributes_key) {
             return;
         }
 
-        // Clean up old payload attributes
         all_payload_attributes.retain(|_, value| value.slot >= head_slot);
-
-        // Save new one
         all_payload_attributes.insert(*payload_attributes_key, payload_attributes);
     }
 }

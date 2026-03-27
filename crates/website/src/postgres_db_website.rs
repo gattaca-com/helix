@@ -13,7 +13,7 @@ use helix_database::{
 };
 use helix_types::BidTrace;
 
-use crate::website::models::DeliveredPayload;
+use crate::models::DeliveredPayload;
 
 #[async_trait]
 pub trait WebsiteDatabaseService: Send + Sync {
@@ -48,7 +48,7 @@ impl FromRow for DeliveredPayload {
             },
             block_number: parse_i32_to_u64(row.get::<&str, i32>("block_number"))?,
             num_txs: parse_i32_to_usize(row.get::<&str, i32>("num_txs"))?,
-            epoch: parse_i32_to_u64(row.get::<&str, i32>("slot_number"))? / 32, //Calculate directly
+            epoch: parse_i32_to_u64(row.get::<&str, i32>("slot_number"))? / 32,
         })
     }
 }

@@ -12,21 +12,37 @@ use helix_common::{
         proposer_api::GetHeaderParams,
     },
     bid_submission::OptimisticVersion,
+    is_local_dev,
     utils::alert_discord,
 };
 use helix_types::{BlsPublicKeyBytes, MergedBlock, SignedBidSubmission};
-use tracing::error;
+use tracing::{error, warn};
 
 use crate::{
     postgres::postgres_db_service::{DbRequest, PendingBlockSubmissionValue},
     types::{BuilderInfoDocument, SavePayloadParams},
 };
 
+#[derive(Clone)]
+struct DbSender<T> {
+    sender: crossbeam_channel::Sender<T>,
+}
+
+impl<T> DbSender<T> {
+    fn try_send(&self, request: T) -> Result<(), crossbeam_channel::TrySendError<T>> {
+        if is_local_dev() {
+            warn!("local dev, skipping write to db");
+            return Ok(());
+        }
+        self.sender.try_send(request)
+    }
+}
+
 // This is temporary until we have the spine connected up
 #[derive(Clone)]
 pub struct DbHandle {
-    sender: crossbeam_channel::Sender<DbRequest>,
-    batch_sender: crossbeam_channel::Sender<PendingBlockSubmissionValue>,
+    sender: DbSender<DbRequest>,
+    batch_sender: DbSender<PendingBlockSubmissionValue>,
 }
 
 impl DbHandle {
@@ -34,7 +50,7 @@ impl DbHandle {
         sender: crossbeam_channel::Sender<DbRequest>,
         batch_sender: crossbeam_channel::Sender<PendingBlockSubmissionValue>,
     ) -> Self {
-        Self { sender, batch_sender }
+        Self { sender: DbSender { sender }, batch_sender: DbSender { sender: batch_sender } }
     }
 
     pub fn save_too_late_get_payload(

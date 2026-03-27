@@ -5,7 +5,15 @@ use std::{
 
 use axum::{Extension, extract::Path, http::HeaderMap, response::IntoResponse};
 use helix_common::{
-    GET_HEADER_REQUEST_CUTOFF_MS, GetHeaderTrace, RequestTimings, api::proposer_api::GetHeaderParams, api_provider::{ApiProvider, TimingResult}, chain_info::ChainInfo, decoder::{Encoding, HEADER_SSZ}, metrics::{BID_SIGNING_LATENCY, HEADER_TIMEOUT_FETCH, HEADER_TIMEOUT_SLEEP}, signing::RelaySigningContext, spawn_tracked, utils::{extract_request_id, utcnow_ms, utcnow_ns}
+    GET_HEADER_REQUEST_CUTOFF_MS, GetHeaderTrace, RequestTimings,
+    api::proposer_api::GetHeaderParams,
+    api_provider::{ApiProvider, TimingResult},
+    chain_info::ChainInfo,
+    decoder::{Encoding, HEADER_SSZ},
+    metrics::{BID_SIGNING_LATENCY, HEADER_TIMEOUT_FETCH, HEADER_TIMEOUT_SLEEP},
+    signing::RelaySigningContext,
+    spawn_tracked,
+    utils::{extract_request_id, utcnow_ms, utcnow_ns},
 };
 use helix_types::{BuilderBid, ForkName, GetHeaderResponse, SignedBuilderBid};
 use http::{HeaderValue, header::CONTENT_TYPE};
