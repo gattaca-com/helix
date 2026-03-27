@@ -1,11 +1,10 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use alloy_primitives::B256;
 use flux::{spine::SpineAdapter, tile::Tile, timing::InternalMessage};
 use flux_utils::SharedVector;
 use helix_common::{
     S3Config, api::builder_api::TopBidUpdate, config::ClickhouseConfig, decoder::Encoding,
-    task::block_on,
 };
 use helix_types::{BlsPublicKeyBytes, MergeType};
 use rustc_hash::FxHashMap;
@@ -38,6 +37,7 @@ pub struct DataGatherer {
     s3: Option<S3Data>,
     current_slot: u64,
     instance_id: String,
+    rt: tokio::runtime::Runtime,
 }
 
 impl DataGatherer {
@@ -47,6 +47,10 @@ impl DataGatherer {
         ch_config: Option<&ClickhouseConfig>,
         s3_config: Option<S3Config>,
     ) -> Self {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("failed to build data gatherer runtime");
         Self {
             decoded,
             map: FxHashMap::with_capacity_and_hasher(5000, Default::default()),
@@ -54,6 +58,7 @@ impl DataGatherer {
             s3: s3_config.map(S3Data::new),
             current_slot: 0,
             instance_id,
+            rt,
         }
     }
 
@@ -65,13 +70,9 @@ impl DataGatherer {
                 .map
                 .extract_if(|_, v| v.slot < new_slot)
                 .map(|(hash, info)| Self::make_row(self.instance_id.clone(), hash, info));
-            block_on(ch.publish(rows));
+            self.rt.block_on(ch.publish(rows));
         } else {
             self.map.retain(|_, v| v.slot >= new_slot);
-        }
-
-        if let Some(s3) = self.s3.as_mut() {
-            block_on(s3.flush());
         }
     }
 
@@ -132,7 +133,7 @@ impl DataGatherer {
 
                 let (slot, block_hash, builder_pubkey) = unsafe {
                     (
-                        core::ptr::read_unaligned(buf.as_ptr() as *const u64),
+                        u64::from_le_bytes(buf[0..8].try_into().unwrap()),
                         core::ptr::read_unaligned(
                             buf.as_ptr().add(BLOCK_HASH_OFFSET) as *const B256
                         ),
@@ -154,8 +155,8 @@ impl Tile<HelixSpine> for DataGatherer {
 
         adapter.consume_with_dcache_internal_message(
             |bid: &InternalMessage<NewBidSubmission>, payload| {
-                if let Some(s3) = self.s3.as_mut() {
-                    s3.push(bid.header, payload, bid.payload_offset);
+                if let Some(s3) = self.s3.as_ref() {
+                    self.rt.spawn(s3.upload_task(bid.header, payload, bid.payload_offset));
                 }
 
                 let is_mergeable = matches!(bid.header.merge_type, MergeType::Mergeable);
@@ -210,19 +211,20 @@ impl Tile<HelixSpine> for DataGatherer {
         if max_slot > self.current_slot {
             self.on_new_slot(max_slot);
         }
+
+        // drive spawned S3 upload tasks
+        self.rt.block_on(tokio::time::sleep(Duration::from_micros(500)));
     }
 
     fn teardown(mut self, adapter: &mut SpineAdapter<HelixSpine>) {
         self.loop_body(adapter);
         if let Some(ch) = self.ch.as_mut() {
+            let instance_id = self.instance_id.clone();
             let rows = self
                 .map
                 .into_iter()
-                .map(|(hash, info)| Self::make_row(self.instance_id.clone(), hash, info));
-            block_on(ch.publish(rows));
-        }
-        if let Some(s3) = self.s3.as_mut() {
-            block_on(s3.flush());
+                .map(move |(hash, info)| Self::make_row(instance_id.clone(), hash, info));
+            self.rt.block_on(ch.publish(rows));
         }
     }
 }

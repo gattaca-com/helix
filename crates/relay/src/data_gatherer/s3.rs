@@ -1,9 +1,10 @@
+use std::future::Future;
+
 use aws_sdk_s3::{
     Client,
     config::{BehaviorVersion, Credentials, Region},
     primitives::ByteStream,
 };
-use bytes::Bytes;
 use chrono::Utc;
 use helix_common::{S3Config, expect_env_var};
 use uuid::Uuid;
@@ -16,7 +17,6 @@ const ENV_SECRET_ACCESS_KEY: &str = "S3_SECRET_ACCESS_KEY";
 pub struct S3Data {
     client: Client,
     bucket: String,
-    pending: Vec<(Uuid, Bytes)>,
 }
 
 impl S3Data {
@@ -32,15 +32,15 @@ impl S3Data {
             .build();
         let client = Client::from_conf(sdk_config);
 
-        Self { client, bucket: config.bucket, pending: Vec::with_capacity(10_000) }
+        Self { client, bucket: config.bucket }
     }
 
-    pub fn push(
-        &mut self,
+    pub fn upload_task(
+        &self,
         header: InternalBidSubmissionHeader,
         payload: &[u8],
         payload_offset: usize,
-    ) {
+    ) -> impl Future<Output = ()> + Send + 'static {
         let id = header.id;
         let header = header.to_bytes();
         let header_slice = header.as_slice();
@@ -54,18 +54,15 @@ impl S3Data {
         buf.extend_from_slice(payload);
         let bytes = buf.freeze();
 
-        self.pending.push((id, bytes));
-    }
-
-    pub async fn flush(&mut self) {
-        for (id, payload) in self.pending.drain(..) {
+        let client = self.client.clone();
+        let bucket = self.bucket.clone();
+        async move {
             let key = Self::make_key(id);
-            if let Err(e) = self
-                .client
+            if let Err(e) = client
                 .put_object()
-                .bucket(self.bucket.clone())
+                .bucket(bucket)
                 .key(&key)
-                .body(ByteStream::from(payload))
+                .body(ByteStream::from(bytes))
                 .send()
                 .await
             {
