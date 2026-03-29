@@ -43,6 +43,9 @@ pub enum ProposerApiError {
     #[error("proposer not registered")]
     ProposerNotRegistered,
 
+    #[error("unknown validators registration found")]
+    UnknownValidatorsRegistration,
+
     #[error("timestamp too early. {timestamp} < {min_timestamp}")]
     TimestampTooEarly { timestamp: u64, min_timestamp: u64 },
 
@@ -145,6 +148,7 @@ impl IntoResponse for ProposerApiError {
                 ProposerApiError::InvalidFork |
                 ProposerApiError::SerdeDecodeError(_) |
                 ProposerApiError::ProposerNotRegistered |
+                ProposerApiError::UnknownValidatorsRegistration |
                 ProposerApiError::TimestampTooEarly { .. } |
                 ProposerApiError::TimestampTooFarInTheFuture { .. } |
                 ProposerApiError::RequestWrongSlot { .. } |
