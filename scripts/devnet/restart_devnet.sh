@@ -21,9 +21,15 @@ NETWORK_SUBNET=$(docker network inspect "kt-${ENCLAVE}" --format '{{range .IPAM.
 sudo ufw allow from "$NETWORK_SUBNET" to any port 4040
 sudo ufw allow from "$NETWORK_SUBNET" to any port 9060
 
-# Get proxy container IP
-PROXY_IP=$(docker inspect \
-  "$(docker ps --filter "name=helix-relay" --format '{{.ID}}' | head -1)" \
+# Get helix-relay proxy container IP
+PROXY_CONTAINER=$(docker ps --filter "name=helix-relay" --format '{{.ID}}' | head -n 1)
+
+if [ -z "$PROXY_CONTAINER" ]; then
+    echo "ERROR: helix-relay proxy container not found or not running" >&2
+    exit 1
+fi
+
+PROXY_IP=$(docker inspect "$PROXY_CONTAINER" \
   --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}')
 
 # Extract env vars from the service
