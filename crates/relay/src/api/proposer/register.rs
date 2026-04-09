@@ -6,14 +6,10 @@ use axum::{
     http::{HeaderMap, StatusCode},
 };
 use helix_common::{
-    ValidatorPreferences,
-    api::proposer_api::ValidatorRegistrationInfo,
-    api_provider::ApiProvider,
-    metrics::{
+    PreferencesHeader, ValidatorPreferences, api::proposer_api::ValidatorRegistrationInfo, api_provider::ApiProvider, metrics::{
         REGISTRATIONS_INVALID, REGISTRATIONS_SKIPPED, REGISTRATIONS_TO_CHECK_COUNT,
         REGISTRATIONS_UNKNOWN,
-    },
-    utils::extract_request_id,
+    }, utils::extract_request_id, validator_preferences
 };
 use helix_types::SignedValidatorRegistration;
 use tokio::{task::JoinSet, time::Instant};
@@ -22,7 +18,7 @@ use tracing::{error, info, trace};
 use super::ProposerApi;
 use crate::api::{
     Api,
-    proposer::{PreferencesHeader, error::ProposerApiError},
+    proposer::error::ProposerApiError,
     router::KnownValidatorsLoaded,
 };
 
@@ -55,33 +51,7 @@ impl<A: Api> ProposerApi<A> {
             return Err(ProposerApiError::ServiceUnavailableError);
         }
 
-        // Set using default preferences from config
-        let mut validator_preferences = ValidatorPreferences {
-            filtering: proposer_api.validator_preferences.filtering,
-            trusted_builders: proposer_api.validator_preferences.trusted_builders.clone(),
-            header_delay: proposer_api.validator_preferences.header_delay,
-            delay_ms: proposer_api.validator_preferences.delay_ms,
-            disable_inclusion_lists: proposer_api.validator_preferences.disable_inclusion_lists,
-            disable_optimistic: proposer_api.validator_preferences.disable_optimistic,
-        };
-
-        let preferences_header = headers.get("x-preferences");
-
-        let preferences = match preferences_header {
-            Some(preferences_header) => {
-                let decoded_prefs: PreferencesHeader =
-                    serde_json::from_str(preferences_header.to_str()?)?;
-                Some(decoded_prefs)
-            }
-            None => None,
-        };
-
-        if let Some(preferences) = preferences {
-            preferences.apply(&mut validator_preferences);
-        }
-
-        // Query params override (applied after header)
-        query_prefs.apply(&mut validator_preferences);
+        let validator_preferences = proposer_api.api_provider.get_preferences(&headers, &query_prefs, proposer_api.validator_preferences.clone(), &registrations);
 
         let user_agent = proposer_api.api_provider.get_metadata(&headers);
 
