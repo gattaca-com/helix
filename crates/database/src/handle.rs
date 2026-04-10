@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use alloy_primitives::{B256, U256};
+use alloy_primitives::{Address, B256, U256};
 use helix_common::{
     DataAdjustmentsEntry, GetHeaderTrace, GetPayloadTrace, GossipedPayloadTrace, SubmissionTrace,
     ValidatorSummary,
@@ -117,6 +117,10 @@ impl DbHandle {
         trace: GetHeaderTrace,
         mev_boost: bool,
         user_agent: Option<String>,
+        builder_pubkey: BlsPublicKeyBytes,
+        proposer_fee_recipient: Address,
+        block_number: u64,
+        extra_data: Vec<u8>,
     ) {
         if let Err(err) = self.sender.try_send(DbRequest::SaveGetHeaderCall {
             params,
@@ -125,6 +129,10 @@ impl DbHandle {
             trace,
             mev_boost,
             user_agent,
+            builder_pubkey,
+            proposer_fee_recipient,
+            block_number,
+            extra_data,
         }) {
             error!(%err, "failed to send SaveGetHeaderCall request");
         }

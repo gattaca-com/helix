@@ -27,10 +27,10 @@ use crate::{
 };
 
 pub type BidsCache = Cache<BuilderBlocksReceivedParams, Vec<ReceivedBlocksResponse>>;
-pub(crate) type BidsCacheV2 = Cache<BuilderBlocksReceivedParams, Vec<ReceivedBlocksResponseV2>>;
+pub type BidsCacheV2 = Cache<BuilderBlocksReceivedParams, Vec<ReceivedBlocksResponseV2>>;
 pub type DeliveredPayloadsCache =
     Cache<ProposerPayloadDeliveredParams, Vec<DeliveredPayloadsResponse>>;
-pub(crate) type DeliveredPayloadsCacheV2 =
+pub type DeliveredPayloadsCacheV2 =
     Cache<ProposerPayloadDeliveredParams, Vec<DeliveredPayloadsResponseV2>>;
 
 #[derive(Clone)]

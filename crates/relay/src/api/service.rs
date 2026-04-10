@@ -14,7 +14,8 @@ use tracing::{error, info};
 use crate::{
     AuctioneerHandle, DbHandle, PostgresDatabaseService, RegWorkerHandle,
     api::{
-        Api, BidsCache, DataApi, DeliveredPayloadsCache, SelectiveExpiry, builder::api::BuilderApi,
+        Api, BidsCache, BidsCacheV2, DataApi, DeliveredPayloadsCache, DeliveredPayloadsCacheV2,
+        SelectiveExpiry, builder::api::BuilderApi,
         proposer::ProposerApi, router::build_router,
     },
     beacon::multi_beacon_client::MultiBeaconClient,
@@ -127,11 +128,17 @@ pub async fn run_api_service<A: Api>(
     let bids_cache: BidsCache =
         Cache::builder().time_to_idle(Duration::from_secs(12)).max_capacity(10_000).build();
 
+    let bids_cache_v2: BidsCacheV2 =
+        Cache::builder().time_to_idle(Duration::from_secs(12)).max_capacity(10_000).build();
+
     let delivered_payloads_cache: DeliveredPayloadsCache = Cache::builder()
         .expire_after(SelectiveExpiry)
         .time_to_idle(Duration::from_secs(12))
         .max_capacity(10_000)
         .build();
+
+    let delivered_payloads_cache_v2: DeliveredPayloadsCacheV2 =
+        Cache::builder().time_to_idle(Duration::from_secs(12)).max_capacity(10_000).build();
 
     let router = build_router(
         &mut config.router_config,
@@ -140,7 +147,9 @@ pub async fn run_api_service<A: Api>(
         data_api,
         relay_network_api,
         bids_cache,
+        bids_cache_v2,
         delivered_payloads_cache,
+        delivered_payloads_cache_v2,
         known_validators_loaded,
         terminating,
     );

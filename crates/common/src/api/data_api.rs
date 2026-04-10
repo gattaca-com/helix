@@ -198,6 +198,7 @@ pub struct ProposerHeaderDeliveredParams {
     pub block_number: Option<u64>,
     pub builder_pubkey: Option<BlsPublicKey>,
     pub proposer_pubkey: Option<BlsPublicKey>,
+    pub region: Option<String>,
     pub limit: Option<u64>,
     pub order_by: Option<String>,
 }
@@ -235,9 +236,15 @@ pub struct ProposerHeaderDeliveredResponse {
     pub slot: Option<Slot>,
     pub parent_hash: Option<B256>,
     pub block_hash: Option<B256>,
+    pub builder_pubkey: Option<BlsPublicKeyBytes>,
     pub proposer_pubkey: Option<BlsPublicKeyBytes>,
+    pub proposer_fee_recipient: Option<Address>,
     #[serde(default, skip_serializing_if = "Option::is_none", with = "quoted_u256_opt")]
     pub value: Option<U256>,
+    pub block_number: Option<u64>,
+    pub proposer_send_timestamp_ms: Option<u64>,
+    pub extra_data: Option<String>,
+    pub region: Option<String>,
 }
 
 mod quoted_u256_opt {

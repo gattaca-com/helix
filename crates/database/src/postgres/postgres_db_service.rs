@@ -7,7 +7,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use alloy_primitives::{B256, U256};
+use alloy_primitives::{Address, B256, U256};
 use deadpool_postgres::{Config, GenericClient, ManagerConfig, Pool, RecyclingMethod};
 use helix_common::{
     DataAdjustmentsEntry, Filtering, GetHeaderTrace, GetPayloadTrace, GossipedPayloadTrace,
@@ -73,6 +73,10 @@ pub enum DbRequest {
         trace: GetHeaderTrace,
         mev_boost: bool,
         user_agent: Option<String>,
+        builder_pubkey: BlsPublicKeyBytes,
+        proposer_fee_recipient: Address,
+        block_number: u64,
+        extra_data: Vec<u8>,
     },
     SaveFailedGetPayload {
         slot: u64,
@@ -579,6 +583,10 @@ impl PostgresDatabaseService {
                 trace,
                 mev_boost,
                 user_agent,
+                builder_pubkey,
+                proposer_fee_recipient,
+                block_number,
+                extra_data,
             } => {
                 if let Err(err) = self
                     .save_get_header_call(
@@ -588,6 +596,10 @@ impl PostgresDatabaseService {
                         trace,
                         mev_boost,
                         user_agent,
+                        builder_pubkey,
+                        proposer_fee_recipient,
+                        block_number,
+                        extra_data,
                     )
                     .await
                 {
@@ -2226,6 +2238,10 @@ impl PostgresDatabaseService {
         trace: GetHeaderTrace,
         mev_boost: bool,
         user_agent: Option<String>,
+        builder_pubkey: BlsPublicKeyBytes,
+        proposer_fee_recipient: Address,
+        block_number: u64,
+        extra_data: Vec<u8>,
     ) -> Result<(), DatabaseError> {
         let mut record = DbMetricRecord::new("save_get_header_call");
 
@@ -2237,9 +2253,9 @@ impl PostgresDatabaseService {
             .execute(
                 "
                     INSERT INTO get_header
-                        (slot_number, region_id, parent_hash, proposer_pubkey, block_hash, value, mev_boost, user_agent, receive, validation_complete, best_bid_fetched)
+                        (slot_number, region_id, parent_hash, proposer_pubkey, block_hash, value, mev_boost, user_agent, receive, validation_complete, best_bid_fetched, builder_pubkey, proposer_fee_recipient, block_number, extra_data)
                     VALUES
-                        ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                        ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
                 ",
                 &[
                     &(params.slot as i32),
@@ -2253,6 +2269,10 @@ impl PostgresDatabaseService {
                     &(trace.receive as i64),
                     &(trace.validation_complete as i64),
                     &(trace.best_bid_fetched as i64),
+                    &(builder_pubkey.as_slice()),
+                    &(proposer_fee_recipient.as_slice()),
+                    &(block_number as i64),
+                    &(extra_data),
                 ],
             )
             .await?;
@@ -2516,9 +2536,16 @@ impl PostgresDatabaseService {
                 slot_number,
                 parent_hash,
                 block_hash,
+                builder_pubkey,
                 proposer_pubkey,
-                value
+                proposer_fee_recipient,
+                block_number,
+                extra_data,
+                value,
+                best_bid_fetched,
+                region.name AS region
             FROM get_header
+            INNER JOIN region ON get_header.region_id = region.id
             WHERE mev_boost = true
         ",
         );
@@ -2544,7 +2571,17 @@ impl PostgresDatabaseService {
             param_index += 1;
         }
 
-        // builder_pubkey filter not supported (not stored in get_header table)
+        if let Some(ref builder_pubkey) = params.builder_pubkey {
+            query.push_str(&format!(" AND builder_pubkey = ${param_index}"));
+            db_params.push(Box::new(builder_pubkey.serialize().to_vec()));
+            param_index += 1;
+        }
+
+        if let Some(block_number) = params.block_number {
+            query.push_str(&format!(" AND block_number = ${param_index}"));
+            db_params.push(Box::new(block_number as i64));
+            param_index += 1;
+        }
 
         if let Some(ref proposer_pubkey) = params.proposer_pubkey {
             query.push_str(&format!(" AND proposer_pubkey = ${param_index}"));
@@ -2574,10 +2611,27 @@ impl PostgresDatabaseService {
                 block_hash: row
                     .get::<_, Option<Vec<u8>>>("block_hash")
                     .and_then(|h| B256::try_from(h.as_slice()).ok()),
+                builder_pubkey: row
+                    .get::<_, Option<Vec<u8>>>("builder_pubkey")
+                    .and_then(|p| BlsPublicKeyBytes::try_from(p.as_slice()).ok()),
                 proposer_pubkey: row
                     .get::<_, Option<Vec<u8>>>("proposer_pubkey")
                     .and_then(|p| BlsPublicKeyBytes::try_from(p.as_slice()).ok()),
+                proposer_fee_recipient: row
+                    .get::<_, Option<Vec<u8>>>("proposer_fee_recipient")
+                    .and_then(|b| Address::try_from(b.as_slice()).ok()),
                 value: row.get::<_, Option<PostgresNumeric>>("value").map(|v| v.0),
+                block_number: row.get::<_, Option<i64>>("block_number").map(|n| n as u64),
+                proposer_send_timestamp_ms: row.get::<_, Option<i64>>("best_bid_fetched").map(
+                    |s| {
+                        // convert from i64 nanoseconds to u64 milliseconds
+                        (s as u64) / 1_000_000
+                    },
+                ),
+                extra_data: row
+                    .get::<_, Option<Vec<u8>>>("extra_data")
+                    .map(|b| alloy_primitives::hex::encode_prefixed(b)),
+                region: row.get::<_, Option<String>>("region"),
             })
             .collect();
 
