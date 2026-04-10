@@ -2,7 +2,6 @@ mod error;
 mod get_header;
 pub(crate) mod get_payload;
 mod register;
-mod types;
 
 use std::sync::{Arc, atomic::Ordering};
 
@@ -14,7 +13,6 @@ use helix_common::{
 };
 use helix_database::handle::DbHandle;
 use hyper::StatusCode;
-pub use types::*;
 
 use crate::{
     api::{Api, router::Terminating},
