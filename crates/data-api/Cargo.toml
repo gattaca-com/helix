@@ -9,8 +9,10 @@ version.workspace = true
 [dependencies]
 axum.workspace = true
 clap = { workspace = true }
+reqwest.workspace = true
 serde.workspace = true
 serde_yaml.workspace = true
+tower_governor.workspace = true
 crossbeam-channel.workspace = true
 eyre.workspace = true
 helix-common.workspace = true
