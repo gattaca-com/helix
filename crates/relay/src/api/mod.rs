@@ -3,7 +3,9 @@
 use std::sync::Arc;
 
 use helix_common::{api_provider::ApiProvider, local_cache::LocalCache};
-pub use helix_data_api::{BidsCache, DataApi, DeliveredPayloadsCache};
+pub use helix_data_api::{
+    BidsCache, BidsCacheV2, DataApi, DeliveredPayloadsCache, DeliveredPayloadsCacheV2,
+};
 pub use service::start_api_service;
 
 pub use crate::auctioneer::{BidAdjustor, DefaultBidAdjustor};

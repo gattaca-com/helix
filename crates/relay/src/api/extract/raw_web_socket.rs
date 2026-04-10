@@ -90,11 +90,10 @@ impl RawWebSocketUpgrade {
 
             // axum::serve uses auto::Builder which wraps the IO in Rewind<TokioIo<TcpStream>>.
             // Use the auto upgrade downcast helper which unwraps the Rewind layer.
-            let parts =
-                hyper_util::server::conn::auto::upgrade::downcast::<TokioIo<tokio::net::TcpStream>>(
-                    upgraded,
-                )
-                .expect("upgraded connection must be TokioIo<TcpStream>");
+            let parts = hyper_util::server::conn::auto::upgrade::downcast::<
+                TokioIo<tokio::net::TcpStream>,
+            >(upgraded)
+            .expect("upgraded connection must be TokioIo<TcpStream>");
             debug_assert!(
                 parts.read_buf.is_empty(),
                 "unexpected pre-buffered bytes after WebSocket upgrade"

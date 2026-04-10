@@ -80,10 +80,8 @@ impl Tile<HelixSpine> for DecoderTile {
                     );
                 }
                 DCacheRead::NoRef(new_bid) => {
-                    let Some(payload) = new_bid
-                        .http_submission_ix
-                        .map(|ix| self.http_submissions.get(ix))
-                        .flatten()
+                    let Some(payload) =
+                        new_bid.http_submission_ix.and_then(|ix| self.http_submissions.get(ix))
                     else {
                         tracing::error!(
                             "failed to find the payload for bid submission with id = {}",
