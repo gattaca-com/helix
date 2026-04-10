@@ -22,19 +22,16 @@ use rustc_hash::FxHashMap;
 use tracing::{debug, info, warn};
 
 use crate::{
-    api::{FutureBidSubmissionResult, builder::error::BuilderApiError},
-    auctioneer::{
+    SubmissionDataWithSpan, api::{FutureBidSubmissionResult, builder::error::BuilderApiError}, auctioneer::{
         AuctioneerHandle, BlockMergeResponse,
         bid_adjustor::BidAdjustor,
         bid_sorter::BidSorter,
         block_merger::BlockMerger,
         types::{PayloadEntry, PendingPayload, SubmissionRef},
-    },
-    simulator::{SimRequest, tile::ValidationResult},
-    spine::{
+    }, simulator::{SimRequest, tile::ValidationResult}, spine::{
         HelixSpineProducers,
         messages::{SubmissionResultWithRef, ToSimKind, ToSimMsg},
-    },
+    }
 };
 
 // Context that is only valid for a given slot
@@ -59,6 +56,7 @@ pub struct Context<B: BidAdjustor> {
     pub slot_context: SlotContext,
     pub bid_adjustor: B,
     pub completed_dry_run: bool,
+    pub decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
     pub future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
     pub auctioneer_handle: AuctioneerHandle,
     pub sim_inbound: Arc<SharedVector<SimRequest>>,
@@ -82,6 +80,7 @@ impl<B: BidAdjustor> Context<B> {
         bid_sorter: BidSorter,
         cache: LocalCache,
         bid_adjustor: B,
+        decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
         future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
         auctioneer_handle: AuctioneerHandle,
     ) -> Self {
@@ -121,6 +120,7 @@ impl<B: BidAdjustor> Context<B> {
             config,
             bid_adjustor,
             completed_dry_run: false,
+            decoded,
             future_results,
             auctioneer_handle,
             sim_inbound,
@@ -239,6 +239,7 @@ impl<B: BidAdjustor> Context<B> {
         self.block_merger.on_new_slot(bid_slot.as_u64());
         self.bid_adjustor.on_new_slot(bid_slot.as_u64());
         self.auctioneer_handle.clear_inflight_payloads();
+        self.decoded.clear();
 
         if !self.payloads.is_empty() {
             // here we need to deallocate a lot of data, taking more than 1s on busy slots

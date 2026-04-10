@@ -66,7 +66,6 @@ pub struct Auctioneer<B: BidAdjustor> {
     state: State,
     tel: Telemetry,
     event_rx: crossbeam_channel::Receiver<Event>,
-    decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
     sim_results: Arc<SharedVector<SimResult>>,
 }
 
@@ -99,6 +98,7 @@ impl<B: BidAdjustor> Auctioneer<B> {
             bid_sorter,
             local_cache,
             bid_adjustor,
+            decoded,
             future_results,
             auctioneer_handle,
         );
@@ -107,7 +107,6 @@ impl<B: BidAdjustor> Auctioneer<B> {
             state: State::default(),
             tel: Telemetry::new(format!("auctioneer_{id}")),
             event_rx,
-            decoded,
             sim_results,
         }
     }
@@ -120,7 +119,7 @@ impl<B: BidAdjustor> Tile<HelixSpine> for Auctioneer<B> {
         }
 
         adapter.consume(|submission: DecodedSubmission, producers| {
-            match self.decoded.get(submission.ix) {
+            match self.ctx.decoded.get(submission.ix) {
                 Some(submission_data) => {
                     let event = Event::Submission { submission_data, decoded_ix: submission.ix };
                     self.state.step(event, &mut self.ctx, &mut self.tel, producers);
