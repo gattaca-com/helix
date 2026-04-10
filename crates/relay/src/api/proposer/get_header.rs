@@ -117,6 +117,11 @@ impl<A: Api> ProposerApi<A> {
 
         let bid_block_hash = *bid.block_hash();
         let value = *bid.value();
+        let ep = bid.execution_payload();
+        let builder_pubkey = *bid.bid_data_ref().builder_pubkey;
+        let proposer_fee_recipient = ep.fee_recipient;
+        let block_number = ep.block_number;
+        let extra_data = ep.extra_data.to_vec();
 
         proposer_api.db.save_get_header_call(
             params,
@@ -125,6 +130,10 @@ impl<A: Api> ProposerApi<A> {
             trace,
             is_mev_boost,
             user_agent,
+            builder_pubkey,
+            proposer_fee_recipient,
+            block_number,
+            extra_data,
         );
 
         let fork = proposer_api.chain_info.current_fork_name();

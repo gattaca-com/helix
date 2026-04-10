@@ -22,7 +22,7 @@ use tracing::{info, warn};
 
 use crate::{
     api::{
-        Api, BidsCache, DataApi, DeliveredPayloadsCache,
+        Api, BidsCache, BidsCacheV2, DataApi, DeliveredPayloadsCache, DeliveredPayloadsCacheV2,
         builder::api::BuilderApi,
         middleware::body_limit_middleware,
         proposer::{self, ProposerApi},
@@ -43,7 +43,9 @@ pub fn build_router<A: Api>(
     data_api: Arc<DataApi>,
     relay_network_api: RelayNetworkApi,
     bids_cache: BidsCache,
+    bids_cache_v2: BidsCacheV2,
     delivered_payloads_cache: DeliveredPayloadsCache,
+    delivered_payloads_cache_v2: DeliveredPayloadsCacheV2,
     known_validators_loaded: Arc<AtomicBool>,
     terminating: Arc<AtomicBool>,
 ) -> Router {
@@ -140,7 +142,9 @@ pub fn build_router<A: Api>(
         .layer(Extension(data_api))
         .layer(Extension(relay_network_api))
         .layer(Extension(bids_cache))
+        .layer(Extension(bids_cache_v2))
         .layer(Extension(delivered_payloads_cache))
+        .layer(Extension(delivered_payloads_cache_v2))
         .layer(Extension(KnownValidatorsLoaded(known_validators_loaded)))
         .layer(Extension(Terminating(terminating)));
 

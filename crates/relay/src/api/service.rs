@@ -11,7 +11,10 @@ use flux_utils::SharedVector;
 use helix_common::{
     RelayConfig, chain_info::ChainInfo, local_cache::LocalCache, signing::RelaySigningContext,
 };
-use helix_data_api::{BidsCache, DataApi, DeliveredPayloadsCache, SelectiveExpiry};
+use helix_data_api::{
+    BidsCache, BidsCacheV2, DataApi, DeliveredPayloadsCache, DeliveredPayloadsCacheV2,
+    SelectiveExpiry,
+};
 use moka::sync::Cache;
 use tracing::{error, info};
 
@@ -144,11 +147,17 @@ pub async fn run_api_service<A: Api>(
     let bids_cache: BidsCache =
         Cache::builder().time_to_idle(Duration::from_secs(12)).max_capacity(10_000).build();
 
+    let bids_cache_v2: BidsCacheV2 =
+        Cache::builder().time_to_idle(Duration::from_secs(12)).max_capacity(10_000).build();
+
     let delivered_payloads_cache: DeliveredPayloadsCache = Cache::builder()
         .expire_after(SelectiveExpiry)
         .time_to_idle(Duration::from_secs(12))
         .max_capacity(10_000)
         .build();
+
+    let delivered_payloads_cache_v2: DeliveredPayloadsCacheV2 =
+        Cache::builder().time_to_idle(Duration::from_secs(12)).max_capacity(10_000).build();
 
     let router = build_router(
         &mut config.router_config,
@@ -157,7 +166,9 @@ pub async fn run_api_service<A: Api>(
         data_api,
         relay_network_api,
         bids_cache,
+        bids_cache_v2,
         delivered_payloads_cache,
+        delivered_payloads_cache_v2,
         known_validators_loaded,
         terminating,
     );

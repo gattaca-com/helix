@@ -4,8 +4,8 @@ use axum::{Extension, Router, routing::get};
 use helix_common::{
     ValidatorPreferences,
     api::{
-        PATH_BUILDER_BIDS_RECEIVED, PATH_DATA_ADJUSTMENTS, PATH_DATA_API, PATH_MERGED_BLOCKS,
-        PATH_PROPOSER_HEADER_DELIVERED, PATH_PROPOSER_PAYLOAD_DELIVERED,
+        PATH_BUILDER_BIDS_RECEIVED, PATH_DATA_ADJUSTMENTS, PATH_DATA_API, PATH_DATA_API_V2,
+        PATH_MERGED_BLOCKS, PATH_PROPOSER_HEADER_DELIVERED, PATH_PROPOSER_PAYLOAD_DELIVERED,
         PATH_VALIDATOR_REGISTRATION,
     },
 };
@@ -14,19 +14,25 @@ use moka::sync::Cache;
 use tracing::{error, info};
 
 use crate::{
-    api::{BidsCache, DataApi, DeliveredPayloadsCache},
+    api::{BidsCache, BidsCacheV2, DataApi, DeliveredPayloadsCache, DeliveredPayloadsCacheV2},
     stats::SelectiveExpiry,
 };
 
 pub fn build_data_router(
     data_api: Arc<DataApi>,
     bids_cache: BidsCache,
+    bids_cache_v2: BidsCacheV2,
     delivered_payloads_cache: DeliveredPayloadsCache,
+    delivered_payloads_cache_v2: DeliveredPayloadsCacheV2,
 ) -> Router {
     Router::new()
         .route(
             &format!("{PATH_DATA_API}{PATH_PROPOSER_PAYLOAD_DELIVERED}"),
             get(DataApi::proposer_payload_delivered),
+        )
+        .route(
+            &format!("{PATH_DATA_API_V2}{PATH_PROPOSER_PAYLOAD_DELIVERED}"),
+            get(DataApi::proposer_payload_delivered_v2),
         )
         .route(
             &format!("{PATH_DATA_API}{PATH_PROPOSER_HEADER_DELIVERED}"),
@@ -37,6 +43,10 @@ pub fn build_data_router(
             get(DataApi::builder_bids_received),
         )
         .route(
+            &format!("{PATH_DATA_API_V2}{PATH_BUILDER_BIDS_RECEIVED}"),
+            get(DataApi::builder_bids_received_v2),
+        )
+        .route(
             &format!("{PATH_DATA_API}{PATH_VALIDATOR_REGISTRATION}"),
             get(DataApi::validator_registration),
         )
@@ -44,7 +54,9 @@ pub fn build_data_router(
         .route(&format!("{PATH_DATA_API}{PATH_MERGED_BLOCKS}"), get(DataApi::merged_blocks))
         .layer(Extension(data_api))
         .layer(Extension(bids_cache))
+        .layer(Extension(bids_cache_v2))
         .layer(Extension(delivered_payloads_cache))
+        .layer(Extension(delivered_payloads_cache_v2))
 }
 
 /// Run a standalone data API server.
@@ -61,13 +73,25 @@ pub async fn run_data_api(
     let bids_cache: BidsCache =
         Cache::builder().time_to_idle(Duration::from_secs(12)).max_capacity(10_000).build();
 
+    let bids_cache_v2: BidsCacheV2 =
+        Cache::builder().time_to_idle(Duration::from_secs(12)).max_capacity(10_000).build();
+
     let delivered_payloads_cache: DeliveredPayloadsCache = Cache::builder()
         .expire_after(SelectiveExpiry)
         .time_to_idle(Duration::from_secs(12))
         .max_capacity(10_000)
         .build();
 
-    let router = build_data_router(data_api, bids_cache, delivered_payloads_cache);
+    let delivered_payloads_cache_v2: DeliveredPayloadsCacheV2 =
+        Cache::builder().time_to_idle(Duration::from_secs(12)).max_capacity(10_000).build();
+
+    let router = build_data_router(
+        data_api,
+        bids_cache,
+        bids_cache_v2,
+        delivered_payloads_cache,
+        delivered_payloads_cache_v2,
+    );
 
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await?;
     info!(port, "data API listening");
