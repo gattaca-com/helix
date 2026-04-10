@@ -5676,12 +5676,15 @@ name = "helix-data-api"
 version = "0.0.1"
 dependencies = [
  "axum 0.8.7",
+ "clap",
  "crossbeam-channel",
  "eyre",
  "helix-common",
  "helix-database",
  "helix-types",
  "moka",
+ "serde",
+ "serde_yaml",
  "thiserror 1.0.69",
  "tokio",
  "tower 0.4.13",

@@ -1,25 +1,32 @@
-use std::sync::{Arc, atomic::AtomicBool};
+use std::{fs::File, sync::Arc};
 
-use helix_common::{RelayConfig, load_config, local_cache::LocalCache};
-use helix_data_api::service::run_data_api;
-use helix_database::{DbRequest, PendingBlockSubmissionValue, start_db_service};
+use clap::Parser;
+use helix_common::local_cache::LocalCache;
+use helix_data_api::{config::DataApiConfig, service::run_data_api};
+use helix_database::PostgresDatabaseService;
+
+#[derive(Parser)]
+struct Args {
+    #[clap(long, default_value = "config.yml")]
+    config: String,
+}
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     tracing_subscriber::fmt::init();
 
-    let config: RelayConfig = load_config();
+    let args = Args::parse();
+    let file = File::open(&args.config)
+        .unwrap_or_else(|_| panic!("unable to find config file: '{}'", args.config));
+    let config: DataApiConfig = serde_yaml::from_reader(file).expect("failed to parse config file");
 
-    let validator_preferences = Arc::new(config.validator_preferences.clone());
-    let port = config.api_port;
-
-    let known_validators_loaded = Arc::new(AtomicBool::new(false));
     let local_cache = Arc::new(LocalCache::new());
-    let (_, db_req_rx) = crossbeam_channel::bounded::<DbRequest>(0);
-    let (_, db_batch_rx) = crossbeam_channel::bounded::<PendingBlockSubmissionValue>(0);
     let db =
-        start_db_service(&config, known_validators_loaded, db_req_rx, db_batch_rx, local_cache)
-            .await?;
+        PostgresDatabaseService::from_postgres_config(&config.postgres, local_cache).await;
+    db.init_forever().await;
 
-    run_data_api(db, validator_preferences, port).await
+    let db = Arc::new(db);
+    let validator_preferences = Arc::new(config.validator_preferences);
+
+    run_data_api(db, validator_preferences, config.api_port).await
 }

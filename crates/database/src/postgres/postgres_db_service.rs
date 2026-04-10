@@ -186,11 +186,18 @@ impl PostgresDatabaseService {
         relay_config: &RelayConfig,
         local_cache: Arc<LocalCache>,
     ) -> Self {
+        Self::from_postgres_config(&relay_config.postgres, local_cache).await
+    }
+
+    pub async fn from_postgres_config(
+        postgres: &PostgresConfig,
+        local_cache: Arc<LocalCache>,
+    ) -> Self {
         let mut cfg = Config::new();
-        cfg.host = Some(relay_config.postgres.hostname.clone());
-        cfg.port = Some(relay_config.postgres.port);
-        cfg.dbname = Some(relay_config.postgres.db_name.clone());
-        cfg.user = Some(relay_config.postgres.user.clone());
+        cfg.host = Some(postgres.hostname.clone());
+        cfg.port = Some(postgres.port);
+        cfg.dbname = Some(postgres.db_name.clone());
+        cfg.user = Some(postgres.user.clone());
         cfg.password = Some(expect_env_var(POSTGRES_PASSWORD_ENV_VAR));
         cfg.manager = Some(ManagerConfig { recycling_method: RecyclingMethod::Fast });
 
@@ -215,7 +222,7 @@ impl PostgresDatabaseService {
         };
 
         PostgresDatabaseService {
-            region: relay_config.postgres.region,
+            region: postgres.region,
             pool: Arc::new(pool),
             high_priority_pool: Arc::new(high_priority_pool),
             local_cache,
