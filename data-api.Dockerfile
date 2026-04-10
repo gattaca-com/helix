@@ -10,7 +10,7 @@ COPY --from=planner /app/recipe.json recipe.json
 RUN cargo chef cook --release --recipe-path recipe.json
 
 COPY . .
-RUN cargo build --release --bin data_api
+RUN cargo build --release -p helix-data-api --bin data_api
 
 FROM debian:stable-slim AS runtime
 WORKDIR /app
