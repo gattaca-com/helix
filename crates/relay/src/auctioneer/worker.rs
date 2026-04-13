@@ -181,6 +181,7 @@ impl SubWorker {
                             bid_adjustment_data,
                             withdrawals_root,
                             trace,
+                            non_optimistic: header.flags.non_optimistic(),
                         };
 
                         let message = Event::Submission {

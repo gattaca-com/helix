@@ -36,8 +36,8 @@ use uuid::Uuid;
 use crate::{
     api::{
         HEADER_API_KEY, HEADER_API_TOKEN, HEADER_HYDRATE, HEADER_IS_MERGEABLE, HEADER_MERGE_TYPE,
-        HEADER_SEQUENCE, HEADER_WITH_ADJUSTMENTS, builder::error::BuilderApiError,
-        proposer::ProposerApiError,
+        HEADER_NON_OPTIMISTIC, HEADER_SEQUENCE, HEADER_WITH_ADJUSTMENTS,
+        builder::error::BuilderApiError, proposer::ProposerApiError,
     },
     auctioneer::{
         BlockMergeResult,
@@ -78,6 +78,10 @@ impl InternalBidSubmissionHeader {
         }
         if headers.get(HEADER_HYDRATE).is_some() {
             flags.set(BidSubmissionFlags::IS_DEHYDRATED, true);
+        }
+        if matches!(headers.get(HEADER_NON_OPTIMISTIC), Some(header) if header == HeaderValue::from_static("true"))
+        {
+            flags.set(BidSubmissionFlags::NON_OPTIMISTIC, true);
         }
 
         let submission_type = SubmissionType::from_headers(&headers);
@@ -193,6 +197,7 @@ pub struct SubmissionData {
     pub version: SubmissionVersion,
     pub withdrawals_root: B256,
     pub trace: SubmissionTrace,
+    pub non_optimistic: bool,
 }
 
 impl Deref for SubmissionData {
