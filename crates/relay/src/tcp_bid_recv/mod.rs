@@ -1,16 +1,16 @@
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
 use dashmap::DashMap;
-use flux::{spine::FluxSpine, tile::Tile, timing::Nanos};
+use flux::{spine::FluxSpine, tile::Tile, timing::Nanos, utils::ArrayVec};
 use flux_network::{
     Token,
     tcp::{PollEvent, SendBehavior, TcpConnector, TcpTelemetry},
 };
 use flux_utils::DCachePtr;
 use helix_common::{SubmissionTrace, metrics::SUB_CLIENT_TO_SERVER_LATENCY, utils::utcnow_ns};
-use helix_tcp_types::BID_SUB_HEADER_SIZE;
+use helix_tcp_types::{BID_SUB_HEADER_SIZE, MAX_PUBKEYS};
 use helix_types::BlsPublicKeyBytes;
-use ssz::{Decode, Encode};
+use ssz::Encode;
 use uuid::Uuid;
 
 use crate::{
@@ -37,7 +37,7 @@ pub struct BidSubmissionTcpListener {
     api_key_cache: Arc<DashMap<String, Vec<BlsPublicKeyBytes>>>,
 
     to_disconnect: Vec<Token>,
-    registered: HashMap<Token, BlsPublicKeyBytes>,
+    registered: HashMap<Token, ArrayVec<BlsPublicKeyBytes, MAX_PUBKEYS>>,
     submission_errors: Vec<SubmissionError>,
 }
 
@@ -81,7 +81,7 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                 None
             }
             PollEvent::Message { token, payload, send_ts } => {
-                if let Some(expected_pubkey) = self.registered.get(&token) {
+                if let Some(expected_pubkeys) = self.registered.get(&token) {
                     let header = match BidSubmissionHeader::try_from(payload) {
                         Ok(header) => header,
                         Err(e) => {
@@ -126,24 +126,22 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                         header: InternalBidSubmissionHeader::from_tcp_header(id, header),
                         submission_ref,
                         trace,
-                        expected_pubkey: Some(*expected_pubkey),
+                        expected_pubkeys: Some(*expected_pubkeys),
                         http_submission_ix: None,
                     })
                 } else {
-                    match RegistrationMsg::from_ssz_bytes(payload) {
+                    match RegistrationMsg::try_from(payload) {
                         Ok(msg) => {
                             let api_key = Uuid::from_bytes(msg.api_key).to_string();
-                            if self
-                                .api_key_cache
-                                .get(&api_key)
-                                .is_some_and(|p| p.value().contains(&msg.builder_pubkey))
-                            {
-                                self.registered.insert(token, msg.builder_pubkey);
+                            let all_valid = self.api_key_cache.get(&api_key).is_some_and(|p| {
+                                msg.builder_pubkeys.iter().all(|pk| p.value().contains(pk))
+                            });
+                            if all_valid {
+                                self.registered.insert(token, msg.builder_pubkeys);
                             } else {
                                 tracing::error!(
-                                    "unknown api key and pubkey pair: {} {}, disconnecting peer",
+                                    "unknown api key and pubkey pair: {}, disconnecting peer",
                                     api_key,
-                                    msg.builder_pubkey
                                 );
                                 self.to_disconnect.push(token);
                             }

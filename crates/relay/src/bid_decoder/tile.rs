@@ -6,6 +6,7 @@ use flux::{
     spine::{DCacheRead, SpineProducers},
     tile::Tile,
     timing::{InternalMessage, Nanos},
+    utils::ArrayVec,
 };
 use flux_utils::SharedVector;
 use helix_common::{
@@ -16,6 +17,7 @@ use helix_common::{
     local_cache::LocalCache,
     record_submission_step,
 };
+use helix_tcp_types::MAX_PUBKEYS;
 use helix_types::{
     BidAdjustmentData, BlockMergingData, BlsPublicKeyBytes, MergeableOrdersWithPref,
     SignedBidSubmission, Submission, SubmissionVersion,
@@ -64,7 +66,7 @@ impl Tile<HelixSpine> for DecoderTile {
                     &mut self.buffer.borrow_mut(),
                     new_bid.trace,
                     sent_at,
-                    new_bid.expected_pubkey.as_ref(),
+                    new_bid.expected_pubkeys.as_ref(),
                 )
             },
             |res, producers| match res {
@@ -106,7 +108,7 @@ impl Tile<HelixSpine> for DecoderTile {
                         &mut self.buffer.borrow_mut(),
                         new_bid.trace,
                         sent_at,
-                        new_bid.expected_pubkey.as_ref(),
+                        new_bid.expected_pubkeys.as_ref(),
                     );
                     Self::handle_result(
                         &self.decoded,
@@ -190,7 +192,7 @@ impl DecoderTile {
         buffer: &mut Vec<u8>,
         mut trace: SubmissionTrace,
         sent_at: Nanos,
-        expected_pubkey: Option<&BlsPublicKeyBytes>,
+        expected_pubkeys: Option<&ArrayVec<BlsPublicKeyBytes, MAX_PUBKEYS>>,
     ) -> Result<(SubmissionData, tracing::Span), BuilderApiError> {
         tracing::Span::current().record("id", tracing::field::display(header.id));
         record_submission_step("worker_recv", sent_at.elapsed());
@@ -207,7 +209,7 @@ impl DecoderTile {
             chain_info,
             config,
             header,
-            expected_pubkey,
+            expected_pubkeys,
             payload,
             buffer,
             &mut trace,
@@ -264,7 +266,7 @@ impl DecoderTile {
         chain_info: &ChainInfo,
         config: &RelayConfig,
         header: &InternalBidSubmissionHeader,
-        expected_pubkey: Option<&BlsPublicKeyBytes>,
+        expected_pubkeys: Option<&ArrayVec<BlsPublicKeyBytes, MAX_PUBKEYS>>,
         payload: &[u8],
         buffer: &mut Vec<u8>,
         trace: &mut SubmissionTrace,
@@ -301,9 +303,9 @@ impl DecoderTile {
         trace.decoded_ns = Nanos::now();
 
         let builder_pubkey = *submission.builder_pubkey();
-        let skip_sigverify = if let Some(expected_pubkey) = expected_pubkey {
-            if builder_pubkey != *expected_pubkey {
-                return Err(BuilderApiError::InvalidBuilderPubkey(*expected_pubkey, builder_pubkey));
+        let skip_sigverify = if let Some(expected_pubkeys) = expected_pubkeys {
+            if !expected_pubkeys.contains(&builder_pubkey) {
+                return Err(BuilderApiError::InvalidBuilderPubkey(builder_pubkey));
             }
 
             true

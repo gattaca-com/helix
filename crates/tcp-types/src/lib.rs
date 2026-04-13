@@ -1,9 +1,13 @@
 use std::fmt::{self, Display};
 
 use bytes::Bytes;
+use flux::utils::ArrayVec;
 use flux_type_hash_derive::TypeHash;
 use serde::{Deserialize, Serialize};
 use strum::{AsRefStr, EnumString};
+
+pub const PROTOCOL_VERSION: u8 = 1;
+pub const MAX_PUBKEYS: usize = 4;
 
 #[repr(u8)]
 #[derive(
@@ -100,14 +104,76 @@ impl std::fmt::Display for Compression {
     }
 }
 
-/// First message on a new TCP connection. SSZ-encoded.
-/// Server validates the (api_key, builder_pubkey) pair against the key cache; on failure drops the
+/// First message on a new TCP connection. Manually encoded as:
+/// `[1B version][16B api_key][1B num_pubkeys][num_pubkeys * 48B pubkeys]`
+///
+/// Server validates all (api_key, pubkey) pairs against the key cache; on failure drops the
 /// connection.
-#[repr(C)]
-#[derive(Debug, Clone, ssz_derive::Decode, ssz_derive::Encode)]
+#[derive(Debug, Clone)]
 pub struct RegistrationMsg {
-    pub api_key: [u8; 16], // UUID bytes
-    pub builder_pubkey: alloy_rpc_types::beacon::BlsPublicKey,
+    pub version: u8,
+    pub api_key: [u8; 16],
+    pub builder_pubkeys: ArrayVec<alloy_rpc_types::beacon::BlsPublicKey, MAX_PUBKEYS>,
+}
+
+const PUBKEY_SIZE: usize = 48;
+const REG_HEADER_SIZE: usize = 1 + 16 + 1; // version + api_key + num_pubkeys
+
+impl TryFrom<&[u8]> for RegistrationMsg {
+    type Error = ParseError;
+
+    fn try_from(data: &[u8]) -> Result<Self, Self::Error> {
+        if data.len() < REG_HEADER_SIZE {
+            return Err(ParseError::RegistrationTooShort);
+        }
+
+        let version = data[0];
+        match version {
+            1 => {}
+            v => return Err(ParseError::UnsupportedVersion(v)),
+        }
+
+        let mut api_key = [0u8; 16];
+        api_key.copy_from_slice(&data[1..17]);
+
+        let num_pubkeys = data[17];
+        if num_pubkeys == 0 || num_pubkeys as usize > MAX_PUBKEYS {
+            return Err(ParseError::InvalidPubkeyCount(num_pubkeys));
+        }
+
+        let expected_len = REG_HEADER_SIZE + num_pubkeys as usize * PUBKEY_SIZE;
+        if data.len() < expected_len {
+            return Err(ParseError::RegistrationTooShort);
+        }
+
+        let mut builder_pubkeys = ArrayVec::new();
+        for i in 0..num_pubkeys as usize {
+            let offset = REG_HEADER_SIZE + i * PUBKEY_SIZE;
+            let pk = alloy_rpc_types::beacon::BlsPublicKey::from_slice(
+                &data[offset..offset + PUBKEY_SIZE],
+            );
+            builder_pubkeys.push(pk);
+        }
+
+        Ok(Self { version, api_key, builder_pubkeys })
+    }
+}
+
+impl RegistrationMsg {
+    pub const fn encoded_len(&self) -> usize {
+        REG_HEADER_SIZE + self.builder_pubkeys.len() * PUBKEY_SIZE
+    }
+
+    /// Encode into `buf`. Panics if `buf.len() < self.encoded_len()`.
+    pub fn encode(&self, buf: &mut [u8]) {
+        buf[0] = self.version;
+        buf[1..17].copy_from_slice(&self.api_key);
+        buf[17] = self.builder_pubkeys.len() as u8;
+        for (i, pk) in self.builder_pubkeys.iter().enumerate() {
+            let offset = REG_HEADER_SIZE + i * PUBKEY_SIZE;
+            buf[offset..offset + PUBKEY_SIZE].copy_from_slice(pk.as_ref());
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -118,6 +184,12 @@ pub enum ParseError {
     SubmissionTooShort,
     #[error("DuplicateSequenceNumber {0}")]
     DuplicateSequenceNumber(u32),
+    #[error("UnsupportedVersion {0}")]
+    UnsupportedVersion(u8),
+    #[error("InvalidPubkeyCount {0}")]
+    InvalidPubkeyCount(u8),
+    #[error("RegistrationTooShort")]
+    RegistrationTooShort,
 }
 
 #[derive(Debug, Clone)]
@@ -274,5 +346,34 @@ mod tests {
             BidSubmissionHeader::try_from(buffer.as_slice()).expect("failed to decode header");
 
         assert_eq!(decoded, header);
+    }
+
+    #[test]
+    fn test_registration_msg_roundtrip() {
+        let pk1 = alloy_rpc_types::beacon::BlsPublicKey::from([0xAA; 48]);
+        let pk2 = alloy_rpc_types::beacon::BlsPublicKey::from([0xBB; 48]);
+
+        let msg = RegistrationMsg {
+            version: PROTOCOL_VERSION,
+            api_key: [1u8; 16],
+            builder_pubkeys: {
+                let mut v = ArrayVec::new();
+                v.push(pk1);
+                v.push(pk2);
+                v
+            },
+        };
+
+        let mut buf = vec![0u8; msg.encoded_len()];
+        msg.encode(&mut buf);
+
+        assert_eq!(buf.len(), REG_HEADER_SIZE + 2 * PUBKEY_SIZE);
+
+        let decoded = RegistrationMsg::try_from(buf.as_slice()).expect("failed to decode");
+        assert_eq!(decoded.version, PROTOCOL_VERSION);
+        assert_eq!(decoded.api_key, [1u8; 16]);
+        assert_eq!(decoded.builder_pubkeys.len(), 2);
+        assert_eq!(decoded.builder_pubkeys[0], pk1);
+        assert_eq!(decoded.builder_pubkeys[1], pk2);
     }
 }

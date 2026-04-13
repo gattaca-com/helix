@@ -5846,6 +5846,7 @@ dependencies = [
  "bytes",
  "ethereum_ssz",
  "ethereum_ssz_derive",
+ "flux",
  "serde",
  "strum 0.27.2",
  "thiserror 1.0.69",

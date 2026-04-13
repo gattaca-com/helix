@@ -1,9 +1,10 @@
 use alloy_primitives::B256;
+use flux::utils::ArrayVec;
 use flux_utils::ArrayStr;
 use helix_common::SubmissionTrace;
 // Re-export as also used as spine message.
 pub use helix_common::api::builder_api::TopBidUpdate;
-use helix_tcp_types::Status;
+use helix_tcp_types::{MAX_PUBKEYS, Status};
 use helix_types::BlsPublicKeyBytes;
 use http::StatusCode;
 
@@ -18,7 +19,7 @@ pub struct NewBidSubmission {
     pub submission_ref: SubmissionRef,
     pub header: InternalBidSubmissionHeader,
     pub trace: SubmissionTrace,
-    pub expected_pubkey: Option<BlsPublicKeyBytes>,
+    pub expected_pubkeys: Option<ArrayVec<BlsPublicKeyBytes, MAX_PUBKEYS>>,
     pub http_submission_ix: Option<usize>,
 }
 

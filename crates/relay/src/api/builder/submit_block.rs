@@ -61,7 +61,7 @@ impl<A: Api> BuilderApi<A> {
             header,
             submission_ref: SubmissionRef::Http(future_ix),
             trace,
-            expected_pubkey: None,
+            expected_pubkeys: None,
             http_submission_ix: Some(ix),
         };
 

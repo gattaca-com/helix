@@ -62,10 +62,8 @@ pub enum BuilderApiError {
     #[error("internal error")]
     InternalError,
 
-    #[error(
-        "submission pubkey doesn't match registration message pubkey; expected: {0}, receieved: {1}"
-    )]
-    InvalidBuilderPubkey(BlsPublicKeyBytes, BlsPublicKeyBytes),
+    #[error("submission pubkey {0} not in registered pubkeys")]
+    InvalidBuilderPubkey(BlsPublicKeyBytes),
 }
 
 impl IntoResponse for BuilderApiError {
@@ -93,7 +91,7 @@ impl BuilderApiError {
             BuilderApiError::SigError(_) |
             BuilderApiError::SimOnNextSlot |
             BuilderApiError::MergeableOrdersNotFound(_) |
-            BuilderApiError::InvalidBuilderPubkey(_, _) |
+            BuilderApiError::InvalidBuilderPubkey(_) |
             BuilderApiError::DeliveringPayload { .. } => StatusCode::BAD_REQUEST,
 
             BuilderApiError::InvalidApiKey |
