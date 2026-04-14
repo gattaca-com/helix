@@ -17,7 +17,7 @@ use hyper::{
     client::conn::http1::{self, Connection, SendRequest},
 };
 use mio::{Events, Interest, Poll as MioPoll, Token, net::TcpStream};
-use rustls::{ClientConfig, ClientConnection, RootCertStore, pki_types::ServerName};
+use rustls::{ClientConfig, ClientConnection, OwnedTrustAnchor, RootCertStore, ServerName};
 use url::Url;
 
 const CONN: Token = Token(0);
@@ -214,9 +214,18 @@ pub struct HttpClient {
 
 impl HttpClient {
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        let roots = RootCertStore { roots: webpki_roots::TLS_SERVER_ROOTS.into() };
+        let mut roots = RootCertStore::empty();
+        roots.add_trust_anchors(
+            webpki_roots::TLS_SERVER_ROOTS.iter().map(|ta| {
+                OwnedTrustAnchor::from_subject_spki_name_constraints(
+                    ta.subject,
+                    ta.spki,
+                    ta.name_constraints,
+                )
+            }),
+        );
         let tls_config =
-            Arc::new(ClientConfig::builder().with_root_certificates(roots).with_no_client_auth());
+            Arc::new(ClientConfig::builder().with_safe_defaults().with_root_certificates(roots).with_no_client_auth());
         Ok(Self { tls_config })
     }
 
