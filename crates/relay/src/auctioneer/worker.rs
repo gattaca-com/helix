@@ -130,6 +130,7 @@ impl SubWorker {
                 record_submission_step("worker_recv", sent_at.elapsed());
                 let guard = span.enter();
                 trace!("received by worker");
+                let non_optimistic = header.flags.non_optimistic();
                 match self.handle_block_submission(header, expected_pubkey, body, &mut trace) {
                     Ok((
                         submission,
@@ -181,7 +182,7 @@ impl SubWorker {
                             bid_adjustment_data,
                             withdrawals_root,
                             trace,
-                            non_optimistic: header.flags.non_optimistic(),
+                            non_optimistic,
                         };
 
                         let message = Event::Submission {
