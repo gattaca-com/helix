@@ -21,7 +21,7 @@ use helix_common::{
 };
 use helix_database::postgres::postgres_db_service::{DbRequest, PendingBlockSubmissionValue};
 use helix_relay::{
-    DbHandle, HelixSpine, SlotUpdate, HousekeeperTile, RelayNetworkManager, SlotMsg,
+    DbHandle, HelixSpine, HousekeeperTile, RelayNetworkManager, SlotMsg, SlotUpdate,
 };
 use helix_types::{BlsKeypair, BlsSecretKey};
 use url::Url;

@@ -32,7 +32,7 @@ pub use crate::{
     },
     bid_decoder::{DecoderTile, SubmissionDataWithSpan},
     data_gatherer::DataGatherer,
-    housekeeper::{SlotUpdate, HousekeeperTile},
+    housekeeper::{HousekeeperTile, SlotUpdate},
     network::RelayNetworkManager,
     registration::{RegWorkerHandle, RegistrationTile},
     simulator::{SimRequest, SimResult},

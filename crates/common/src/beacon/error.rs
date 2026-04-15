@@ -7,6 +7,8 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::http::error::HttpClientError;
+
 #[derive(Debug, thiserror::Error)]
 pub enum BeaconClientError {
     #[error("Reqwest error: {0}")]
@@ -29,6 +31,12 @@ pub enum BeaconClientError {
 
     #[error("block integration failed")]
     BlockIntegrationFailed,
+
+    #[error("HTTP client error: {0}")]
+    HttpError(#[from] HttpClientError),
+
+    #[error("HTTP request build error: {0}")]
+    HttpBuildError(#[from] http::Error),
 }
 
 impl IntoResponse for BeaconClientError {

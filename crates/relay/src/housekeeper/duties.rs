@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use helix_common::{
     ProposerDuty, SignedValidatorRegistrationEntry,
     api::builder_api::BuilderGetValidatorsResponseEntry,
-    beacon::{BeaconClientError, MultiBeaconClient, types::BeaconResponse},
+    beacon::{MultiBeaconClient, types::BeaconResponse},
     http::client::{HttpClient, PendingResponse},
     local_cache::LocalCache,
 };
@@ -111,16 +111,4 @@ pub fn process_duties(
     info!(duties = formatted.capacity(), registered = formatted.len(), "storing proposer duties");
     local_cache.update_proposer_duties(formatted.clone());
     db.set_proposer_duties(formatted);
-}
-
-pub async fn fetch_duties(
-    epoch: u64,
-    beacon_client: Arc<MultiBeaconClient>,
-) -> Result<Vec<ProposerDuty>, BeaconClientError> {
-    let (_, mut proposer_duties) = beacon_client.get_proposer_duties(epoch).await?;
-    match beacon_client.get_proposer_duties(epoch + 1).await {
-        Ok((_, mut next_duties)) => proposer_duties.append(&mut next_duties),
-        Err(err) => error!(epoch = epoch + 1, %err, "failed fetching next proposer duties"),
-    }
-    Ok(proposer_duties)
 }

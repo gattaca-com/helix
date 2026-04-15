@@ -252,6 +252,13 @@ impl State {
                     }
                     Ordering::Greater => {
                         if *curr_slot > 0 {
+                            if bid_slot != *curr_slot + 1 {
+                                error!(
+                                    curr_slot =% curr_slot,
+                                    received_slot =% bid_slot,
+                                    "gap in slot data received, maybe missed some slots?"
+                                );
+                            }
                             assert_eq!(
                                 bid_slot,
                                 *curr_slot + 1,

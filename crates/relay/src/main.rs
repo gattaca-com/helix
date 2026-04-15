@@ -28,8 +28,8 @@ use helix_common::{
 use helix_relay::{
     Api, Auctioneer, AuctioneerHandle, BidSorter, BidSubmissionTcpListener, DataGatherer, DbHandle,
     DecoderTile, DefaultBidAdjustor, FutureBidSubmissionResult, HelixSpine, HelixSpineConfig,
-    SlotUpdate, HousekeeperTile, NewBidSubmission, RegWorkerHandle, RegistrationTile,
-    RelayNetworkManager, SimRequest, SimResult, SimulatorTile, SubmissionDataWithSpan, TopBidTile,
+    HousekeeperTile, NewBidSubmission, RegWorkerHandle, RegistrationTile, RelayNetworkManager,
+    SimRequest, SimResult, SimulatorTile, SlotUpdate, SubmissionDataWithSpan, TopBidTile,
     spawn_tokio_monitoring, start_admin_service, start_api_service, start_db_service,
 };
 use helix_types::BlsKeypair;

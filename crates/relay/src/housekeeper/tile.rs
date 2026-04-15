@@ -1,4 +1,8 @@
-use std::{collections::HashMap, sync::Arc, time::Instant};
+use std::{
+    collections::HashMap,
+    sync::{Arc, atomic::Ordering},
+    time::Instant,
+};
 
 use alloy_primitives::B256;
 use flux::{
@@ -12,7 +16,7 @@ use helix_common::{
     api::builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
     beacon::{
         MultiBeaconClient,
-        types::{BeaconResponse, HeadEventData, PayloadAttributesEvent},
+        types::{BeaconResponse, HeadEventData, PayloadAttributesEvent, SyncStatus},
     },
     chain_info::ChainInfo,
     http::client::{HttpClient, PendingResponse, SseStream},
@@ -39,6 +43,7 @@ use crate::{
 
 const KNOWN_VALIDATORS_REFRESH_INTERVAL: std::time::Duration =
     std::time::Duration::from_secs(10 * 60);
+const SYNC_STATUS_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(4);
 
 /// Slot event stored in SharedVector and broadcast via spine.
 #[derive(Clone, Debug)]
@@ -77,9 +82,16 @@ pub struct HousekeeperTile {
     primev_validators_fetch: Option<PrimevValidatorsFetch>,
     il_fetch: Option<IlFetchState>,
     pending_il: Option<helix_common::api::builder_api::InclusionListWithMetadata>,
+    il_consensus_rx: Option<
+        tokio::sync::oneshot::Receiver<Option<helix_common::api::builder_api::InclusionList>>,
+    >,
     known_validators_fetch: Option<(Instant, PendingResponse)>,
     /// None = disabled (not a registration instance).
     known_validators_next_refresh: Option<Instant>,
+
+    // Sync status polling: one in-flight PendingResponse per beacon client (indexed).
+    sync_check_pending: Vec<(usize, PendingResponse)>,
+    sync_check_next: Instant,
 }
 
 impl HousekeeperTile {
@@ -137,8 +149,11 @@ impl HousekeeperTile {
             primev_validators_fetch: None,
             il_fetch: None,
             pending_il: None,
+            il_consensus_rx: None,
             known_validators_fetch: None,
             known_validators_next_refresh: config.is_registration_instance.then(Instant::now),
+            sync_check_pending: Vec::new(),
+            sync_check_next: Instant::now(),
         };
         (tile, curr_slot_info)
     }
@@ -147,6 +162,7 @@ impl HousekeeperTile {
         let slot = self.chain_head.head();
         info!(%slot, "new slot started");
         self.pending_il = None;
+        self.il_consensus_rx = None;
 
         if let Some(cfg) = &self.primev_config {
             self.primev_builders_fetch = PrimevBuildersFetch::new(&self.http_client, cfg);
@@ -309,7 +325,8 @@ impl Tile<HelixSpine> for HousekeeperTile {
                         Err(err) => warn!(%err, %head, "could not decode inclusion list RLP"),
                     }
                     self.chain_head.mark_il_done();
-                    self.relay_network_api.try_share_inclusion_list(head.as_u64(), il);
+                    self.il_consensus_rx =
+                        self.relay_network_api.try_share_inclusion_list(head.as_u64(), il);
                 }
                 None => warn!("inclusion list fetch timed out"),
             }
@@ -342,6 +359,61 @@ impl Tile<HelixSpine> for HousekeeperTile {
             self.known_validators_fetch = Some((Instant::now(), req));
             self.known_validators_next_refresh =
                 Some(Instant::now() + KNOWN_VALIDATORS_REFRESH_INTERVAL);
+        }
+
+        // Poll in-flight sync status requests.
+        if !self.sync_check_pending.is_empty() {
+            let mut best: Option<(usize, u64)> = None;
+            let pending = std::mem::take(&mut self.sync_check_pending);
+            for (idx, mut req) in pending {
+                match req.poll_json::<BeaconResponse<SyncStatus>>() {
+                    Poll::Pending => self.sync_check_pending.push((idx, req)),
+                    Poll::Ready(Ok(resp)) => {
+                        let slot = resp.data.head_slot.as_u64();
+                        if best.as_ref().is_none_or(|(_, s)| slot > *s) {
+                            best = Some((idx, slot));
+                        }
+                    }
+                    Poll::Ready(Err(e)) => warn!(%e, idx, "sync status fetch failed"),
+                }
+            }
+            if self.sync_check_pending.is_empty() {
+                if let Some((best_idx, _)) = best {
+                    self.beacon_client.best_index.store(best_idx, Ordering::Relaxed);
+                }
+            }
+        }
+        // Start a new sync status batch when the previous one is done and the timer fires.
+        if self.sync_check_pending.is_empty() && Instant::now() >= self.sync_check_next {
+            for (idx, client) in self.beacon_client.beacon_clients.iter().enumerate() {
+                if let Ok(url) = client.config.url.join("eth/v1/node/syncing") &&
+                    let Ok(req) = self.http_client.get(&url)
+                {
+                    self.sync_check_pending.push((idx, req));
+                }
+            }
+            self.sync_check_next = Instant::now() + SYNC_STATUS_CHECK_INTERVAL;
+        }
+
+        // Poll for consensus IL result from multi-relay service.
+        if let Some(rx) = &mut self.il_consensus_rx {
+            match rx.try_recv() {
+                Ok(Some(il)) => {
+                    match InclusionListWithMetadata::try_from(il) {
+                        Ok(il_meta) => self.pending_il = Some(il_meta),
+                        Err(e) => warn!(%e, "could not decode consensus IL"),
+                    }
+                    self.il_consensus_rx = None;
+                }
+                Ok(None) => {
+                    self.il_consensus_rx = None;
+                }
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
+                Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                    warn!("IL consensus channel closed before result");
+                    self.il_consensus_rx = None;
+                }
+            }
         }
 
         if self.chain_head.is_ready() {
