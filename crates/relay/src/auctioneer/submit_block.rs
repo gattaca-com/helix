@@ -184,7 +184,7 @@ impl<B: BidAdjustor> Context<B> {
         trace!("validated");
 
         let (optimistic_version, is_top_bid) =
-            if !submission_data.non_optimistic &&
+            if !submission_data.is_pessimistic &&
                 self.sim_manager.can_process_optimistic_submission() &&
                 self.should_process_optimistically(&submission, &builder_info, slot_data)
             {
