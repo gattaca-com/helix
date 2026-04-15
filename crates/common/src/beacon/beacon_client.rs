@@ -9,8 +9,6 @@ use hyper::body::Bytes;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
-#[cfg(test)]
-use crate::ValidatorSummary;
 use crate::{
     BeaconClientConfig,
     beacon::{

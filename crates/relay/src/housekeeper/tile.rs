@@ -328,7 +328,10 @@ impl Tile<HelixSpine> for HousekeeperTile {
                     self.il_consensus_rx =
                         self.relay_network_api.try_share_inclusion_list(head.as_u64(), il);
                 }
-                None => warn!("inclusion list fetch timed out"),
+                None => {
+                    warn!("inclusion list fetch timed out");
+                    self.chain_head.mark_il_done();
+                }
             }
         }
 
@@ -377,10 +380,10 @@ impl Tile<HelixSpine> for HousekeeperTile {
                     Poll::Ready(Err(e)) => warn!(%e, idx, "sync status fetch failed"),
                 }
             }
-            if self.sync_check_pending.is_empty() {
-                if let Some((best_idx, _)) = best {
-                    self.beacon_client.best_index.store(best_idx, Ordering::Relaxed);
-                }
+            if self.sync_check_pending.is_empty() &&
+                let Some((best_idx, _)) = best
+            {
+                self.beacon_client.best_index.store(best_idx, Ordering::Relaxed);
             }
         }
         // Start a new sync status batch when the previous one is done and the timer fires.
