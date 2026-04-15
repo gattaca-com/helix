@@ -35,3 +35,4 @@ pub const HEADER_IS_MERGEABLE: &str = "x-mergeable";
 pub const HEADER_SUBMISSION_TYPE: &str = "x-submission-type";
 pub const HEADER_MERGE_TYPE: &str = "x-merge-type";
 pub const HEADER_WITH_ADJUSTMENTS: &str = "x-with-adjustments";
+pub const HEADER_PESSIMISTIC: &str = "x-pessimistic";
