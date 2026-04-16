@@ -251,11 +251,11 @@ impl State {
                         (registration_data, payload_attributes_map.clone(), il)
                     }
                     Ordering::Greater => {
-                        if *curr_slot > 0 && bid_slot != *curr_slot + 1 {
-                            error!(
-                                curr_slot =% curr_slot,
-                                received_slot =% bid_slot,
-                                "gap in slot data received, missed some slots"
+                        if *curr_slot > 0 {
+                            assert_eq!(
+                                bid_slot,
+                                *curr_slot + 1,
+                                "gap in slot data received (slot)"
                             );
                         }
 

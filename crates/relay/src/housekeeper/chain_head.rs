@@ -44,7 +44,7 @@ impl ChainHead {
             slot: current_slot,
             block: None,
             state: ChainHeadState::Pending,
-            next_deadline: Instant::now() + next_slot_timeout(&chain_info, current_slot),
+            next_deadline: Instant::now() + slot_cutoff_timeout(&chain_info, current_slot),
             duties_done: false,
             payload_attributes_done: false,
             inclusion_list_done: false,
@@ -86,10 +86,15 @@ impl ChainHead {
         // Setting self.slot = current makes head < current false on the next call,
         // so no additional state guard is needed.
         if self.head() < current {
+            let prev = self.slot;
             self.slot = current;
             self.block = None;
             self.state = ChainHeadState::Pending;
-            self.next_deadline = Instant::now() + next_slot_timeout(&self.chain_info, self.slot);
+            // Use prev (not current) so the deadline is start_of(current) + CUTOFF_TIME,
+            // i.e. CUTOFF_TIME into the new slot. Using current would give CUTOFF_TIME
+            // into the slot after next (~16s), which lets a subsequent is_new_slot() call
+            // overwrite this state before the deadline fires (causing skipped slot events).
+            self.next_deadline = Instant::now() + slot_cutoff_timeout(&self.chain_info, prev);
             self.duties_done = false;
             self.payload_attributes_done = false;
             self.inclusion_list_done = false;
@@ -115,7 +120,7 @@ impl ChainHead {
             self.block = Some(ev.block);
             self.state = ChainHeadState::Pending;
             // Reset deadline so we don't fire against a stale slot-N-1 cutoff.
-            self.next_deadline = Instant::now() + next_slot_timeout(&self.chain_info, self.slot);
+            self.next_deadline = Instant::now() + slot_cutoff_timeout(&self.chain_info, self.slot);
             self.duties_done = false;
             self.payload_attributes_done = false;
             self.inclusion_list_done = false;
@@ -368,7 +373,7 @@ mod tests {
     }
 }
 
-fn next_slot_timeout(chain_info: &ChainInfo, head: Slot) -> Duration {
+fn slot_cutoff_timeout(chain_info: &ChainInfo, head: Slot) -> Duration {
     chain_info
         .clock
         .start_of(head + 1)

@@ -6,7 +6,10 @@
 //! BEACON_URLS is a comma-separated list of beacon node HTTP URLs.
 //! Stops on SIGINT (Ctrl+C) or SIGTERM.
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use flux::{
     spine::FluxSpine,
@@ -34,8 +37,12 @@ impl Tile<HelixSpine> for SlotEventPrinter {
     fn loop_body(&mut self, adapter: &mut flux::spine::SpineAdapter<HelixSpine>) {
         adapter.consume(|msg: SlotMsg, _producers| {
             let Some(ev) = self.slot_events.get(msg.ix) else { return };
+            let ts = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis();
             println!(
-                "SlotUpdate: bid_slot={} has_registration={} has_payload_attrs={} has_il={}",
+                "SlotUpdate: ts={ts} bid_slot={} has_registration={} has_payload_attrs={} has_il={}",
                 ev.bid_slot,
                 ev.registration_data.is_some(),
                 !ev.payload_attributes.is_empty(),
