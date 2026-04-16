@@ -220,7 +220,7 @@ async fn run(
             }
         }
 
-        attach_tile(housekeeper_tile, spine, TileConfig::background(None, None));
+        attach_tile(housekeeper_tile, spine, TileConfig::background(config.cores.housekeeper, None));
 
         if config.is_submission_instance {
             if config.clickhouse.is_some() || config.s3_config.is_some() {

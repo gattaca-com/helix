@@ -106,6 +106,7 @@ impl RelayConfig {
                 simulator: 5,
                 top_bid: 1,
                 data_gatherer: 3,
+                housekeeper: None,
             },
             gossip_payload_on_header: false,
             api_port: 4040,
@@ -162,6 +163,7 @@ pub struct CoresConfig {
     pub top_bid: usize,
     #[serde(default)]
     pub data_gatherer: usize,
+    pub housekeeper: Option<usize>,
 }
 
 impl Default for WebsiteConfig {
