@@ -479,6 +479,9 @@ fn send_slot_event(
 
     let update = SlotDuties { slot, new_duties: Some(new_duties), next_duty: next_duty.clone() };
     curr_slot_info.handle_new_slot(update, chain_head.chain_info());
+    for attr in &next_payload_attributes {
+        curr_slot_info.handle_new_payload_attributes(attr.clone());
+    }
 
     let ix = slot_events.push(SlotUpdate {
         bid_slot,
