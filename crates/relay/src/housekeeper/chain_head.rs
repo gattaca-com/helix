@@ -120,7 +120,7 @@ impl ChainHead {
             self.block = Some(ev.block);
             self.state = ChainHeadState::Pending;
             // Reset deadline so we don't fire against a stale slot-N-1 cutoff.
-            self.next_deadline = Instant::now() + slot_cutoff_timeout(&self.chain_info, self.slot);
+            self.next_deadline = Instant::now() + slot_cutoff_timeout(&self.chain_info, ev.slot.saturating_sub(Slot::new(1)));
             self.duties_done = false;
             self.payload_attributes_done = false;
             self.inclusion_list_done = false;
