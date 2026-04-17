@@ -249,6 +249,7 @@ async fn run(
                     future_results.clone(),
                     decoded.clone(),
                     http_submissions.clone(),
+                    slot_events.clone(),
                     *core,
                 );
                 attach_tile(decoder_tile, spine, TileConfig::new(*core, ThreadPriority::OSDefault));

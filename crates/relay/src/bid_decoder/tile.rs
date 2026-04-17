@@ -17,24 +17,19 @@ use helix_common::{
     record_submission_step,
 };
 use helix_types::{
-    BidAdjustmentData, BlockMergingData, BlsPublicKeyBytes, MergeableOrdersWithPref,
-    SignedBidSubmission, Submission, SubmissionVersion,
+    BidAdjustmentData, BlockMergingData, BlsPublicKeyBytes, MergeableOrdersWithPref, SignedBidSubmission, Slot, Submission, SubmissionVersion
 };
 use tracing::trace;
 use zstd::zstd_safe::WriteBuf;
 
 use crate::{
-    HelixSpine,
-    api::{FutureBidSubmissionResult, builder::error::BuilderApiError},
-    auctioneer::{
+    HelixSpine, SlotMsg, SlotUpdate, api::{FutureBidSubmissionResult, builder::error::BuilderApiError}, auctioneer::{
         InternalBidSubmissionHeader, SubmissionData, SubmissionRef, get_mergeable_orders,
         send_submission_result,
-    },
-    bid_decoder::SubmissionDataWithSpan,
-    spine::{
+    }, bid_decoder::SubmissionDataWithSpan, spine::{
         HelixSpineProducers,
         messages::{DecodedSubmission, NewBidSubmission},
-    },
+    }
 };
 
 pub struct DecoderTile {
@@ -44,7 +39,9 @@ pub struct DecoderTile {
     decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
     future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
     http_submissions: Arc<SharedVector<Bytes>>,
+    slot_events: Arc<SharedVector<SlotUpdate>>,
     buffer: RefCell<Vec<u8>>,
+    current_slot: Slot,
     core: usize,
 }
 
@@ -135,6 +132,19 @@ impl Tile<HelixSpine> for DecoderTile {
                 DCacheRead::Empty => {}
             },
         );
+
+        adapter.consume(|msg: SlotMsg, _producers| {
+            let Some(ev) = self.slot_events.get(msg.ix) else {
+                tracing::error!(?msg, "slot event not found");
+                return;
+            };
+            if self.current_slot < ev.bid_slot {
+                self.http_submissions.clear();
+                self.current_slot = ev.bid_slot;
+            }
+
+        });
+
     }
 
     fn try_init(&mut self, adapter: &mut flux::spine::SpineAdapter<HelixSpine>) -> bool {
@@ -157,8 +167,10 @@ impl DecoderTile {
         future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
         decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
         http_submissions: Arc<SharedVector<Bytes>>,
+        slot_events: Arc<SharedVector<SlotUpdate>>,
         core: usize,
     ) -> Self {
+        let current_slot = chain_info.current_slot();
         Self {
             chain_info,
             cache,
@@ -166,7 +178,9 @@ impl DecoderTile {
             decoded,
             future_results,
             http_submissions,
+            slot_events,
             buffer: RefCell::new(Vec::with_capacity(MAX_PAYLOAD_LENGTH)),
+            current_slot, 
             core,
         }
     }
