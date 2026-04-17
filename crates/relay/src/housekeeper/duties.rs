@@ -108,7 +108,7 @@ pub fn process_duties(
     let formatted: Vec<BuilderGetValidatorsResponseEntry> =
         _build_formatted_duties(proposer_duties, &registrations);
 
-    info!(duties = formatted.capacity(), registered = formatted.len(), "storing proposer duties");
+    info!(duties = formatted.len(), registered = formatted.len(), "storing proposer duties");
     local_cache.update_proposer_duties(formatted.clone());
     db.set_proposer_duties(formatted);
 }
