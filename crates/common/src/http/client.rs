@@ -4,7 +4,7 @@ use eventsource_stream::Event;
 use http_body_util::Full;
 use hyper::{Request, body::Bytes, client::conn::http1};
 use mio::{Events, Interest, Poll as MioPoll, Token, net::TcpStream};
-use rustls::{ClientConfig, ClientConnection, OwnedTrustAnchor, RootCertStore, ServerName};
+use rustls::{ClientConfig, ClientConnection, RootCertStore, pki_types::ServerName};
 use url::Url;
 
 pub use crate::http::pending_response::PendingResponse;
@@ -24,20 +24,9 @@ pub struct HttpClient {
 
 impl HttpClient {
     pub fn new() -> Result<Self, HttpClientError> {
-        let mut roots = RootCertStore::empty();
-        roots.add_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.iter().map(|ta| {
-            OwnedTrustAnchor::from_subject_spki_name_constraints(
-                ta.subject,
-                ta.spki,
-                ta.name_constraints,
-            )
-        }));
-        let tls_config = Arc::new(
-            ClientConfig::builder()
-                .with_safe_defaults()
-                .with_root_certificates(roots)
-                .with_no_client_auth(),
-        );
+        let roots = RootCertStore { roots: webpki_roots::TLS_SERVER_ROOTS.to_vec() };
+        let tls_config =
+            Arc::new(ClientConfig::builder().with_root_certificates(roots).with_no_client_auth());
         Ok(Self { tls_config })
     }
 
@@ -47,10 +36,13 @@ impl HttpClient {
             "http" => false,
             s => return Err(HttpClientError::UnsupportedScheme(s.to_string())),
         };
-        let host = url.host_str().unwrap();
-        let port = url.port_or_known_default().unwrap();
+        let host = url.host_str().ok_or(HttpClientError::MissingHost)?;
+        let port = url.port_or_known_default().ok_or(HttpClientError::MissingPort)?;
 
-        let addr = (host, port).to_socket_addrs()?.next().unwrap();
+        let addr = (host, port)
+            .to_socket_addrs()?
+            .next()
+            .ok_or_else(|| HttpClientError::DnsError(host.to_string()))?;
         let mut tcp = TcpStream::connect(addr)?;
         let mio = MioPoll::new()?;
         mio.registry().register(&mut tcp, CONN, Interest::READABLE | Interest::WRITABLE)?;

@@ -1,4 +1,10 @@
-use std::{cell::RefCell, sync::Arc};
+use std::{
+    cell::RefCell,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
 use alloy_primitives::B256;
 use bytes::Bytes;
@@ -17,19 +23,24 @@ use helix_common::{
     record_submission_step,
 };
 use helix_types::{
-    BidAdjustmentData, BlockMergingData, BlsPublicKeyBytes, MergeableOrdersWithPref, SignedBidSubmission, Slot, Submission, SubmissionVersion
+    BidAdjustmentData, BlockMergingData, BlsPublicKeyBytes, MergeableOrdersWithPref,
+    SignedBidSubmission, Submission, SubmissionVersion,
 };
 use tracing::trace;
 use zstd::zstd_safe::WriteBuf;
 
 use crate::{
-    HelixSpine, SlotMsg, SlotUpdate, api::{FutureBidSubmissionResult, builder::error::BuilderApiError}, auctioneer::{
+    HelixSpine, SlotMsg, SlotUpdate,
+    api::{FutureBidSubmissionResult, builder::error::BuilderApiError},
+    auctioneer::{
         InternalBidSubmissionHeader, SubmissionData, SubmissionRef, get_mergeable_orders,
         send_submission_result,
-    }, bid_decoder::SubmissionDataWithSpan, spine::{
+    },
+    bid_decoder::SubmissionDataWithSpan,
+    spine::{
         HelixSpineProducers,
         messages::{DecodedSubmission, NewBidSubmission},
-    }
+    },
 };
 
 pub struct DecoderTile {
@@ -41,7 +52,7 @@ pub struct DecoderTile {
     http_submissions: Arc<SharedVector<Bytes>>,
     slot_events: Arc<SharedVector<SlotUpdate>>,
     buffer: RefCell<Vec<u8>>,
-    current_slot: Slot,
+    current_slot: Arc<AtomicU64>,
     core: usize,
 }
 
@@ -138,13 +149,16 @@ impl Tile<HelixSpine> for DecoderTile {
                 tracing::error!(?msg, "slot event not found");
                 return;
             };
-            if self.current_slot < ev.bid_slot {
+            let new_slot = ev.bid_slot.as_u64();
+            let old_slot = self.current_slot.load(Ordering::Relaxed);
+            if new_slot > old_slot &&
+                self.current_slot
+                    .compare_exchange(old_slot, new_slot, Ordering::AcqRel, Ordering::Relaxed)
+                    .is_ok()
+            {
                 self.http_submissions.clear();
-                self.current_slot = ev.bid_slot;
             }
-
         });
-
     }
 
     fn try_init(&mut self, adapter: &mut flux::spine::SpineAdapter<HelixSpine>) -> bool {
@@ -168,9 +182,9 @@ impl DecoderTile {
         decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
         http_submissions: Arc<SharedVector<Bytes>>,
         slot_events: Arc<SharedVector<SlotUpdate>>,
+        current_slot: Arc<AtomicU64>,
         core: usize,
     ) -> Self {
-        let current_slot = chain_info.current_slot();
         Self {
             chain_info,
             cache,
@@ -180,7 +194,7 @@ impl DecoderTile {
             http_submissions,
             slot_events,
             buffer: RefCell::new(Vec::with_capacity(MAX_PAYLOAD_LENGTH)),
-            current_slot, 
+            current_slot,
             core,
         }
     }

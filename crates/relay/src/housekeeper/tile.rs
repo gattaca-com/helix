@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     sync::{Arc, atomic::Ordering},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use alloy_primitives::B256;
@@ -41,9 +41,9 @@ use crate::{
     spine::messages::SlotMsg,
 };
 
-const KNOWN_VALIDATORS_REFRESH_INTERVAL: std::time::Duration =
-    std::time::Duration::from_secs(10 * 60);
-const SYNC_STATUS_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(4);
+const KNOWN_VALIDATORS_REFRESH_INTERVAL: Duration = Duration::from_secs(10 * 60);
+const SYNC_STATUS_CHECK_INTERVAL: Duration = Duration::from_secs(4);
+const SYNC_STATUS_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Slot event stored in SharedVector and broadcast via spine.
 #[derive(Clone, Debug)]
@@ -90,7 +90,7 @@ pub struct HousekeeperTile {
     known_validators_next_refresh: Option<Instant>,
 
     // Sync status polling: one in-flight PendingResponse per beacon client (indexed).
-    sync_check_pending: Vec<(usize, PendingResponse)>,
+    sync_check_pending: Vec<(usize, Instant, PendingResponse)>,
     sync_check_next: Instant,
 }
 
@@ -161,29 +161,9 @@ impl HousekeeperTile {
     fn on_new_slot(&mut self) {
         let slot = self.chain_head.head();
         info!(%slot, "new slot started");
-        self.pending_il = None;
-        self.il_consensus_rx = None;
 
-        if let Some(cfg) = &self.primev_config {
-            self.primev_builders_fetch = PrimevBuildersFetch::new(&self.http_client, cfg);
-            self.primev_validators_fetch =
-                PrimevValidatorsFetch::new(&self.http_client, cfg, self.duties.clone());
-        }
-        if let Some(cfg) = &self.il_config {
-            let slot = self.chain_head.head();
-            let elapsed = self.chain_head.chain_info().duration_into_slot(slot).unwrap_or_default();
-            let timeout = IL_CUTOFF.saturating_sub(elapsed);
-            self.il_fetch = IlFetchState::start(&self.http_client, cfg, timeout);
-            info!("expecting inclusion list for new slot from IL service");
-        } else {
-            self.chain_head.mark_il_done();
-        }
-
-        self.duties_fetch = DutiesFetchState::new(
-            &self.http_client,
-            &self.beacon_client,
-            self.chain_head.epoch().as_u64(),
-        );
+        self.fetch_duties();
+        self.maybe_fetch_il();
 
         let bid_slot = slot + 1;
         for d in &self.duties {
@@ -199,6 +179,36 @@ impl HousekeeperTile {
                 self.chain_head.mark_payload_attrs_done();
             }
         });
+    }
+
+    fn fetch_duties(&mut self) {
+        self.duties_fetch = DutiesFetchState::new(
+            &self.http_client,
+            &self.beacon_client,
+            self.chain_head.epoch().as_u64(),
+        );
+    }
+
+    fn maybe_fetch_primev(&mut self) {
+        if let Some(cfg) = &self.primev_config {
+            self.primev_builders_fetch = PrimevBuildersFetch::new(&self.http_client, cfg);
+            self.primev_validators_fetch =
+                PrimevValidatorsFetch::new(&self.http_client, cfg, self.duties.clone());
+        }
+    }
+
+    fn maybe_fetch_il(&mut self) {
+        self.pending_il = None;
+        self.il_consensus_rx = None;
+        if let Some(cfg) = &self.il_config {
+            let slot = self.chain_head.head();
+            let elapsed = self.chain_head.chain_info().duration_into_slot(slot).unwrap_or_default();
+            let timeout = IL_CUTOFF.saturating_sub(elapsed);
+            self.il_fetch = IlFetchState::start(&self.http_client, cfg, timeout);
+            info!("expecting inclusion list for new slot from IL service");
+        } else {
+            self.chain_head.mark_il_done();
+        }
     }
 }
 
@@ -264,6 +274,7 @@ impl Tile<HelixSpine> for HousekeeperTile {
                     process_duties(&proposer_duties, &self.local_cache, &self.db);
                     self.duties = proposer_duties;
                     self.chain_head.mark_duties_done();
+                    self.maybe_fetch_primev();
                 }
                 Err(e) => error!(%e, "failed to fetch proposer duties"),
             }
@@ -368,9 +379,15 @@ impl Tile<HelixSpine> for HousekeeperTile {
         if !self.sync_check_pending.is_empty() {
             let mut best: Option<(usize, u64)> = None;
             let pending = std::mem::take(&mut self.sync_check_pending);
-            for (idx, mut req) in pending {
+            for (idx, started, mut req) in pending {
                 match req.poll_json::<BeaconResponse<SyncStatus>>() {
-                    Poll::Pending => self.sync_check_pending.push((idx, req)),
+                    Poll::Pending => {
+                        if started.elapsed() < SYNC_STATUS_REQUEST_TIMEOUT {
+                            self.sync_check_pending.push((idx, started, req));
+                        } else {
+                            warn!(idx, "sync status request timed out");
+                        }
+                    }
                     Poll::Ready(Ok(resp)) => {
                         let slot = resp.data.head_slot.as_u64();
                         if best.as_ref().is_none_or(|(_, s)| slot > *s) {
@@ -380,9 +397,7 @@ impl Tile<HelixSpine> for HousekeeperTile {
                     Poll::Ready(Err(e)) => warn!(%e, idx, "sync status fetch failed"),
                 }
             }
-            if self.sync_check_pending.is_empty() &&
-                let Some((best_idx, _)) = best
-            {
+            if let Some((best_idx, _)) = best {
                 self.beacon_client.best_index.store(best_idx, Ordering::Relaxed);
             }
         }
@@ -392,7 +407,7 @@ impl Tile<HelixSpine> for HousekeeperTile {
                 if let Ok(url) = client.config.url.join("eth/v1/node/syncing") &&
                     let Ok(req) = self.http_client.get(&url)
                 {
-                    self.sync_check_pending.push((idx, req));
+                    self.sync_check_pending.push((idx, Instant::now(), req));
                 }
             }
             self.sync_check_next = Instant::now() + SYNC_STATUS_CHECK_INTERVAL;

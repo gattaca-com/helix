@@ -21,8 +21,14 @@ pub enum HttpClientError {
     #[error("DNS resolution failed: {0}")]
     DnsError(String),
 
+    #[error("URL has no host")]
+    MissingHost,
+
+    #[error("URL has no port")]
+    MissingPort,
+
     #[error("invalid DNS name: {0}")]
-    InvalidDnsNameError(#[from] rustls::client::InvalidDnsNameError),
+    InvalidDnsNameError(#[from] rustls::pki_types::InvalidDnsNameError),
 
     #[error("unsupported URL scheme: {0}")]
     UnsupportedScheme(String),

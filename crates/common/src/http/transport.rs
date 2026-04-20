@@ -56,28 +56,25 @@ impl hyper::rt::Read for TlsStream {
         if let Err(e) = this.tls.process_new_packets() {
             return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, e)));
         }
-        let cap = buf.remaining();
-        if cap == 0 {
+        if buf.remaining() == 0 {
             return Poll::Ready(Ok(()));
         }
-        let mut tmp = vec![0u8; cap];
-        match this.tls.reader().read(&mut tmp) {
-            Ok(0) => Poll::Ready(Ok(())),
-            Ok(n) => {
-                // SAFETY: copy_nonoverlapping initialises the n bytes we advance past.
-                unsafe {
-                    std::ptr::copy_nonoverlapping(
-                        tmp.as_ptr(),
-                        buf.as_mut().as_mut_ptr().cast::<u8>(),
-                        n,
-                    );
-                    buf.advance(n);
-                }
-                Poll::Ready(Ok(()))
+
+        let n = unsafe {
+            let dst = buf.as_mut();
+            let len = dst.len();
+            std::ptr::write_bytes(dst.as_mut_ptr().cast::<u8>(), 0, len);
+            let slice = std::slice::from_raw_parts_mut(dst.as_mut_ptr().cast::<u8>(), len);
+            match this.tls.reader().read(slice) {
+                Ok(n) => n,
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Poll::Pending,
+                Err(e) => return Poll::Ready(Err(e)),
             }
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => Poll::Pending,
-            Err(e) => Poll::Ready(Err(e)),
+        };
+        if n > 0 {
+            unsafe { buf.advance(n) };
         }
+        Poll::Ready(Ok(()))
     }
 }
 
@@ -115,27 +112,24 @@ impl hyper::rt::Read for Transport {
     ) -> Poll<io::Result<()>> {
         match self.get_mut() {
             Transport::Plain(tcp) => {
-                let cap = buf.remaining();
-                if cap == 0 {
+                if buf.remaining() == 0 {
                     return Poll::Ready(Ok(()));
                 }
-                let mut tmp = vec![0u8; cap];
-                match tcp.read(&mut tmp) {
-                    Ok(0) => Poll::Ready(Ok(())),
-                    Ok(n) => {
-                        unsafe {
-                            std::ptr::copy_nonoverlapping(
-                                tmp.as_ptr(),
-                                buf.as_mut().as_mut_ptr().cast::<u8>(),
-                                n,
-                            );
-                            buf.advance(n);
-                        }
-                        Poll::Ready(Ok(()))
+                let n = unsafe {
+                    let dst = buf.as_mut();
+                    let len = dst.len();
+                    std::ptr::write_bytes(dst.as_mut_ptr().cast::<u8>(), 0, len);
+                    let slice = std::slice::from_raw_parts_mut(dst.as_mut_ptr().cast::<u8>(), len);
+                    match tcp.read(slice) {
+                        Ok(n) => n,
+                        Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Poll::Pending,
+                        Err(e) => return Poll::Ready(Err(e)),
                     }
-                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => Poll::Pending,
-                    Err(e) => Poll::Ready(Err(e)),
+                };
+                if n > 0 {
+                    unsafe { buf.advance(n) };
                 }
+                Poll::Ready(Ok(()))
             }
             Transport::Tls(tls) => Pin::new(tls).poll_read(cx, buf),
         }

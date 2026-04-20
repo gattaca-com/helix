@@ -2,7 +2,7 @@ use std::{
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -241,6 +241,7 @@ async fn run(
                 );
             }
 
+            let decoder_slot = Arc::new(AtomicU64::new(chain_info.current_slot().as_u64()));
             for core in &config.cores.decoder {
                 let decoder_tile = DecoderTile::new(
                     local_cache.as_ref().clone(),
@@ -250,6 +251,7 @@ async fn run(
                     decoded.clone(),
                     http_submissions.clone(),
                     slot_events.clone(),
+                    decoder_slot.clone(),
                     *core,
                 );
                 attach_tile(decoder_tile, spine, TileConfig::new(*core, ThreadPriority::OSDefault));

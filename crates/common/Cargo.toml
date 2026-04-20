@@ -60,8 +60,8 @@ zstd.workspace = true
 
 mio = { version = "1.2.0", features = ["net", "os-poll"] }
 hyper = { version = "1.9.0", features = ["client", "http1"] }
-rustls = "0.21"
-webpki-roots = "0.25"
+rustls = "0.23"
+webpki-roots = "0.26"
 http-body-util = "0.1"
 
 [dev-dependencies]

@@ -86,7 +86,7 @@ prometheus = "0.13.4"
 prost = "0.12"
 rand = "0.9.2"
 refinery = { version = "0.8", features = ["tokio-postgres"] }
-reqwest = { version = "0.11.23", default-features = false, features = ["blocking", "json", "rustls-tls", "stream"] }
+reqwest = { version = "0.13.2", default-features = false, features = ["blocking", "json", "rustls", "stream"] }
 reqwest-eventsource = "0.5"
 eventsource-stream = "0.2.3"
 reth-chain-state = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.1" }
