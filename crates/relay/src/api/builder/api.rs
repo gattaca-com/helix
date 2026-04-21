@@ -5,13 +5,12 @@ use bytes::Bytes;
 use crossbeam_channel::Sender;
 use flux::spine::StandaloneDCacheProducer;
 use flux_utils::SharedVector;
-use helix_common::{RelayConfig, local_cache::LocalCache};
+use helix_common::{CurrentSlotInfo, RelayConfig, local_cache::LocalCache};
 use helix_database::handle::DbHandle;
 
 use crate::{
     api::{Api, FutureBidSubmissionResult, extract::raw_web_socket::RawWebSocket},
     auctioneer::AuctioneerHandle,
-    housekeeper::CurrentSlotInfo,
     spine::messages::NewBidSubmission,
 };
 

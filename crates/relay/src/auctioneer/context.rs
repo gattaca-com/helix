@@ -22,20 +22,20 @@ use rustc_hash::FxHashMap;
 use tracing::{debug, info, warn};
 
 use crate::{
-    api::{builder::error::BuilderApiError, FutureBidSubmissionResult},
+    SubmissionDataWithSpan,
+    api::{FutureBidSubmissionResult, builder::error::BuilderApiError},
     auctioneer::{
+        AuctioneerHandle, BlockMergeResponse,
         bid_adjustor::BidAdjustor,
         bid_sorter::BidSorter,
         block_merger::BlockMerger,
         types::{PayloadEntry, PendingPayload, SubmissionRef},
-        AuctioneerHandle, BlockMergeResponse,
     },
-    simulator::{tile::ValidationResult, SimRequest},
+    simulator::{SimRequest, tile::ValidationResult},
     spine::{
-        messages::{SubmissionResultWithRef, ToSimKind, ToSimMsg},
         HelixSpineProducers,
+        messages::{SubmissionResultWithRef, ToSimKind, ToSimMsg},
     },
-    SubmissionDataWithSpan,
 };
 
 // Context that is only valid for a given slot
@@ -239,6 +239,12 @@ impl<B: BidAdjustor> Context<B> {
             ix: 0,
             bid_slot: bid_slot.as_u64(),
         });
+
+        let merged_blocks = self.cache.get_merged_blocks();
+        if !merged_blocks.is_empty() {
+            self.db.save_merged_blocks(merged_blocks);
+            self.cache.clear_merged_blocks();
+        }
 
         self.block_merger.on_new_slot(bid_slot.as_u64());
         self.bid_adjustor.on_new_slot(bid_slot.as_u64());

@@ -35,7 +35,7 @@ mod proposer_api_tests {
     };
 
     use alloy_primitives::{address, b256, hex, FixedBytes, U256};
-    use crate::beacon::multi_beacon_client::MultiBeaconClient;
+    use helix_common::beacon::MultiBeaconClient;
     use helix_common::{
         api::{
             builder_api::BuilderGetValidatorsResponseEntry,
@@ -50,7 +50,7 @@ mod proposer_api_tests {
     };
     use crate::databasemock_database_service::MockDatabaseService;
     use helix_datastore::MockAuctioneer;
-    use helix_housekeeper::{CurrentSlotInfo, PayloadAttributesUpdate, SlotUpdate};
+    use helix_common::{CurrentSlotInfo, PayloadAttributesUpdate, SlotDuties};
     use helix_types::{
         get_fixed_pubkey, get_fixed_secret, get_payload_deneb, BlobsBundle, BlsPublicKey,
         BlsPublicKeyBytes, BlsSignature, BuilderBidDeneb, ExecutionPayloadDeneb,

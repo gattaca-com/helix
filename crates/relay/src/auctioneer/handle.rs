@@ -1,18 +1,18 @@
-use std::{ops::Range, sync::Arc};
+use std::sync::Arc;
 
 use dashmap::DashMap;
 use futures::{FutureExt, future::Shared};
 use helix_common::{GetPayloadTrace, api::proposer_api::GetHeaderParams, chain_info::ChainInfo};
 use helix_types::{
     BlsPublicKey, BlsPublicKeyBytes, ExecPayload, GetPayloadResponse, SigError,
-    SignedBlindedBeaconBlock, SignedValidatorRegistration,
+    SignedBlindedBeaconBlock,
 };
 use tokio::sync::oneshot::{self, Receiver};
 use tracing::trace;
 
 use crate::{
     api::proposer::{ProposerApiError, get_payload::ProposerApiVersion},
-    auctioneer::types::{Event, GetHeaderResult, GetPayloadResult, RegWorkerJob},
+    auctioneer::types::{Event, GetHeaderResult, GetPayloadResult},
     gossip::BroadcastPayloadParams,
 };
 
@@ -133,28 +133,6 @@ impl AuctioneerHandle {
 }
 
 pub struct ChannelFull;
-
-#[derive(Clone)]
-pub struct RegWorkerHandle {
-    worker: crossbeam_channel::Sender<RegWorkerJob>,
-}
-
-impl RegWorkerHandle {
-    pub fn new(worker: crossbeam_channel::Sender<RegWorkerJob>) -> Self {
-        Self { worker }
-    }
-
-    pub fn send(
-        &self,
-        regs: Arc<Vec<SignedValidatorRegistration>>,
-        range: Range<usize>,
-    ) -> Result<oneshot::Receiver<Vec<(usize, bool)>>, ChannelFull> {
-        let (tx, rx) = oneshot::channel();
-        self.worker.try_send(RegWorkerJob { regs, range, res_tx: tx }).map_err(|_| ChannelFull)?;
-
-        Ok(rx)
-    }
-}
 
 fn verify_signed_blinded_block_signature(
     chain_info: &ChainInfo,

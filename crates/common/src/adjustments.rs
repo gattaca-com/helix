@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use helix_types::{BlsPublicKeyBytes, Slot};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DataAdjustmentsEntry {
     pub slot: Slot,
     pub builder_pubkey: BlsPublicKeyBytes,

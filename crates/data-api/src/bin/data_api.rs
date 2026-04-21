@@ -21,7 +21,9 @@ async fn main() -> eyre::Result<()> {
         .unwrap_or_else(|_| panic!("unable to find config file: '{}'", args.config));
     let config: DataApiConfig = serde_yaml::from_reader(file).expect("failed to parse config file");
 
-    let _guard = init_tracing_log(&config.logging, &config.postgres.region_name, "helix-data".to_string()).await;
+    let _guard =
+        init_tracing_log(&config.logging, &config.postgres.region_name, "helix-data".to_string())
+            .await;
 
     init_panic_hook(
         "helix-data".to_string(),

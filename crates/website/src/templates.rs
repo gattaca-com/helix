@@ -1,0 +1,44 @@
+use askama::Template;
+
+use crate::models::DeliveredPayload;
+
+pub mod filters {
+    use alloy_primitives::{U256, utils::format_ether};
+    use askama::Result;
+    use num_format::{Locale, ToFormattedString};
+
+    pub fn pretty_int<T>(i: &T) -> Result<String>
+    where
+        T: ToFormattedString,
+    {
+        Ok(i.to_formatted_string(&Locale::en))
+    }
+
+    pub fn wei_to_eth(wei: &U256) -> Result<String> {
+        Ok(format!("{:.6}", format_ether(*wei)))
+    }
+}
+
+#[derive(Template, Default)]
+#[template(path = "index.html")]
+pub struct IndexTemplate {
+    pub network: String,
+    pub relay_url: String,
+    pub relay_pubkey: String,
+    pub show_config_details: bool,
+    pub network_validators: i64,
+    pub registered_validators: i64,
+    pub latest_slot: i32,
+    pub recent_payloads: Vec<DeliveredPayload>,
+    pub num_delivered_payloads: i64,
+    pub value_link: String,
+    pub value_order_icon: String,
+    pub link_beaconchain: String,
+    pub link_etherscan: String,
+    pub link_data_api: String,
+    pub capella_fork_version: String,
+    pub bellatrix_fork_version: String,
+    pub genesis_fork_version: String,
+    pub genesis_validators_root: String,
+    pub builder_signing_domain: String,
+}

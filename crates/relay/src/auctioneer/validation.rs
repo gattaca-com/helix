@@ -1,14 +1,11 @@
 use alloy_primitives::B256;
-use helix_common::BuilderInfo;
+use helix_common::{BuilderInfo, PayloadAttributesUpdate};
 use helix_types::{BlockValidationError, BlsPublicKeyBytes, Submission, SubmissionVersion};
 
-use crate::{
-    auctioneer::{
-        bid_adjustor::BidAdjustor,
-        context::Context,
-        types::{SlotData, SubmissionData},
-    },
-    housekeeper::PayloadAttributesUpdate,
+use crate::auctioneer::{
+    bid_adjustor::BidAdjustor,
+    context::Context,
+    types::{SlotData, SubmissionData},
 };
 
 impl<B: BidAdjustor> Context<B> {

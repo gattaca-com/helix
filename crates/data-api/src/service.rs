@@ -4,7 +4,9 @@ use axum::{Router, extract::Extension, http::StatusCode, routing::get};
 use helix_common::{Route, RouterConfig, ValidatorPreferences};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use moka::sync::Cache;
-use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder, key_extractor::SmartIpKeyExtractor};
+use tower_governor::{
+    GovernorLayer, governor::GovernorConfigBuilder, key_extractor::SmartIpKeyExtractor,
+};
 use tracing::{error, info, warn};
 
 use crate::{

@@ -8,7 +8,6 @@ use std::{
 };
 
 use bytes::Bytes;
-use eyre::eyre;
 use flux::{
     spine::FluxSpine,
     tile::{TileConfig, TileName, attach_tile},
@@ -18,6 +17,7 @@ use flux_utils::SharedVector;
 use helix_common::{
     RelayConfig,
     api_provider::DefaultApiProvider,
+    beacon::{create_beacon_client, load_chain_info},
     expect_env_var, load_config, load_keypair,
     local_cache::LocalCache,
     metrics::start_metrics_server,
@@ -28,12 +28,12 @@ use helix_common::{
 use helix_relay::{
     Api, Auctioneer, AuctioneerHandle, BidSorter, BidSubmissionTcpListener, DataGatherer, DbHandle,
     DecoderTile, DefaultBidAdjustor, FutureBidSubmissionResult, HelixSpine, HelixSpineConfig,
-    NewBidSubmission, RegWorker, RegWorkerHandle, RelayNetworkManager, SimRequest, SimResult,
-    SimulatorTile, SubmissionDataWithSpan, TopBidTile, WebsiteService, spawn_tokio_monitoring,
-    start_admin_service, start_api_service, start_beacon_client, start_db_service,
-    start_housekeeper,
+    HousekeeperTile, NewBidSubmission, RegWorkerHandle, RegistrationTile, RelayNetworkManager,
+    SimRequest, SimResult, SimulatorTile, SlotUpdate, SubmissionDataWithSpan, TopBidTile,
+    spawn_tokio_monitoring, start_admin_service, start_api_service, start_db_service,
 };
 use helix_types::BlsKeypair;
+use helix_website::WebsiteService;
 use serde::Deserialize;
 use tikv_jemallocator::Jemalloc;
 use tokio::signal::unix::{SignalKind, signal};
@@ -45,6 +45,7 @@ static GLOBAL: Jemalloc = Jemalloc;
 const ADMIN_TOKEN_ENV_VAR: &str = "ADMIN_TOKEN";
 
 const MAX_SUBMISSIONS_PER_SLOT: usize = 10_000;
+const MAX_IN_FLIGHT_SUBMISSIONS: usize = 1_000;
 
 #[derive(Clone)]
 struct ApiProd;
@@ -107,8 +108,8 @@ async fn run(
     spine_config: Option<HelixSpineConfig>,
     keypair: BlsKeypair,
 ) -> eyre::Result<()> {
-    let beacon_client = start_beacon_client(&config);
-    let chain_info = Arc::new(beacon_client.load_chain_info().await);
+    let beacon_client = create_beacon_client(&config);
+    let chain_info = Arc::new(load_chain_info(&beacon_client).await);
 
     info!(
         instance_id,
@@ -143,17 +144,17 @@ async fn run(
 
     let (event_tx, event_rx) = crossbeam_channel::bounded(10_000);
 
-    let current_slot_info = start_housekeeper(
+    let slot_events = Arc::new(SharedVector::<SlotUpdate>::with_capacity(64));
+
+    let (housekeeper_tile, current_slot_info) = HousekeeperTile::new(
         db_handle.clone(),
+        beacon_client.clone(),
         local_cache.clone(),
         &config,
-        beacon_client.clone(),
         chain_info.clone(),
-        event_tx.clone(),
+        slot_events.clone(),
         relay_network_api.clone(),
-    )
-    .await
-    .map_err(|e| eyre!("housekeeper init: {e}"))?;
+    );
 
     let terminating = Arc::new(AtomicBool::default());
     let termination_grace_period = Duration::from_millis(config.router_config.shutdown_delay_ms);
@@ -176,7 +177,7 @@ async fn run(
         let (web_socket_send, web_socket_recv) = crossbeam_channel::bounded(1024);
 
         let http_submissions =
-            Arc::new(SharedVector::<Bytes>::with_capacity(MAX_SUBMISSIONS_PER_SLOT));
+            Arc::new(SharedVector::<Bytes>::with_capacity(MAX_IN_FLIGHT_SUBMISSIONS));
 
         let future_results = Arc::new(SharedVector::<FutureBidSubmissionResult>::with_capacity(
             MAX_SUBMISSIONS_PER_SLOT,
@@ -214,12 +215,17 @@ async fn run(
 
         if config.is_registration_instance {
             for core in config.cores.reg_workers.clone() {
-                let worker =
-                    RegWorker::new(core, chain_info.as_ref().clone(), reg_worker_rx.clone());
-
-                attach_tile(worker, spine, TileConfig::new(core, ThreadPriority::OSDefault));
+                let tile =
+                    RegistrationTile::new(core, chain_info.as_ref().clone(), reg_worker_rx.clone());
+                attach_tile(tile, spine, TileConfig::new(core, ThreadPriority::OSDefault));
             }
         }
+
+        attach_tile(
+            housekeeper_tile,
+            spine,
+            TileConfig::background(config.cores.housekeeper, None),
+        );
 
         if config.is_submission_instance {
             if config.clickhouse.is_some() || config.s3_config.is_some() {
@@ -304,6 +310,7 @@ async fn run(
                 sim_results,
                 accept_optimistic,
                 failsafe_triggered,
+                slot_events,
             );
             attach_tile(
                 auctioneer,

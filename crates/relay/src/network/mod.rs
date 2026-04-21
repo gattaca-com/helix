@@ -79,14 +79,16 @@ impl RelayNetworkManager {
         self.network_config.is_enabled && !self.network_config.peers.is_empty()
     }
 
-    pub async fn share_inclusion_list(
+    /// Non-blocking send. Returns the consensus result receiver, or `None` if network is
+    /// disabled or the channel is full. Caller must poll the receiver to get the
+    /// consensus-agreed IL.
+    pub fn try_share_inclusion_list(
         &self,
         slot: u64,
         inclusion_list: InclusionList,
-    ) -> Option<InclusionList> {
-        // Skip consensus if disabled
+    ) -> Option<oneshot::Receiver<Option<InclusionList>>> {
         if !self.is_enabled() {
-            return Some(inclusion_list);
+            return None;
         }
         let (result_tx, result_rx) = oneshot::channel();
         let event =
@@ -95,19 +97,11 @@ impl RelayNetworkManager {
                 inclusion_list,
                 result_tx,
             }));
-        // Send event to API
-        if let Err(err) = self.api_events_tx.send(event).await {
-            // If API service is unavailable, just return the original IL and log a warning
-            warn!("failed to send inclusion list to network API");
-            match err.0 {
-                NetworkEvent::InclusionList(InclusionListEvent::Local(event)) => {
-                    return Some(event.inclusion_list);
-                }
-                _ => unreachable!("the returned value is an inclusion list event"),
-            }
+        if let Err(_) = self.api_events_tx.try_send(event) {
+            warn!("network channel full, dropping inclusion list share");
+            return None;
         }
-        // If API service drops the channel, return None and log a warning
-        result_rx.await.inspect_err(|_| warn!("response channel was dropped")).ok().flatten()
+        Some(result_rx)
     }
 }
 

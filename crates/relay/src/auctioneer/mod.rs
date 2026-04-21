@@ -8,7 +8,6 @@ mod handle;
 mod submit_block;
 mod types;
 mod validation;
-mod worker;
 
 use std::{
     cmp::Ordering,
@@ -20,9 +19,9 @@ use alloy_primitives::B256;
 pub use block_merger::OrderValidationError;
 use flux::tile::Tile;
 use flux_utils::SharedVector;
-pub use handle::{AuctioneerHandle, GetPayloadKind, RegWorkerHandle};
+pub use handle::{AuctioneerHandle, GetPayloadKind};
 use helix_common::{
-    RelayConfig,
+    PayloadAttributesUpdate, RelayConfig,
     api::builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
     chain_info::ChainInfo,
     local_cache::LocalCache,
@@ -37,17 +36,16 @@ pub use types::{
     Event, GetPayloadResultData, PayloadBidData, PayloadEntry, SlotData, SubmissionData,
     SubmissionPayload,
 };
-pub use worker::RegWorker;
 
 use crate::{
     HelixSpine, SubmissionDataWithSpan,
     api::{FutureBidSubmissionResult, builder::error::BuilderApiError, proposer::ProposerApiError},
     auctioneer::types::PendingPayload,
-    housekeeper::PayloadAttributesUpdate,
+    housekeeper::SlotUpdate,
     simulator::{SimRequest, SimResult},
     spine::{
         HelixSpineProducers,
-        messages::{DecodedSubmission, FromSimMsg},
+        messages::{DecodedSubmission, FromSimMsg, SlotMsg},
     },
 };
 pub use crate::{
@@ -67,6 +65,7 @@ pub struct Auctioneer<B: BidAdjustor> {
     tel: Telemetry,
     event_rx: crossbeam_channel::Receiver<Event>,
     sim_results: Arc<SharedVector<SimResult>>,
+    slot_events: Arc<SharedVector<SlotUpdate>>,
 }
 
 impl<B: BidAdjustor> Auctioneer<B> {
@@ -87,6 +86,7 @@ impl<B: BidAdjustor> Auctioneer<B> {
         sim_results: Arc<SharedVector<SimResult>>,
         accept_optimistic: Arc<AtomicBool>,
         failsafe_triggered: Arc<AtomicBool>,
+        slot_events: Arc<SharedVector<SlotUpdate>>,
     ) -> Self {
         let ctx = Context::new(
             chain_info,
@@ -108,6 +108,7 @@ impl<B: BidAdjustor> Auctioneer<B> {
             tel: Telemetry::new(format!("auctioneer_{id}")),
             event_rx,
             sim_results,
+            slot_events,
         }
     }
 }
@@ -138,6 +139,20 @@ impl<B: BidAdjustor> Tile<HelixSpine> for Auctioneer<B> {
             let event = match payload.as_ref() {
                 SimResult::Validate(sim_result) => Event::SimResult(sim_result.clone()),
                 SimResult::Merge(merge_result) => Event::MergeResult(merge_result.clone()),
+            };
+            self.state.step(event, &mut self.ctx, &mut self.tel, producers);
+        });
+
+        adapter.consume(|msg: SlotMsg, producers| {
+            let Some(ev) = self.slot_events.get(msg.ix) else {
+                tracing::error!(?msg, "slot event not found");
+                return;
+            };
+            let event = Event::SlotData {
+                bid_slot: ev.bid_slot,
+                registration_data: ev.registration_data.clone(),
+                payload_attributes: ev.payload_attributes.clone(),
+                il: ev.il.clone(),
             };
             self.state.step(event, &mut self.ctx, &mut self.tel, producers);
         });
@@ -261,15 +276,17 @@ impl State {
                 Ordering::Less => (),
                 Ordering::Equal => {
                     // check fork
-                    if let Some(update) = payload_attributes &&
-                        !slot_data.payload_attributes_map.contains_key(&update.parent_hash)
-                    {
-                        info!(bid_slot =% slot_data.bid_slot, received =? update.parent_hash, sorting =? slot_data.payload_attributes_map.keys(), "sorting for an additional fork");
-
+                    let new_forks: Vec<_> = payload_attributes
+                        .into_iter()
+                        .filter(|u| !slot_data.payload_attributes_map.contains_key(&u.parent_hash))
+                        .collect();
+                    if !new_forks.is_empty() {
                         // ugly clone but should be relatively rare
                         let mut slot_data = slot_data.clone();
-                        slot_data.payload_attributes_map.insert(update.parent_hash, update);
-
+                        for update in new_forks {
+                            info!(bid_slot =% slot_data.bid_slot, received =? update.parent_hash, sorting =? slot_data.payload_attributes_map.keys(), "sorting for an additional fork");
+                            slot_data.payload_attributes_map.insert(update.parent_hash, update);
+                        }
                         *self = State::Sorting(slot_data);
                     } else if slot_data.il.is_none() && il.is_some() {
                         info!(
@@ -315,14 +332,13 @@ impl State {
                         "gap in slot data received (broadcast)"
                     );
 
-                    if let Some(attributes) = &payload_attributes &&
-                        &attributes.parent_hash != block_hash
+                    if payload_attributes.iter().all(|a| &a.parent_hash != block_hash) &&
+                        !payload_attributes.is_empty()
                     {
                         warn!(
                             maybe_missed_slot =% slot_data.bid_slot,
-                            parent_hash =% attributes.parent_hash,
                             broadcasting_hash =% block_hash,
-                            "new slot while broacasting different block, was the slot missed?");
+                            "new slot while broadcasting different block, was the slot missed?");
                     }
 
                     ctx.on_new_slot(bid_slot, producers);
@@ -580,11 +596,11 @@ impl State {
         bid_slot: Slot,
         mut payload_attributes_map: FxHashMap<B256, PayloadAttributesUpdate>,
         registration_data: Option<BuilderGetValidatorsResponseEntry>,
-        payload_attributes_update: Option<PayloadAttributesUpdate>,
+        payload_attributes: Vec<PayloadAttributesUpdate>,
         il: Option<InclusionListWithMetadata>,
         ctx: &mut Context<B>,
     ) -> Self {
-        if let Some(update) = payload_attributes_update {
+        for update in payload_attributes {
             payload_attributes_map.insert(update.parent_hash, update);
         }
 
