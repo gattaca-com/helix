@@ -17,7 +17,13 @@ pub trait ApiProvider: Send + Sync + Clone + 'static {
 
     fn get_metadata(&self, headers: &HeaderMap) -> Option<String>;
 
-    fn get_preferences(&self, headers: &HeaderMap, query_prefs: &PreferencesHeader, fallback: Arc<ValidatorPreferences>, _registrations: &[SignedValidatorRegistration]) -> ValidatorPreferences;
+    fn get_preferences(
+        &self,
+        headers: &HeaderMap,
+        query_prefs: &PreferencesHeader,
+        fallback: Arc<ValidatorPreferences>,
+        _registrations: &[SignedValidatorRegistration],
+    ) -> ValidatorPreferences;
 }
 
 pub struct TimingResult {
@@ -43,7 +49,13 @@ impl ApiProvider for DefaultApiProvider {
         Ok(TimingResult { sleep_time: None, is_mev_boost: false })
     }
 
-    fn get_preferences(&self, headers: &HeaderMap, query_prefs: &PreferencesHeader, fallback: Arc<ValidatorPreferences>, _registrations: &[SignedValidatorRegistration]) -> ValidatorPreferences {
+    fn get_preferences(
+        &self,
+        headers: &HeaderMap,
+        query_prefs: &PreferencesHeader,
+        fallback: Arc<ValidatorPreferences>,
+        _registrations: &[SignedValidatorRegistration],
+    ) -> ValidatorPreferences {
         // Set using default preferences from config
         let mut validator_preferences = ValidatorPreferences {
             filtering: fallback.filtering,

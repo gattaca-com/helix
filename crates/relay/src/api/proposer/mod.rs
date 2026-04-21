@@ -8,18 +8,18 @@ use std::sync::{Arc, atomic::Ordering};
 use axum::{Extension, response::IntoResponse};
 pub use error::*;
 use helix_common::{
-    RelayConfig, ValidatorPreferences, alerts::AlertManager, chain_info::ChainInfo,
-    local_cache::LocalCache, signing::RelaySigningContext,
+    CurrentSlotInfo, RelayConfig, ValidatorPreferences, alerts::AlertManager,
+    beacon::MultiBeaconClient, chain_info::ChainInfo, local_cache::LocalCache,
+    signing::RelaySigningContext,
 };
 use helix_database::handle::DbHandle;
 use hyper::StatusCode;
 
 use crate::{
     api::{Api, router::Terminating},
-    auctioneer::{AuctioneerHandle, RegWorkerHandle},
-    beacon::multi_beacon_client::MultiBeaconClient,
+    auctioneer::AuctioneerHandle,
     gossip::GrpcGossiperClientManager,
-    housekeeper::CurrentSlotInfo,
+    registration::RegWorkerHandle,
 };
 
 #[derive(Clone)]

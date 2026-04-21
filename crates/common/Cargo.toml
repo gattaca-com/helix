@@ -36,6 +36,8 @@ parking_lot.workspace = true
 prometheus.workspace = true
 rand.workspace = true
 reqwest.workspace = true
+reqwest-eventsource.workspace = true
+eventsource-stream.workspace = true
 rustc-hash.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -55,3 +57,13 @@ tree_hash_derive.workspace = true
 url.workspace = true
 uuid.workspace = true
 zstd.workspace = true
+
+mio = { version = "1.2.0", features = ["net", "os-poll"] }
+hyper = { version = "1.9.0", features = ["client", "http1"] }
+rustls = "0.23"
+webpki-roots = "0.26"
+http-body-util = "0.1"
+
+[dev-dependencies]
+httpmock.workspace = true
+mockito.workspace = true

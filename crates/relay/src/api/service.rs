@@ -9,7 +9,8 @@ use crossbeam_channel::Sender;
 use flux::spine::StandaloneDCacheProducer;
 use flux_utils::SharedVector;
 use helix_common::{
-    RelayConfig, chain_info::ChainInfo, local_cache::LocalCache, signing::RelaySigningContext,
+    CurrentSlotInfo, RelayConfig, beacon::MultiBeaconClient, chain_info::ChainInfo,
+    local_cache::LocalCache, signing::RelaySigningContext,
 };
 use helix_data_api::{
     BidsCache, BidsCacheV2, DataApi, DeliveredPayloadsCache, DeliveredPayloadsCacheV2,
@@ -24,9 +25,7 @@ use crate::{
         Api, FutureBidSubmissionResult, builder::api::BuilderApi,
         extract::raw_web_socket::RawWebSocket, proposer::ProposerApi, router::build_router,
     },
-    beacon::multi_beacon_client::MultiBeaconClient,
     gossip::{GrpcGossiperClientManager, process_gossip_messages},
-    housekeeper::CurrentSlotInfo,
     network::api::RelayNetworkApi,
     spine::messages::NewBidSubmission,
 };

@@ -1,14 +1,10 @@
-use std::{
-    ops::{Deref, Range},
-    sync::Arc,
-    time::Instant,
-};
+use std::{ops::Deref, sync::Arc, time::Instant};
 
 use alloy_primitives::{B256, U256};
 use flux_network::Token;
 use flux_utils::ArrayStr;
 use helix_common::{
-    GetPayloadTrace, SubmissionTrace,
+    GetPayloadTrace, PayloadAttributesUpdate, SubmissionTrace,
     api::{
         builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
         proposer_api::GetHeaderParams,
@@ -20,8 +16,8 @@ use helix_tcp_types::{BidSubmissionFlags, BidSubmissionHeader};
 use helix_types::{
     BidAdjustmentData, BlsPublicKeyBytes, BuilderBid, Compression, ExecutionPayload,
     ExecutionRequests, ForkName, GetPayloadResponse, MergeType, MergeableOrdersWithPref,
-    PayloadAndBlobs, SignedBidSubmission, SignedBlindedBeaconBlock, SignedValidatorRegistration,
-    Slot, Submission, SubmissionVersion, VersionedSignedProposal, mock_public_key_bytes,
+    PayloadAndBlobs, SignedBidSubmission, SignedBlindedBeaconBlock, Slot, Submission,
+    SubmissionVersion, VersionedSignedProposal, mock_public_key_bytes,
 };
 use http::{
     HeaderMap, HeaderValue,
@@ -42,7 +38,6 @@ use crate::{
     },
     auctioneer::MergeResult,
     gossip::BroadcastPayloadParams,
-    housekeeper::PayloadAttributesUpdate,
     simulator::tile::ValidationResult,
 };
 
@@ -399,13 +394,6 @@ impl PayloadBidDataRef<'_> {
     }
 }
 
-pub struct RegWorkerJob {
-    pub regs: Arc<Vec<SignedValidatorRegistration>>,
-    pub range: Range<usize>,
-    /// (Index in regs, has passed verification)
-    pub res_tx: oneshot::Sender<Vec<(usize, bool)>>,
-}
-
 #[derive(Clone)]
 pub struct SlotData {
     /// Head slot + 1, builders are bidding to build this slot
@@ -445,8 +433,8 @@ pub enum Event {
         bid_slot: Slot,
         /// Data about the validator registration
         registration_data: Option<BuilderGetValidatorsResponseEntry>,
-        /// Payload attributes for the incoming blocks
-        payload_attributes: Option<PayloadAttributesUpdate>,
+        /// Payload attributes for the incoming blocks (one per fork parent hash)
+        payload_attributes: Vec<PayloadAttributesUpdate>,
         /// Inclusion list
         il: Option<InclusionListWithMetadata>,
     },

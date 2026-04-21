@@ -33,6 +33,7 @@ futures.workspace = true
 helix-common.workspace = true
 helix-data-api.workspace = true
 helix-database.workspace = true
+helix-website.workspace = true
 helix-tcp-types.workspace = true
 helix-types.workspace = true
 http.workspace = true

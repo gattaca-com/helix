@@ -5,6 +5,7 @@ use axum::{Extension, http::HeaderMap, response::IntoResponse};
 use helix_common::{
     Filtering, GetPayloadTrace, RequestTimings,
     api_provider::ApiProvider,
+    beacon::types::BroadcastValidation,
     chain_info::ChainInfo,
     decoder::{Encoding, HEADER_SSZ},
     spawn_tracked,
@@ -28,7 +29,6 @@ use crate::{
         proposer::{CONSENSUS_VERSION_HEADER, error::ProposerApiError},
     },
     auctioneer::{GetPayloadKind, GetPayloadResultData, PayloadBidData},
-    beacon::types::BroadcastValidation,
     gossip::{BroadcastGetPayloadParams, BroadcastPayloadParams},
 };
 

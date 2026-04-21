@@ -7,7 +7,7 @@ use std::{
 use alloy_primitives::{address, b256, hex, B256, U256};
 use axum::http::{header, Method, Request, Uri};
 use futures::{stream::FuturesOrdered, Future, SinkExt, StreamExt};
-use crate::beacon::types::PayloadAttributes;
+use helix_common::beacon::types::PayloadAttributes;
 use helix_common::{
     api::{
         builder_api::{
@@ -23,7 +23,7 @@ use helix_common::{
 };
 use crate::databasemock_database_service::MockDatabaseService;
 use helix_datastore::MockAuctioneer;
-use helix_housekeeper::{CurrentSlotInfo, PayloadAttributesUpdate, SlotUpdate};
+use helix_common::{CurrentSlotInfo, PayloadAttributesUpdate, SlotDuties};
 use helix_types::{
     get_fixed_pubkey, get_fixed_secret, BlsPublicKey, BlsSignature, ChainSpec, ExecutionPayloadRef,
     ForkName, SignedBidSubmission, SignedRoot,
@@ -105,8 +105,8 @@ fn get_valid_payload_register_validator(
         }
 }
 
-fn get_dummy_slot_update(head_slot: Option<u64>, submission_slot: Option<u64>) -> SlotUpdate {
-    SlotUpdate {
+fn get_dummy_slot_update(head_slot: Option<u64>, submission_slot: Option<u64>) -> SlotDuties {
+    SlotDuties {
         slot: head_slot.unwrap_or(HEAD_SLOT),
         next_duty: Some(get_valid_payload_register_validator(submission_slot)),
         new_duties: Some(vec![get_valid_payload_register_validator(submission_slot)]),

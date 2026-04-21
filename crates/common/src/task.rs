@@ -22,7 +22,7 @@ static RUNTIME: OnceLock<runtime::Runtime> = OnceLock::new();
 #[macro_export]
 macro_rules! spawn_tracked {
     ($future:expr) => {
-        helix_common::task::spawn(file!(), line!(), $future)
+        $crate::task::spawn(file!(), line!(), $future)
     };
 }
 
