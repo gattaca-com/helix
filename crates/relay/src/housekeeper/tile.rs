@@ -398,10 +398,11 @@ impl Tile<HelixSpine> for HousekeeperTile {
                     Poll::Ready(Err(e)) => warn!(%e, idx, "sync status fetch failed"),
                 }
             }
-            if self.sync_check_pending.is_empty()
-                && let Some((best_idx, _)) = self.sync_best.take() {
-                    self.beacon_client.best_index.store(best_idx, Ordering::Relaxed);
-                }
+            if self.sync_check_pending.is_empty() &&
+                let Some((best_idx, _)) = self.sync_best.take()
+            {
+                self.beacon_client.best_index.store(best_idx, Ordering::Relaxed);
+            }
         }
         // Start a new sync status batch when the previous one is done and the timer fires.
         if self.sync_check_pending.is_empty() && Instant::now() >= self.sync_check_next {
