@@ -1,10 +1,4 @@
-use std::{
-    cell::RefCell,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
-};
+use std::{cell::RefCell, sync::Arc};
 
 use alloy_primitives::B256;
 use bytes::Bytes;
@@ -30,7 +24,7 @@ use tracing::trace;
 use zstd::zstd_safe::WriteBuf;
 
 use crate::{
-    HelixSpine, SlotMsg, SlotUpdate,
+    HelixSpine,
     api::{FutureBidSubmissionResult, builder::error::BuilderApiError},
     auctioneer::{
         InternalBidSubmissionHeader, SubmissionData, SubmissionRef, get_mergeable_orders,
@@ -50,9 +44,7 @@ pub struct DecoderTile {
     decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
     future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
     http_submissions: Arc<SharedVector<Bytes>>,
-    slot_events: Arc<SharedVector<SlotUpdate>>,
     buffer: RefCell<Vec<u8>>,
-    current_slot: Arc<AtomicU64>,
     core: usize,
 }
 
@@ -143,22 +135,6 @@ impl Tile<HelixSpine> for DecoderTile {
                 DCacheRead::Empty => {}
             },
         );
-
-        adapter.consume(|msg: SlotMsg, _producers| {
-            let Some(ev) = self.slot_events.get(msg.ix) else {
-                tracing::error!(?msg, "slot event not found");
-                return;
-            };
-            let new_slot = ev.bid_slot.as_u64();
-            let old_slot = self.current_slot.load(Ordering::Relaxed);
-            if new_slot > old_slot &&
-                self.current_slot
-                    .compare_exchange(old_slot, new_slot, Ordering::AcqRel, Ordering::Relaxed)
-                    .is_ok()
-            {
-                self.http_submissions.clear();
-            }
-        });
     }
 
     fn try_init(&mut self, adapter: &mut flux::spine::SpineAdapter<HelixSpine>) -> bool {
@@ -181,8 +157,6 @@ impl DecoderTile {
         future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
         decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
         http_submissions: Arc<SharedVector<Bytes>>,
-        slot_events: Arc<SharedVector<SlotUpdate>>,
-        current_slot: Arc<AtomicU64>,
         core: usize,
     ) -> Self {
         Self {
@@ -192,9 +166,7 @@ impl DecoderTile {
             decoded,
             future_results,
             http_submissions,
-            slot_events,
             buffer: RefCell::new(Vec::with_capacity(MAX_PAYLOAD_LENGTH)),
-            current_slot,
             core,
         }
     }

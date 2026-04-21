@@ -92,6 +92,7 @@ pub struct HousekeeperTile {
     // Sync status polling: one in-flight PendingResponse per beacon client (indexed).
     sync_check_pending: Vec<(usize, Instant, PendingResponse)>,
     sync_check_next: Instant,
+    sync_best: Option<(usize, u64)>,
 }
 
 impl HousekeeperTile {
@@ -154,6 +155,7 @@ impl HousekeeperTile {
             known_validators_next_refresh: config.is_registration_instance.then(Instant::now),
             sync_check_pending: Vec::new(),
             sync_check_next: Instant::now(),
+            sync_best: None,
         };
         (tile, curr_slot_info)
     }
@@ -377,7 +379,6 @@ impl Tile<HelixSpine> for HousekeeperTile {
 
         // Poll in-flight sync status requests.
         if !self.sync_check_pending.is_empty() {
-            let mut best: Option<(usize, u64)> = None;
             let pending = std::mem::take(&mut self.sync_check_pending);
             for (idx, started, mut req) in pending {
                 match req.poll_json::<BeaconResponse<SyncStatus>>() {
@@ -390,19 +391,21 @@ impl Tile<HelixSpine> for HousekeeperTile {
                     }
                     Poll::Ready(Ok(resp)) => {
                         let slot = resp.data.head_slot.as_u64();
-                        if best.as_ref().is_none_or(|(_, s)| slot > *s) {
-                            best = Some((idx, slot));
+                        if self.sync_best.as_ref().is_none_or(|(_, s)| slot > *s) {
+                            self.sync_best = Some((idx, slot));
                         }
                     }
                     Poll::Ready(Err(e)) => warn!(%e, idx, "sync status fetch failed"),
                 }
             }
-            if let Some((best_idx, _)) = best {
-                self.beacon_client.best_index.store(best_idx, Ordering::Relaxed);
-            }
+            if self.sync_check_pending.is_empty()
+                && let Some((best_idx, _)) = self.sync_best.take() {
+                    self.beacon_client.best_index.store(best_idx, Ordering::Relaxed);
+                }
         }
         // Start a new sync status batch when the previous one is done and the timer fires.
         if self.sync_check_pending.is_empty() && Instant::now() >= self.sync_check_next {
+            self.sync_best = None;
             for (idx, client) in self.beacon_client.beacon_clients.iter().enumerate() {
                 if let Ok(url) = client.config.url.join("eth/v1/node/syncing") &&
                     let Ok(req) = self.http_client.get(&url)

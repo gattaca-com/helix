@@ -2,7 +2,7 @@ use std::{
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, Ordering},
     },
     time::Duration,
 };
@@ -45,6 +45,7 @@ static GLOBAL: Jemalloc = Jemalloc;
 const ADMIN_TOKEN_ENV_VAR: &str = "ADMIN_TOKEN";
 
 const MAX_SUBMISSIONS_PER_SLOT: usize = 10_000;
+const MAX_IN_FLIGHT_SUBMISSIONS: usize = 1_000;
 
 #[derive(Clone)]
 struct ApiProd;
@@ -176,7 +177,7 @@ async fn run(
         let (web_socket_send, web_socket_recv) = crossbeam_channel::bounded(1024);
 
         let http_submissions =
-            Arc::new(SharedVector::<Bytes>::with_capacity(MAX_SUBMISSIONS_PER_SLOT));
+            Arc::new(SharedVector::<Bytes>::with_capacity(MAX_IN_FLIGHT_SUBMISSIONS));
 
         let future_results = Arc::new(SharedVector::<FutureBidSubmissionResult>::with_capacity(
             MAX_SUBMISSIONS_PER_SLOT,
@@ -241,7 +242,6 @@ async fn run(
                 );
             }
 
-            let decoder_slot = Arc::new(AtomicU64::new(chain_info.current_slot().as_u64()));
             for core in &config.cores.decoder {
                 let decoder_tile = DecoderTile::new(
                     local_cache.as_ref().clone(),
@@ -250,8 +250,6 @@ async fn run(
                     future_results.clone(),
                     decoded.clone(),
                     http_submissions.clone(),
-                    slot_events.clone(),
-                    decoder_slot.clone(),
                     *core,
                 );
                 attach_tile(decoder_tile, spine, TileConfig::new(*core, ThreadPriority::OSDefault));
