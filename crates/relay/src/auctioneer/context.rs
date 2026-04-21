@@ -22,20 +22,20 @@ use rustc_hash::FxHashMap;
 use tracing::{debug, info, warn};
 
 use crate::{
-    SubmissionDataWithSpan,
-    api::{FutureBidSubmissionResult, builder::error::BuilderApiError},
+    api::{builder::error::BuilderApiError, FutureBidSubmissionResult},
     auctioneer::{
-        AuctioneerHandle, BlockMergeResponse,
         bid_adjustor::BidAdjustor,
         bid_sorter::BidSorter,
         block_merger::BlockMerger,
         types::{PayloadEntry, PendingPayload, SubmissionRef},
+        AuctioneerHandle, BlockMergeResponse,
     },
-    simulator::{SimRequest, tile::ValidationResult},
+    simulator::{tile::ValidationResult, SimRequest},
     spine::{
-        HelixSpineProducers,
         messages::{SubmissionResultWithRef, ToSimKind, ToSimMsg},
+        HelixSpineProducers,
     },
+    SubmissionDataWithSpan,
 };
 
 // Context that is only valid for a given slot
