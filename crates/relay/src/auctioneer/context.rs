@@ -1,8 +1,8 @@
 use std::{
     ops::{Deref, DerefMut},
     sync::{
-        Arc,
         atomic::{AtomicBool, Ordering},
+        Arc,
     },
     time::Instant,
 };
@@ -11,10 +11,10 @@ use alloy_primitives::{B256, U256};
 use flux::spine::{SpineProducer, SpineProducers};
 use flux_utils::SharedVector;
 use helix_common::{
-    BuilderInfo, RelayConfig,
     chain_info::ChainInfo,
     local_cache::LocalCache,
-    metrics::{CACHE_SIZE, SimulatorMetrics},
+    metrics::{SimulatorMetrics, CACHE_SIZE},
+    BuilderInfo, RelayConfig,
 };
 use helix_database::handle::DbHandle;
 use helix_types::{BlsPublicKeyBytes, HydrationCache, Slot, SubmissionVersion};
@@ -22,16 +22,20 @@ use rustc_hash::FxHashMap;
 use tracing::{debug, info, warn};
 
 use crate::{
-    SubmissionDataWithSpan, api::{FutureBidSubmissionResult, builder::error::BuilderApiError}, auctioneer::{
-        AuctioneerHandle, BlockMergeResponse,
+    api::{builder::error::BuilderApiError, FutureBidSubmissionResult},
+    auctioneer::{
         bid_adjustor::BidAdjustor,
         bid_sorter::BidSorter,
         block_merger::BlockMerger,
         types::{PayloadEntry, PendingPayload, SubmissionRef},
-    }, simulator::{SimRequest, tile::ValidationResult}, spine::{
-        HelixSpineProducers,
+        AuctioneerHandle, BlockMergeResponse,
+    },
+    simulator::{tile::ValidationResult, SimRequest},
+    spine::{
         messages::{SubmissionResultWithRef, ToSimKind, ToSimMsg},
-    }
+        HelixSpineProducers,
+    },
+    SubmissionDataWithSpan,
 };
 
 // Context that is only valid for a given slot
