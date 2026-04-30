@@ -2542,7 +2542,7 @@ impl PostgresDatabaseService {
                 block_number,
                 extra_data,
                 value,
-                best_bid_fetched,
+                receive,
                 region.name AS region
             FROM get_header
             INNER JOIN region ON get_header.region_id = region.id
@@ -2622,7 +2622,7 @@ impl PostgresDatabaseService {
                     .and_then(|b| Address::try_from(b.as_slice()).ok()),
                 value: row.get::<_, Option<PostgresNumeric>>("value").map(|v| v.0),
                 block_number: row.get::<_, Option<i64>>("block_number").map(|n| n as u64),
-                proposer_send_timestamp_ms: row.get::<_, Option<i64>>("best_bid_fetched").map(
+                proposer_send_timestamp_ms: row.get::<_, Option<i64>>("receive").map(
                     |s| {
                         // convert from i64 nanoseconds to u64 milliseconds
                         (s as u64) / 1_000_000
