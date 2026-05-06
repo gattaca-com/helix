@@ -5,7 +5,7 @@ use axum::{Extension, http::HeaderMap, response::IntoResponse};
 use helix_common::{
     Filtering, GetPayloadTrace, RequestTimings,
     api_provider::ApiProvider,
-    beacon::types::BroadcastValidation,
+    beacon::{BeaconClientError, types::BroadcastValidation},
     chain_info::ChainInfo,
     decoder::{Encoding, HEADER_SSZ},
     spawn_tracked,
@@ -24,6 +24,7 @@ use uuid::Uuid;
 
 use super::ProposerApi;
 use crate::{
+    Event,
     api::{
         Api,
         proposer::{CONSENSUS_VERSION_HEADER, error::ProposerApiError},
@@ -369,6 +370,25 @@ impl<A: Api> ProposerApi<A> {
                 )
                 .await
             {
+                if matches!(err, BeaconClientError::BlockValidationFailed(..)) {
+                    let builder_pubkey = bid.builder_pubkey;
+                    let reason = format!("Block validation failed: {err}");
+
+                    let _ = self_clone.auctioneer_handle.send_event(Event::BuilderDemotion {
+                        slot,
+                        builder_pubkey,
+                        block_hash,
+                        reason,
+                    });
+
+                    warn!(
+                        %builder_pubkey,
+                        %block_hash,
+                        slot = %slot,
+                        "BuilderDemotion event sent due to BlockValidationFailed"
+                    );
+                }
+
                 error!(%err, "error publishing block");
                 failed_publishing = true;
             };

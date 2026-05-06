@@ -465,6 +465,12 @@ pub enum Event {
     GossipPayload(BroadcastPayloadParams),
     SimResult(ValidationResult),
     MergeResult(MergeResult),
+    BuilderDemotion {
+        slot: Slot,
+        builder_pubkey: BlsPublicKeyBytes,
+        block_hash: B256,
+        reason: String,
+    },
 }
 
 impl Event {
@@ -477,6 +483,7 @@ impl Event {
             Event::GossipPayload(_) => "GossipPayload",
             Event::SimResult(_) => "SimResult",
             Event::MergeResult(_) => "MergeResult",
+            Event::BuilderDemotion { .. } => "BuilderDemotion",
         }
     }
 }

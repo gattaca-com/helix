@@ -2665,12 +2665,10 @@ impl PostgresDatabaseService {
                     .and_then(|b| Address::try_from(b.as_slice()).ok()),
                 value: row.get::<_, Option<PostgresNumeric>>("value").map(|v| v.0),
                 block_number: row.get::<_, Option<i64>>("block_number").map(|n| n as u64),
-                proposer_send_timestamp_ms: row.get::<_, Option<i64>>("receive").map(
-                    |s| {
-                        // convert from i64 nanoseconds to u64 milliseconds
-                        (s as u64) / 1_000_000
-                    },
-                ),
+                proposer_send_timestamp_ms: row.get::<_, Option<i64>>("receive").map(|s| {
+                    // convert from i64 nanoseconds to u64 milliseconds
+                    (s as u64) / 1_000_000
+                }),
                 extra_data: row
                     .get::<_, Option<Vec<u8>>>("extra_data")
                     .map(|b| alloy_primitives::hex::encode_prefixed(b)),
