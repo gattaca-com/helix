@@ -34,7 +34,7 @@ use crate::{
     SubmissionDataWithSpan,
     api::{
         HEADER_API_KEY, HEADER_API_TOKEN, HEADER_HYDRATE, HEADER_IS_MERGEABLE, HEADER_MERGE_TYPE,
-        HEADER_SEQUENCE, HEADER_WITH_ADJUSTMENTS, proposer::ProposerApiError,
+        HEADER_PESSIMISTIC, HEADER_SEQUENCE, HEADER_WITH_ADJUSTMENTS, proposer::ProposerApiError,
     },
     auctioneer::MergeResult,
     gossip::BroadcastPayloadParams,
@@ -71,6 +71,10 @@ impl InternalBidSubmissionHeader {
         }
         if headers.get(HEADER_HYDRATE).is_some() {
             flags.set(BidSubmissionFlags::IS_DEHYDRATED, true);
+        }
+        if matches!(headers.get(HEADER_PESSIMISTIC), Some(header) if header == HeaderValue::from_static("true"))
+        {
+            flags.set(BidSubmissionFlags::PESSIMISTIC, true);
         }
 
         let submission_type = SubmissionType::from_headers(&headers);
@@ -196,6 +200,7 @@ pub struct SubmissionData {
     pub withdrawals_root: B256,
     pub trace: SubmissionTrace,
     pub decoder_params: SubmissionDecoderParams,
+    pub is_pessimistic: bool,
 }
 
 impl Deref for SubmissionData {

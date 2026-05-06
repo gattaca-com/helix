@@ -283,7 +283,8 @@ impl<B: BidAdjustor> Context<B> {
         builder_info: &BuilderInfo,
         slot_data: &SlotData,
     ) -> bool {
-        !slot_data.registration_data.entry.preferences.disable_optimistic &&
+        !submission.is_pessimistic &&
+            !slot_data.registration_data.entry.preferences.disable_optimistic &&
             builder_info.is_optimistic &&
             submission.bid_trace().value <= builder_info.collateral &&
             (!slot_data.registration_data.entry.preferences.filtering.is_regional() ||

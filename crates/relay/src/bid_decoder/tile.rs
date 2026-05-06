@@ -253,6 +253,7 @@ impl DecoderTile {
             withdrawals_root,
             trace,
             decoder_params,
+            is_pessimistic: header.flags.pessimistic(),
         };
 
         Ok((submission_data, tracing::Span::current()))
