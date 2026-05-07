@@ -46,7 +46,7 @@ impl DutiesFetchState {
                             *self = Self::Current { req, next_epoch_url };
                             return Poll::Pending;
                         }
-                        Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+                        Poll::Ready(Err(e)) => return Poll::Ready(Err(e.into())),
                         Poll::Ready(Ok(resp)) => match http_client.get(&next_epoch_url) {
                             Err(e) => {
                                 error!(%e, epoch_offset = 1, "failed to start next duties fetch");

@@ -5,9 +5,10 @@ use axum::{Extension, http::HeaderMap, response::IntoResponse};
 use helix_common::{
     Filtering, GetPayloadTrace, RequestTimings,
     api_provider::ApiProvider,
-    beacon::{BeaconClientError, types::BroadcastValidation},
+    beacon::types::BroadcastValidation,
     chain_info::ChainInfo,
     decoder::{Encoding, HEADER_SSZ},
+    metrics::BEACON_BLOCK_PUBLISH_FAILURES,
     spawn_tracked,
     utils::{extract_request_id, utcnow_ns},
 };
@@ -18,7 +19,7 @@ use helix_types::{
 };
 use http::{HeaderValue, StatusCode, header::CONTENT_TYPE};
 use ssz::{Decode, Encode};
-use tokio::time::sleep;
+use tokio::time::{sleep, timeout};
 use tracing::{Instrument, error, info, warn};
 use uuid::Uuid;
 
@@ -34,6 +35,16 @@ use crate::{
 };
 
 const GET_PAYLOAD_REQUEST_CUTOFF_MS: i64 = 4000;
+const AUCTIONEER_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[derive(Copy, Clone)]
+enum PublishOutcome {
+    Success,
+    /// Network/timeout failure — block is valid, proposer can still broadcast.
+    Transient,
+    /// Beacon explicitly rejected the block (equivocation, invalid state transition).
+    BlockInvalid,
+}
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
 pub enum ProposerApiVersion {
@@ -299,10 +310,15 @@ impl<A: Api> ProposerApi<A> {
         };
 
         // Primary path: process the payload and notify dedup waiters.
-        let result = match rx.await {
-            Ok(result) => result,
-            Err(err) => {
+        let result = match timeout(AUCTIONEER_RESPONSE_TIMEOUT, rx).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(err)) => {
                 error!(%err, "failed to receive payload response from auctioneer");
+                let _ = dedup_tx.send(Arc::new(None));
+                return Err(ProposerApiError::InternalServerError);
+            }
+            Err(_elapsed) => {
+                error!("timed out waiting for payload response from auctioneer");
                 let _ = dedup_tx.send(Arc::new(None));
                 return Err(ProposerApiError::InternalServerError);
             }
@@ -359,9 +375,7 @@ impl<A: Api> ProposerApi<A> {
         let payload_clone = to_proposer.data.clone();
 
         let handle = spawn_tracked!(async move {
-            let mut failed_publishing = false;
-
-            if let Err(err) = self_clone
+            let publish_outcome = match self_clone
                 .multi_beacon_client
                 .publish_block(
                     Arc::new(to_publish),
@@ -370,27 +384,25 @@ impl<A: Api> ProposerApi<A> {
                 )
                 .await
             {
-                if matches!(err, BeaconClientError::BlockValidationFailed(..)) {
-                    let builder_pubkey = bid.builder_pubkey;
-                    let reason = format!("Block validation failed: {err}");
-
-                    let _ = self_clone.auctioneer_handle.send_event(Event::BuilderDemotion {
-                        slot,
-                        builder_pubkey,
-                        block_hash,
-                        reason,
-                    });
-
-                    warn!(
-                        %builder_pubkey,
-                        %block_hash,
-                        slot = %slot,
-                        "BuilderDemotion event sent due to BlockValidationFailed"
-                    );
+                Ok(_) => PublishOutcome::Success,
+                Err(err) => {
+                    error!(%err, "error publishing block");
+                    BEACON_BLOCK_PUBLISH_FAILURES.inc();
+                    if err.is_block_content_error() {
+                        let builder_pubkey = bid.builder_pubkey;
+                        let reason = format!("block validation failed: {err}");
+                        let _ = self_clone.auctioneer_handle.send_event(Event::BuilderDemotion {
+                            slot,
+                            builder_pubkey,
+                            block_hash,
+                            reason,
+                        });
+                        warn!(%builder_pubkey, %block_hash, slot = %slot, "builder demoted due to block validation failure");
+                        PublishOutcome::BlockInvalid
+                    } else {
+                        PublishOutcome::Transient
+                    }
                 }
-
-                error!(%err, "error publishing block");
-                failed_publishing = true;
             };
 
             trace_clone.beacon_client_broadcast = utcnow_ns();
@@ -412,7 +424,7 @@ impl<A: Api> ProposerApi<A> {
                 )
                 .await;
 
-            (trace_clone, failed_publishing)
+            (trace_clone, publish_outcome)
         });
 
         if let Some(merged_block) = self.local_cache.get_merged_block(&block_hash) {
@@ -420,17 +432,22 @@ impl<A: Api> ProposerApi<A> {
         }
 
         if matches!(api_version, ProposerApiVersion::V1) {
-            let Ok((new_trace, failed_publishing)) = handle.await else {
+            let Ok((new_trace, publish_outcome)) = handle.await else {
                 return Err(ProposerApiError::InternalServerError);
             };
             *trace = new_trace;
 
-            if failed_publishing {
-                error!("failed to publish payload to beacon client");
-                return Err(ProposerApiError::InternalServerError);
+            match publish_outcome {
+                PublishOutcome::Success => info!(?trace, "payload published and saved!"),
+                PublishOutcome::Transient => {
+                    warn!("beacon publish failed (transient), returning payload to proposer");
+                }
+                PublishOutcome::BlockInvalid => {
+                    error!("beacon rejected block as invalid, caching failure");
+                    let _ = dedup_tx.send(Arc::new(None));
+                    return Err(ProposerApiError::InternalServerError);
+                }
             }
-
-            info!(?trace, "payload published and saved!");
 
             // Calculate the remaining time needed to reach the target propagation duration.
             // Conditionally pause the execution until we hit

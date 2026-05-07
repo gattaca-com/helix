@@ -32,4 +32,7 @@ pub enum HttpClientError {
 
     #[error("unsupported URL scheme: {0}")]
     UnsupportedScheme(String),
+
+    #[error("request timed out")]
+    TimedOut,
 }

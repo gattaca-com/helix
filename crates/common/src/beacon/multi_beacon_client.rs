@@ -62,15 +62,22 @@ impl MultiBeaconClient {
 
         let mut last_error: Option<BeaconClientError> = None;
         for res in (join_all(handles).await).into_iter().flatten() {
+            let already_have_content_error =
+                last_error.as_ref().is_some_and(|e| e.is_block_content_error());
             match res {
                 Ok(202) => {
-                    last_error = Some(BeaconClientError::BlockIntegrationFailed);
+                    if !already_have_content_error {
+                        last_error = Some(BeaconClientError::BlockIntegrationFailed);
+                    }
                 }
                 Ok(_) => return Ok(()),
-                Err(BeaconClientError::BlockValidationFailed(details)) => {
-                    last_error = Some(BeaconClientError::BlockValidationFailed(details));
+                Err(err) => {
+                    // Prefer block content errors: a transient error from one client
+                    // must not overwrite a content rejection from another.
+                    if err.is_block_content_error() || !already_have_content_error {
+                        last_error = Some(err);
+                    }
                 }
-                Err(err) => last_error = Some(err),
             }
         }
 
