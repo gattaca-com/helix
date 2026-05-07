@@ -20,7 +20,7 @@ use crate::{
 };
 
 const CONSENSUS_VERSION_HEADER: &str = "eth-consensus-version";
-const PUBLISH_BLOCK_TIMEOUT: Duration = Duration::from_secs(2);
+const PUBLISH_BLOCK_TIMEOUT: Duration = Duration::from_secs(4);
 const GET_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug)]

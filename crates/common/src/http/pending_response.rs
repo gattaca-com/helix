@@ -56,6 +56,7 @@ impl Future for PendingResponse {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
         if this.deadline.is_some_and(|d| Instant::now() >= d) {
+            this.state = State::Done;
             return Poll::Ready(Err(HttpClientError::TimedOut));
         }
         let _ = this.mio.poll(&mut this.events, Some(Duration::ZERO));
