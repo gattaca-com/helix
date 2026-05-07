@@ -42,9 +42,13 @@ pub enum BeaconClientError {
 impl BeaconClientError {
     /// Returns true when the beacon node explicitly rejected the block due to its content
     /// (e.g. equivocation, invalid state transition). Transient errors (timeouts, network
-    /// failures, node unavailable) return false.
+    /// failures, node unavailable, 5xx) return false.
     pub fn is_block_content_error(&self) -> bool {
-        matches!(self, BeaconClientError::Api(_) | BeaconClientError::BlockValidationFailed(_))
+        match self {
+            BeaconClientError::Api(e) => e.is_client_error(),
+            BeaconClientError::BlockValidationFailed(_) => true,
+            _ => false,
+        }
     }
 }
 
@@ -69,6 +73,19 @@ pub enum ApiError {
 pub struct IndexedError {
     index: usize,
     message: String,
+}
+
+impl ApiError {
+    fn code(&self) -> u16 {
+        match self {
+            Self::IndexedError { code, .. } | Self::ErrorMessage { code, .. } => *code,
+        }
+    }
+
+    pub fn is_client_error(&self) -> bool {
+        let code = self.code();
+        code >= 400 && code < 500
+    }
 }
 
 impl fmt::Display for ApiError {
