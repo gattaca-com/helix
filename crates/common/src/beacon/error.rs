@@ -34,6 +34,9 @@ pub enum BeaconClientError {
 
     #[error("HTTP request build error: {0}")]
     HttpBuildError(#[from] http::Error),
+
+    #[error("block validation failed: {0}")]
+    BlockValidationFailed(String),
 }
 
 impl IntoResponse for BeaconClientError {

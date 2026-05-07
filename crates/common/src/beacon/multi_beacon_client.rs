@@ -67,6 +67,9 @@ impl MultiBeaconClient {
                     last_error = Some(BeaconClientError::BlockIntegrationFailed);
                 }
                 Ok(_) => return Ok(()),
+                Err(BeaconClientError::BlockValidationFailed(details)) => {
+                    last_error = Some(BeaconClientError::BlockValidationFailed(details));
+                }
                 Err(err) => last_error = Some(err),
             }
         }

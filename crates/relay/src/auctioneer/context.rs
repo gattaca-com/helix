@@ -15,6 +15,7 @@ use helix_common::{
     chain_info::ChainInfo,
     local_cache::LocalCache,
     metrics::{CACHE_SIZE, SimulatorMetrics},
+    spawn_tracked,
 };
 use helix_database::handle::DbHandle;
 use helix_types::{BlsPublicKeyBytes, HydrationCache, Slot, SubmissionVersion};
@@ -296,6 +297,28 @@ impl<B: BidAdjustor> Context<B> {
             return;
         };
         self.payloads.insert(block_hash, payload);
+    }
+
+    pub fn handle_builder_demotion(
+        &mut self,
+        slot: Slot,
+        builder_pubkey: BlsPublicKeyBytes,
+        block_hash: B256,
+        reason: String,
+    ) {
+        if self.cache.demote_builder(&builder_pubkey) {
+            warn!(%builder_pubkey, %block_hash, "builder demoted due to block validation failure");
+
+            let db = self.db.clone();
+            let failsafe = self.failsafe_triggered.clone();
+            let slot_u64 = slot.as_u64();
+
+            spawn_tracked!(async move {
+                db.db_demote_builder(slot_u64, builder_pubkey, block_hash, reason, failsafe)
+            });
+        } else {
+            warn!(%reason, %builder_pubkey, %block_hash, "builder already demoted, skipping demotion");
+        }
     }
 }
 
