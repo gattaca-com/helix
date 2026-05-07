@@ -96,6 +96,16 @@ impl<B: BidAdjustor> Context<B> {
             Ok(v) => v,
             Err(e) => {
                 error!(?e, "hydration failed after pre-check passed");
+                // Optimistic submissions already received Ok(()) above; only non-optimistic
+                // builders are still waiting for a response at this point.
+                if !is_optimistic {
+                    send_submission_result(
+                        producers,
+                        &self.future_results,
+                        submission_ref,
+                        Err(BuilderApiError::InternalError),
+                    );
+                }
                 return;
             }
         };

@@ -39,6 +39,15 @@ pub enum BeaconClientError {
     BlockValidationFailed(String),
 }
 
+impl BeaconClientError {
+    /// Returns true when the beacon node explicitly rejected the block due to its content
+    /// (e.g. equivocation, invalid state transition). Transient errors (timeouts, network
+    /// failures, node unavailable) return false.
+    pub fn is_block_content_error(&self) -> bool {
+        matches!(self, BeaconClientError::Api(_) | BeaconClientError::BlockValidationFailed(_))
+    }
+}
+
 impl IntoResponse for BeaconClientError {
     fn into_response(self) -> Response {
         let message = self.to_string();

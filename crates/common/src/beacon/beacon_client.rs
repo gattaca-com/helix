@@ -1,4 +1,4 @@
-use std::{sync::Arc, task::Poll};
+use std::{sync::Arc, task::Poll, time::Duration};
 
 use ::ssz::Encode;
 use alloy_primitives::B256;
@@ -20,6 +20,8 @@ use crate::{
 };
 
 const CONSENSUS_VERSION_HEADER: &str = "eth-consensus-version";
+const PUBLISH_BLOCK_TIMEOUT: Duration = Duration::from_secs(2);
+const GET_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug)]
 pub struct BeaconClient {
@@ -47,13 +49,11 @@ impl BeaconClient {
         path: &str,
     ) -> Result<T, BeaconClientError> {
         let target = self.config.url.join(path)?;
-        let mut pending = self.http.get(&target)?;
+        let mut pending = self.http.get(&target)?.with_timeout(GET_TIMEOUT);
         loop {
             match pending.poll_json::<T>() {
                 Poll::Pending => {}
-                Poll::Ready(r) => {
-                    return r.map_err(|e| BeaconClientError::MissingExpectedData(e.to_string()))
-                }
+                Poll::Ready(r) => return r.map_err(Into::into),
             }
             tokio::task::yield_now().await;
         }
@@ -78,15 +78,13 @@ impl BeaconClient {
             .header(CONSENSUS_VERSION_HEADER, fork.to_string())
             .header(CONTENT_TYPE, "application/octet-stream")
             .body(Full::new(body_bytes))?;
-        let mut pending = self.http.send(&target, req)?;
+        let mut pending = self.http.send(&target, req)?.with_timeout(PUBLISH_BLOCK_TIMEOUT);
 
         let (status, body) = loop {
             match pending.poll_bytes() {
                 Poll::Pending => {}
                 Poll::Ready(Ok(r)) => break r,
-                Poll::Ready(Err(e)) => {
-                    return Err(BeaconClientError::MissingExpectedData(e.to_string()))
-                }
+                Poll::Ready(Err(e)) => return Err(e.into()),
             }
             tokio::task::yield_now().await;
         };

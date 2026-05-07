@@ -458,6 +458,14 @@ lazy_static! {
     )
     .unwrap();
 
+    //////////////// GET PAYLOAD ////////////////
+    pub static ref BEACON_BLOCK_PUBLISH_FAILURES: IntCounter = register_int_counter_with_registry!(
+        "beacon_block_publish_failures_total",
+        "Count of failures when publishing a block to beacon clients",
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
     //////////////// GET HEADER ////////////////
     pub static ref HEADER_TIMEOUT_FETCH: IntCounter = register_int_counter_with_registry!(
         "header_timeout_fetch",
