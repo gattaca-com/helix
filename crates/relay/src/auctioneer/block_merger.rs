@@ -410,6 +410,9 @@ impl BlockMerger {
     }
 
     fn should_request_merge(&self) -> bool {
+        if self.base_block.is_none() {
+            return false;
+        }
         let start_time = Instant::now();
         let has_new_data = self.best_mergeable_orders.has_new_orders() ||
             (self.best_mergeable_orders.has_orders() && self.has_new_base_block);
