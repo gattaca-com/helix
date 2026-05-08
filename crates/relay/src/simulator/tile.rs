@@ -210,10 +210,24 @@ impl SimulatorTile {
         if let Some(id) = sim_id {
             self.local_telemetry.sims_sent_immediately += 1;
             self.spawn_sim(id, req)
-        } else if fast_track {
-            self.priority_requests.store(req, builder_pubkey, &mut self.local_telemetry)
         } else {
-            self.requests.store(req, builder_pubkey, &mut self.local_telemetry)
+            let evicted = if fast_track {
+                self.priority_requests.store(req, builder_pubkey, &mut self.local_telemetry)
+            } else {
+                self.requests.store(req, builder_pubkey, &mut self.local_telemetry)
+            };
+            // A dropped dehydrated request may carry full transactions that haven't
+            // been inserted into the cache yet. Hydrate it now so subsequent
+            // dehydrated submissions from this builder can resolve their tx hashes.
+            if let Some(evicted_req) = evicted
+                && let Some(data) = self.decoded.get(evicted_req.decoded_ix)
+                    && let Submission::Dehydrated(d) =
+                        data.submission_data.submission.clone()
+                    {
+                        let _ = self
+                            .hydration_cache
+                            .hydrate(d, self.chain_info.max_blobs_per_block());
+                    }
         }
     }
 
@@ -599,21 +613,24 @@ impl PendingRequests {
         Self { reqs: Vec::with_capacity(capacity) }
     }
 
+    /// Returns the evicted request if a newer one replaced it.
     fn store(
         &mut self,
         req: crate::simulator::ValidationRequest,
         builder_pubkey: BlsPublicKeyBytes,
         local_telemetry: &mut LocalTelemetry,
-    ) {
+    ) -> Option<crate::simulator::ValidationRequest> {
         if let Some(i) = self.reqs.iter().position(|(_, pk)| *pk == builder_pubkey) {
-            if req.on_receive_ns() > self.reqs[i].0.on_receive_ns() {
-                self.reqs[i].0 = req;
-            }
             local_telemetry.sims_reqs_dropped += 1;
-        } else {
-            self.reqs.push((req, builder_pubkey));
+            if req.on_receive_ns() > self.reqs[i].0.on_receive_ns() {
+                let evicted = std::mem::replace(&mut self.reqs[i].0, req);
+                return Some(evicted);
+            }
+            return None;
         }
+        self.reqs.push((req, builder_pubkey));
         local_telemetry.max_pending = local_telemetry.max_pending.max(self.reqs.len());
+        None
     }
 
     fn next_req(&mut self) -> Option<crate::simulator::ValidationRequest> {
