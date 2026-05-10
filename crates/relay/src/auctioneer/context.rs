@@ -153,6 +153,11 @@ impl<B: BidAdjustor> Context<B> {
             return;
         };
 
+        let submission_id = match &result.submission_ref {
+            SubmissionRef::Tcp { id, .. } => Some(*id),
+            _ => None,
+        };
+
         if let Some(bid) = &result.bid {
             let builder = bid.builder_pubkey;
             let block_hash = bid.block_hash;
@@ -161,7 +166,7 @@ impl<B: BidAdjustor> Context<B> {
             if let Err(err) = result.result.as_ref() {
                 if err.is_demotable() {
                     if is_adjusted {
-                        warn!(%builder, %block_hash, %err, "block simulation resulted in an error. Disabling adjustments...");
+                        warn!(%builder, %block_hash, %err, ?submission_id, "block simulation resulted in an error. Disabling adjustments...");
 
                         if !self.cache.adjustments_enabled.load(Ordering::Relaxed) {
                             warn!(%block_hash, "adjustments already disabled");
@@ -175,7 +180,7 @@ impl<B: BidAdjustor> Context<B> {
                             );
                         }
                     } else if self.cache.demote_builder(&builder) {
-                        warn!(%builder, %block_hash, %err, "Block simulation resulted in an error. Demoting builder...");
+                        warn!(%builder, %block_hash, %err, ?submission_id, "Block simulation resulted in an error. Demoting builder...");
 
                         SimulatorMetrics::demotion_count();
 
@@ -191,7 +196,7 @@ impl<B: BidAdjustor> Context<B> {
                             failsafe_triggered,
                         );
                     } else {
-                        warn!(%err, %builder, %block_hash, "builder already demoted, skipping demotion");
+                        warn!(%err, %builder, %block_hash, ?submission_id, "builder already demoted, skipping demotion");
                     }
                 }
             } else if is_adjusted {
