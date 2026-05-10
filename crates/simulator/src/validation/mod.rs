@@ -752,3 +752,39 @@ pub trait BlockSubmissionValidationApi {
         request: ExtendedValidationRequestV5,
     ) -> jsonrpsee::core::RpcResult<()>;
 }
+
+
+#[test]
+fn test_ensure_well_formed_payload() {
+    let req_payload_bytes = include_bytes!("validate_builder_submissionV5_request.json");
+    let request: ExtendedValidationRequestV5 = serde_json::from_slice(req_payload_bytes.as_slice()).unwrap();
+    println!("{}", request.apply_blacklist);
+
+    let chain_spec = Arc::new(reth_ethereum::chainspec::MAINNET.clone());
+    let validator: EthereumEngineValidator<Arc<reth_ethereum::chainspec::ChainSpec>> =
+        EthereumEngineValidator::new(chain_spec);
+    let execution_data = ExecutionData {
+            payload: ExecutionPayload::V3(request.base.request.execution_payload),
+            sidecar: ExecutionPayloadSidecar::v4(
+                CancunPayloadFields {
+                    parent_beacon_block_root: request.base.parent_beacon_block_root,
+                    versioned_hashes: request.base.request.blobs_bundle.commitments
+                        .iter()
+                        .map(|c| kzg_to_versioned_hash(c.as_slice()))
+                        .collect(),
+                },
+                PraguePayloadFields {
+                    requests: RequestsOrHash::Requests(
+                        request.base.request.execution_requests.to_requests(),
+                    ),
+                },
+            ),
+        };
+
+    <EthereumEngineValidator<Arc<reth_ethereum::chainspec::ChainSpec>>
+        as reth_node_builder::PayloadValidator<reth_ethereum_engine_primitives::EthPayloadTypes>>::ensure_well_formed_payload(
+        &validator,
+        execution_data,
+    )
+    .unwrap();
+}
