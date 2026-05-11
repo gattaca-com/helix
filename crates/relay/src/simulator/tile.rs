@@ -304,6 +304,8 @@ impl SimulatorTile {
             return;
         };
 
+        tracing::trace!(?req, ?decoded_data.submission_data.submission_ref, "preparing simulation request");
+
         let (submission, tx_root) = match decoded_data.submission_data.submission.clone() {
             Submission::Full(s) => (s, None),
             Submission::Dehydrated(d) => {
