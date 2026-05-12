@@ -402,7 +402,10 @@ impl SimulatorTile {
 
             let time = timer.stop_and_record();
 
-            debug!(?submission_ref, tx_root = ?tx_root, %block_hash, time_secs = time, ?res, "simulation completed");
+            //TODO: remove once we understand the root causes of hydration issues and have mitigations in place
+            let expected_tx_root = submission.transactions_root();
+
+            debug!(?submission_ref, ?tx_root, ?expected_tx_root, %block_hash, time_secs = time, ?res, "simulation completed");
 
             let paused_until = if let Err(err) = res.as_ref() {
                 SimulatorMetrics::sim_status(false);
@@ -413,10 +416,9 @@ impl SimulatorTile {
             };
 
             if let Some(got) = tx_root {
-                let expected = submission.transactions_root();
-                debug!(?submission_ref, ?tx_root, ?expected, "validating transaction root");
-                if expected != got {
-                    res = Err(BlockSimError::InvalidTxRoot { got, expected })
+                debug!(?submission_ref, ?tx_root, ?expected_tx_root, "validating transaction root");
+                if expected_tx_root != got {
+                    res = Err(BlockSimError::InvalidTxRoot { got, expected: expected_tx_root })
                 }
             }
 
