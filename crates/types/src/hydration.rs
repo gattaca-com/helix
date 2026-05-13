@@ -156,6 +156,36 @@ impl DehydratedBidSubmission {
             }
         }
     }
+
+    pub fn is_dehydrated(&self) -> bool {
+        match self {
+            DehydratedBidSubmission::Fulu(s) => s.is_dehydrated(),
+        }
+    }
+
+    pub fn tx_root(&self) -> Option<B256> {
+        match self {
+            DehydratedBidSubmission::Fulu(s) => s.tx_root,
+        }
+    }
+
+    pub fn set_tx_root(&mut self, root: B256) {
+        match self {
+            DehydratedBidSubmission::Fulu(s) => s.tx_root = Some(root),
+        }
+    }
+
+    pub fn calculate_tx_root(&self) -> Option<B256> {
+        match self {
+            DehydratedBidSubmission::Fulu(s) => {
+                if s.is_dehydrated() {
+                    None
+                } else {
+                    Some(s.execution_payload.transactions.tree_hash_root())
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
@@ -260,6 +290,10 @@ impl DehydratedBidSubmissionFulu {
         }
 
         true
+    }
+
+    fn is_dehydrated(&self) -> bool {
+        self.execution_payload.transactions.iter().any(|tx| tx.len() == std::mem::size_of::<u64>())
     }
 
     fn hydrate_inner(

@@ -19,7 +19,7 @@ use serde::de::DeserializeOwned;
 use ssz::Decode;
 use ssz_derive::{Decode, Encode};
 use strum::{AsRefStr, EnumString};
-use tracing::{error, trace};
+use tracing::{debug, error, trace};
 use zstd::{
     stream::read::Decoder as ZstdDecoder,
     zstd_safe::{CONTENTSIZE_ERROR, CONTENTSIZE_UNKNOWN, get_frame_content_size},
@@ -282,8 +282,20 @@ impl SubmissionDecoder {
 
             (sub, Some(adjustment_data))
         } else {
-            let submission: DehydratedBidSubmission = self.decode_by_fork(body, self.fork_name)?;
-
+            let mut submission: DehydratedBidSubmission = self.decode_by_fork(body, self.fork_name)?;
+            if !submission.is_dehydrated() {
+                let expected_tx_root = submission.calculate_tx_root().unwrap();
+                if let Some(current_tx_root) = submission.tx_root() {
+                    if current_tx_root != expected_tx_root {
+                        error!("dehydrated submission has invalid tx root");
+                        return Err(DecoderError::PayloadDecode);
+                    }
+                } else {
+                    submission.set_tx_root(expected_tx_root);
+                    debug!(?expected_tx_root, "setting tx root for dehydrated submission");
+                }
+                
+            }
             (submission, None)
         };
 
