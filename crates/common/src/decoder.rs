@@ -278,7 +278,21 @@ impl SubmissionDecoder {
         let (submission, bid_adjustment) = if self.with_adjustments {
             let sub_with_adjustment: DehydratedBidSubmissionFuluWithAdjustments =
                 self.decode_by_fork(body, self.fork_name)?;
-            let (sub, adjustment_data) = sub_with_adjustment.split();
+            let (mut sub, adjustment_data) = sub_with_adjustment.split();
+
+            if !sub.is_dehydrated() {
+                let expected_tx_root = sub.calculate_tx_root().unwrap();
+                if let Some(current_tx_root) = sub.tx_root() {
+                    if current_tx_root != expected_tx_root {
+                        error!("dehydrated submission has invalid tx root");
+                        return Err(DecoderError::PayloadDecode);
+                    }
+                } else {
+                    sub.set_tx_root(expected_tx_root);
+                    debug!(?expected_tx_root, "setting tx root for dehydrated submission");
+                }
+                
+            }
 
             (sub, Some(adjustment_data))
         } else {
