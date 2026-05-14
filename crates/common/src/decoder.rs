@@ -504,15 +504,15 @@ pub fn tx_root_from_ssz(payload: &[u8]) -> Option<Hash256> {
 
     let mut txs = Vec::new();
     for i in 0..tx_count {
-        let start = u32::from_le_bytes(tx_list[i*4..i*4+4].try_into().unwrap()) as usize;
+        let start = u32::from_le_bytes(tx_list.get(i*4..i*4+4)?.try_into().ok()?) as usize;
         let end = if i + 1 < tx_count {
-            u32::from_le_bytes(tx_list[(i+1)*4..(i+1)*4+4].try_into().unwrap()) as usize
+            u32::from_le_bytes(tx_list.get((i+1)*4..(i+1)*4+4)?.try_into().ok()?) as usize
         } else {
             tx_list.len()
         };
-        let tx_bytes = &tx_list[start..end];
-        if tx_bytes.len() == 64 {
-            // sanity check, no tx root for dehydrated tx
+        let tx_bytes = tx_list.get(start..end)?;
+        if tx_bytes.len() == 8 {
+            // dehydrated tx placeholder, can't compute root
             return None;
         }
         txs.push(Transaction(Bytes::copy_from_slice(tx_bytes)));
