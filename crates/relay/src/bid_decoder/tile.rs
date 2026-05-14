@@ -12,7 +12,7 @@ use helix_common::{
     RelayConfig, SubmissionTrace,
     api::builder_api::MAX_PAYLOAD_LENGTH,
     chain_info::ChainInfo,
-    decoder::{SubmissionDecoder, SubmissionDecoderParams},
+    decoder::{SubmissionDecoder, SubmissionDecoderParams, tx_root_from_ssz},
     local_cache::LocalCache,
     record_submission_step,
 };
@@ -295,11 +295,23 @@ impl DecoderTile {
             fork_name: chain_info.current_fork_name(),
         };
 
+        if is_dehydrated {
+            if let Some(tx_root) = tx_root_from_ssz(&payload) {
+                tracing::debug!(?header.id, ?tx_root, "calculated tx root in decoder tile");
+            }
+        }
+
         let mut decoder = SubmissionDecoder::new(&decoder_params);
         let (mut submission, merging_data, bid_adjustment_data) =
             decoder.decode(payload, buffer)?;
 
         trace.decoded_ns = Nanos::now();
+
+        if is_dehydrated {
+            if let Some(tx_root) = tx_root_from_ssz(&payload) {
+                tracing::debug!(?header.id, ?tx_root, "calculated tx root after decoding in decoder tile");
+            }
+        }
 
         let builder_pubkey = *submission.builder_pubkey();
         let skip_sigverify = if let Some(expected_pubkey) = expected_pubkey {

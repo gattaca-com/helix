@@ -7,7 +7,7 @@ use flux_network::{
     tcp::{PollEvent, SendBehavior, TcpConnector, TcpTelemetry},
 };
 use flux_utils::DCachePtr;
-use helix_common::{SubmissionTrace, metrics::SUB_CLIENT_TO_SERVER_LATENCY, utils::utcnow_ns};
+use helix_common::{SubmissionTrace, decoder::tx_root_from_ssz, metrics::SUB_CLIENT_TO_SERVER_LATENCY, utils::utcnow_ns};
 use helix_tcp_types::BID_SUB_HEADER_SIZE;
 use helix_types::BlsPublicKeyBytes;
 use ssz::{Decode, Encode};
@@ -120,6 +120,12 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                         read_body_ns: Nanos(now),
                         ..Default::default()
                     };
+
+                    if header.flags.is_dehydrated() {
+                        if let Some(tx_root) = tx_root_from_ssz(&payload[BID_SUB_HEADER_SIZE..]) {
+                            tracing::debug!(?id, ?tx_root, "calculated tx root before sending to decoder tile");
+                        }
+                    }
 
                     Some(NewBidSubmission {
                         payload_offset: BID_SUB_HEADER_SIZE,

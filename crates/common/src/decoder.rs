@@ -3,13 +3,14 @@ use std::{
     time::{Duration, Instant},
 };
 
+use alloy_primitives::Bytes;
 use axum::response::{IntoResponse, Response};
 use flate2::read::GzDecoder;
 use helix_types::{
     BidAdjustmentData, BlockMergingData, Compression, DehydratedBidSubmission,
     DehydratedBidSubmissionFuluWithAdjustments, ForkName, ForkVersionDecode, MergeType,
     SignedBidSubmission, SignedBidSubmissionWithAdjustments, SignedBidSubmissionWithMergingData,
-    Submission,
+    Submission, Transaction, Transactions,
 };
 use http::{
     HeaderMap, HeaderValue, StatusCode,
@@ -18,8 +19,10 @@ use http::{
 use serde::de::DeserializeOwned;
 use ssz::Decode;
 use ssz_derive::{Decode, Encode};
+use ssz_types::VariableList;
 use strum::{AsRefStr, EnumString};
 use tracing::{debug, error, trace};
+use tree_hash::{Hash256, TreeHash};
 use zstd::{
     stream::read::Decoder as ZstdDecoder,
     zstd_safe::{CONTENTSIZE_ERROR, CONTENTSIZE_UNKNOWN, get_frame_content_size},
@@ -490,6 +493,37 @@ fn gzip_size_hint(buf: &[u8]) -> Option<usize> {
     }
 }
 
+pub fn tx_root_from_ssz(payload: &[u8]) -> Option<Hash256> {
+    let start = Instant::now();
+    let ep_start = payload[236..240].try_into().map(u32::from_le_bytes).unwrap() as usize;
+    let tx_offset = payload[ep_start + 504..ep_start + 508].try_into().map(u32::from_le_bytes).unwrap() as usize;
+    let withdrawals_offset = payload[ep_start + 508..ep_start + 512].try_into().map(u32::from_le_bytes).unwrap() as usize;
+    let tx_list = &payload[ep_start + tx_offset..ep_start + withdrawals_offset];
+    let first_tx_offset = u32::from_le_bytes(tx_list[0..4].try_into().unwrap()) as usize;
+    let tx_count = first_tx_offset / 4;
+
+    let mut txs = Vec::new();
+    for i in 0..tx_count {
+        let start = u32::from_le_bytes(tx_list[i*4..i*4+4].try_into().unwrap()) as usize;
+        let end = if i + 1 < tx_count {
+            u32::from_le_bytes(tx_list[(i+1)*4..(i+1)*4+4].try_into().unwrap()) as usize
+        } else {
+            tx_list.len()
+        };
+        let tx_bytes = &tx_list[start..end];
+        if tx_bytes.len() == 64 {
+            // sanity check, no tx root for dehydrated tx
+            return None;
+        }
+        txs.push(Transaction(Bytes::copy_from_slice(tx_bytes)));
+    }
+
+    let transactions: Transactions = VariableList::new(txs).unwrap();
+    let duration = start.elapsed();
+    println!("tx_root_from_ssz took: {:?}", duration);
+    Some(transactions.tree_hash_root())
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -555,6 +589,11 @@ use helix_types::{BlobsBundle, MergeType};
         let header_len = u16::from_le_bytes(raw[..2].try_into().unwrap()) as usize;
         let header = &raw[2..2 + header_len];
         let payload = &raw[2 + header_len..];
+        let start = Instant::now();
+        let root = tx_root_from_ssz(payload);
+        let duration = start.elapsed();
+        println!("tx_root_from_ssz took: {:?}", duration);
+        assert_eq!(root, Some(B256::from_hex("0xee8513f442f7414172b9c543c93137148a3e309b3a0f31d3c63c7600ce53d677").unwrap()));
 
         let merge_type = MergeType::try_from(header[21]).unwrap();
         let flags = header[22];
@@ -586,8 +625,6 @@ use helix_types::{BlobsBundle, MergeType};
         match res {
             Submission::Full(sub) => assert_eq!(*sub.block_hash(), B256::from_hex("0xeda2e151114e1e7a9728d85c72ee4e3c7db21bd1d8dcdea88298371820ec3221").unwrap()),
             Submission::Dehydrated(sub) => {
-                //assert_eq!(sub.tx_root(), Some(B256::from_hex("0x2849512290a0d9134da68a24337f21d92368b6af9e52967c68b16747312e9165").unwrap()));
-
                 let s = match sub {
                     DehydratedBidSubmission::Fulu(subf) => subf,
                 };
@@ -603,7 +640,7 @@ use helix_types::{BlobsBundle, MergeType};
                 };
 
                 let v5: alloy_rpc_types::beacon::relay::SignedBidSubmissionV5 = submission.into();
-                let mut execution_data = ExecutionData {
+                let execution_data = ExecutionData {
                     payload: ExecutionPayload::V3(v5.execution_payload),
                     sidecar: ExecutionPayloadSidecar::v4(
                         CancunPayloadFields {
@@ -621,8 +658,7 @@ use helix_types::{BlobsBundle, MergeType};
                     ),
                 };
 
-                let mut header = execution_data.into_block_raw().unwrap().header;
-                header.transactions_root = B256::from_hex("0x2849512290a0d9134da68a24337f21d92368b6af9e52967c68b16747312e9165").unwrap();
+                let header = execution_data.into_block_raw().unwrap().header;
                 let block_hash = header.hash_slow();
                 assert_eq!(block_hash, B256::from_hex("0xeda2e151114e1e7a9728d85c72ee4e3c7db21bd1d8dcdea88298371820ec3221").unwrap());
             },
