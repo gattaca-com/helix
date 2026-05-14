@@ -291,7 +291,6 @@ impl SubmissionDecoder {
                     sub.set_tx_root(expected_tx_root);
                     debug!(?expected_tx_root, "setting tx root for dehydrated submission");
                 }
-                
             }
 
             (sub, Some(adjustment_data))
@@ -493,7 +492,12 @@ fn gzip_size_hint(buf: &[u8]) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use helix_types::MergeType;
+    use std::sync::Arc;
+
+use alloy_eips::{eip4844::kzg_to_versioned_hash, eip7685::RequestsOrHash};
+use alloy_primitives::{B256, hex::FromHex};
+use alloy_rpc_types::engine::{CancunPayloadFields, ExecutionData, ExecutionPayload, ExecutionPayloadSidecar, PraguePayloadFields};
+use helix_types::{BlobsBundle, MergeType};
 
     use super::*;
 
@@ -538,5 +542,90 @@ mod tests {
         // Test that invalid values fail
         assert!("invalid".parse::<MergeType>().is_err());
         assert!("AppendOnly".parse::<MergeType>().is_err()); // CamelCase should fail
+    }
+
+    #[test]
+    fn test_decode_tcp_submission_from_s3() {
+        use helix_types::{Compression, ForkName, MergeType, Submission};
+
+        let raw = include_bytes!(
+            "../test_data/2026-05-13T10_36_09.464299763+00_00_9c111baa-7984-48c7-bd81-9f3d2a875f9c.bin"
+        );
+
+        let header_len = u16::from_le_bytes(raw[..2].try_into().unwrap()) as usize;
+        let header = &raw[2..2 + header_len];
+        let payload = &raw[2 + header_len..];
+
+        let merge_type = MergeType::try_from(header[21]).unwrap();
+        let flags = header[22];
+        let encoding = match header[23] {
+            0 => Encoding::Json,
+            1 => Encoding::Ssz,
+            b => panic!("unknown encoding byte {b}"),
+        };
+        let compression = match header[24] {
+            0 => Compression::None,
+            1 => Compression::Gzip,
+            2 => Compression::Zstd,
+            b => panic!("unknown compression byte {b}"),
+        };
+
+        let decoder_params = SubmissionDecoderParams {
+            compression,
+            encoding,
+            is_dehydrated: flags & (1 << 0) != 0,
+            merge_type,
+            with_mergeable_data: merge_type.is_some(),
+            with_adjustments: flags & (1 << 1) != 0,
+            block_merging_dry_run: false,
+            fork_name: ForkName::Fulu,
+        };
+
+        let mut buf = Vec::new();
+        let (res, _, _) = SubmissionDecoder::new(&decoder_params).decode(payload, &mut buf).unwrap();
+        match res {
+            Submission::Full(sub) => assert_eq!(*sub.block_hash(), B256::from_hex("0xeda2e151114e1e7a9728d85c72ee4e3c7db21bd1d8dcdea88298371820ec3221").unwrap()),
+            Submission::Dehydrated(sub) => {
+                //assert_eq!(sub.tx_root(), Some(B256::from_hex("0x2849512290a0d9134da68a24337f21d92368b6af9e52967c68b16747312e9165").unwrap()));
+
+                let s = match sub {
+                    DehydratedBidSubmission::Fulu(subf) => subf,
+                };
+
+                let sidecar = BlobsBundle::with_capacity(s.blobs_bundle.commitments.len());
+
+                let submission = SignedBidSubmission {
+                    message: s.message,
+                    execution_payload: Arc::new(s.execution_payload),
+                    blobs_bundle: Arc::new(sidecar),
+                    execution_requests: s.execution_requests,
+                    signature: s.signature,
+                };
+
+                let v5: alloy_rpc_types::beacon::relay::SignedBidSubmissionV5 = submission.into();
+                let mut execution_data = ExecutionData {
+                    payload: ExecutionPayload::V3(v5.execution_payload),
+                    sidecar: ExecutionPayloadSidecar::v4(
+                        CancunPayloadFields {
+                            parent_beacon_block_root: B256::from_hex("0x6841897da5752b1ab0ef580bb971df5adcdb1178c1f6796d95aad833400b7c60").unwrap(),
+                            versioned_hashes: v5
+                                .blobs_bundle
+                                .commitments
+                                .iter()
+                                .map(|c| kzg_to_versioned_hash(c.as_slice()))
+                                .collect(),
+                        },
+                        PraguePayloadFields {
+                            requests: RequestsOrHash::Requests(v5.execution_requests.to_requests()),
+                        },
+                    ),
+                };
+
+                let mut header = execution_data.into_block_raw().unwrap().header;
+                header.transactions_root = B256::from_hex("0x2849512290a0d9134da68a24337f21d92368b6af9e52967c68b16747312e9165").unwrap();
+                let block_hash = header.hash_slow();
+                assert_eq!(block_hash, B256::from_hex("0xeda2e151114e1e7a9728d85c72ee4e3c7db21bd1d8dcdea88298371820ec3221").unwrap());
+            },
+        }
     }
 }

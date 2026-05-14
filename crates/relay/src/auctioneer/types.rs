@@ -41,6 +41,7 @@ use crate::{
     simulator::tile::ValidationResult,
 };
 
+#[repr(u8)]
 #[derive(Clone, Copy, Debug)]
 pub enum SubmissionRef {
     Http(usize),
@@ -51,6 +52,8 @@ pub enum SubmissionRef {
 pub type GetHeaderResult = Result<PayloadEntry, ProposerApiError>;
 pub type GetPayloadResult = Result<GetPayloadResultData, ProposerApiError>;
 
+
+#[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct InternalBidSubmissionHeader {
     pub id: Uuid,

@@ -47,6 +47,7 @@ impl From<BuilderGetValidatorsResponseEntry> for BuilderGetValidatorsResponse {
     }
 }
 
+#[repr(C)]
 #[derive(Clone, Copy, Debug, Encode, Decode)]
 pub struct TopBidUpdate {
     pub timestamp: u64,

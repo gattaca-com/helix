@@ -12,6 +12,7 @@ use crate::{
     auctioneer::{InternalBidSubmissionHeader, SubmissionRef},
 };
 
+#[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NewBidSubmission {
     pub payload_offset: usize,
@@ -22,6 +23,7 @@ pub struct NewBidSubmission {
     pub http_submission_ix: Option<usize>,
 }
 
+#[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct SubmissionResultWithRef {
     pub sub_ref: SubmissionRef,
@@ -61,12 +63,14 @@ impl SubmissionResultWithRef {
 }
 
 // references position in SharedVector<BidSubmission>
+#[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct DecodedSubmission {
     pub ix: usize,
 }
 
 /// Auctioneer → SimulatorTile: spine signal for a new sim/merge request or slot transition.
+#[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct ToSimMsg {
     pub kind: ToSimKind,
@@ -76,6 +80,7 @@ pub struct ToSimMsg {
     pub bid_slot: u64,
 }
 
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToSimKind {
     /// SimRequest or MergeRequest stored at `ix`.
@@ -84,22 +89,26 @@ pub enum ToSimKind {
 }
 
 /// SimulatorTile → Auctioneer: index into `SharedVector<SimOutboundPayload>`.
+#[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct FromSimMsg {
     pub ix: usize,
 }
 
+#[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub enum BidEvent {
     Live,
 }
 
+#[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct BidUpdate {
     pub block_hash: B256,
     pub event: BidEvent,
 }
 
+#[repr(C)]
 /// HousekeeperTile → all consumers: index into `SharedVector<SlotUpdate>`.
 #[derive(Debug, Clone, Copy)]
 pub struct SlotMsg {

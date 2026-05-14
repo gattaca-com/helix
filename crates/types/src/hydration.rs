@@ -186,17 +186,23 @@ impl DehydratedBidSubmission {
             }
         }
     }
+
+    pub fn calculate_block_hash(&self) -> B256 {
+        match self {
+            DehydratedBidSubmission::Fulu(s) => s.calculate_block_hash(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
 #[serde(deny_unknown_fields)]
 pub struct DehydratedBidSubmissionFulu {
-    message: BidTrace,
-    execution_payload: ExecutionPayload,
-    blobs_bundle: DehydratedBlobsFulu,
-    execution_requests: Arc<ExecutionRequests>,
-    signature: BlsSignatureBytes,
-    tx_root: Option<B256>,
+    pub message: BidTrace,
+    pub execution_payload: ExecutionPayload,
+    pub blobs_bundle: DehydratedBlobsFulu,
+    pub execution_requests: Arc<ExecutionRequests>,
+    pub signature: BlsSignatureBytes,
+    pub tx_root: Option<B256>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
@@ -242,16 +248,16 @@ impl ForkVersionDecode for DehydratedBidSubmissionFuluWithAdjustments {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
-struct DehydratedBlobsFulu {
-    commitments: Vec<KzgCommitment>,
-    new_items: Vec<BlobItemFulu>,
+pub struct DehydratedBlobsFulu {
+    pub commitments: Vec<KzgCommitment>,
+    pub new_items: Vec<BlobItemFulu>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
-struct BlobItemFulu {
-    proof: Vec<KzgProof>,
-    commitment: KzgCommitment,
-    blob: Blob,
+pub struct BlobItemFulu {
+    pub proof: Vec<KzgProof>,
+    pub commitment: KzgCommitment,
+    pub blob: Blob,
 }
 
 impl DehydratedBidSubmissionFulu {
@@ -383,6 +389,11 @@ impl DehydratedBidSubmissionFulu {
         };
 
         Ok(HydratedData { submission, tx_cache_hits, blob_cache_hits, tx_root: self.tx_root })
+    }
+
+    fn calculate_block_hash(&self) -> B256 {
+        let header = self.execution_payload.to_header(None, None);
+        header.tree_hash_root()
     }
 }
 

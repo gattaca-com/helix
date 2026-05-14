@@ -5019,7 +5019,7 @@ dependencies = [
 [[package]]
 name = "flux"
 version = "0.0.38"
-source = "git+https://github.com/gattaca-com/flux?rev=732c996c13f8fb5e2988dbf949e1d8a74261fca4#732c996c13f8fb5e2988dbf949e1d8a74261fca4"
+source = "git+https://github.com/gattaca-com/flux?rev=ed5030b81c1cf2217ee8aab1ae3fe06c8cad4751#ed5030b81c1cf2217ee8aab1ae3fe06c8cad4751"
 dependencies = [
  "bitcode",
  "core_affinity",
@@ -5027,11 +5027,9 @@ dependencies = [
  "flux-timing",
  "flux-utils",
  "libc",
- "once_cell",
  "serde",
  "signal-hook",
  "spine-derive",
- "tinyvec",
  "tracing",
  "type-hash",
  "type-hash-derive",
@@ -5041,12 +5039,11 @@ dependencies = [
 [[package]]
 name = "flux-communication"
 version = "0.0.27"
-source = "git+https://github.com/gattaca-com/flux?rev=732c996c13f8fb5e2988dbf949e1d8a74261fca4#732c996c13f8fb5e2988dbf949e1d8a74261fca4"
+source = "git+https://github.com/gattaca-com/flux?rev=ed5030b81c1cf2217ee8aab1ae3fe06c8cad4751#ed5030b81c1cf2217ee8aab1ae3fe06c8cad4751"
 dependencies = [
  "directories",
  "flux-timing",
  "flux-utils",
- "once_cell",
  "rand 0.9.2",
  "shared_memory",
  "thiserror 1.0.69",
@@ -5056,7 +5053,7 @@ dependencies = [
 [[package]]
 name = "flux-network"
 version = "0.0.8"
-source = "git+https://github.com/gattaca-com/flux?rev=732c996c13f8fb5e2988dbf949e1d8a74261fca4#732c996c13f8fb5e2988dbf949e1d8a74261fca4"
+source = "git+https://github.com/gattaca-com/flux?rev=ed5030b81c1cf2217ee8aab1ae3fe06c8cad4751#ed5030b81c1cf2217ee8aab1ae3fe06c8cad4751"
 dependencies = [
  "flux",
  "flux-communication",
@@ -5064,19 +5061,19 @@ dependencies = [
  "flux-utils",
  "libc",
  "mio",
+ "serde",
  "tracing",
 ]
 
 [[package]]
 name = "flux-timing"
 version = "0.0.16"
-source = "git+https://github.com/gattaca-com/flux?rev=732c996c13f8fb5e2988dbf949e1d8a74261fca4#732c996c13f8fb5e2988dbf949e1d8a74261fca4"
+source = "git+https://github.com/gattaca-com/flux?rev=ed5030b81c1cf2217ee8aab1ae3fe06c8cad4751#ed5030b81c1cf2217ee8aab1ae3fe06c8cad4751"
 dependencies = [
  "bitcode",
  "chrono",
  "governor 0.6.3",
  "humantime",
- "once_cell",
  "quanta",
  "serde",
  "serde_json",
@@ -5088,7 +5085,7 @@ dependencies = [
 [[package]]
 name = "flux-utils"
 version = "0.0.23"
-source = "git+https://github.com/gattaca-com/flux?rev=732c996c13f8fb5e2988dbf949e1d8a74261fca4#732c996c13f8fb5e2988dbf949e1d8a74261fca4"
+source = "git+https://github.com/gattaca-com/flux?rev=ed5030b81c1cf2217ee8aab1ae3fe06c8cad4751#ed5030b81c1cf2217ee8aab1ae3fe06c8cad4751"
 dependencies = [
  "core_affinity",
  "directories",
@@ -5683,8 +5680,10 @@ name = "helix-common"
 version = "0.0.1"
 dependencies = [
  "alloy-consensus",
+ "alloy-eips",
  "alloy-primitives",
  "alloy-rlp",
+ "alloy-rpc-types",
  "axum 0.8.7",
  "backtrace",
  "bytes",
@@ -13727,7 +13726,7 @@ dependencies = [
 [[package]]
 name = "spine-derive"
 version = "0.0.10"
-source = "git+https://github.com/gattaca-com/flux?rev=732c996c13f8fb5e2988dbf949e1d8a74261fca4#732c996c13f8fb5e2988dbf949e1d8a74261fca4"
+source = "git+https://github.com/gattaca-com/flux?rev=ed5030b81c1cf2217ee8aab1ae3fe06c8cad4751#ed5030b81c1cf2217ee8aab1ae3fe06c8cad4751"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -15070,12 +15069,12 @@ dependencies = [
 [[package]]
 name = "type-hash"
 version = "0.0.1"
-source = "git+https://github.com/gattaca-com/flux?rev=732c996c13f8fb5e2988dbf949e1d8a74261fca4#732c996c13f8fb5e2988dbf949e1d8a74261fca4"
+source = "git+https://github.com/gattaca-com/flux?rev=ed5030b81c1cf2217ee8aab1ae3fe06c8cad4751#ed5030b81c1cf2217ee8aab1ae3fe06c8cad4751"
 
 [[package]]
 name = "type-hash-derive"
 version = "0.0.4"
-source = "git+https://github.com/gattaca-com/flux?rev=732c996c13f8fb5e2988dbf949e1d8a74261fca4#732c996c13f8fb5e2988dbf949e1d8a74261fca4"
+source = "git+https://github.com/gattaca-com/flux?rev=ed5030b81c1cf2217ee8aab1ae3fe06c8cad4751#ed5030b81c1cf2217ee8aab1ae3fe06c8cad4751"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",

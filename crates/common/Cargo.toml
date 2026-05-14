@@ -8,8 +8,10 @@ version.workspace = true
 
 [dependencies]
 alloy-consensus.workspace = true
+alloy-eips.workspace = true
 alloy-primitives.workspace = true
 alloy-rlp.workspace = true
+alloy-rpc-types.workspace = true
 axum.workspace = true
 backtrace.workspace = true
 bytes.workspace = true

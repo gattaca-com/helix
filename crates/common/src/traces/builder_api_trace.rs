@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{RequestTimings, metrics::SUB_TRACE_LATENCY, utils::utcnow_ns};
 
+
+#[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SubmissionTrace {
     // first packet

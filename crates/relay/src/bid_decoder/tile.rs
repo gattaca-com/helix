@@ -384,3 +384,8 @@ fn verify_and_validate(
     submission.validate_payload_ssz_lengths(chain_info.max_blobs_per_block())?;
     Ok(())
 }
+
+#[test]
+fn test_decoder() {
+
+}
