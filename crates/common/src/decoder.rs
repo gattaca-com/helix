@@ -495,11 +495,11 @@ fn gzip_size_hint(buf: &[u8]) -> Option<usize> {
 
 pub fn tx_root_from_ssz(payload: &[u8]) -> Option<Hash256> {
     let start = Instant::now();
-    let ep_start = payload[236..240].try_into().map(u32::from_le_bytes).unwrap() as usize;
-    let tx_offset = payload[ep_start + 504..ep_start + 508].try_into().map(u32::from_le_bytes).unwrap() as usize;
-    let withdrawals_offset = payload[ep_start + 508..ep_start + 512].try_into().map(u32::from_le_bytes).unwrap() as usize;
-    let tx_list = &payload[ep_start + tx_offset..ep_start + withdrawals_offset];
-    let first_tx_offset = u32::from_le_bytes(tx_list[0..4].try_into().unwrap()) as usize;
+    let ep_start = u32::from_le_bytes(payload.get(236..240)?.try_into().ok()?) as usize;
+    let tx_offset = u32::from_le_bytes(payload.get(ep_start + 504..ep_start + 508)?.try_into().ok()?) as usize;
+    let withdrawals_offset = u32::from_le_bytes(payload.get(ep_start + 508..ep_start + 512)?.try_into().ok()?) as usize;
+    let tx_list = payload.get(ep_start + tx_offset..ep_start + withdrawals_offset)?;
+    let first_tx_offset = u32::from_le_bytes(tx_list.get(0..4)?.try_into().ok()?) as usize;
     let tx_count = first_tx_offset / 4;
 
     let mut txs = Vec::new();
