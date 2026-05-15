@@ -582,9 +582,17 @@ use helix_types::{BlobsBundle, MergeType};
     fn test_decode_tcp_submission_from_s3() {
         use helix_types::{Compression, ForkName, MergeType, Submission};
 
+        // let raw = include_bytes!(
+        //     "../test_data/2026-05-13T10_36_09.464299763+00_00_9c111baa-7984-48c7-bd81-9f3d2a875f9c.bin"
+        // );
+
+        // let parent_beacon_block_root = B256::from_hex("0x6841897da5752b1ab0ef580bb971df5adcdb1178c1f6796d95aad833400b7c60").unwrap();
+
         let raw = include_bytes!(
-            "../test_data/2026-05-13T10_36_09.464299763+00_00_9c111baa-7984-48c7-bd81-9f3d2a875f9c.bin"
+            "../test_data/2026-05-14T14_37_57.154483103+00_00_3be3daec-2400-48bc-bbcc-5db863db4900.bin"
         );
+
+        let parent_beacon_block_root = B256::from_hex("0xd260e7444794efb4be8d9e0c38efffa874aab842b0da46437537e9fb0e0a5edf").unwrap();
 
         let header_len = u16::from_le_bytes(raw[..2].try_into().unwrap()) as usize;
         let header = &raw[2..2 + header_len];
@@ -593,7 +601,7 @@ use helix_types::{BlobsBundle, MergeType};
         let root = tx_root_from_ssz(payload);
         let duration = start.elapsed();
         println!("tx_root_from_ssz took: {:?}", duration);
-        assert_eq!(root, Some(B256::from_hex("0xee8513f442f7414172b9c543c93137148a3e309b3a0f31d3c63c7600ce53d677").unwrap()));
+        assert_eq!(root, Some(B256::from_hex("0x7dbb1535ed3f1d518bc2f6f2aacaddfc385f158ea5e420442d5a91d0f7175b25").unwrap()));
 
         let merge_type = MergeType::try_from(header[21]).unwrap();
         let flags = header[22];
@@ -623,7 +631,7 @@ use helix_types::{BlobsBundle, MergeType};
         let mut buf = Vec::new();
         let (res, _, _) = SubmissionDecoder::new(&decoder_params).decode(payload, &mut buf).unwrap();
         match res {
-            Submission::Full(sub) => assert_eq!(*sub.block_hash(), B256::from_hex("0xeda2e151114e1e7a9728d85c72ee4e3c7db21bd1d8dcdea88298371820ec3221").unwrap()),
+            Submission::Full(sub) => panic!("expected dehydrated submission, got full submission: {:?}", sub),
             Submission::Dehydrated(sub) => {
                 let s = match sub {
                     DehydratedBidSubmission::Fulu(subf) => subf,
@@ -644,7 +652,7 @@ use helix_types::{BlobsBundle, MergeType};
                     payload: ExecutionPayload::V3(v5.execution_payload),
                     sidecar: ExecutionPayloadSidecar::v4(
                         CancunPayloadFields {
-                            parent_beacon_block_root: B256::from_hex("0x6841897da5752b1ab0ef580bb971df5adcdb1178c1f6796d95aad833400b7c60").unwrap(),
+                            parent_beacon_block_root: parent_beacon_block_root,
                             versioned_hashes: v5
                                 .blobs_bundle
                                 .commitments
@@ -658,9 +666,11 @@ use helix_types::{BlobsBundle, MergeType};
                     ),
                 };
 
+                println!("parent hash: {:?}", execution_data.parent_hash());
+
                 let header = execution_data.into_block_raw().unwrap().header;
                 let block_hash = header.hash_slow();
-                assert_eq!(block_hash, B256::from_hex("0xeda2e151114e1e7a9728d85c72ee4e3c7db21bd1d8dcdea88298371820ec3221").unwrap());
+                assert_eq!(block_hash, B256::from_hex("0xcf6f27cd99b9293218a074018d4fa982405d7a5a4bab620c6b22e46de90c5724").unwrap());
             },
         }
     }

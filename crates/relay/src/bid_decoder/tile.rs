@@ -52,7 +52,13 @@ impl Tile<HelixSpine> for DecoderTile {
     fn loop_body(&mut self, adapter: &mut flux::spine::SpineAdapter<HelixSpine>) {
         adapter.consume_with_dcache_collaborative_internal_message(
             |new_bid: &InternalMessage<NewBidSubmission>, dcache_payload| {
-                let payload = &dcache_payload[new_bid.payload_offset..];
+                let bytes;
+                let payload = if let Some(b) = new_bid.http_submission_ix.and_then(|ix| self.http_submissions.get(ix)) {
+                    bytes = b;
+                    &bytes.as_slice()[new_bid.payload_offset..]
+                } else {
+                    &dcache_payload[new_bid.payload_offset..]
+                };
                 let sent_at = new_bid.tracking_timestamp().publish_t();
                 DecoderTile::handle_block_submission(
                     &self.cache,
@@ -294,34 +300,18 @@ impl DecoderTile {
             block_merging_dry_run: config.block_merging_config.is_dry_run,
             fork_name: chain_info.current_fork_name(),
         };
-
-        let ssz_uncompressed =
-            matches!(header.encoding, Encoding::Ssz) && matches!(header.compression, Compression::None);
-
-        if is_dehydrated && ssz_uncompressed {
-            if let Some(tx_root) = tx_root_from_ssz(&payload) {
-                tracing::debug!(?header.id, ?tx_root, "calculated tx root in decoder tile");
-            }
-        }
-
+        
         let mut decoder = SubmissionDecoder::new(&decoder_params);
         let (mut submission, merging_data, bid_adjustment_data) =
             decoder.decode(payload, buffer)?;
 
         trace.decoded_ns = Nanos::now();
 
-        if is_dehydrated && ssz_uncompressed {
-            if let Some(tx_root) = tx_root_from_ssz(&payload) {
-                tracing::debug!(?header.id, ?tx_root, "calculated tx root after decoding in decoder tile");
-            }
-        }
-
         let builder_pubkey = *submission.builder_pubkey();
         let skip_sigverify = if let Some(expected_pubkey) = expected_pubkey {
             if builder_pubkey != *expected_pubkey {
                 return Err(BuilderApiError::InvalidBuilderPubkey(*expected_pubkey, builder_pubkey));
             }
-
             true
         } else {
             header.api_key.is_some_and(|api_key| cache.validate_api_key(&api_key, &builder_pubkey))
