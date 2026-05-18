@@ -13,7 +13,10 @@ use hyper::{
 };
 use mio::{Events, Poll as MioPoll};
 
-use crate::http::{error::HttpClientError, transport::{BoxFuture, HyperConn, Transport}};
+use crate::http::{
+    error::HttpClientError,
+    transport::{BoxFuture, HyperConn, Transport},
+};
 
 pub enum State {
     Handshaking {
@@ -141,9 +144,9 @@ impl PendingResponse {
             Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
             Poll::Ready(Ok((status, bytes))) => {
                 if !(200..300).contains(&status) {
-                    return Poll::Ready(Err(HttpClientError::RequestFailed(
-                        format!("HTTP {status}"),
-                    )));
+                    return Poll::Ready(Err(HttpClientError::RequestFailed(format!(
+                        "HTTP {status}"
+                    ))));
                 }
                 Poll::Ready(
                     serde_json::from_slice(&bytes)

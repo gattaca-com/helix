@@ -5,7 +5,7 @@ use bytes::Bytes;
 use crossbeam_channel::Sender;
 use flux::spine::StandaloneDCacheProducer;
 use flux_utils::SharedVector;
-use helix_common::{CurrentSlotInfo, RelayConfig, local_cache::LocalCache};
+use helix_common::{CurrentSlotInfo, RelayConfig, alerts::AlertManager, local_cache::LocalCache};
 use helix_database::handle::DbHandle;
 
 use crate::{
@@ -21,6 +21,7 @@ pub struct BuilderApi<A: Api> {
     pub relay_config: Arc<RelayConfig>,
     pub auctioneer_handle: AuctioneerHandle,
     pub api_provider: Arc<A::ApiProvider>,
+    pub alert_manager: Arc<AlertManager>,
     pub producer: StandaloneDCacheProducer<NewBidSubmission>,
     pub future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
     pub submission_payloads: Arc<SharedVector<Bytes>>,
@@ -35,6 +36,7 @@ impl<A: Api> BuilderApi<A> {
         curr_slot_info: CurrentSlotInfo,
         auctioneer_handle: AuctioneerHandle,
         api_provider: Arc<A::ApiProvider>,
+        alert_manager: Arc<AlertManager>,
         producer: StandaloneDCacheProducer<NewBidSubmission>,
         future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
         submission_payloads: Arc<SharedVector<Bytes>>,
@@ -47,6 +49,7 @@ impl<A: Api> BuilderApi<A> {
             curr_slot_info,
             auctioneer_handle,
             api_provider,
+            alert_manager,
             producer,
             future_results,
             submission_payloads,

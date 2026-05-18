@@ -108,6 +108,12 @@ impl DbHandle {
         }
     }
 
+    pub fn db_promote_builder(&self, builder_pub_key: BlsPublicKeyBytes) {
+        if let Err(err) = self.sender.try_send(DbRequest::DbPromoteBuilder { builder_pub_key }) {
+            error!(%err, "failed to send DbPromoteBuilder request");
+        }
+    }
+
     pub fn store_block_submission(
         &self,
         submission: SignedBidSubmission,

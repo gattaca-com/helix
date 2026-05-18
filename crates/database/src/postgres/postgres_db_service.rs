@@ -67,6 +67,9 @@ pub enum DbRequest {
         reason: String,
         failsafe_triggered: Arc<AtomicBool>,
     },
+    DbPromoteBuilder {
+        builder_pub_key: BlsPublicKeyBytes,
+    },
     SaveGetHeaderCall {
         params: GetHeaderParams,
         best_block_hash: B256,
@@ -588,6 +591,11 @@ impl PostgresDatabaseService {
                         "{} {} {} failed to demote builder in database! Pausing all optmistic submissions",
                         builder_pub_key, err, block_hash
                     ));
+                }
+            }
+            DbRequest::DbPromoteBuilder { builder_pub_key } => {
+                if let Err(err) = self.db_promote_builder(&builder_pub_key).await {
+                    error!(%err, "error promoting builder in database");
                 }
             }
             DbRequest::SaveGetHeaderCall {
@@ -1857,6 +1865,24 @@ impl PostgresDatabaseService {
         transaction.commit().await?;
 
         record.record_success();
+        Ok(())
+    }
+
+    #[instrument(skip_all)]
+    pub async fn db_promote_builder(
+        &self,
+        builder_pub_key: &BlsPublicKeyBytes,
+    ) -> Result<(), DatabaseError> {
+        let mut client = self.high_priority_pool.get().await?;
+        let transaction = client.transaction().await?;
+
+        transaction
+            .execute("UPDATE builder_info SET is_optimistic = TRUE WHERE public_key = $1", &[
+                &(builder_pub_key.as_slice()),
+            ])
+            .await?;
+
+        transaction.commit().await?;
         Ok(())
     }
 

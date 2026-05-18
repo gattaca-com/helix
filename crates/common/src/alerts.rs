@@ -1,17 +1,39 @@
+use std::sync::Arc;
+
+use alloy_primitives::B256;
+use dashmap::DashMap;
+use helix_types::BlsPublicKeyBytes;
 use teloxide::{
     Bot,
     payloads::SendMessageSetters,
     prelude::Requester,
-    types::{ChatId, ParseMode},
+    types::{ChatId, InlineKeyboardButton, InlineKeyboardMarkup, ParseMode},
 };
 use tracing::error;
+use uuid::Uuid;
 
 use crate::RelayConfig;
+
+#[derive(Clone, Default)]
+pub struct PromotionTokenCache(Arc<DashMap<String, BlsPublicKeyBytes>>);
+
+impl PromotionTokenCache {
+    pub fn insert(&self, pubkey: BlsPublicKeyBytes) -> String {
+        let token = Uuid::new_v4().to_string();
+        self.0.insert(token.clone(), pubkey);
+        token
+    }
+
+    // Consumes token (one-shot — can't reuse)
+    pub fn consume(&self, token: &str) -> Option<BlsPublicKeyBytes> {
+        self.0.remove(token).map(|(_, pubkey)| pubkey)
+    }
+}
 
 #[derive(Clone)]
 pub enum AlertManager {
     Disabled,
-    Telegram { bot: Bot, chat_ids: Vec<ChatId> },
+    Telegram { bot: Bot, chat_ids: Vec<ChatId>, promotion_tokens: PromotionTokenCache },
 }
 
 impl AlertManager {
@@ -23,6 +45,7 @@ impl AlertManager {
                 AlertManager::Telegram {
                     bot: Bot::new(&alerts.telegram_bot_token),
                     chat_ids: alerts.chat_ids.clone(),
+                    promotion_tokens: PromotionTokenCache::default(),
                 }
             }
             _ => AlertManager::Disabled,
@@ -32,7 +55,7 @@ impl AlertManager {
     pub fn send(&self, message: &str) {
         match self {
             AlertManager::Disabled => {}
-            AlertManager::Telegram { bot, chat_ids } => {
+            AlertManager::Telegram { bot, chat_ids, .. } => {
                 let msg = message.to_owned();
 
                 for chat_id in chat_ids {
@@ -51,4 +74,76 @@ impl AlertManager {
             }
         }
     }
+
+    pub fn send_demotion(&self, message: &str, token: &str) {
+        let AlertManager::Telegram { bot, chat_ids, .. } = self else { return };
+
+        let url = format!("https://helix.xyz/relay/v2/data/promote?token={token}");
+
+        for chat_id in chat_ids {
+            let bot = bot.clone();
+            let chat_id = *chat_id;
+            let msg = message.to_owned();
+            let url = url.clone();
+
+            tokio::spawn(async move {
+                let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::url(
+                    "🔁 Repromote",
+                    url.parse().expect("valid url"),
+                )]]);
+                if let Err(e) = bot
+                    .send_message(chat_id, msg)
+                    .parse_mode(ParseMode::MarkdownV2)
+                    .reply_markup(keyboard)
+                    .await
+                {
+                    error!("demotion alert send error: {e}");
+                }
+            });
+        }
+    }
+
+    pub fn generate_token(&self, pubkey: BlsPublicKeyBytes) -> String {
+        match self {
+            AlertManager::Telegram { promotion_tokens, .. } => promotion_tokens.insert(pubkey),
+            AlertManager::Disabled => String::new(),
+        }
+    }
+
+    pub fn consume_promotion_token(&self, token: &str) -> Option<BlsPublicKeyBytes> {
+        match self {
+            AlertManager::Telegram { promotion_tokens, .. } => promotion_tokens.consume(token),
+            AlertManager::Disabled => None,
+        }
+    }
+}
+
+pub fn format_demotion_alert(
+    slot: u64,
+    network: &str,
+    region: &str,
+    builder_pubkey: &BlsPublicKeyBytes,
+    builder_id: &str,
+    block_hash: &B256,
+    reason: &str,
+) -> String {
+    format!(
+        "⚠️ *Builder Demoted*\n\
+            \n\
+            *Link:* https://beaconcha\\.in/slot/{slot}\n\
+            *Slot:* `{slot}`\n\
+            *Network:* `{network}`\n\
+            *Region:* `{region}`\n\
+            *Builder Pubkey:* `{builder_pubkey}`\n\
+            *Builder ID:* `{builder_id}`\n\
+            *Block Hash:* `{block_hash}`\n\
+            *Reason:* `{reason}`\n",
+        slot = slot,
+        network = network,
+        region = region,
+        builder_pubkey = builder_pubkey,
+        builder_id = builder_id,
+        block_hash = block_hash,
+        reason = reason,
+    )
 }

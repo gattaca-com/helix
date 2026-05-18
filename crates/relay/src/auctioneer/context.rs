@@ -350,7 +350,10 @@ pub fn send_submission_result<P>(
             if let Some(future) = future_results.get(future_ix) {
                 future.set(result);
             } else {
-                tracing::warn!(future_ix, "submission result dropped: no future found (connection may have closed)");
+                tracing::warn!(
+                    future_ix,
+                    "submission result dropped: no future found (connection may have closed)"
+                );
             }
         }
         SubmissionRef::Tcp { .. } => producers.produce(result),

@@ -9,8 +9,8 @@ use crossbeam_channel::Sender;
 use flux::spine::StandaloneDCacheProducer;
 use flux_utils::SharedVector;
 use helix_common::{
-    CurrentSlotInfo, RelayConfig, beacon::MultiBeaconClient, chain_info::ChainInfo,
-    local_cache::LocalCache, signing::RelaySigningContext,
+    CurrentSlotInfo, RelayConfig, alerts::AlertManager, beacon::MultiBeaconClient,
+    chain_info::ChainInfo, local_cache::LocalCache, signing::RelaySigningContext,
 };
 use helix_data_api::{
     BidsCache, BidsCacheV2, DataApi, DeliveredPayloadsCache, DeliveredPayloadsCacheV2,
@@ -101,6 +101,7 @@ pub async fn run_api_service<A: Api>(
     );
 
     let validator_preferences = Arc::new(config.validator_preferences.clone());
+    let alert_manager = Arc::new(AlertManager::from_relay_config(&config));
 
     let (gossip_sender, gossip_receiver) = tokio::sync::mpsc::channel(10_000);
 
@@ -111,6 +112,7 @@ pub async fn run_api_service<A: Api>(
         current_slot_info.clone(),
         auctioneer_handle.clone(),
         api_provider.clone(),
+        alert_manager.clone(),
         bid_producer,
         future_results,
         http_submissions,
@@ -133,6 +135,7 @@ pub async fn run_api_service<A: Api>(
         current_slot_info,
         auctioneer_handle,
         registrations_handle,
+        alert_manager,
     ));
 
     tokio::spawn(process_gossip_messages(
