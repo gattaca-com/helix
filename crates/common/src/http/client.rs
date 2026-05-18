@@ -67,7 +67,11 @@ impl HttpClient {
     ) -> Result<PendingResponse, HttpClientError> {
         let (transport, mio) = self.connect(url)?;
         let handshake = Box::pin(http1::handshake::<_, Full<Bytes>>(transport));
-        Ok(PendingResponse::new(State::Handshaking { handshake, req }, mio, Events::with_capacity(8)))
+        Ok(PendingResponse::new(
+            State::Handshaking { handshake, req },
+            mio,
+            Events::with_capacity(8),
+        ))
     }
 
     pub fn get(&self, url: &Url) -> Result<PendingResponse, HttpClientError> {

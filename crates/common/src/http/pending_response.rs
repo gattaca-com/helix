@@ -13,7 +13,10 @@ use hyper::{
 };
 use mio::{Events, Poll as MioPoll};
 
-use crate::http::{error::HttpClientError, transport::{BoxFuture, HyperConn, Transport}};
+use crate::http::{
+    error::HttpClientError,
+    transport::{BoxFuture, HyperConn, Transport},
+};
 
 pub enum State {
     Handshaking {
@@ -83,7 +86,7 @@ impl Future for PendingResponse {
                             return Poll::Pending;
                         }
                         Poll::Ready(Err(e)) => {
-                            return Poll::Ready(Err(HttpClientError::HyperError(e)))
+                            return Poll::Ready(Err(HttpClientError::HyperError(e)));
                         }
                         Poll::Ready(Ok(response)) => {
                             let status = response.status().as_u16();
@@ -102,10 +105,10 @@ impl Future for PendingResponse {
                             return Poll::Pending;
                         }
                         Poll::Ready(Err(e)) => {
-                            return Poll::Ready(Err(HttpClientError::HyperError(e)))
+                            return Poll::Ready(Err(HttpClientError::HyperError(e)));
                         }
                         Poll::Ready(Ok(collected)) => {
-                            return Poll::Ready(Ok((status, collected.to_bytes())))
+                            return Poll::Ready(Ok((status, collected.to_bytes())));
                         }
                     }
                 }
@@ -141,9 +144,9 @@ impl PendingResponse {
             Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
             Poll::Ready(Ok((status, bytes))) => {
                 if !(200..300).contains(&status) {
-                    return Poll::Ready(Err(HttpClientError::RequestFailed(
-                        format!("HTTP {status}"),
-                    )));
+                    return Poll::Ready(Err(HttpClientError::RequestFailed(format!(
+                        "HTTP {status}"
+                    ))));
                 }
                 Poll::Ready(
                     serde_json::from_slice(&bytes)

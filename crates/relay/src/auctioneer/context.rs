@@ -12,6 +12,7 @@ use flux::spine::{SpineProducer, SpineProducers};
 use flux_utils::SharedVector;
 use helix_common::{
     BuilderInfo, RelayConfig,
+    alerts::AlertManager,
     chain_info::ChainInfo,
     local_cache::LocalCache,
     metrics::{CACHE_SIZE, SimulatorMetrics},
@@ -67,6 +68,7 @@ pub struct Context<B: BidAdjustor> {
     pub sim_inbound: Arc<SharedVector<SimRequest>>,
     pub accept_optimistic: Arc<AtomicBool>,
     pub failsafe_triggered: Arc<AtomicBool>,
+    pub alert_manager: Arc<AlertManager>,
 }
 
 const EXPECTED_PAYLOADS_PER_SLOT: usize = 5000;
@@ -88,6 +90,7 @@ impl<B: BidAdjustor> Context<B> {
         decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
         future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
         auctioneer_handle: AuctioneerHandle,
+        alert_manager: Arc<AlertManager>,
     ) -> Self {
         let unknown_builder_info = BuilderInfo {
             collateral: U256::ZERO,
@@ -131,6 +134,7 @@ impl<B: BidAdjustor> Context<B> {
             sim_inbound,
             accept_optimistic,
             failsafe_triggered,
+            alert_manager,
         }
     }
 
@@ -189,6 +193,10 @@ impl<B: BidAdjustor> Context<B> {
                             block_hash,
                             reason,
                             failsafe_triggered,
+                            &self.alert_manager,
+                            &self.config.website.network_name,
+                            &self.config.postgres.region_name,
+                            &self.builder_info(&builder).builder_id(),
                         );
                     } else {
                         warn!(%err, %builder, %block_hash, "builder already demoted, skipping demotion");
@@ -312,9 +320,27 @@ impl<B: BidAdjustor> Context<B> {
             let db = self.db.clone();
             let failsafe = self.failsafe_triggered.clone();
             let slot_u64 = slot.as_u64();
+            let alert_manager = self.alert_manager.clone();
+            let network = self.config.website.network_name.clone();
+            let region = self.config.postgres.region_name.clone();
+            let builder_id = self
+                .cache
+                .get_builder_info(&builder_pubkey)
+                .and_then(|i| i.builder_id)
+                .unwrap_or_default();
 
             spawn_tracked!(async move {
-                db.db_demote_builder(slot_u64, builder_pubkey, block_hash, reason, failsafe)
+                db.db_demote_builder(
+                    slot_u64,
+                    builder_pubkey,
+                    block_hash,
+                    reason,
+                    failsafe,
+                    &alert_manager,
+                    &network,
+                    &region,
+                    &builder_id,
+                )
             });
         } else {
             warn!(%reason, %builder_pubkey, %block_hash, "builder already demoted, skipping demotion");
@@ -350,7 +376,10 @@ pub fn send_submission_result<P>(
             if let Some(future) = future_results.get(future_ix) {
                 future.set(result);
             } else {
-                tracing::warn!(future_ix, "submission result dropped: no future found (connection may have closed)");
+                tracing::warn!(
+                    future_ix,
+                    "submission result dropped: no future found (connection may have closed)"
+                );
             }
         }
         SubmissionRef::Tcp { .. } => producers.produce(result),
