@@ -429,6 +429,7 @@ impl RouterConfig {
             Route::SubmitBlock,
             Route::GetTopBid,
             Route::GetInclusionList,
+            Route::PromoteBuilder,
         ]);
 
         self.replace_condensed_with_real(Route::ProposerApi, &[
@@ -556,6 +557,7 @@ pub enum Route {
     RelayNetwork,
     DataAdjustments,
     MergedBlocks,
+    PromoteBuilder,
 }
 
 impl Route {
@@ -586,6 +588,7 @@ impl Route {
             Route::ValidatorRegistration => format!("{PATH_DATA_API}{PATH_VALIDATOR_REGISTRATION}"),
             Route::DataAdjustments => format!("{PATH_DATA_API}{PATH_DATA_ADJUSTMENTS}"),
             Route::MergedBlocks => format!("{PATH_DATA_API}{PATH_MERGED_BLOCKS}"),
+            Route::PromoteBuilder => format!("{PATH_DATA_API_V2}{PATH_PROMOTE_BUILDER}"),
             Route::All => panic!("All is not a real route"),
             Route::BuilderApi => panic!("BuilderApi is not a real route"),
             Route::ProposerApi => panic!("ProposerApi is not a real route"),

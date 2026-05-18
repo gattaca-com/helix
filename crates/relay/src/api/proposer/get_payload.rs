@@ -4,6 +4,7 @@ use alloy_primitives::{Address, B256};
 use axum::{Extension, http::HeaderMap, response::IntoResponse};
 use helix_common::{
     Filtering, GetPayloadTrace, RequestTimings,
+    alerts::format_demotion_alert,
     api_provider::ApiProvider,
     beacon::types::BroadcastValidation,
     chain_info::ChainInfo,
@@ -390,13 +391,30 @@ impl<A: Api> ProposerApi<A> {
                     BEACON_BLOCK_PUBLISH_FAILURES.inc();
                     if err.is_block_content_error() {
                         let builder_pubkey = bid.builder_pubkey;
+                        let builder_id = self_clone
+                            .local_cache
+                            .get_builder_info(&builder_pubkey)
+                            .and_then(|info| info.builder_id)
+                            .unwrap_or_default();
                         let reason = format!("block validation failed: {err}");
+                        let message = format_demotion_alert(
+                            slot.as_u64(),
+                            &self_clone.relay_config.website.network_name,
+                            &self_clone.relay_config.postgres.region_name,
+                            &builder_pubkey,
+                            &builder_id,
+                            &block_hash,
+                            &reason,
+                        );
+                        let token = self_clone.alert_manager.generate_token(builder_pubkey);
                         let _ = self_clone.auctioneer_handle.send_event(Event::BuilderDemotion {
                             slot,
                             builder_pubkey,
                             block_hash,
                             reason,
                         });
+
+                        self_clone.alert_manager.send_demotion(&message, &token);
                         warn!(%builder_pubkey, %block_hash, slot = %slot, "builder demoted due to block validation failure");
                         PublishOutcome::BlockInvalid
                     } else {

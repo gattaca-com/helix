@@ -219,15 +219,12 @@ impl SimulatorTile {
             // A dropped dehydrated request may carry full transactions that haven't
             // been inserted into the cache yet. Hydrate it now so subsequent
             // dehydrated submissions from this builder can resolve their tx hashes.
-            if let Some(evicted_req) = evicted
-                && let Some(data) = self.decoded.get(evicted_req.decoded_ix)
-                    && let Submission::Dehydrated(d) =
-                        data.submission_data.submission.clone()
-                    {
-                        let _ = self
-                            .hydration_cache
-                            .hydrate(d, self.chain_info.max_blobs_per_block());
-                    }
+            if let Some(evicted_req) = evicted &&
+                let Some(data) = self.decoded.get(evicted_req.decoded_ix) &&
+                let Submission::Dehydrated(d) = data.submission_data.submission.clone()
+            {
+                let _ = self.hydration_cache.hydrate(d, self.chain_info.max_blobs_per_block());
+            }
         }
     }
 
