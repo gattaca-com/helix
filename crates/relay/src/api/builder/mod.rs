@@ -11,5 +11,7 @@ mod top_bid;
 pub use top_bid::TopBidTile;
 pub use types::*;
 
+pub mod promote;
+
 // #[cfg(test)]
 // mod tests;

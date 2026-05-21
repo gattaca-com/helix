@@ -145,7 +145,7 @@ impl TryFrom<&[u8]> for BidSubmissionHeader {
 
     fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
         if value.len() < BID_SUB_HEADER_SIZE {
-            return Err(ParseError::SubmissionTooShort)
+            return Err(ParseError::SubmissionTooShort);
         }
         let sequence_number = u32::from_be_bytes(value[..4].try_into().unwrap());
         let merge_type =

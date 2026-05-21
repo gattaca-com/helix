@@ -16,6 +16,7 @@ use flux::{
 use flux_utils::SharedVector;
 use helix_common::{
     RelayConfig,
+    alerts::AlertManager,
     api_provider::DefaultApiProvider,
     beacon::{create_beacon_client, load_chain_info},
     expect_env_var, load_config, load_keypair,
@@ -185,6 +186,7 @@ async fn run(
         let decoded = Arc::new(SharedVector::<SubmissionDataWithSpan>::with_capacity(
             MAX_SUBMISSIONS_PER_SLOT,
         ));
+        let alert_manager = Arc::new(AlertManager::from_relay_config(&config));
 
         let bid_producer =
             spine.spine.standalone_dcache_producer_for(TileName::from_str_truncate("Api"));
@@ -207,6 +209,7 @@ async fn run(
             future_results.clone(),
             http_submissions.clone(),
             web_socket_send,
+            alert_manager.clone(),
         );
 
         if config.website.enabled {
@@ -311,6 +314,7 @@ async fn run(
                 accept_optimistic,
                 failsafe_triggered,
                 slot_events,
+                alert_manager.clone(),
             );
             attach_tile(
                 auctioneer,

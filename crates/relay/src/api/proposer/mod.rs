@@ -35,7 +35,7 @@ pub struct ProposerApi<A: Api> {
     pub chain_info: Arc<ChainInfo>,
     pub validator_preferences: Arc<ValidatorPreferences>,
     pub relay_config: RelayConfig,
-    pub alert_manager: AlertManager,
+    pub alert_manager: Arc<AlertManager>,
     pub auctioneer_handle: AuctioneerHandle,
     pub reg_handle: RegWorkerHandle,
 }
@@ -54,6 +54,7 @@ impl<A: Api> ProposerApi<A> {
         curr_slot_info: CurrentSlotInfo,
         auctioneer_handle: AuctioneerHandle,
         reg_handle: RegWorkerHandle,
+        alert_manager: Arc<AlertManager>,
     ) -> Self {
         Self {
             local_cache,
@@ -66,7 +67,7 @@ impl<A: Api> ProposerApi<A> {
             validator_preferences,
             relay_config: relay_config.clone(),
             curr_slot_info,
-            alert_manager: AlertManager::from_relay_config(&relay_config),
+            alert_manager,
             auctioneer_handle,
             reg_handle,
         }

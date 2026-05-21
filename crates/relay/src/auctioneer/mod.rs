@@ -22,6 +22,7 @@ use flux_utils::SharedVector;
 pub use handle::{AuctioneerHandle, GetPayloadKind};
 use helix_common::{
     PayloadAttributesUpdate, RelayConfig,
+    alerts::AlertManager,
     api::builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
     chain_info::ChainInfo,
     local_cache::LocalCache,
@@ -87,6 +88,7 @@ impl<B: BidAdjustor> Auctioneer<B> {
         accept_optimistic: Arc<AtomicBool>,
         failsafe_triggered: Arc<AtomicBool>,
         slot_events: Arc<SharedVector<SlotUpdate>>,
+        alert_manager: Arc<AlertManager>,
     ) -> Self {
         let ctx = Context::new(
             chain_info,
@@ -101,6 +103,7 @@ impl<B: BidAdjustor> Auctioneer<B> {
             decoded,
             future_results,
             auctioneer_handle,
+            alert_manager,
         );
         Self {
             ctx,

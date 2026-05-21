@@ -174,7 +174,21 @@ impl LocalCache {
         }
 
         builder_info.is_optimistic = false;
-        builder_info.is_optimistic_for_regional_filtering = false;
+
+        true
+    }
+
+    /// Returns whether builder was non-optimistic before the promotion
+    pub fn promote_builder(&self, builder_pub_key: &BlsPublicKeyBytes) -> bool {
+        let Some(mut builder_info) = self.builder_info_cache.get_mut(builder_pub_key) else {
+            return false;
+        };
+
+        if builder_info.is_optimistic {
+            return false;
+        }
+
+        builder_info.is_optimistic = true;
 
         true
     }

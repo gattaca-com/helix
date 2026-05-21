@@ -9,8 +9,8 @@ use crossbeam_channel::Sender;
 use flux::spine::StandaloneDCacheProducer;
 use flux_utils::SharedVector;
 use helix_common::{
-    CurrentSlotInfo, RelayConfig, beacon::MultiBeaconClient, chain_info::ChainInfo,
-    local_cache::LocalCache, signing::RelaySigningContext,
+    CurrentSlotInfo, RelayConfig, alerts::AlertManager, beacon::MultiBeaconClient,
+    chain_info::ChainInfo, local_cache::LocalCache, signing::RelaySigningContext,
 };
 use helix_data_api::{
     BidsCache, BidsCacheV2, DataApi, DeliveredPayloadsCache, DeliveredPayloadsCacheV2,
@@ -51,6 +51,7 @@ pub fn start_api_service<A: Api>(
     future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
     http_submissions: Arc<SharedVector<Bytes>>,
     web_socket_connections: Sender<RawWebSocket>,
+    alert_manager: Arc<AlertManager>,
 ) {
     tokio::spawn(run_api_service::<A>(
         config.clone(),
@@ -71,6 +72,7 @@ pub fn start_api_service<A: Api>(
         future_results,
         http_submissions,
         web_socket_connections,
+        alert_manager,
     ));
 }
 
@@ -93,6 +95,7 @@ pub async fn run_api_service<A: Api>(
     future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
     http_submissions: Arc<SharedVector<Bytes>>,
     web_socket_connections: Sender<RawWebSocket>,
+    alert_manager: Arc<AlertManager>,
 ) {
     let gossiper = Arc::new(
         GrpcGossiperClientManager::new(config.relays.iter().map(|cfg| cfg.url.clone()).collect())
@@ -111,6 +114,7 @@ pub async fn run_api_service<A: Api>(
         current_slot_info.clone(),
         auctioneer_handle.clone(),
         api_provider.clone(),
+        alert_manager.clone(),
         bid_producer,
         future_results,
         http_submissions,
@@ -133,6 +137,7 @@ pub async fn run_api_service<A: Api>(
         current_slot_info,
         auctioneer_handle,
         registrations_handle,
+        alert_manager,
     ));
 
     tokio::spawn(process_gossip_messages(

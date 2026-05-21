@@ -7,6 +7,7 @@ use alloy_primitives::{Address, B256, U256};
 use helix_common::{
     DataAdjustmentsEntry, GetHeaderTrace, GetPayloadTrace, GossipedPayloadTrace, SubmissionTrace,
     ValidatorSummary,
+    alerts::{AlertManager, format_demotion_alert},
     api::{
         builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
         proposer_api::GetHeaderParams,
@@ -91,12 +92,16 @@ impl DbHandle {
         block_hash: B256,
         reason: String,
         failsafe_triggered: Arc<AtomicBool>,
+        alert_manager: &Arc<AlertManager>,
+        network: &str,
+        region: &str,
+        builder_id: &str,
     ) {
         if let Err(err) = self.sender.try_send(DbRequest::DbDemoteBuilder {
             slot,
             builder_pub_key,
             block_hash,
-            reason,
+            reason: reason.clone(),
             failsafe_triggered: failsafe_triggered.clone(),
         }) {
             error!(%err, "failed to send DbDemoteBuilder request triggering failsafe: stopping all optimistic submissions");
@@ -105,6 +110,24 @@ impl DbHandle {
                 "{} {} {} failed to demote builder in database! Pausing all optmistic submissions",
                 builder_pub_key, err, block_hash
             ));
+
+            let token = alert_manager.generate_token(builder_pub_key);
+            let message = format_demotion_alert(
+                slot,
+                network,
+                region,
+                &builder_pub_key,
+                builder_id,
+                &block_hash,
+                &reason,
+            );
+            alert_manager.send_demotion(&message, &token);
+        }
+    }
+
+    pub fn db_promote_builder(&self, builder_pub_key: BlsPublicKeyBytes) {
+        if let Err(err) = self.sender.try_send(DbRequest::DbPromoteBuilder { builder_pub_key }) {
+            error!(%err, "failed to send DbPromoteBuilder request");
         }
     }
 
