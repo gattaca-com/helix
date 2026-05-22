@@ -15,10 +15,15 @@ pub struct TxSimRow {
     pub tx_hash: [u8; 32],
     pub to_address: [u8; 20],
     pub index: u32,
+    #[serde(serialize_with = "serialize_bytes_32")]
     pub builder_payment: [u8; 32],
     pub timestamp: i64,
     #[serde(serialize_with = "serialize_48")]
     pub builder_pubkey: [u8; 48],
+}
+
+fn serialize_bytes_32<S: serde::Serializer>(v: &[u8; 32], s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_bytes(v)
 }
 
 fn serialize_48<S: serde::Serializer>(v: &[u8; 48], s: S) -> Result<S::Ok, S::Error> {
