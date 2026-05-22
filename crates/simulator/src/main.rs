@@ -3,12 +3,14 @@ mod common;
 mod inclusion;
 mod ssz_server;
 mod state_recorder;
+mod tx_sink;
 mod validation;
 
 use std::{path::PathBuf, sync::Arc};
 
 use alloy_primitives::{Address, Bytes};
 use clap::Parser;
+use helix_common::config::ClickhouseConfig;
 use reth_chain_state::CanonStateSubscriptions;
 use reth_ethereum::{
     cli::{chainspec::EthereumChainSpecParser, interface::Cli},
@@ -16,6 +18,7 @@ use reth_ethereum::{
     rpc::api::eth::RpcNodeCore,
 };
 use reth_node_builder::FullNodeComponents;
+use tx_sink::TxSimSink;
 use validation::{ValidationApi, ValidationApiConfig};
 
 use crate::{
@@ -50,7 +53,7 @@ fn main() {
                         return Ok(());
                     }
 
-                    let validation_api = ValidationApi::new(
+                    let mut validation_api = ValidationApi::new(
                         ctx.node().provider.clone(),
                         Arc::new(ctx.node().consensus().clone()),
                         RpcNodeCore::evm_config(ctx.node()).clone(),
@@ -60,6 +63,20 @@ fn main() {
                         Box::new(ctx.node().task_executor.clone()),
                         Arc::new(EthereumEngineValidator::new(ctx.config().chain.clone())),
                     );
+
+                    if let Some(url) = args.clickhouse_url.clone() {
+                        let database = args
+                            .clickhouse_database
+                            .clone()
+                            .unwrap_or_else(|| "default".to_string());
+                        let user =
+                            args.clickhouse_user.clone().unwrap_or_else(|| "default".to_string());
+                        let sink = Arc::new(TxSimSink::new(
+                            &ClickhouseConfig { url, database, user },
+                            &ctx.node().task_executor,
+                        ));
+                        validation_api = validation_api.with_tx_sink(sink);
+                    }
                     if args.enable_block_merging_ext {
                         let block_merging_api =
                             BlockMergingApi::new(validation_api.clone(), args.clone().into());
@@ -141,6 +158,15 @@ struct CliExt {
     /// If set, start an SSZ binary validation endpoint on this port
     #[arg(long)]
     pub sim_ssz_port: Option<u16>,
+
+    #[arg(long)]
+    pub clickhouse_url: Option<String>,
+
+    #[arg(long)]
+    pub clickhouse_database: Option<String>,
+
+    #[arg(long)]
+    pub clickhouse_user: Option<String>,
 }
 
 impl From<CliExt> for BlockMergingConfig {

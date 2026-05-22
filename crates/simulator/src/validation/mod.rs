@@ -24,7 +24,7 @@ use reth_ethereum::{
     Block, EthPrimitives, Receipt, TransactionSigned,
     consensus::{ConsensusError, FullConsensus, validation::MAX_RLP_BLOCK_SIZE},
     evm::{
-        primitives::{Evm, execute::Executor},
+        primitives::{Evm, block::StateChangeSource, execute::Executor},
         revm::{cached::CachedReads, database::StateProviderDatabase},
     },
     node::{EthereumEngineValidator, core::rpc::result::internal_rpc_err},
@@ -52,6 +52,7 @@ use tracing::{info, warn};
 
 use crate::{
     common::{RethConsensus, RethPayloadValidator, RethProvider},
+    tx_sink::{TxSimRow, TxSimSink},
     validation::error::{GetParentError, ValidationApiError},
 };
 
@@ -63,6 +64,13 @@ pub struct ValidationApi {
 }
 
 impl ValidationApi {
+    pub fn with_tx_sink(mut self, sink: Arc<TxSimSink>) -> Self {
+        Arc::get_mut(&mut self.inner)
+            .expect("with_tx_sink called after cloning ValidationApi")
+            .tx_sink = Some(sink);
+        self
+    }
+
     /// Create a new instance of the [`ValidationApi`]
     pub fn new(
         provider: RethProvider,
@@ -85,6 +93,7 @@ impl ValidationApi {
             cached_state: Default::default(),
             task_spawner,
             metrics: Default::default(),
+            tx_sink: None,
         });
 
         inner.metrics.disallow_size.set(inner.disallow.len() as f64);
@@ -187,7 +196,28 @@ impl ValidationApi {
 
         let mut accessed_blacklisted = None;
 
-        let result = executor.execute_one(&block)?;
+        let (result, per_tx_coinbase, mut prev_cb) = if self.tx_sink.is_some() {
+            let coinbase = block.beneficiary();
+            let initial_cb = StateProviderDatabase::new(&state_provider)
+                .basic(coinbase)
+                .ok()
+                .flatten()
+                .map(|a| a.balance)
+                .unwrap_or_default();
+            let (cb_tx, cb_rx) = std::sync::mpsc::channel::<Option<U256>>();
+            let result = executor.execute_one_with_state_hook(
+                &block,
+                move |source, state: &revm::state::EvmState| {
+                    if let StateChangeSource::Transaction(_) = source {
+                        let _ = cb_tx.send(state.get(&coinbase).map(|a| a.info.balance));
+                    }
+                },
+            )?;
+            let per_tx: Vec<Option<U256>> = cb_rx.try_iter().collect();
+            (result, per_tx, initial_cb)
+        } else {
+            (executor.execute_one(&block)?, Vec::new(), U256::ZERO)
+        };
 
         let state = executor.into_state();
 
@@ -227,6 +257,32 @@ impl ValidationApi {
                 GotExpected { got: state_root, expected: block.header().state_root() }.into(),
             )
             .into());
+        }
+
+        if let Some(sink) = &self.tx_sink {
+            let mut rows = Vec::with_capacity(output.result.receipts.len());
+            let timestamp = (block.header().timestamp() * 1_000_000_000) as i64;
+
+            for (tx_index, tx) in block.body().transactions().enumerate() {
+                let new_cb = per_tx_coinbase.get(tx_index).and_then(|b| *b).unwrap_or(prev_cb);
+                let cb_delta = new_cb.saturating_sub(prev_cb);
+                prev_cb = new_cb;
+
+                rows.push(TxSimRow {
+                    slot: message.slot,
+                    block_hash: message.block_hash.0,
+                    tx_hash: tx.tx_hash().0,
+                    to_address: tx.to().map(|a| a.0.0).unwrap_or_default(),
+                    index: tx_index as u32,
+                    builder_payment: cb_delta.to_le_bytes(),
+                    timestamp,
+                    builder_pubkey: message.builder_pubkey.0,
+                });
+            }
+
+            if !rows.is_empty() {
+                sink.send(rows);
+            }
         }
 
         Ok(())
@@ -653,6 +709,8 @@ pub struct ValidationApiInner {
     pub(crate) task_spawner: Box<TaskExecutor>,
     /// Validation metrics
     metrics: ValidationMetrics,
+    /// Optional per-tx execution analytics sink.
+    tx_sink: Option<Arc<TxSimSink>>,
 }
 
 /// Configuration for validation API.

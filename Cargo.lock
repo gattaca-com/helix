@@ -5883,6 +5883,7 @@ dependencies = [
  "axum 0.8.7",
  "bytes",
  "clap",
+ "clickhouse",
  "dashmap 5.5.3",
  "derive_more 2.1.0",
  "ethereum_ssz",

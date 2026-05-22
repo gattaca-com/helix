@@ -196,7 +196,7 @@ impl<B: BidAdjustor> Context<B> {
                             &self.alert_manager,
                             &self.config.website.network_name,
                             &self.config.postgres.region_name,
-                            &self.builder_info(&builder).builder_id(),
+                            self.builder_info(&builder).builder_id(),
                         );
                     } else {
                         warn!(%err, %builder, %block_hash, "builder already demoted, skipping demotion");
