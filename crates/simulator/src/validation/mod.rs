@@ -274,7 +274,7 @@ impl ValidationApi {
                     tx_hash: tx.tx_hash().0,
                     to_address: tx.to().map(|a| a.0.0).unwrap_or_default(),
                     index: tx_index as u32,
-                    builder_payment: cb_delta.to_le_bytes(),
+                    builder_payment: clickhouse::types::UInt256::from_le_bytes(cb_delta.to_le_bytes()),
                     timestamp,
                     builder_pubkey: message.builder_pubkey.0,
                 });
