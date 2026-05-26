@@ -14,7 +14,8 @@ use flux::{
 };
 use flux_utils::SharedVector;
 use helix_common::{
-    SimulatorConfig, SubmissionTrace,
+    RelayConfig, SimulatorConfig, SubmissionTrace,
+    api::builder_api::InclusionListWithMetadata,
     bid_submission::OptimisticVersion,
     chain_info::ChainInfo,
     is_local_dev,
@@ -24,20 +25,37 @@ use helix_common::{
     spawn_tracked,
     validator_preferences::{Filtering, ValidatorPreferences},
 };
-use helix_types::{BlsPublicKeyBytes, SignedBidSubmission, SimHydrationCache, Submission};
+use helix_types::{
+    BlsPublicKeyBytes, MergeableOrdersWithPref, SignedBidSubmission, SimHydrationCache, Submission,
+};
 use ssz::Encode as _;
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    HelixSpine, SimRequest, ValidationRequest,
-    auctioneer::Bid,
+    HelixSpine, SimRequest, SubmissionRef, ValidationRequest,
+    auctioneer::{Bid, NO_IL_IX},
     bid_decoder::SubmissionDataWithSpan,
-    simulator::{MergeRequest, SimResult, client::SimulatorClient},
+    simulator::{
+        BlockMergeResponse, MergeRequest, SimResult,
+        block_merger::{SimBlockMerger, ValidatedMergeCandidate},
+        client::SimulatorClient,
+    },
     spine::{
         HelixSpineProducers,
-        messages::{FromSimMsg, ToSimKind, ToSimMsg},
+        messages::{FromSimMsg, MergedBlockSubmission, ToSimKind, ToSimMsg, TopBidForSim},
     },
 };
+
+pub type ValidationResult = (usize, Option<SimulationResultInner>);
+
+#[derive(Clone)]
+pub struct SimulationResultInner {
+    pub submission_ref: SubmissionRef,
+    pub optimistic_version: OptimisticVersion,
+    /// None for infra errors where simulation never ran.
+    pub bid: Option<Bid>,
+    pub result: Result<SubmissionTrace, BlockSimError>,
+}
 
 pub struct SimulatorTile {
     simulators: Vec<SimEntry>,
@@ -59,6 +77,9 @@ pub struct SimulatorTile {
     pub accept_optimistic: Arc<AtomicBool>,
     /// If we failed to demote a builder in the DB
     pub failsafe_triggered: Arc<AtomicBool>,
+    block_merger: SimBlockMerger,
+    merging_enabled: bool,
+    sim_il: Arc<SharedVector<InclusionListWithMetadata>>,
 }
 
 impl Tile<HelixSpine> for SimulatorTile {
@@ -68,8 +89,22 @@ impl Tile<HelixSpine> for SimulatorTile {
         let events: Vec<SimTileInternalEvent> = self.rx.try_iter().collect();
         for event in events {
             match event {
-                SimTileInternalEvent::TaskDone { id, paused_until, result_ix } => {
-                    self.handle_task_response(id, paused_until, result_ix, &mut adapter.producers);
+                SimTileInternalEvent::ValidationDone {
+                    id,
+                    paused_until,
+                    result_ix,
+                    merge_candidate,
+                } => {
+                    self.handle_validation_done(
+                        id,
+                        paused_until,
+                        result_ix,
+                        merge_candidate,
+                        &mut adapter.producers,
+                    );
+                }
+                SimTileInternalEvent::MergeDone { id, response } => {
+                    self.handle_merge_done(id, response, &mut adapter.producers);
                 }
                 SimTileInternalEvent::SyncStatus { id, is_synced } => {
                     self.handle_sync_status(id, is_synced);
@@ -77,23 +112,26 @@ impl Tile<HelixSpine> for SimulatorTile {
             }
         }
 
-        // Consume inbound spine messages from the auctioneer.
         adapter.consume(|msg: ToSimMsg, producers| match msg.kind {
             ToSimKind::Request => match self.sim_requests.get(msg.ix) {
                 Some(payload) => match payload.as_ref() {
                     SimRequest::Validate { req, fast_track } => {
                         self.handle_sim_request((**req).clone(), *fast_track, producers);
                     }
-                    SimRequest::Merge(req) => {
-                        self.handle_merge_request(req.clone());
-                    }
                 },
                 None => error!(?msg, "sim inbound payload not found"),
             },
             ToSimKind::NewSlot => {
-                self.on_new_slot(msg.bid_slot);
+                self.on_new_slot(msg.bid_slot, msg.ix);
             }
         });
+
+        if self.merging_enabled {
+            adapter.consume(|msg: TopBidForSim, producers| {
+                self.block_merger.update_base_block(msg.block_hash);
+                self.maybe_dispatch_merge(producers);
+            });
+        }
     }
 
     fn name(&self) -> TileName {
@@ -108,6 +146,8 @@ impl SimulatorTile {
         sim_results: Arc<SharedVector<SimResult>>,
         decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
         chain_info: ChainInfo,
+        config: RelayConfig,
+        sim_il: Arc<SharedVector<InclusionListWithMetadata>>,
     ) -> (Arc<AtomicBool>, Arc<AtomicBool>, Self) {
         let (task_tx, rx) = crossbeam_channel::bounded(512);
 
@@ -156,6 +196,9 @@ impl SimulatorTile {
             .map(|(i, _)| i)
             .collect();
 
+        let block_merger = SimBlockMerger::new(chain_info.clone(), config.clone());
+        let merging_enabled = config.block_merging_config.is_enabled;
+
         let tile = Self {
             simulators,
             ssz_sim_indices,
@@ -172,6 +215,9 @@ impl SimulatorTile {
             chain_info,
             accept_optimistic: accept_optimistic.clone(),
             failsafe_triggered: failsafe_triggered.clone(),
+            block_merger,
+            merging_enabled,
+            sim_il,
         };
 
         (accept_optimistic, failsafe_triggered, tile)
@@ -189,7 +235,7 @@ impl SimulatorTile {
 
     fn handle_sim_request(
         &mut self,
-        req: crate::simulator::ValidationRequest,
+        req: ValidationRequest,
         fast_track: bool,
         producers: &mut HelixSpineProducers,
     ) {
@@ -206,19 +252,15 @@ impl SimulatorTile {
         self.local_telemetry.sims_reqs += 1;
 
         let sim_id = self.select_simulator(&builder_pubkey);
-
         if let Some(id) = sim_id {
             self.local_telemetry.sims_sent_immediately += 1;
-            self.spawn_sim(id, req)
+            self.spawn_sim(id, req);
         } else {
             let evicted = if fast_track {
                 self.priority_requests.store(req, builder_pubkey, &mut self.local_telemetry)
             } else {
                 self.requests.store(req, builder_pubkey, &mut self.local_telemetry)
             };
-            // A dropped dehydrated request may carry full transactions that haven't
-            // been inserted into the cache yet. Hydrate it now so subsequent
-            // dehydrated submissions from this builder can resolve their tx hashes.
             if let Some(evicted_req) = evicted &&
                 let Some(data) = self.decoded.get(evicted_req.decoded_ix) &&
                 let Submission::Dehydrated(d) = data.submission_data.submission.clone()
@@ -228,59 +270,33 @@ impl SimulatorTile {
         }
     }
 
-    fn handle_merge_request(&mut self, req: MergeRequest) {
-        self.local_telemetry.merge_reqs += 1;
-        if let Some(id) = self.next_client(|s| s.can_merge()) {
-            let sim = &mut self.simulators[id];
-            let to_send = sim.client.merge_request_builder();
-            sim.pending += 1;
-
-            self.local_telemetry.max_in_flight =
-                self.local_telemetry.max_in_flight.max(sim.pending);
-            let timer = SimulatorMetrics::block_merge_timer(sim.client.endpoint());
-            let task_tx = self.task_tx.clone();
-            let sim_results = self.sim_results.clone();
-            spawn_tracked!(async move {
-                debug!(bid_slot = %req.bid_slot, block_hash = %req.block_hash, "sending merge request");
-                let res = SimulatorClient::do_merge_request(&req, to_send).await;
-                if res.is_ok() {
-                    timer.stop_and_record();
-                } else {
-                    timer.stop_and_discard();
-                }
-                SimulatorMetrics::block_merge_status(res.is_ok());
-
-                let result_ix = sim_results.push(SimResult::Merge((id, res)));
-                let _ = task_tx.try_send(SimTileInternalEvent::TaskDone {
-                    id,
-                    paused_until: None,
-                    result_ix,
-                });
-            });
-        } else {
-            self.local_telemetry.dropped_merge_reqs += 1;
-            warn!("no client available for merging! Dropping request");
-        }
-    }
-
-    fn handle_task_response(
+    /// Called on the tile thread when a validation async task finishes.
+    fn handle_validation_done(
         &mut self,
         id: usize,
         paused_until: Option<Instant>,
         result_ix: usize,
+        merge_candidate: Option<ValidatedMergeCandidate>,
         producers: &mut HelixSpineProducers,
     ) {
         let sim = &mut self.simulators[id];
         sim.pending = sim.pending.saturating_sub(1);
-        sim.paused_until = sim.paused_until.max(paused_until); // keep highest pause
+        sim.paused_until = sim.paused_until.max(paused_until);
 
+        // Forward the validation result to the auctioneer.
         producers.produce(FromSimMsg { ix: result_ix });
 
-        if let Some(id) = self.next_client(|s| s.can_simulate()) &&
-            let Some(req) = self.priority_requests.next_req().or(self.requests.next_req())
-        {
-            self.spawn_sim(id, req);
+        // Ingest merge candidate (only when validation succeeded — enforced
+        // by `spawn_sim` which only sets `merge_candidate` on `res.is_ok()`).
+        if self.merging_enabled {
+            if let Some(candidate) = merge_candidate {
+                self.block_merger.ingest_validated_candidate(candidate);
+            }
+            self.maybe_dispatch_merge(producers);
         }
+
+        // Drain next queued validation.
+        self.drain_next_queued_sim();
     }
 
     fn spawn_sim(&mut self, id: usize, req: ValidationRequest) {
@@ -288,15 +304,15 @@ impl SimulatorTile {
 
         let Some(decoded_data) = self.decoded.get(req.decoded_ix) else {
             error!(ix = req.decoded_ix, "decoded submission not found in ring");
-            // Balance pending so handle_task_response can route the next request.
             let sim = &mut self.simulators[id];
             sim.pending += 1;
             let result_ix =
                 self.sim_results.push(SimResult::Validate((id, Some(infra_error(&req)))));
-            let _ = self.task_tx.try_send(SimTileInternalEvent::TaskDone {
+            let _ = self.task_tx.try_send(SimTileInternalEvent::ValidationDone {
                 id,
                 paused_until: None,
                 result_ix,
+                merge_candidate: None,
             });
             return;
         };
@@ -313,15 +329,37 @@ impl SimulatorTile {
                         let result_ix = self
                             .sim_results
                             .push(SimResult::Validate((id, Some(infra_error(&req)))));
-                        let _ = self.task_tx.try_send(SimTileInternalEvent::TaskDone {
+                        let _ = self.task_tx.try_send(SimTileInternalEvent::ValidationDone {
                             id,
                             paused_until: None,
                             result_ix,
+                            merge_candidate: None,
                         });
                         return;
                     }
                 }
             }
+        };
+
+        let pre_merge: Option<PreMergeCapture> = if self.merging_enabled {
+            decoded_data.submission_data.merging_data.as_ref().and_then(|md| {
+                // Only full submissions carry usable execution payloads.
+                Some(PreMergeCapture {
+                    block_hash: *submission.block_hash(),
+                    slot: submission.slot().as_u64(),
+                    value: *submission.value(),
+                    proposer_fee_recipient: *submission.proposer_fee_recipient(),
+                    parent_beacon_block_root: Some(req.parent_beacon_block_root),
+                    allow_appending: md.allow_appending,
+                    is_top_bid: req.is_top_bid,
+                    merging_data: md.clone(),
+                    execution_payload: submission.execution_payload_ref().clone(),
+                    blobs_bundle: submission.blobs_bundle(),
+                    builder_pubkey: *submission.builder_public_key(),
+                })
+            })
+        } else {
+            None
         };
 
         let version = decoded_data.submission_data.version;
@@ -345,6 +383,7 @@ impl SimulatorTile {
         let timer = SimulatorMetrics::timer(sim.client.endpoint());
         let task_tx = self.task_tx.clone();
         let sim_results = self.sim_results.clone();
+
         spawn_tracked!(async move {
             let start_sim = Nanos::now();
             let block_hash = submission.block_hash();
@@ -352,6 +391,7 @@ impl SimulatorTile {
 
             let optimistic_version = req.optimistic_version();
             SimulatorMetrics::sim_count(optimistic_version.is_optimistic());
+
             let (mut res, ssz_retry) = match dispatch {
                 SimDispatch::Ssz { to_send, ssz_url, http } => {
                     let request = create_ssz_request(&req, &submission);
@@ -380,8 +420,6 @@ impl SimulatorTile {
                 }
             };
 
-            // On cache miss, retry with full uncompressed SSZ so the simulator
-            // can process the submission without a hydration cache entry.
             if matches!(res, Err(BlockSimError::HydrationMiss)) {
                 debug!(%block_hash, "hydration miss — retrying with full SSZ");
                 if let Some((request, ssz_url, http)) = ssz_retry {
@@ -396,7 +434,6 @@ impl SimulatorTile {
             }
 
             let time = timer.stop_and_record();
-
             debug!(%block_hash, time_secs = time, ?res, "simulation completed");
 
             let paused_until = if let Err(err) = res.as_ref() {
@@ -410,11 +447,33 @@ impl SimulatorTile {
             if let Some(got) = tx_root {
                 let expected = submission.transactions_root();
                 if expected != got {
-                    res = Err(BlockSimError::InvalidTxRoot { got, expected })
+                    res = Err(BlockSimError::InvalidTxRoot { got, expected });
                 }
             }
 
             record_submission_step("simulation", start_sim.elapsed());
+
+            let merge_candidate: Option<ValidatedMergeCandidate> = if res.is_ok() {
+                pre_merge
+                    .map(|p| {
+                        Some(ValidatedMergeCandidate {
+                            block_hash: p.block_hash,
+                            slot: p.slot,
+                            value: p.value,
+                            proposer_fee_recipient: p.proposer_fee_recipient,
+                            parent_beacon_block_root: p.parent_beacon_block_root,
+                            allow_appending: p.allow_appending,
+                            is_top_bid: p.is_top_bid,
+                            mergeable_orders: p.merging_data.orders,
+                            execution_payload: p.execution_payload,
+                            blobs_bundle: p.blobs_bundle,
+                            builder_pubkey: p.builder_pubkey,
+                        })
+                    })
+                    .flatten()
+            } else {
+                None
+            };
 
             let bid = Bid::new(version, &submission);
             let inner = SimulationResultInner {
@@ -425,15 +484,121 @@ impl SimulatorTile {
             };
 
             let result_ix = sim_results.push(SimResult::Validate((id, Some(inner))));
-            let _ =
-                task_tx.try_send(SimTileInternalEvent::TaskDone { id, paused_until, result_ix });
+            let _ = task_tx.try_send(SimTileInternalEvent::ValidationDone {
+                id,
+                paused_until,
+                result_ix,
+                merge_candidate,
+            });
         });
     }
 
-    /// Selection priority:
-    /// 1. Sticky sim with SSZ endpoint (state locality + binary protocol)
-    /// 2. Any SSZ-capable sim, least pending (binary protocol)
-    /// 3. Any sim, least pending (JSON-RPC fallback; stickiness irrelevant without SSZ)
+    fn maybe_dispatch_merge(&mut self, producers: &mut HelixSpineProducers) {
+        if let Some(req) = self.block_merger.fetch_merge_request() {
+            self.dispatch_merge(req, producers);
+        }
+    }
+
+    fn dispatch_merge(&mut self, req: MergeRequest, _producers: &mut HelixSpineProducers) {
+        self.local_telemetry.merge_reqs += 1;
+
+        let Some(id) = self.next_client(|s| s.can_merge()) else {
+            self.local_telemetry.dropped_merge_reqs += 1;
+            warn!(
+                bid_slot = %req.bid_slot,
+                block_hash = %req.block_hash,
+                "no merging simulator available, dropping"
+            );
+            return;
+        };
+
+        let sim = &mut self.simulators[id];
+        let to_send = sim.client.merge_request_builder();
+        sim.pending += 1;
+        self.local_telemetry.max_in_flight = self.local_telemetry.max_in_flight.max(sim.pending);
+
+        let timer = SimulatorMetrics::block_merge_timer(sim.client.endpoint());
+        let task_tx = self.task_tx.clone();
+
+        spawn_tracked!(async move {
+            debug!(bid_slot = %req.bid_slot, block_hash = %req.block_hash, "sending merge request");
+            let res = SimulatorClient::do_merge_request(&req, to_send).await;
+            if res.is_ok() {
+                timer.stop_and_record();
+            } else {
+                timer.stop_and_discard();
+            }
+            SimulatorMetrics::block_merge_status(res.is_ok());
+            let _ = task_tx
+                .try_send(SimTileInternalEvent::MergeDone { id, response: res.ok().map(Box::new) });
+        });
+    }
+
+    fn handle_merge_done(
+        &mut self,
+        id: usize,
+        response: Option<Box<BlockMergeResponse>>,
+        producers: &mut HelixSpineProducers,
+    ) {
+        let sim = &mut self.simulators[id];
+        sim.pending = sim.pending.saturating_sub(1);
+
+        if let Some(response) = response {
+            let base_hash = response.base_block_hash;
+
+            match self.block_merger.take_base_info(base_hash) {
+                Some((builder_pubkey, blobs_bundle, ..)) => {
+                    match self.block_merger.assemble_payload(
+                        *response,
+                        builder_pubkey,
+                        blobs_bundle,
+                    ) {
+                        Ok(entry) => {
+                            let result_ix =
+                                self.sim_results.push(SimResult::MergedPayload(Box::new(entry)));
+                            producers.produce(MergedBlockSubmission { ix: result_ix });
+                        }
+                        Err(e) => {
+                            warn!(%e, %base_hash, "failed to assemble merged payload");
+                        }
+                    }
+                }
+                None => {
+                    warn!(%base_hash, "base block info not found for merge assembly");
+                }
+            }
+        }
+
+        self.drain_next_queued_sim();
+    }
+
+    fn on_new_slot(&mut self, bid_slot: u64, il_ix: usize) {
+        if self.last_bid_slot > 0 {
+            self.report();
+        }
+        self.last_bid_slot = bid_slot;
+        self.requests.clear();
+        self.priority_requests.clear();
+        self.hydration_cache.clear();
+        if self.merging_enabled {
+            self.block_merger.on_new_slot(bid_slot);
+
+            // Retrieve the IL for this slot from the shared ring.
+            // NO_IL_IX (usize::MAX) is the sentinel meaning "no IL this slot".
+            if il_ix != NO_IL_IX {
+                if let Some(il) = self.sim_il.get(il_ix) {
+                    self.block_merger.add_inclusion_list(&il);
+                }
+            }
+        }
+        let now = Instant::now();
+        for s in self.simulators.iter_mut() {
+            if s.paused_until.is_some_and(|until| until < now) {
+                s.paused_until = None;
+            }
+        }
+    }
+
     fn select_simulator(&self, builder_pubkey: &BlsPublicKeyBytes) -> Option<usize> {
         if !self.ssz_sim_indices.is_empty() {
             let sticky =
@@ -463,26 +628,18 @@ impl SimulatorTile {
             .map(|(i, _)| i)
     }
 
-    fn on_new_slot(&mut self, bid_slot: u64) {
-        if self.last_bid_slot > 0 {
-            self.report();
-        }
-
-        self.last_bid_slot = bid_slot;
-        self.requests.clear();
-        self.priority_requests.clear();
-        self.hydration_cache.clear();
-        let now = Instant::now();
-        for s in self.simulators.iter_mut() {
-            if s.paused_until.is_some_and(|until| until < now) {
-                s.paused_until = None;
+    fn drain_next_queued_sim(&mut self) {
+        if let Some(id) = self.next_client(|s| s.can_simulate()) {
+            if let Some(req) =
+                self.priority_requests.next_req().or_else(|| self.requests.next_req())
+            {
+                self.spawn_sim(id, req);
             }
         }
     }
 
     fn report(&mut self) {
         let tel = std::mem::take(&mut self.local_telemetry);
-
         SimulatorMetrics::sim_mananger_count("sims_sent_immediately", tel.sims_sent_immediately);
         SimulatorMetrics::sim_mananger_count("sims_reqs_dropped", tel.sims_reqs_dropped);
         SimulatorMetrics::sim_mananger_count("stale_sim_reqs", tel.stale_sim_reqs);
@@ -490,7 +647,6 @@ impl SimulatorTile {
         SimulatorMetrics::sim_manager_gauge("max_in_flight", tel.max_in_flight);
         SimulatorMetrics::sim_mananger_count("merge_reqs", tel.merge_reqs);
         SimulatorMetrics::sim_mananger_count("dropped_merge_reqs", tel.dropped_merge_reqs);
-
         info!(
             bid_slot = self.last_bid_slot,
             sims_reqs = tel.sims_reqs,
@@ -502,16 +658,45 @@ impl SimulatorTile {
             merge_reqs = tel.merge_reqs,
             dropped_merge_reqs = tel.dropped_merge_reqs,
             "sim manager telemetry"
-        )
+        );
     }
+}
+
+struct PreMergeCapture {
+    block_hash: alloy_primitives::B256,
+    slot: u64,
+    value: alloy_primitives::U256,
+    proposer_fee_recipient: alloy_primitives::Address,
+    parent_beacon_block_root: Option<alloy_primitives::B256>,
+    allow_appending: bool,
+    is_top_bid: bool,
+    merging_data: MergeableOrdersWithPref,
+    execution_payload: helix_types::ExecutionPayload,
+    blobs_bundle: std::sync::Arc<helix_types::BlobsBundle>,
+    builder_pubkey: BlsPublicKeyBytes,
+}
+
+pub(super) enum SimTileInternalEvent {
+    ValidationDone {
+        id: usize,
+        paused_until: Option<Instant>,
+        result_ix: usize,
+        merge_candidate: Option<ValidatedMergeCandidate>,
+    },
+    MergeDone {
+        id: usize,
+        response: Option<Box<BlockMergeResponse>>,
+    },
+    SyncStatus {
+        id: usize,
+        is_synced: bool,
+    },
 }
 
 struct SimEntry {
     client: SimulatorClient,
     is_synced: bool,
-    /// For certain errors we pause sims for some time to allow time for the node to recover
     paused_until: Option<Instant>,
-    /// Current number of pending tasks (validation or merging)
     pending: usize,
 }
 
@@ -520,7 +705,6 @@ impl SimEntry {
         Self { client, is_synced: false, paused_until: None, pending: 0 }
     }
 
-    /// A lighter check to decide whether we should accept optimistic submissions
     fn can_simulate_light(&self) -> bool {
         self.is_synced &&
             match self.paused_until {
@@ -546,24 +730,10 @@ struct LocalTelemetry {
     sims_sent_immediately: usize,
     sims_reqs_dropped: usize,
     stale_sim_reqs: usize,
-    // waiting to be sent
     max_pending: usize,
-    // waiting for result
     max_in_flight: usize,
     merge_reqs: usize,
     dropped_merge_reqs: usize,
-}
-
-// Sim id / Simulation Result, so we can use this for merging requests
-pub type ValidationResult = (usize, Option<SimulationResultInner>);
-#[derive(Clone)]
-pub struct SimulationResultInner {
-    pub submission_ref: crate::auctioneer::SubmissionRef,
-    pub optimistic_version: OptimisticVersion,
-    /// None for infra errors where simulation never ran (no decoded data available).
-    pub bid: Option<Bid>,
-    /// Ok carries the trace; Err carries the simulation failure.
-    pub result: Result<SubmissionTrace, BlockSimError>,
 }
 
 enum SimDispatch {
@@ -571,38 +741,8 @@ enum SimDispatch {
     Json { to_send: reqwest::RequestBuilder, method: String },
 }
 
-/// Internal-only events: async task → sim tile (not tile-to-tile).
-pub(super) enum SimTileInternalEvent {
-    TaskDone { id: usize, paused_until: Option<Instant>, result_ix: usize },
-    SyncStatus { id: usize, is_synced: bool },
-}
-
-/// Jump consistent hash — maps a builder pubkey to a simulator index with
-/// minimal reassignment when the set size changes.
-fn sticky_sim_index(num_simulators: usize, builder_pubkey: &BlsPublicKeyBytes) -> usize {
-    if num_simulators <= 1 {
-        return 0;
-    }
-    let key = u64::from_le_bytes(builder_pubkey.0[..8].try_into().unwrap());
-    jump_hash(key, num_simulators)
-}
-
-/// Stateless consistent hash — minimises slot reassignment as `n` changes.
-/// <https://arxiv.org/abs/1406.2294>
-fn jump_hash(mut key: u64, n: usize) -> usize {
-    let mut b: i64 = -1;
-    let mut j: i64 = 0;
-    while j < n as i64 {
-        b = j;
-        key = key.wrapping_mul(2862933555777941757).wrapping_add(1);
-        j = ((b + 1) as f64 * ((1u64 << 31) as f64) / ((key >> 33) + 1) as f64) as i64;
-    }
-    b as usize
-}
-
-/// Pending requests, we only keep the last one for each builder.
 struct PendingRequests {
-    reqs: Vec<(crate::simulator::ValidationRequest, BlsPublicKeyBytes)>,
+    reqs: Vec<(ValidationRequest, BlsPublicKeyBytes)>,
 }
 
 impl PendingRequests {
@@ -610,13 +750,12 @@ impl PendingRequests {
         Self { reqs: Vec::with_capacity(capacity) }
     }
 
-    /// Returns the evicted request if a newer one replaced it.
     fn store(
         &mut self,
-        req: crate::simulator::ValidationRequest,
+        req: ValidationRequest,
         builder_pubkey: BlsPublicKeyBytes,
         local_telemetry: &mut LocalTelemetry,
-    ) -> Option<crate::simulator::ValidationRequest> {
+    ) -> Option<ValidationRequest> {
         if let Some(i) = self.reqs.iter().position(|(_, pk)| *pk == builder_pubkey) {
             local_telemetry.sims_reqs_dropped += 1;
             if req.on_receive_ns() > self.reqs[i].0.on_receive_ns() {
@@ -630,14 +769,12 @@ impl PendingRequests {
         None
     }
 
-    fn next_req(&mut self) -> Option<crate::simulator::ValidationRequest> {
+    fn next_req(&mut self) -> Option<ValidationRequest> {
         let i =
             self.reqs.iter().enumerate().max_by_key(|(_, (r, _))| r.sort_key()).map(|(i, _)| i)?;
         Some(self.reqs.swap_remove(i).0)
     }
 
-    /// Clear backlog of simulations from the previous bid slot.
-    /// All pending requests are always for `last_bid_slot` (asserted on intake).
     fn clear(&mut self) {
         self.reqs.clear();
     }
@@ -664,4 +801,23 @@ fn create_ssz_request(
         decoder_params: None,
         signed_bid_submission: submission.as_ssz_bytes(),
     }
+}
+
+fn sticky_sim_index(num_simulators: usize, builder_pubkey: &BlsPublicKeyBytes) -> usize {
+    if num_simulators <= 1 {
+        return 0;
+    }
+    let key = u64::from_le_bytes(builder_pubkey.0[..8].try_into().unwrap());
+    jump_hash(key, num_simulators)
+}
+
+fn jump_hash(mut key: u64, n: usize) -> usize {
+    let mut b: i64 = -1;
+    let mut j: i64 = 0;
+    while j < n as i64 {
+        b = j;
+        key = key.wrapping_mul(2862933555777941757).wrapping_add(1);
+        j = ((b + 1) as f64 * ((1u64 << 31) as f64) / ((key >> 33) + 1) as f64) as i64;
+    }
+    b as usize
 }

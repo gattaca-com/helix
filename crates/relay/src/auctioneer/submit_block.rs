@@ -1,6 +1,6 @@
 use std::sync::atomic::Ordering;
 
-use alloy_primitives::{Address, B256, U256};
+use alloy_primitives::B256;
 use flux::{spine::SpineProducers, timing::Nanos};
 use helix_common::{
     self, BuilderInfo,
@@ -8,7 +8,7 @@ use helix_common::{
     metrics::{BID_ADJUSTMENT_LATENCY, HYDRATION_CACHE_HITS},
     record_submission_step,
 };
-use helix_types::{MergeableOrdersWithPref, SignedBidSubmission, Submission};
+use helix_types::{SignedBidSubmission, Submission};
 use tracing::{error, trace};
 
 use crate::{
@@ -22,7 +22,7 @@ use crate::{
     simulator::{SimRequest, ValidationRequest, tile::ValidationResult},
     spine::{
         HelixSpineProducers,
-        messages::{BidEvent, BidUpdate, ToSimKind, ToSimMsg},
+        messages::{BidEvent, BidUpdate, ToSimKind, ToSimMsg, TopBidForSim},
     },
 };
 
@@ -66,6 +66,14 @@ impl<B: BidAdjustor> Context<B> {
         {
             let bid = Bid::from_submission_data(&submission_data);
             let is_top_bid = self.bid_sorter.sort(bid, &mut submission_data.trace, true, producers);
+            if is_top_bid {
+                // Notify the sim tile that the top bid changed so it can update
+                // its SimBlockMerger base block.
+                producers.produce(TopBidForSim {
+                    block_hash: *submission_data.submission.block_hash(),
+                    slot: submission_data.submission.bid_slot(),
+                });
+            }
             (OptimisticVersion::V1, is_top_bid)
         } else {
             (OptimisticVersion::NotOptimistic, false)
@@ -110,17 +118,6 @@ impl<B: BidAdjustor> Context<B> {
             }
         };
 
-        let merging_data = submission_data.merging_data.map(|data| MergeData {
-            is_top_bid,
-            slot: submission.slot().as_u64(),
-            block_hash: *submission.block_hash(),
-            block_value: *submission.value(),
-            proposer_fee_recipient: *submission.proposer_fee_recipient(),
-            parent_beacon_block_root: payload_attributes.parent_beacon_block_root,
-            execution_payload: submission.execution_payload_ref().clone(),
-            merging_data: data,
-        });
-
         let entry = PayloadEntry::new_submission(
             submission,
             payload_attributes.withdrawals_root,
@@ -133,25 +130,6 @@ impl<B: BidAdjustor> Context<B> {
 
         self.try_adjustments_dry_run(&entry, slot_data, producers);
         self.store_data(entry, is_optimistic, producers);
-        self.try_merge_block(merging_data, producers);
-    }
-
-    fn try_merge_block(
-        &mut self,
-        merging_data: Option<MergeData>,
-        producers: &mut HelixSpineProducers,
-    ) {
-        if self.config.block_merging_config.is_enabled &&
-            let Some(data) = merging_data
-        {
-            let base_block = data.block_hash;
-            let is_top_bid = data.is_top_bid;
-            self.block_merger.insert_merge_data(data);
-            if is_top_bid {
-                self.block_merger.update_base_block(base_block);
-            }
-            self.request_merged_block(producers);
-        }
     }
 
     fn try_adjustments_dry_run(
@@ -222,9 +200,10 @@ impl<B: BidAdjustor> Context<B> {
                 let block_hash = bid.block_hash;
                 let is_top_bid = self.bid_sorter.sort(*bid, trace, false, producers);
                 if is_top_bid {
-                    self.block_merger.update_base_block(block_hash);
+                    // Notify the sim tile of the new top bid so it can update
+                    // SimBlockMerger's base block.
+                    producers.produce(TopBidForSim { block_hash, slot: bid.slot });
                 }
-                self.request_merged_block(producers);
 
                 if need_send_result {
                     producers.produce(BidUpdate { block_hash, event: BidEvent::Live });
@@ -301,13 +280,6 @@ impl<B: BidAdjustor> Context<B> {
                 builder_info.can_process_regional_slot_optimistically())
     }
 
-    fn request_merged_block(&mut self, producers: &mut HelixSpineProducers) {
-        if let Some(merge_request) = self.block_merger.fetch_merge_request() {
-            let ix = self.sim_inbound.push(SimRequest::Merge(merge_request));
-            producers.produce(ToSimMsg { kind: ToSimKind::Request, ix, bid_slot: 0 });
-        }
-    }
-
     fn hydrate(
         &mut self,
         submission: Submission,
@@ -341,15 +313,4 @@ impl<B: BidAdjustor> Context<B> {
             }
         }
     }
-}
-
-pub struct MergeData {
-    pub is_top_bid: bool,
-    pub slot: u64,
-    pub block_hash: B256,
-    pub block_value: U256,
-    pub proposer_fee_recipient: Address,
-    pub parent_beacon_block_root: Option<B256>,
-    pub execution_payload: helix_types::ExecutionPayload,
-    pub merging_data: MergeableOrdersWithPref,
 }

@@ -13,6 +13,7 @@ use flux_utils::SharedVector;
 use helix_common::{
     BuilderInfo, RelayConfig,
     alerts::AlertManager,
+    api::builder_api::InclusionListWithMetadata,
     chain_info::ChainInfo,
     local_cache::LocalCache,
     metrics::{CACHE_SIZE, SimulatorMetrics},
@@ -27,10 +28,10 @@ use crate::{
     SubmissionDataWithSpan,
     api::{FutureBidSubmissionResult, builder::error::BuilderApiError},
     auctioneer::{
-        AuctioneerHandle, BlockMergeResponse,
+        AuctioneerHandle,
         bid_adjustor::BidAdjustor,
         bid_sorter::BidSorter,
-        block_merger::BlockMerger,
+        merged_bid_cache::MergedBidCache,
         types::{PayloadEntry, PendingPayload, SubmissionRef},
     },
     simulator::{SimRequest, tile::ValidationResult},
@@ -50,7 +51,7 @@ pub struct SlotContext {
     pub version: FxHashMap<BlsPublicKeyBytes, SubmissionVersion>,
     pub hydration_cache: HydrationCache,
     pub payloads: FxHashMap<B256, PayloadEntry>,
-    pub block_merger: BlockMerger,
+    pub merged_bid_cache: MergedBidCache,
 }
 
 pub struct Context<B: BidAdjustor> {
@@ -69,10 +70,13 @@ pub struct Context<B: BidAdjustor> {
     pub accept_optimistic: Arc<AtomicBool>,
     pub failsafe_triggered: Arc<AtomicBool>,
     pub alert_manager: Arc<AlertManager>,
+    pub sim_il: Arc<SharedVector<InclusionListWithMetadata>>,
 }
 
 const EXPECTED_PAYLOADS_PER_SLOT: usize = 5000;
 const EXPECTED_BUILDERS_PER_SLOT: usize = 200;
+
+pub const NO_IL_IX: usize = usize::MAX;
 
 impl<B: BidAdjustor> Context<B> {
     // TODO: refactor to accept fewer parameters
@@ -91,6 +95,7 @@ impl<B: BidAdjustor> Context<B> {
         future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
         auctioneer_handle: AuctioneerHandle,
         alert_manager: Arc<AlertManager>,
+        sim_il: Arc<SharedVector<InclusionListWithMetadata>>,
     ) -> Self {
         let unknown_builder_info = BuilderInfo {
             collateral: U256::ZERO,
@@ -100,8 +105,6 @@ impl<B: BidAdjustor> Context<B> {
             builder_ids: None,
             api_key: None,
         };
-
-        let block_merger = BlockMerger::new(0, chain_info.clone(), cache.clone(), config.clone());
 
         let slot_context = SlotContext {
             bid_slot: Slot::new(0),
@@ -116,7 +119,7 @@ impl<B: BidAdjustor> Context<B> {
                 EXPECTED_PAYLOADS_PER_SLOT,
                 Default::default(),
             ),
-            block_merger,
+            merged_bid_cache: MergedBidCache::new(config.clone()),
         };
 
         Self {
@@ -135,11 +138,21 @@ impl<B: BidAdjustor> Context<B> {
             accept_optimistic,
             failsafe_triggered,
             alert_manager,
+            sim_il,
         }
     }
 
     pub fn builder_info(&self, builder: &BlsPublicKeyBytes) -> BuilderInfo {
         self.cache.get_builder_info(builder).unwrap_or_else(|| self.unknown_builder_info.clone())
+    }
+
+    pub fn handle_merged_payload(&mut self, entry: PayloadEntry, base_block_time_ms: u64) {
+        let block_hash = *entry.block_hash();
+        debug!(%block_hash, value = %entry.value(), "storing merged payload from sim tile");
+
+        // Keep a copy for get_header before we move entry into payloads.
+        self.merged_bid_cache.store_merged(entry.clone(), base_block_time_ms);
+        self.payloads.insert(block_hash, entry);
     }
 
     /// 1. Check whether we should demote the builder, this is processed even if the result comes
@@ -217,7 +230,12 @@ impl<B: BidAdjustor> Context<B> {
         }
     }
 
-    pub fn on_new_slot(&mut self, bid_slot: Slot, producers: &mut HelixSpineProducers) {
+    pub fn on_new_slot(
+        &mut self,
+        bid_slot: Slot,
+        il: Option<InclusionListWithMetadata>,
+        producers: &mut HelixSpineProducers,
+    ) {
         self.bid_slot = bid_slot;
         if let Some(pending) = self.pending_payload.take() {
             let _ = pending
@@ -242,10 +260,16 @@ impl<B: BidAdjustor> Context<B> {
 
         self.version.clear();
         self.hydration_cache.clear();
+        self.merged_bid_cache.on_new_slot(bid_slot.as_u64());
+
+        let il_ix = match il {
+            Some(il) => self.sim_il.push(il),
+            None => NO_IL_IX,
+        };
 
         producers.produce(ToSimMsg {
             kind: ToSimKind::NewSlot,
-            ix: 0,
+            ix: il_ix,
             bid_slot: bid_slot.as_u64(),
         });
 
@@ -255,7 +279,6 @@ impl<B: BidAdjustor> Context<B> {
             self.cache.clear_merged_blocks();
         }
 
-        self.block_merger.on_new_slot(bid_slot.as_u64());
         self.bid_adjustor.on_new_slot(bid_slot.as_u64());
         self.auctioneer_handle.clear_inflight_payloads();
         self.decoded.clear();
@@ -279,32 +302,6 @@ impl<B: BidAdjustor> Context<B> {
                 info!("dropped {} payloads in {:?}", to_drop, start.elapsed())
             });
         }
-    }
-
-    pub fn handle_merge_response(&mut self, response: BlockMergeResponse) {
-        let block_hash = response.execution_payload.block_hash;
-        let Some(original_payload) = self.payloads.get(&response.base_block_hash) else {
-            warn!(%block_hash, "could not fetch original payload for merged block");
-            return;
-        };
-
-        let original_payload_and_blobs = original_payload.payload_and_blobs();
-        let builder_pubkey = *original_payload.bid_data_ref().builder_pubkey;
-
-        //TODO: this function does a lot of work, should move that work away from the event loop
-        let Some(payload) = self
-            .block_merger
-            .prepare_merged_payload_for_storage(
-                response,
-                original_payload_and_blobs,
-                builder_pubkey,
-            )
-            .ok()
-        else {
-            warn!(%block_hash, "failed to prepare merged payload for storage");
-            return;
-        };
-        self.payloads.insert(block_hash, payload);
     }
 
     pub fn handle_builder_demotion(
