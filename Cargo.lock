@@ -5913,8 +5913,12 @@ dependencies = [
 name = "helix-tcp-types"
 version = "0.0.1"
 dependencies = [
+ "alloy-consensus",
+ "alloy-eips",
  "alloy-primitives",
  "alloy-rpc-types",
+ "alloy-signer",
+ "alloy-signer-local",
  "bitflags 2.10.0",
  "bytes",
  "ethereum_ssz",
@@ -5922,6 +5926,7 @@ dependencies = [
  "serde",
  "strum 0.27.2",
  "thiserror 1.0.69",
+ "tokio",
  "tracing",
  "type-hash",
  "type-hash-derive",
