@@ -5913,6 +5913,7 @@ dependencies = [
 name = "helix-tcp-types"
 version = "0.0.1"
 dependencies = [
+ "alloy-primitives",
  "alloy-rpc-types",
  "bitflags 2.10.0",
  "bytes",
