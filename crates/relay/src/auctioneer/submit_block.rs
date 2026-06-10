@@ -46,6 +46,9 @@ impl<B: BidAdjustor> Context<B> {
             match self.validate_submission(submission_data, &builder_info, slot_data) {
                 Ok(v) => v,
                 Err(e) => {
+                    // We must still update the hydration cache for this builder, otherwise
+                    // subsequnet submissions may fail due to missing txs. 
+                    let _ = self.hydrate(submission_data.submission.clone());
                     send_submission_result(
                         producers,
                         &self.future_results,
