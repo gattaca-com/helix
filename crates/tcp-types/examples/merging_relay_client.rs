@@ -4,7 +4,8 @@
 //! interaction:
 //!
 //!   registration -> ack -> relay config -> slot start -> ping/pong
-//!   -> orders -> base block -> activate -> stream of merged blocks / rejects
+//!   -> mergeable block (payload + order refs) -> activate
+//!   -> stream of merged blocks / rejects
 //!
 //! The client is intentionally self-contained: it implements the frame
 //! layout (`[u32 LE len][u64 LE send-ts][1B msg_type][1B flags][SSZ body]`)
@@ -24,7 +25,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use alloy_consensus::{SignableTransaction, TxEip1559, TxEnvelope};
 use alloy_eips::eip2718::Encodable2718;
-use alloy_primitives::{Address, B256, Bloom, Bytes, TxKind, U256, keccak256};
+use alloy_primitives::{Address, B256, Bloom, Bytes, TxKind, U256};
 use alloy_rpc_types::{
     beacon::BlsPublicKey,
     engine::{ExecutionPayloadV1, ExecutionPayloadV2, ExecutionPayloadV3},
@@ -37,8 +38,8 @@ use helix_tcp_types::merging::{
     control::{
         BuilderCollateral, MergerAckV1, MergerRegistrationV1, PingV1, PongV1, RelayConfigV1,
     },
-    order::{MergeableBundle, MergeableOrder, MergeableTx, OrderMeta, bundle_order_hash},
-    relay_to_builder::{ActivateBaseBlockV1, BaseBlockV1, OrderWithMeta, OrdersV1, SlotStartV1},
+    order::{BundleOrderRef, MergeOrderRef, TxOrderRef},
+    relay_to_builder::{ActivateBaseBlockV1, MergeableBlockV1, SlotStartV1},
 };
 use ssz::{Decode, Encode};
 use tokio::{
@@ -124,66 +125,55 @@ async fn main() -> std::io::Result<()> {
     // -- 4. Liveness check.
     write_msg(&mut stream, MergingMsgId::PingV1, &PingV1 { nonce: 7 }).await?;
 
-    // -- 5. Mergeable orders: one single tx, one two-tx bundle. order_hash is
-    //       keccak(tx bytes) for a tx and keccak(concat tx hashes) for a
-    //       bundle; the builder recomputes and rejects mismatches.
+    // -- 5. Forward a mergeable block: a builder submission whose payload
+    //       carries both the mergeable txs (referenced by index) and, since
+    //       `allow_appending` is set, serves as a merge-base candidate. The
+    //       last tx must be the proposer payment of exactly `block_value`.
     let order_tx = signed_tx_bytes(&PrivateKeySigner::random(), 0, Address::random(), 1);
-    let tx_order = OrderWithMeta {
-        meta: order_meta(keccak256(&order_tx)),
-        order: MergeableOrder::Tx(MergeableTx { transaction: order_tx, can_revert: false }),
-    };
-
     let searcher = PrivateKeySigner::random();
-    let bundle_txs = vec![
-        signed_tx_bytes(&searcher, 0, Address::random(), 2),
-        signed_tx_bytes(&searcher, 1, Address::random(), 3),
-    ];
-    let bundle_tx_hashes: Vec<B256> = bundle_txs.iter().map(keccak256).collect();
-    let bundle_order = OrderWithMeta {
-        meta: order_meta(bundle_order_hash(&bundle_tx_hashes)),
-        order: MergeableOrder::Bundle(MergeableBundle {
-            transactions: bundle_txs,
+    let bundle_tx_0 = signed_tx_bytes(&searcher, 0, Address::random(), 2);
+    let bundle_tx_1 = signed_tx_bytes(&searcher, 1, Address::random(), 3);
+    let block_value = U256::from(GWEI); // 1 gwei proposer payment
+    let payment_tx =
+        signed_tx_bytes(&PrivateKeySigner::random(), 0, proposer_fee_recipient, GWEI as u64);
+
+    let merge_orders = vec![
+        MergeOrderRef::Tx(TxOrderRef { index: 0, can_revert: false }),
+        MergeOrderRef::Bundle(BundleOrderRef {
+            txs: vec![1, 2],
             reverting_txs: vec![0],
             dropping_txs: vec![1],
         }),
-    };
-
-    write_msg(&mut stream, MergingMsgId::OrdersV1, &OrdersV1 {
-        slot,
-        orders: vec![tx_order, bundle_order],
-    })
-    .await?;
-
-    // -- 6. Base block: the winning bid. The last tx must be the proposer
-    //       payment of exactly `original_value`.
-    let original_value = U256::from(GWEI); // 1 gwei proposer payment
-    let payment_tx =
-        signed_tx_bytes(&PrivateKeySigner::random(), 0, proposer_fee_recipient, GWEI as u64);
+    ];
     let base_block_hash = B256::random();
-    write_msg(&mut stream, MergingMsgId::BaseBlockV1, &BaseBlockV1 {
+    write_msg(&mut stream, MergingMsgId::MergeableBlockV1, &MergeableBlockV1 {
         slot,
         builder_pubkey: BlsPublicKey::random(),
-        original_value,
+        block_value,
+        builder_address: winning_builder_coinbase,
         proposer_fee_recipient,
         parent_beacon_block_root,
+        allow_appending: true,
+        merge_orders,
         execution_payload: demo_payload(
             parent_hash,
             winning_builder_coinbase,
             block_number,
             base_block_hash,
-            payment_tx,
+            vec![order_tx, bundle_tx_0, bundle_tx_1, payment_tx],
         ),
     })
     .await?;
 
-    // -- 7. Select the merge base; this starts the merge session.
+    // -- 6. Select the merge base (the relay's top bid); this starts the
+    //       merge session. The only message on the top-bid critical path.
     write_msg(&mut stream, MergingMsgId::ActivateBaseBlockV1, &ActivateBaseBlockV1 {
         slot,
         block_hash: base_block_hash,
     })
     .await?;
 
-    // -- 8. Print whatever the builder streams back (pong, rejects, merged
+    // -- 7. Print whatever the builder streams back (pong, rejects, merged
     //       blocks) until it goes quiet.
     println!("--- listening for responses (10s idle timeout) ---");
     loop {
@@ -276,21 +266,12 @@ fn signed_tx_bytes(signer: &PrivateKeySigner, nonce: u64, to: Address, value_wei
     TxEnvelope::Eip1559(tx.into_signed(signature)).encoded_2718()
 }
 
-fn order_meta(order_hash: B256) -> OrderMeta {
-    OrderMeta {
-        order_hash,
-        builder_pubkey: BlsPublicKey::random(),
-        origin_coinbase: Address::random(),
-        source_block_hash: B256::random(),
-    }
-}
-
 fn demo_payload(
     parent_hash: B256,
     fee_recipient: Address,
     block_number: u64,
     block_hash: B256,
-    payment_tx: Vec<u8>,
+    txs: Vec<Vec<u8>>,
 ) -> ExecutionPayloadV3 {
     ExecutionPayloadV3 {
         payload_inner: ExecutionPayloadV2 {
@@ -303,12 +284,12 @@ fn demo_payload(
                 prev_randao: B256::random(),
                 block_number,
                 gas_limit: 36_000_000,
-                gas_used: 21_000,
+                gas_used: 84_000,
                 timestamp: now_nanos() / 1_000_000_000,
                 extra_data: Bytes::from_static(b"example relay"),
                 base_fee_per_gas: U256::from(GWEI),
                 block_hash,
-                transactions: vec![payment_tx.into()],
+                transactions: txs.into_iter().map(Into::into).collect(),
             },
             withdrawals: vec![],
         },

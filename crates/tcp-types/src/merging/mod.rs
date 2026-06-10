@@ -27,10 +27,8 @@ pub enum MergingMsgId {
     PongV1 = 0x04,
     RelayConfigV1 = 0x05,
     SlotStartV1 = 0x10,
-    BaseBlockV1 = 0x11,
+    MergeableBlockV1 = 0x11,
     ActivateBaseBlockV1 = 0x12,
-    OrdersV1 = 0x13,
-    UpdateOrderOriginsV1 = 0x14,
     SlotEndV1 = 0x15,
     MergedBlockV1 = 0x40,
     RejectV1 = 0x70,
@@ -48,10 +46,8 @@ impl TryFrom<u8> for MergingMsgId {
             0x04 => Self::PongV1,
             0x05 => Self::RelayConfigV1,
             0x10 => Self::SlotStartV1,
-            0x11 => Self::BaseBlockV1,
+            0x11 => Self::MergeableBlockV1,
             0x12 => Self::ActivateBaseBlockV1,
-            0x13 => Self::OrdersV1,
-            0x14 => Self::UpdateOrderOriginsV1,
             0x15 => Self::SlotEndV1,
             0x40 => Self::MergedBlockV1,
             0x70 => Self::RejectV1,
@@ -129,7 +125,7 @@ mod tests {
 
     #[test]
     fn header_roundtrip() {
-        let header = MergingFrameHeader::new(MergingMsgId::OrdersV1).with_zstd();
+        let header = MergingFrameHeader::new(MergingMsgId::MergeableBlockV1).with_zstd();
         let mut buf = Vec::new();
         header.append_encoded(&mut buf);
         assert_eq!(buf.len(), MERGING_HEADER_SIZE);

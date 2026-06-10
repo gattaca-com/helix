@@ -70,11 +70,11 @@ pub enum RejectCode {
     NotSynced = 1,
     /// `ActivateBaseBlockV1` for a hash never stored.
     UnknownBaseBlock = 2,
-    /// Last tx is not a proposer payment of `original_value`.
+    /// Last tx is not a proposer payment of `block_value`.
     InvalidPayment = 3,
     /// Base fee recipient not in `builder_collaterals`.
     UnknownCollateral = 4,
-    /// Failed tx validation / bad indices / order_hash mismatch; order dropped.
+    /// Failed tx validation or bad order indices in a forwarded block.
     InvalidOrder = 5,
     StaleSlot = 6,
     LimitExceeded = 7,
