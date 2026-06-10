@@ -1,3 +1,5 @@
+pub mod merging;
+
 use std::fmt::{self, Display};
 
 use bytes::Bytes;
