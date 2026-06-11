@@ -44,6 +44,7 @@ pub struct RelayConfig {
     #[serde(default)]
     pub block_merging_config: BlockMergingConfig,
     pub primev_config: Option<PrimevConfig>,
+    pub registration_sync: Option<RegistrationSyncConfig>,
     pub discord_webhook_url: Option<Url>,
     pub alerts_config: Option<AlertsConfig>,
     pub inclusion_list: Option<InclusionListConfig>,
@@ -91,6 +92,7 @@ impl RelayConfig {
             target_get_payload_propagation_duration_ms: Default::default(),
             block_merging_config: Default::default(),
             primev_config: Default::default(),
+            registration_sync: Default::default(),
             discord_webhook_url: Default::default(),
             alerts_config: Default::default(),
             inclusion_list: Default::default(),
@@ -372,6 +374,18 @@ pub struct PrimevConfig {
     pub validator_contract: String,
 }
 
+/// Sync validator registrations for upcoming proposers from another relay's
+/// `/relay/v1/builder/validators` endpoint and treat them as if the proposers
+/// had registered with this relay. Intended for shadow/test deployments where
+/// no proposer registers directly; must not be enabled on a relay that serves
+/// `GetHeader`/`GetPayload`, as the synced registrations were never addressed
+/// to it.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct RegistrationSyncConfig {
+    /// Base URL of the upstream relay, e.g. `https://relay.example.com`.
+    pub url: Url,
+}
+
 #[derive(Default, Serialize, Deserialize, Clone)]
 #[serde(tag = "type")]
 pub enum LoggingConfig {
@@ -410,6 +424,12 @@ pub struct RouterConfig {
     /// and before terminating.
     #[serde(default = "default_u64::<12_000>")]
     pub shutdown_delay_ms: u64,
+    /// Allow accepting block submissions without serving GetHeader. Normally
+    /// that combination is a misconfiguration, but it is exactly what a
+    /// shadow/test relay wants: collect and simulate bids while never serving
+    /// a header or payload to proposers.
+    #[serde(default)]
+    pub allow_submissions_without_get_header: bool,
 }
 
 impl RouterConfig {
@@ -504,7 +524,7 @@ impl RouterConfig {
             Ok(true)
         } else if is_submission_instance {
             ensure!(
-                is_get_header_instance,
+                is_get_header_instance || self.allow_submissions_without_get_header,
                 "relay is receiving blocks so should have get_header enabled"
             );
             ensure!(
@@ -626,7 +646,25 @@ mod tests {
                 .map(|route| RouteInfo { route, rate_limit: None })
                 .collect(),
             shutdown_delay_ms: 12_000,
+            allow_submissions_without_get_header: false,
         }
+    }
+
+    #[test]
+    fn registration_sync_optional_in_relay_config_yaml() {
+        let yaml = serde_yaml::to_string(&RelayConfig::empty_for_test()).unwrap();
+        let without_field: String = yaml
+            .lines()
+            .filter(|l| !l.starts_with("registration_sync"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let parsed: RelayConfig = serde_yaml::from_str(&without_field).unwrap();
+        assert!(parsed.registration_sync.is_none());
+
+        let with_field =
+            format!("{without_field}\nregistration_sync:\n  url: https://relay.example.com\n");
+        let parsed: RelayConfig = serde_yaml::from_str(&with_field).unwrap();
+        assert_eq!(parsed.registration_sync.unwrap().url.as_str(), "https://relay.example.com/");
     }
 
     #[test]
@@ -692,6 +730,18 @@ mod tests {
                 .to_string()
                 .contains("relay is receiving blocks so should have get_header enabled")
         );
+    }
+
+    #[test]
+    fn test_validate_bid_sorter_submission_without_get_header_shadow_mode() {
+        let mut config = create_router_config(vec![Route::SubmitBlock, Route::GetTopBid]);
+        config.allow_submissions_without_get_header = true;
+
+        // Shadow relay: collects bids but never serves headers. The bid
+        // sorter must still run so submissions are ranked and GetTopBid works.
+        let result = config.validate_bid_sorter();
+        assert!(result.is_ok());
+        assert!(result.unwrap());
     }
 
     #[test]

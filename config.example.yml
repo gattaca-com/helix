@@ -38,6 +38,11 @@ block_merging_config:
   max_merged_bid_age_ms: 250
 target_get_payload_propagation_duration_ms: 0
 primev_config: null
+# Shadow/test relay mode: sync validator registrations for upcoming proposers
+# from another relay and treat them as this relay's own. Disable the
+# GetHeader/GetPayload routes when using this.
+# registration_sync:
+#   url: https://relay.example.com
 discord_webhook_url: null
 is_submission_instance: true
 is_registration_instance: true

@@ -12,7 +12,7 @@ use flux::{
 use flux_utils::SharedVector;
 use helix_common::{
     CurrentSlotInfo, InclusionListConfig, PayloadAttributesUpdate, PrimevConfig, ProposerDuty,
-    RelayConfig, SlotDuties, ValidatorSummary,
+    RegistrationSyncConfig, RelayConfig, SlotDuties, ValidatorPreferences, ValidatorSummary,
     api::builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
     beacon::{
         MultiBeaconClient,
@@ -36,6 +36,7 @@ use crate::{
             PRIMEV_BUILDER_ID, PrimevBuildersFetch, PrimevValidatorsFetch,
             build_primev_builder_configs,
         },
+        registration_sync::{RegistrationSyncFetch, ingest_registrations},
     },
     network::RelayNetworkManager,
     spine::messages::SlotMsg,
@@ -65,6 +66,8 @@ pub struct HousekeeperTile {
     payload_attr_sse: Vec<SseStream>,
     primev_config: Option<PrimevConfig>,
     il_config: Option<InclusionListConfig>,
+    registration_sync_config: Option<RegistrationSyncConfig>,
+    default_validator_preferences: ValidatorPreferences,
 
     // Output
     slot_events: Arc<SharedVector<SlotUpdate>>,
@@ -80,6 +83,7 @@ pub struct HousekeeperTile {
     duties_fetch: Option<DutiesFetchState>,
     primev_builders_fetch: Option<PrimevBuildersFetch>,
     primev_validators_fetch: Option<PrimevValidatorsFetch>,
+    registration_sync_fetch: Option<RegistrationSyncFetch>,
     il_fetch: Option<IlFetchState>,
     pending_il: Option<helix_common::api::builder_api::InclusionListWithMetadata>,
     il_consensus_rx: Option<
@@ -138,6 +142,8 @@ impl HousekeeperTile {
             payload_attr_sse,
             primev_config: config.primev_config.clone(),
             il_config: config.inclusion_list.clone(),
+            registration_sync_config: config.registration_sync.clone(),
+            default_validator_preferences: config.validator_preferences.clone(),
             slot_events,
             local_cache,
             curr_slot_info: curr_slot_info.clone(),
@@ -148,6 +154,7 @@ impl HousekeeperTile {
             duties_fetch: None,
             primev_builders_fetch: None,
             primev_validators_fetch: None,
+            registration_sync_fetch: None,
             il_fetch: None,
             pending_il: None,
             il_consensus_rx: None,
@@ -166,6 +173,7 @@ impl HousekeeperTile {
 
         self.fetch_duties();
         self.maybe_fetch_il();
+        self.maybe_fetch_registration_sync();
 
         let bid_slot = slot + 1;
         for d in &self.duties {
@@ -196,6 +204,12 @@ impl HousekeeperTile {
             self.primev_builders_fetch = PrimevBuildersFetch::new(&self.http_client, cfg);
             self.primev_validators_fetch =
                 PrimevValidatorsFetch::new(&self.http_client, cfg, self.duties.clone());
+        }
+    }
+
+    fn maybe_fetch_registration_sync(&mut self) {
+        if let Some(cfg) = &self.registration_sync_config {
+            self.registration_sync_fetch = RegistrationSyncFetch::new(&self.http_client, cfg);
         }
     }
 
@@ -303,6 +317,26 @@ impl Tile<HelixSpine> for HousekeeperTile {
             if !validators.is_empty() {
                 info!(validators = validators.len(), "fetched primev validators");
                 self.local_cache.update_primev_proposers(&validators);
+            }
+        }
+
+        // Poll registration sync from upstream relay (shadow relay mode)
+        if let Some(state) = &mut self.registration_sync_fetch &&
+            let Poll::Ready(entries) = state.poll()
+        {
+            self.registration_sync_fetch = None;
+            let ingested = ingest_registrations(
+                entries,
+                &self.default_validator_preferences,
+                &self.local_cache,
+            );
+            if ingested > 0 {
+                info!(ingested, "synced validator registrations from upstream relay");
+                // Rebuild formatted duties so the new registrations are picked up
+                // without waiting for the next duties fetch.
+                if !self.duties.is_empty() {
+                    process_duties(&self.duties, &self.local_cache, &self.db);
+                }
             }
         }
 
