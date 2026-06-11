@@ -14,6 +14,7 @@ pub struct TxSimRow {
     pub slot: u64,
     pub block_hash: [u8; 32],
     pub tx_hash: [u8; 32],
+    pub from_address: [u8; 20],
     pub to_address: [u8; 20],
     pub index: u32,
     pub builder_payment: UInt256,

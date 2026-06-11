@@ -263,6 +263,7 @@ impl ValidationApi {
             let mut rows = Vec::with_capacity(output.result.receipts.len());
             let timestamp = (block.header().timestamp() * 1_000_000_000) as i64;
 
+            let senders = block.senders();
             for (tx_index, tx) in block.body().transactions().enumerate() {
                 let new_cb = per_tx_coinbase.get(tx_index).and_then(|b| *b).unwrap_or(prev_cb);
                 let cb_delta = new_cb.saturating_sub(prev_cb);
@@ -272,6 +273,7 @@ impl ValidationApi {
                     slot: message.slot,
                     block_hash: message.block_hash.0,
                     tx_hash: tx.tx_hash().0,
+                    from_address: senders.get(tx_index).map(|a| a.0.0).unwrap_or_default(),
                     to_address: tx.to().map(|a| a.0.0).unwrap_or_default(),
                     index: tx_index as u32,
                     builder_payment: clickhouse::types::UInt256::from_le_bytes(
