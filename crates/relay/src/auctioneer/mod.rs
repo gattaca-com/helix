@@ -46,7 +46,7 @@ use crate::{
     simulator::{SimRequest, SimResult},
     spine::{
         HelixSpineProducers,
-        messages::{DecodedSubmission, FromSimMsg, SlotMsg},
+        messages::{DecodedSubmission, FromSimMsg, MergedBlockMsg, SlotMsg},
     },
 };
 pub use crate::{
@@ -67,6 +67,7 @@ pub struct Auctioneer<B: BidAdjustor> {
     event_rx: crossbeam_channel::Receiver<Event>,
     sim_results: Arc<SharedVector<SimResult>>,
     slot_events: Arc<SharedVector<SlotUpdate>>,
+    merged_blocks: Arc<SharedVector<BlockMergeResponse>>,
 }
 
 impl<B: BidAdjustor> Auctioneer<B> {
@@ -88,6 +89,7 @@ impl<B: BidAdjustor> Auctioneer<B> {
         accept_optimistic: Arc<AtomicBool>,
         failsafe_triggered: Arc<AtomicBool>,
         slot_events: Arc<SharedVector<SlotUpdate>>,
+        merged_blocks: Arc<SharedVector<BlockMergeResponse>>,
         alert_manager: Arc<AlertManager>,
     ) -> Self {
         let ctx = Context::new(
@@ -112,6 +114,7 @@ impl<B: BidAdjustor> Auctioneer<B> {
             event_rx,
             sim_results,
             slot_events,
+            merged_blocks,
         }
     }
 }
@@ -143,6 +146,15 @@ impl<B: BidAdjustor> Tile<HelixSpine> for Auctioneer<B> {
                 SimResult::Validate(sim_result) => Event::SimResult(sim_result.clone()),
                 SimResult::Merge(merge_result) => Event::MergeResult(merge_result.clone()),
             };
+            self.state.step(event, &mut self.ctx, &mut self.tel, producers);
+        });
+
+        adapter.consume(|msg: MergedBlockMsg, producers| {
+            let Some(response) = self.merged_blocks.get(msg.ix) else {
+                tracing::error!(?msg, "merged block not found");
+                return;
+            };
+            let event = Event::MergeResult((0, Ok(response.as_ref().clone())));
             self.state.step(event, &mut self.ctx, &mut self.tel, producers);
         });
 

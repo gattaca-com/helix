@@ -1,6 +1,7 @@
 mod api;
 mod auctioneer;
 mod bid_decoder;
+mod block_merging;
 mod data_gatherer;
 mod gossip;
 mod housekeeper;
@@ -31,11 +32,12 @@ pub use crate::{
         SimulatorTile, SlotData, SubmissionPayload, SubmissionRef, ValidationRequest,
     },
     bid_decoder::{DecoderTile, SubmissionDataWithSpan},
+    block_merging::BlockMergingTile,
     data_gatherer::DataGatherer,
     housekeeper::{HousekeeperTile, SlotUpdate},
     network::RelayNetworkManager,
     registration::{RegWorkerHandle, RegistrationTile},
-    simulator::{SimRequest, SimResult},
+    simulator::{BlockMergeResponse, SimRequest, SimResult},
     spine::{
         HelixSpine, HelixSpineConfig,
         messages::{NewBidSubmission, SlotMsg},

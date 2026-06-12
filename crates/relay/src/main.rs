@@ -27,11 +27,12 @@ use helix_common::{
     utils::{init_panic_hook, init_tracing_log},
 };
 use helix_relay::{
-    Api, Auctioneer, AuctioneerHandle, BidSorter, BidSubmissionTcpListener, DataGatherer, DbHandle,
-    DecoderTile, DefaultBidAdjustor, FutureBidSubmissionResult, HelixSpine, HelixSpineConfig,
-    HousekeeperTile, NewBidSubmission, RegWorkerHandle, RegistrationTile, RelayNetworkManager,
-    SimRequest, SimResult, SimulatorTile, SlotUpdate, SubmissionDataWithSpan, TopBidTile,
-    spawn_tokio_monitoring, start_admin_service, start_api_service, start_db_service,
+    Api, Auctioneer, AuctioneerHandle, BidSorter, BidSubmissionTcpListener, BlockMergeResponse,
+    BlockMergingTile, DataGatherer, DbHandle, DecoderTile, DefaultBidAdjustor,
+    FutureBidSubmissionResult, HelixSpine, HelixSpineConfig, HousekeeperTile, NewBidSubmission,
+    RegWorkerHandle, RegistrationTile, RelayNetworkManager, SimRequest, SimResult, SimulatorTile,
+    SlotUpdate, SubmissionDataWithSpan, TopBidTile, spawn_tokio_monitoring, start_admin_service,
+    start_api_service, start_db_service,
 };
 use helix_types::BlsKeypair;
 use helix_website::WebsiteService;
@@ -234,7 +235,7 @@ async fn run(
             if config.clickhouse.is_some() || config.s3_config.is_some() {
                 let data_gatherer = DataGatherer::new(
                     decoded.clone(),
-                    instance_id,
+                    instance_id.clone(),
                     config.clickhouse.as_ref(),
                     config.s3_config.clone(),
                 );
@@ -296,6 +297,25 @@ async fn run(
             let sim_core = config.cores.simulator;
             attach_tile(sim_tile, spine, TileConfig::new(sim_core, ThreadPriority::OSDefault));
 
+            let merged_blocks = Arc::new(SharedVector::<BlockMergeResponse>::with_capacity(1024));
+
+            if config.block_merging_config.is_enabled &&
+                let Some(merging_tcp) = config.block_merging_config.tcp.clone()
+            {
+                let merging_tile = BlockMergingTile::new(
+                    merging_tcp,
+                    instance_id,
+                    decoded.clone(),
+                    slot_events.clone(),
+                    merged_blocks.clone(),
+                );
+                attach_tile(
+                    merging_tile,
+                    spine,
+                    TileConfig::new(config.cores.block_merging, ThreadPriority::OSDefault),
+                );
+            }
+
             let auctioneer_core = config.cores.auctioneer;
             let auctioneer = Auctioneer::new(
                 chain_info.as_ref().clone(),
@@ -314,6 +334,7 @@ async fn run(
                 accept_optimistic,
                 failsafe_triggered,
                 slot_events,
+                merged_blocks,
                 alert_manager.clone(),
             );
             attach_tile(

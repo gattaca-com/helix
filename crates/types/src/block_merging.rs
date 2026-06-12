@@ -162,6 +162,8 @@ pub struct BlobWithMetadata {
 pub struct MergeableOrdersWithPref {
     pub allow_appending: bool,
     pub orders: MergeableOrders,
+    /// Raw index-based refs into the submission's transactions, as submitted.
+    pub merge_orders: Vec<Order>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

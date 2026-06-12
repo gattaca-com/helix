@@ -1,7 +1,10 @@
 use std::{cmp::Ordering, sync::Arc};
 
 use alloy_primitives::{Address, B256, U256};
-use alloy_rpc_types::beacon::relay::SignedBidSubmissionV5;
+use alloy_rpc_types::{
+    beacon::{relay::SignedBidSubmissionV5, requests::ExecutionRequestsV4},
+    engine::ExecutionPayloadV3,
+};
 use lh_types::{ForkName, SignedRoot, Slot, test_utils::TestRandom};
 use serde::{Deserialize, Serialize};
 use ssz::{Decode, DecodeError};
@@ -197,12 +200,172 @@ impl TestRandom for SignedBidSubmission {
     }
 }
 
+/// `ExecutionPayload`/`ExecutionRequests` ⇄ alloy engine V3 / requests V4.
+/// Shared by the V5 submission conversion and the block-merging TCP protocol.
+pub fn payload_from_v3(v3: ExecutionPayloadV3) -> ExecutionPayload {
+    use crate::fields::{Transaction, Withdrawal};
+    let v2 = v3.payload_inner;
+    let v1 = v2.payload_inner;
+    ExecutionPayload {
+        parent_hash: v1.parent_hash,
+        fee_recipient: v1.fee_recipient,
+        state_root: v1.state_root,
+        receipts_root: v1.receipts_root,
+        logs_bloom: *v1.logs_bloom,
+        prev_randao: v1.prev_randao,
+        block_number: v1.block_number,
+        gas_limit: v1.gas_limit,
+        gas_used: v1.gas_used,
+        timestamp: v1.timestamp,
+        extra_data: ExtraData(v1.extra_data),
+        base_fee_per_gas: v1.base_fee_per_gas,
+        block_hash: v1.block_hash,
+        transactions: lh_types::VariableList::new(
+            v1.transactions.into_iter().map(Transaction).collect(),
+        )
+        .expect("transactions exceed spec limit"),
+        withdrawals: lh_types::VariableList::new(
+            v2.withdrawals
+                .into_iter()
+                .map(|w| Withdrawal {
+                    index: w.index,
+                    validator_index: w.validator_index,
+                    address: w.address,
+                    amount: w.amount,
+                })
+                .collect(),
+        )
+        .expect("withdrawals exceed spec limit"),
+        blob_gas_used: v3.blob_gas_used,
+        excess_blob_gas: v3.excess_blob_gas,
+    }
+}
+
+pub fn payload_to_v3(ep: &ExecutionPayload) -> ExecutionPayloadV3 {
+    use alloy_eips::eip4895::Withdrawal as AlloyWithdrawal;
+    use alloy_rpc_types::engine::{ExecutionPayloadV1, ExecutionPayloadV2};
+    ExecutionPayloadV3 {
+        payload_inner: ExecutionPayloadV2 {
+            payload_inner: ExecutionPayloadV1 {
+                parent_hash: ep.parent_hash,
+                fee_recipient: ep.fee_recipient,
+                state_root: ep.state_root,
+                receipts_root: ep.receipts_root,
+                logs_bloom: alloy_primitives::Bloom(ep.logs_bloom),
+                prev_randao: ep.prev_randao,
+                block_number: ep.block_number,
+                gas_limit: ep.gas_limit,
+                gas_used: ep.gas_used,
+                timestamp: ep.timestamp,
+                extra_data: ep.extra_data.0.clone(),
+                base_fee_per_gas: ep.base_fee_per_gas,
+                block_hash: ep.block_hash,
+                transactions: ep.transactions.iter().map(|t| t.0.clone()).collect(),
+            },
+            withdrawals: ep
+                .withdrawals
+                .iter()
+                .map(|w| AlloyWithdrawal {
+                    index: w.index,
+                    validator_index: w.validator_index,
+                    address: w.address,
+                    amount: w.amount,
+                })
+                .collect(),
+        },
+        blob_gas_used: ep.blob_gas_used,
+        excess_blob_gas: ep.excess_blob_gas,
+    }
+}
+
+pub fn requests_from_v4(v4: ExecutionRequestsV4) -> ExecutionRequests {
+    ExecutionRequests {
+        deposits: lh_types::VariableList::new(
+            v4.deposits
+                .into_iter()
+                .map(|d| lh_types::DepositRequest {
+                    pubkey: lh_types::PublicKeyBytes::deserialize(&d.pubkey[..]).expect("len=48"),
+                    withdrawal_credentials: d.withdrawal_credentials,
+                    amount: d.amount,
+                    signature: lh_types::SignatureBytes::deserialize(&d.signature[..])
+                        .expect("len=96"),
+                    index: d.index,
+                })
+                .collect(),
+        )
+        .expect("deposits exceed spec limit"),
+        withdrawals: lh_types::VariableList::new(
+            v4.withdrawals
+                .into_iter()
+                .map(|w| lh_types::WithdrawalRequest {
+                    source_address: w.source_address,
+                    validator_pubkey: lh_types::PublicKeyBytes::deserialize(
+                        &w.validator_pubkey[..],
+                    )
+                    .expect("len=48"),
+                    amount: w.amount,
+                })
+                .collect(),
+        )
+        .expect("withdrawal requests exceed spec limit"),
+        consolidations: lh_types::VariableList::new(
+            v4.consolidations
+                .into_iter()
+                .map(|c| lh_types::ConsolidationRequest {
+                    source_address: c.source_address,
+                    source_pubkey: lh_types::PublicKeyBytes::deserialize(&c.source_pubkey[..])
+                        .expect("len=48"),
+                    target_pubkey: lh_types::PublicKeyBytes::deserialize(&c.target_pubkey[..])
+                        .expect("len=48"),
+                })
+                .collect(),
+        )
+        .expect("consolidations exceed spec limit"),
+    }
+}
+
+pub fn requests_to_v4(er: &ExecutionRequests) -> ExecutionRequestsV4 {
+    use alloy_eips::{
+        eip6110::DepositRequest as AlloyDepositRequest,
+        eip7002::WithdrawalRequest as AlloyWithdrawalRequest,
+        eip7251::ConsolidationRequest as AlloyConsolidationRequest,
+    };
+    ExecutionRequestsV4 {
+        deposits: er
+            .deposits
+            .iter()
+            .map(|d| AlloyDepositRequest {
+                pubkey: d.pubkey.serialize().into(),
+                withdrawal_credentials: d.withdrawal_credentials,
+                amount: d.amount,
+                signature: d.signature.serialize().into(),
+                index: d.index,
+            })
+            .collect(),
+        withdrawals: er
+            .withdrawals
+            .iter()
+            .map(|w| AlloyWithdrawalRequest {
+                source_address: w.source_address,
+                validator_pubkey: w.validator_pubkey.serialize().into(),
+                amount: w.amount,
+            })
+            .collect(),
+        consolidations: er
+            .consolidations
+            .iter()
+            .map(|c| AlloyConsolidationRequest {
+                source_address: c.source_address,
+                source_pubkey: c.source_pubkey.serialize().into(),
+                target_pubkey: c.target_pubkey.serialize().into(),
+            })
+            .collect(),
+    }
+}
+
 impl From<SignedBidSubmissionV5> for SignedBidSubmission {
     fn from(v: SignedBidSubmissionV5) -> SignedBidSubmission {
-        use crate::fields::{Transaction, Withdrawal};
         let m = v.message;
-        let v2 = v.execution_payload.payload_inner;
-        let v1 = v2.payload_inner;
         SignedBidSubmission {
             message: BidTrace {
                 slot: m.slot,
@@ -215,96 +378,14 @@ impl From<SignedBidSubmissionV5> for SignedBidSubmission {
                 gas_used: m.gas_used,
                 value: m.value,
             },
-            execution_payload: Arc::new(ExecutionPayload {
-                parent_hash: v1.parent_hash,
-                fee_recipient: v1.fee_recipient,
-                state_root: v1.state_root,
-                receipts_root: v1.receipts_root,
-                logs_bloom: *v1.logs_bloom,
-                prev_randao: v1.prev_randao,
-                block_number: v1.block_number,
-                gas_limit: v1.gas_limit,
-                gas_used: v1.gas_used,
-                timestamp: v1.timestamp,
-                extra_data: ExtraData(v1.extra_data),
-                base_fee_per_gas: v1.base_fee_per_gas,
-                block_hash: v1.block_hash,
-                transactions: lh_types::VariableList::new(
-                    v1.transactions.into_iter().map(Transaction).collect(),
-                )
-                .expect("transactions exceed spec limit"),
-                withdrawals: lh_types::VariableList::new(
-                    v2.withdrawals
-                        .into_iter()
-                        .map(|w| Withdrawal {
-                            index: w.index,
-                            validator_index: w.validator_index,
-                            address: w.address,
-                            amount: w.amount,
-                        })
-                        .collect(),
-                )
-                .expect("withdrawals exceed spec limit"),
-                blob_gas_used: v.execution_payload.blob_gas_used,
-                excess_blob_gas: v.execution_payload.excess_blob_gas,
-            }),
+            execution_payload: Arc::new(payload_from_v3(v.execution_payload)),
             blobs_bundle: Arc::new(BlobsBundle {
                 commitments: lh_types::VariableList::new(v.blobs_bundle.commitments)
                     .expect("commitments exceed spec limit"),
                 proofs: v.blobs_bundle.proofs,
                 blobs: v.blobs_bundle.blobs.into_iter().map(Arc::new).collect(),
             }),
-            execution_requests: Arc::new(ExecutionRequests {
-                deposits: lh_types::VariableList::new(
-                    v.execution_requests
-                        .deposits
-                        .into_iter()
-                        .map(|d| lh_types::DepositRequest {
-                            pubkey: lh_types::PublicKeyBytes::deserialize(&d.pubkey[..])
-                                .expect("len=48"),
-                            withdrawal_credentials: d.withdrawal_credentials,
-                            amount: d.amount,
-                            signature: lh_types::SignatureBytes::deserialize(&d.signature[..])
-                                .expect("len=96"),
-                            index: d.index,
-                        })
-                        .collect(),
-                )
-                .expect("deposits exceed spec limit"),
-                withdrawals: lh_types::VariableList::new(
-                    v.execution_requests
-                        .withdrawals
-                        .into_iter()
-                        .map(|w| lh_types::WithdrawalRequest {
-                            source_address: w.source_address,
-                            validator_pubkey: lh_types::PublicKeyBytes::deserialize(
-                                &w.validator_pubkey[..],
-                            )
-                            .expect("len=48"),
-                            amount: w.amount,
-                        })
-                        .collect(),
-                )
-                .expect("withdrawal requests exceed spec limit"),
-                consolidations: lh_types::VariableList::new(
-                    v.execution_requests
-                        .consolidations
-                        .into_iter()
-                        .map(|c| lh_types::ConsolidationRequest {
-                            source_address: c.source_address,
-                            source_pubkey: lh_types::PublicKeyBytes::deserialize(
-                                &c.source_pubkey[..],
-                            )
-                            .expect("len=48"),
-                            target_pubkey: lh_types::PublicKeyBytes::deserialize(
-                                &c.target_pubkey[..],
-                            )
-                            .expect("len=48"),
-                        })
-                        .collect(),
-                )
-                .expect("consolidations exceed spec limit"),
-            }),
+            execution_requests: Arc::new(requests_from_v4(v.execution_requests)),
             signature: v.signature,
         }
     }
@@ -312,20 +393,9 @@ impl From<SignedBidSubmissionV5> for SignedBidSubmission {
 
 impl From<SignedBidSubmission> for SignedBidSubmissionV5 {
     fn from(s: SignedBidSubmission) -> SignedBidSubmissionV5 {
-        use alloy_eips::{
-            eip4895::Withdrawal as AlloyWithdrawal, eip6110::DepositRequest as AlloyDepositRequest,
-            eip7002::WithdrawalRequest as AlloyWithdrawalRequest,
-            eip7251::ConsolidationRequest as AlloyConsolidationRequest,
-        };
         // alloy re-exports this as the same type but with a different struct name
-        use alloy_rpc_types::beacon::relay::BidTrace as AlloyBidTrace;
-        use alloy_rpc_types::{
-            beacon::requests::ExecutionRequestsV4,
-            engine::{BlobsBundleV2, ExecutionPayloadV1, ExecutionPayloadV2, ExecutionPayloadV3},
-        };
-        let ep = &*s.execution_payload;
+        use alloy_rpc_types::{beacon::relay::BidTrace as AlloyBidTrace, engine::BlobsBundleV2};
         let bb = &*s.blobs_bundle;
-        let er = &*s.execution_requests;
         let m = s.message;
         SignedBidSubmissionV5 {
             message: AlloyBidTrace {
@@ -339,74 +409,13 @@ impl From<SignedBidSubmission> for SignedBidSubmissionV5 {
                 gas_used: m.gas_used,
                 value: m.value,
             },
-            execution_payload: ExecutionPayloadV3 {
-                payload_inner: ExecutionPayloadV2 {
-                    payload_inner: ExecutionPayloadV1 {
-                        parent_hash: ep.parent_hash,
-                        fee_recipient: ep.fee_recipient,
-                        state_root: ep.state_root,
-                        receipts_root: ep.receipts_root,
-                        logs_bloom: alloy_primitives::Bloom(ep.logs_bloom),
-                        prev_randao: ep.prev_randao,
-                        block_number: ep.block_number,
-                        gas_limit: ep.gas_limit,
-                        gas_used: ep.gas_used,
-                        timestamp: ep.timestamp,
-                        extra_data: ep.extra_data.0.clone(),
-                        base_fee_per_gas: ep.base_fee_per_gas,
-                        block_hash: ep.block_hash,
-                        transactions: ep.transactions.iter().map(|t| t.0.clone()).collect(),
-                    },
-                    withdrawals: ep
-                        .withdrawals
-                        .iter()
-                        .map(|w| AlloyWithdrawal {
-                            index: w.index,
-                            validator_index: w.validator_index,
-                            address: w.address,
-                            amount: w.amount,
-                        })
-                        .collect(),
-                },
-                blob_gas_used: ep.blob_gas_used,
-                excess_blob_gas: ep.excess_blob_gas,
-            },
+            execution_payload: payload_to_v3(&s.execution_payload),
             blobs_bundle: BlobsBundleV2 {
                 commitments: bb.commitments.iter().cloned().collect(),
                 proofs: bb.proofs.clone(),
                 blobs: bb.blobs.iter().map(|b| (**b).clone()).collect(),
             },
-            execution_requests: ExecutionRequestsV4 {
-                deposits: er
-                    .deposits
-                    .iter()
-                    .map(|d| AlloyDepositRequest {
-                        pubkey: d.pubkey.serialize().into(),
-                        withdrawal_credentials: d.withdrawal_credentials,
-                        amount: d.amount,
-                        signature: d.signature.serialize().into(),
-                        index: d.index,
-                    })
-                    .collect(),
-                withdrawals: er
-                    .withdrawals
-                    .iter()
-                    .map(|w| AlloyWithdrawalRequest {
-                        source_address: w.source_address,
-                        validator_pubkey: w.validator_pubkey.serialize().into(),
-                        amount: w.amount,
-                    })
-                    .collect(),
-                consolidations: er
-                    .consolidations
-                    .iter()
-                    .map(|c| AlloyConsolidationRequest {
-                        source_address: c.source_address,
-                        source_pubkey: c.source_pubkey.serialize().into(),
-                        target_pubkey: c.target_pubkey.serialize().into(),
-                    })
-                    .collect(),
-            },
+            execution_requests: requests_to_v4(&s.execution_requests),
             signature: s.signature,
         }
     }
