@@ -78,7 +78,7 @@ pub struct ToSimMsg {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToSimKind {
-    /// SimRequest or MergeRequest stored at `ix`.
+    /// MergeRequest stored at `ix`.
     Request,
     NewSlot,
 }
@@ -104,4 +104,17 @@ pub struct BidUpdate {
 #[derive(Debug, Clone, Copy)]
 pub struct SlotMsg {
     pub ix: usize,
+}
+
+/// SimulatorTile → Auctioneer: a merged block is ready.
+#[derive(Debug, Clone, Copy)]
+pub struct MergedBlockSubmission {
+    pub ix: usize,
+}
+
+/// Auctioneer → SimulatorTile: top bid changed (base block tracking).
+#[derive(Debug, Clone, Copy)]
+pub struct TopBidForSim {
+    pub block_hash: B256,
+    pub slot: u64,
 }

@@ -224,8 +224,6 @@ impl DecoderTile {
         let merging_data = if config.block_merging_config.is_enabled {
             merging_data.and_then(|data| {
                 if let Submission::Full(ref signed_bid_submission) = submission {
-                    // TODO: split up mergeable order and submission processing to
-                    // avoid delaying the bid update
                     match get_mergeable_orders(signed_bid_submission, &data) {
                         Ok(orders) => Some(MergeableOrdersWithPref {
                             allow_appending: data.allow_appending,

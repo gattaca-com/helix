@@ -3,15 +3,15 @@ use std::collections::HashMap;
 use alloy_primitives::{Address, B256, U256};
 use helix_common::{
     api::builder_api::InclusionListWithMetadata, bid_submission::OptimisticVersion,
-    simulator::BlockSimError,
 };
 use helix_types::{
     BuilderInclusionResult, ExecutionPayload, ExecutionRequests, MergeableOrderWithOrigin,
     MergedBlockTrace,
 };
 
-use crate::{SubmissionRef, simulator::tile::ValidationResult};
+use crate::{PayloadEntry, SubmissionRef, simulator::tile::ValidationResult};
 
+pub mod block_merger;
 pub mod client;
 pub mod tile;
 
@@ -50,8 +50,6 @@ pub struct MergeRequest {
     pub block_hash: B256,
 }
 
-pub type MergeResult = (usize, Result<BlockMergeResponse, BlockSimError>);
-
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BlockMergeResponse {
     pub base_block_hash: B256,
@@ -68,15 +66,13 @@ pub struct BlockMergeResponse {
 /// Large payload stored in `SharedVector` for auctioneer → sim tile transfer.
 pub enum SimRequest {
     Validate { req: Box<ValidationRequest>, fast_track: bool },
-    Merge(MergeRequest),
 }
 
-/// Large payload stored in `SharedVector` for sim tile → auctioneer transfer.
+/// Stored in `sim_results` SharedVector: SimulatorTile → Auctioneer.
 pub enum SimResult {
     Validate(ValidationResult),
-    Merge(MergeResult),
+    MergedPayload(Box<PayloadEntry>),
 }
-
 impl ValidationRequest {
     pub fn on_receive_ns(&self) -> u64 {
         self.receive_ns

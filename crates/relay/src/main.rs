@@ -17,6 +17,7 @@ use flux_utils::SharedVector;
 use helix_common::{
     RelayConfig,
     alerts::AlertManager,
+    api::builder_api::InclusionListWithMetadata,
     api_provider::DefaultApiProvider,
     beacon::{create_beacon_client, load_chain_info},
     expect_env_var, load_config, load_keypair,
@@ -285,6 +286,7 @@ async fn run(
                 Arc::new(SharedVector::<SimRequest>::with_capacity(MAX_SUBMISSIONS_PER_SLOT));
             let sim_results =
                 Arc::new(SharedVector::<SimResult>::with_capacity(MAX_SUBMISSIONS_PER_SLOT));
+            let sim_il = Arc::new(SharedVector::<InclusionListWithMetadata>::with_capacity(64));
 
             let (accept_optimistic, failsafe_triggered, sim_tile) = SimulatorTile::create(
                 config.simulators.clone(),
@@ -292,6 +294,8 @@ async fn run(
                 sim_results.clone(),
                 decoded.clone(),
                 chain_info.as_ref().clone(),
+                config.clone(),
+                sim_il.clone(),
             );
             let sim_core = config.cores.simulator;
             attach_tile(sim_tile, spine, TileConfig::new(sim_core, ThreadPriority::OSDefault));
@@ -315,6 +319,7 @@ async fn run(
                 failsafe_triggered,
                 slot_events,
                 alert_manager.clone(),
+                sim_il.clone(),
             );
             attach_tile(
                 auctioneer,

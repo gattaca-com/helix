@@ -36,7 +36,6 @@ use crate::{
         HEADER_API_KEY, HEADER_API_TOKEN, HEADER_HYDRATE, HEADER_IS_MERGEABLE, HEADER_MERGE_TYPE,
         HEADER_PESSIMISTIC, HEADER_SEQUENCE, HEADER_WITH_ADJUSTMENTS, proposer::ProposerApiError,
     },
-    auctioneer::MergeResult,
     gossip::BroadcastPayloadParams,
     simulator::tile::ValidationResult,
 };
@@ -464,7 +463,7 @@ pub enum Event {
     },
     GossipPayload(BroadcastPayloadParams),
     SimResult(ValidationResult),
-    MergeResult(MergeResult),
+    MergedPayload(PayloadEntry),
     BuilderDemotion {
         slot: Slot,
         builder_pubkey: BlsPublicKeyBytes,
@@ -482,7 +481,7 @@ impl Event {
             Event::GetPayload { .. } => "GetPayload",
             Event::GossipPayload(_) => "GossipPayload",
             Event::SimResult(_) => "SimResult",
-            Event::MergeResult(_) => "MergeResult",
+            Event::MergedPayload(_) => "MergedPayload",
             Event::BuilderDemotion { .. } => "BuilderDemotion",
         }
     }

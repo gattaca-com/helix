@@ -34,4 +34,12 @@ pub struct HelixSpine {
     /// HousekeeperTile → all consumers.
     #[queue(size(2usize.pow(6)))]
     pub housekeeper_slot: SpineQueue<messages::SlotMsg>,
+
+    /// Auctioneer → SimulatorTile: top-bid updates for base block tracking.
+    #[queue(size(2usize.pow(16)))]
+    pub top_bid_for_sim: SpineQueue<messages::TopBidForSim>,
+
+    /// SimulatorTile → Auctioneer: merged block result ready.
+    #[queue(size(2usize.pow(10)))]
+    pub merged_block: SpineQueue<messages::MergedBlockSubmission>,
 }

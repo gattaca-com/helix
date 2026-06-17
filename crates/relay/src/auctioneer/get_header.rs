@@ -43,7 +43,7 @@ impl<B: BidAdjustor> Context<B> {
             return Err(ProposerApiError::NoBidPrepared);
         };
 
-        if let Some(merged_bid) = self.block_merger.get_header(original_bid) {
+        if let Some(merged_bid) = self.merged_bid_cache.get_header(original_bid) {
             return Ok(merged_bid);
         };
 
