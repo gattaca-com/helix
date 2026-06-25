@@ -106,6 +106,7 @@ impl RelayConfig {
                 simulator: 5,
                 top_bid: 1,
                 data_gatherer: 3,
+                block_merging: 0,
                 housekeeper: None,
             },
             gossip_payload_on_header: false,
@@ -163,6 +164,8 @@ pub struct CoresConfig {
     pub top_bid: usize,
     #[serde(default)]
     pub data_gatherer: usize,
+    #[serde(default)]
+    pub block_merging: usize,
     pub housekeeper: Option<usize>,
 }
 
@@ -237,6 +240,37 @@ pub struct BlockMergingConfig {
     /// Flag to allow dry run mode.
     #[serde(default = "default_bool::<false>")]
     pub is_dry_run: bool,
+    /// Builder-side merging over TCP. Tile is only spawned if set.
+    #[serde(default)]
+    pub tcp: Option<BlockMergingTcpConfig>,
+}
+
+/// Mirrors `RelayConfigV1` fields; kept local so helix-common does not depend
+/// on helix-tcp-types.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct BlockMergingTcpConfig {
+    pub builders: Vec<MergingBuilderEndpoint>,
+    pub relay_fee_recipient: Address,
+    pub multisend_contract: Address,
+    pub relay_bps: u64,
+    pub merged_builder_bps: u64,
+    pub winning_builder_bps: u64,
+    #[serde(default = "default_u64::<140_000>")]
+    pub distribution_gas_limit: u64,
+    pub builder_collaterals: Vec<MergingBuilderCollateral>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct MergingBuilderEndpoint {
+    pub addr: std::net::SocketAddr,
+    /// UUID api key, validated by the builder on registration.
+    pub api_key: String,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct MergingBuilderCollateral {
+    pub builder_coinbase: Address,
+    pub collateral_safe: Address,
 }
 
 pub const fn default_u16<const U: u16>() -> u16 {

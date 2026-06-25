@@ -6,19 +6,19 @@ use crate::api::builder::error::BuilderApiError;
 #[derive(Debug, thiserror::Error)]
 pub enum BidSubmissionError {
     #[error("Internal error")]
-    InternalError,
+    Internal,
     #[error(transparent)]
-    BuilderApiError(#[from] BuilderApiError),
+    BuilderApi(#[from] BuilderApiError),
     #[error(transparent)]
-    ParseError(#[from] ParseError),
+    Parse(#[from] ParseError),
 }
 
 impl From<&BidSubmissionError> for Status {
     fn from(e: &BidSubmissionError) -> Self {
         match e {
-            BidSubmissionError::InternalError => Status::InternalError,
-            BidSubmissionError::BuilderApiError(_) => Status::InvalidRequest,
-            BidSubmissionError::ParseError(_) => Status::InvalidRequest,
+            BidSubmissionError::Internal => Status::InternalError,
+            BidSubmissionError::BuilderApi(_) => Status::InvalidRequest,
+            BidSubmissionError::Parse(_) => Status::InvalidRequest,
         }
     }
 }

@@ -145,7 +145,7 @@ impl InternalBidSubmissionHeader {
         }
     }
 
-    pub fn to_bytes(&self) -> SerialisedHeader {
+    pub fn to_bytes(self) -> SerialisedHeader {
         let mut buf = [0u8; Self::MAX_SERIALISED_LEN];
         buf[0..16].copy_from_slice(self.id.as_bytes());
         buf[16] = self.sequence_number.is_some() as u8;

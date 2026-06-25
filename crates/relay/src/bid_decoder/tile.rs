@@ -240,6 +240,7 @@ impl DecoderTile {
                         Ok(orders) => Some(MergeableOrdersWithPref {
                             allow_appending: data.allow_appending,
                             orders,
+                            merge_orders: data.merge_orders,
                         }),
                         Err(err) => {
                             tracing::error!(%err, "failed to process mergeable orders");

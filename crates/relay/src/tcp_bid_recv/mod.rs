@@ -97,7 +97,7 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                                 token,
                                 None,
                                 None,
-                                BidSubmissionError::ParseError(e),
+                                BidSubmissionError::Parse(e),
                             ));
                             return None;
                         }

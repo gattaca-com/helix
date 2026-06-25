@@ -36,6 +36,19 @@ router_config:
 block_merging_config:
   is_enabled: false
   max_merged_bid_age_ms: 250
+  # tcp:
+  #   builders:
+  #     - addr: "127.0.0.1:9876"
+  #       api_key: "00000000-0000-0000-0000-000000000001"
+  #   relay_fee_recipient: "0x0000000000000000000000000000000000000000"
+  #   multisend_contract: "0x0000000000000000000000000000000000000000"
+  #   relay_bps: 2500
+  #   merged_builder_bps: 2500
+  #   winning_builder_bps: 2500
+  #   distribution_gas_limit: 140000
+  #   builder_collaterals:
+  #     - builder_coinbase: "0x0000000000000000000000000000000000000000"
+  #       collateral_safe: "0x0000000000000000000000000000000000000000"
 target_get_payload_propagation_duration_ms: 0
 primev_config: null
 discord_webhook_url: null
@@ -50,3 +63,4 @@ cores:
   sub_workers: [2, 3, 4, 5]
   reg_workers: [6, 7, 8, 9]
   tokio: [10, 11, 12, 13]
+  # block_merging: 14

@@ -24,6 +24,10 @@ pub struct HelixSpine {
     #[queue(size(2usize.pow(16)))]
     pub from_sim: SpineQueue<messages::FromSimMsg>,
 
+    /// BlockMergingTile → Auctioneer.
+    #[queue(size(2usize.pow(10)))]
+    pub merged_block: SpineQueue<messages::MergedBlockMsg>,
+
     /// Auctioneer → TopBidTile.
     #[queue(size(2usize.pow(16)))]
     pub top_bid: SpineQueue<messages::TopBidUpdate>,

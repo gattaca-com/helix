@@ -1,6 +1,7 @@
 mod api;
 mod auctioneer;
 mod bid_decoder;
+mod block_merging;
 mod data_gatherer;
 mod gossip;
 mod housekeeper;
@@ -31,11 +32,12 @@ pub use crate::{
         SimulatorTile, SlotData, SubmissionPayload, SubmissionRef, ValidationRequest,
     },
     bid_decoder::{DecoderTile, SubmissionDataWithSpan},
+    block_merging::BlockMergingTile,
     data_gatherer::DataGatherer,
     housekeeper::{HousekeeperTile, SlotUpdate},
     network::RelayNetworkManager,
     registration::{RegWorkerHandle, RegistrationTile},
-    simulator::{SimRequest, SimResult},
+    simulator::{BlockMergeResponse, SimRequest, SimResult},
     spine::{
         HelixSpine, HelixSpineConfig,
         messages::{NewBidSubmission, SlotMsg},
@@ -64,13 +66,13 @@ pub fn spawn_tokio_monitoring() {
             TOKIO_ALIVE_TASKS.set(metrics.num_alive_tasks() as f64);
             TOKIO_GLOBAL_QUEUE_DEPTH.set(metrics.global_queue_depth() as f64);
 
-            for w in 0..metrics.num_workers() {
+            for (w, prev) in prev_busy_us.iter_mut().enumerate() {
                 let busy = metrics.worker_total_busy_duration(w).as_micros();
                 TOKIO_WORKER_BUSY_DURATION
                     .with_label_values(&[&w.to_string()])
-                    .set((busy - prev_busy_us[w]) as f64);
+                    .set((busy - *prev) as f64);
 
-                prev_busy_us[w] = busy;
+                *prev = busy;
             }
         }
     });

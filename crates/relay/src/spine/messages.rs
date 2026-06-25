@@ -89,6 +89,12 @@ pub struct FromSimMsg {
     pub ix: usize,
 }
 
+/// BlockMergingTile → Auctioneer: index into `SharedVector<BlockMergeResponse>`.
+#[derive(Debug, Clone, Copy)]
+pub struct MergedBlockMsg {
+    pub ix: usize,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum BidEvent {
     Live,
