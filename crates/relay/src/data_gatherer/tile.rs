@@ -196,7 +196,7 @@ impl Tile<HelixSpine> for DataGatherer {
         }
 
         // drive spawned S3 and clickhouse tasks
-        self.rt.block_on(tokio::time::sleep(Duration::from_micros(500)));
+        self.rt.block_on(async { tokio::time::sleep(Duration::from_micros(500)).await });
     }
 
     fn teardown(mut self, adapter: &mut SpineAdapter<HelixSpine>) {

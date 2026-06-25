@@ -1,12 +1,13 @@
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
+use bytes::Bytes;
 use dashmap::DashMap;
 use flux::{spine::FluxSpine, tile::Tile, timing::Nanos};
 use flux_network::{
     Token,
     tcp::{PollEvent, SendBehavior, TcpConnector, TcpTelemetry},
 };
-use flux_utils::DCachePtr;
+use flux_utils::{DCachePtr, SharedVector};
 use helix_common::{SubmissionTrace, metrics::SUB_CLIENT_TO_SERVER_LATENCY, utils::utcnow_ns};
 use helix_tcp_types::BID_SUB_HEADER_SIZE;
 use helix_types::BlsPublicKeyBytes;
@@ -39,6 +40,10 @@ pub struct BidSubmissionTcpListener {
     to_disconnect: Vec<Token>,
     registered: HashMap<Token, BlsPublicKeyBytes>,
     submission_errors: Vec<SubmissionError>,
+
+    // dcache bypass: stage a stable copy of the payload, the dcache slot can be
+    // mutated out from under the decoder between publish and consume.
+    http_submissions: Arc<SharedVector<Bytes>>,
 }
 
 impl BidSubmissionTcpListener {
@@ -47,6 +52,7 @@ impl BidSubmissionTcpListener {
         api_key_cache: Arc<DashMap<String, Vec<BlsPublicKeyBytes>>>,
         max_connections: usize,
         dcache_ptr: DCachePtr,
+        http_submissions: Arc<SharedVector<Bytes>>,
     ) -> Self {
         let mut listener = TcpConnector::default()
             .with_telemetry(TcpTelemetry::Enabled { app_name: HelixSpine::app_name() })
@@ -60,6 +66,7 @@ impl BidSubmissionTcpListener {
             to_disconnect: Vec::with_capacity(max_connections),
             registered: HashMap::with_capacity(max_connections),
             submission_errors: Vec::with_capacity(max_connections),
+            http_submissions,
         }
     }
 }
@@ -121,13 +128,16 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                         ..Default::default()
                     };
 
+                    let http_submission_ix =
+                        self.http_submissions.push(Bytes::copy_from_slice(payload));
+
                     Some(NewBidSubmission {
                         payload_offset: BID_SUB_HEADER_SIZE,
                         header: InternalBidSubmissionHeader::from_tcp_header(id, header),
                         submission_ref,
                         trace,
                         expected_pubkey: Some(*expected_pubkey),
-                        http_submission_ix: None,
+                        http_submission_ix: Some(http_submission_ix),
                     })
                 } else {
                     match RegistrationMsg::from_ssz_bytes(payload) {

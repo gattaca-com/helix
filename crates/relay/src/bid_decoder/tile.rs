@@ -52,7 +52,17 @@ impl Tile<HelixSpine> for DecoderTile {
     fn loop_body(&mut self, adapter: &mut flux::spine::SpineAdapter<HelixSpine>) {
         adapter.consume_with_dcache_collaborative_internal_message(
             |new_bid: &InternalMessage<NewBidSubmission>, dcache_payload| {
-                let payload = &dcache_payload[new_bid.payload_offset..];
+                // dcache bypass: the dcache slot can be mutated between publish and
+                // consume, read the stable staged copy when one is present.
+                let bytes;
+                let payload = if let Some(b) =
+                    new_bid.http_submission_ix.and_then(|ix| self.http_submissions.get(ix))
+                {
+                    bytes = b;
+                    &bytes.as_slice()[new_bid.payload_offset..]
+                } else {
+                    &dcache_payload[new_bid.payload_offset..]
+                };
                 let sent_at = new_bid.tracking_timestamp().publish_t();
                 DecoderTile::handle_block_submission(
                     &self.cache,
