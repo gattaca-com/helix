@@ -265,6 +265,7 @@ async fn run(
                 local_cache.api_key_cache.clone(),
                 config.tcp_max_connections,
                 spine.spine.dcache_ptr_for::<NewBidSubmission>(),
+                http_submissions.clone(),
             );
             attach_tile(
                 block_submission_tcp_listener,
