@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration, u64};
+use std::{sync::Arc, time::Duration};
 
 use alloy_primitives::B256;
 use flux::{spine::SpineAdapter, tile::Tile, timing::InternalMessage};

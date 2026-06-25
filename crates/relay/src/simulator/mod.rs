@@ -72,6 +72,8 @@ pub enum SimRequest {
 }
 
 /// Large payload stored in `SharedVector` for sim tile → auctioneer transfer.
+// Stored inline in `SharedVector`; boxing would add a heap alloc on the hot path.
+#[allow(clippy::large_enum_variant)]
 pub enum SimResult {
     Validate(ValidationResult),
     Merge(MergeResult),

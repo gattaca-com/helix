@@ -97,7 +97,7 @@ impl RelayNetworkManager {
                 inclusion_list,
                 result_tx,
             }));
-        if let Err(_) = self.api_events_tx.try_send(event) {
+        if self.api_events_tx.try_send(event).is_err() {
             warn!("network channel full, dropping inclusion list share");
             return None;
         }

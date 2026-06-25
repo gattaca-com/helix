@@ -577,5 +577,3 @@ impl BlockMergingTile {
         }
     }
 }
-
-
