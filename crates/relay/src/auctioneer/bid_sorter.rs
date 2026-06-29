@@ -128,7 +128,7 @@ impl ForkState {
         let now_ns = utcnow_ns();
 
         let top_bid_update = TopBidUpdate {
-            timestamp: now_ns / 1_000_000,
+            timestamp: now_ns,
             slot: bid.slot,
             block_number: bid.block_number,
             block_hash: bid.block_hash,

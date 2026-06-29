@@ -9,8 +9,9 @@ use crossbeam_channel::Sender;
 use flux::spine::StandaloneDCacheProducer;
 use flux_utils::SharedVector;
 use helix_common::{
-    CurrentSlotInfo, RelayConfig, alerts::AlertManager, beacon::MultiBeaconClient,
-    chain_info::ChainInfo, local_cache::LocalCache, signing::RelaySigningContext,
+    CurrentSlotInfo, RelayConfig, alerts::AlertManager, api::builder_api::TopBidPrecision,
+    beacon::MultiBeaconClient, chain_info::ChainInfo, local_cache::LocalCache,
+    signing::RelaySigningContext,
 };
 use helix_data_api::{
     BidsCache, BidsCacheV2, DataApi, DeliveredPayloadsCache, DeliveredPayloadsCacheV2,
@@ -50,7 +51,7 @@ pub fn start_api_service<A: Api>(
     bid_producer: StandaloneDCacheProducer<NewBidSubmission>,
     future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
     http_submissions: Arc<SharedVector<Bytes>>,
-    web_socket_connections: Sender<RawWebSocket>,
+    web_socket_connections: Sender<(RawWebSocket, TopBidPrecision)>,
     alert_manager: Arc<AlertManager>,
 ) {
     tokio::spawn(run_api_service::<A>(
@@ -94,7 +95,7 @@ pub async fn run_api_service<A: Api>(
     bid_producer: StandaloneDCacheProducer<NewBidSubmission>,
     future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
     http_submissions: Arc<SharedVector<Bytes>>,
-    web_socket_connections: Sender<RawWebSocket>,
+    web_socket_connections: Sender<(RawWebSocket, TopBidPrecision)>,
     alert_manager: Arc<AlertManager>,
 ) {
     let gossiper = Arc::new(

@@ -3,6 +3,7 @@ pub mod data_api;
 pub mod proposer_api;
 
 pub const PATH_BUILDER_API: &str = "/relay/v1/builder";
+pub const PATH_BUILDER_API_V2: &str = "/relay/v2/builder";
 pub const PATH_GET_VALIDATORS: &str = "/validators";
 pub const PATH_SUBMIT_BLOCK: &str = "/blocks";
 pub const PATH_SUBMIT_HEADER: &str = "/headers";

@@ -4,7 +4,11 @@ use axum::{Extension, response::IntoResponse};
 use bytes::Bytes;
 use crossbeam_channel::Receiver;
 use flux::{tile::Tile, timing::Nanos};
-use helix_common::{self, api::builder_api::TopBidUpdate, metrics::TopBidMetrics};
+use helix_common::{
+    self,
+    api::builder_api::{TopBidPrecision, TopBidUpdate},
+    metrics::TopBidMetrics,
+};
 use hyper::HeaderMap;
 use tokio_tungstenite::tungstenite::{Error as WebSocketError, Message};
 use tracing::{debug, error};
@@ -22,9 +26,27 @@ use crate::{
 impl<A: Api> BuilderApi<A> {
     #[tracing::instrument(skip_all)]
     pub async fn get_top_bid(
+        api: Extension<Arc<BuilderApi<A>>>,
+        headers: HeaderMap,
+        ws: RawWebSocketUpgrade,
+    ) -> Result<impl IntoResponse, BuilderApiError> {
+        Self::connect_top_bid(api, headers, ws, TopBidPrecision::Millis)
+    }
+
+    #[tracing::instrument(skip_all)]
+    pub async fn get_top_bid_v2(
+        api: Extension<Arc<BuilderApi<A>>>,
+        headers: HeaderMap,
+        ws: RawWebSocketUpgrade,
+    ) -> Result<impl IntoResponse, BuilderApiError> {
+        Self::connect_top_bid(api, headers, ws, TopBidPrecision::Nanos)
+    }
+
+    fn connect_top_bid(
         Extension(api): Extension<Arc<BuilderApi<A>>>,
         headers: HeaderMap,
         ws: RawWebSocketUpgrade,
+        precision: TopBidPrecision,
     ) -> Result<impl IntoResponse, BuilderApiError> {
         let Some(api_key) = headers
             .get(HEADER_API_KEY)
@@ -40,7 +62,7 @@ impl<A: Api> BuilderApi<A> {
 
         let sender = api.web_socket_connections.clone();
         Ok(ws.on_upgrade(move |socket| {
-            if let Err(e) = sender.try_send(socket) {
+            if let Err(e) = sender.try_send((socket, precision)) {
                 tracing::error!(error=?e, "failed to send new web socket connection to top bid tile");
             }
         }))
@@ -48,13 +70,13 @@ impl<A: Api> BuilderApi<A> {
 }
 
 pub struct TopBidTile {
-    new_connections: Receiver<RawWebSocket>,
-    connections: Vec<(RawWebSocket, TopBidMetrics)>,
+    new_connections: Receiver<(RawWebSocket, TopBidPrecision)>,
+    connections: Vec<(RawWebSocket, TopBidMetrics, TopBidPrecision)>,
     last_send: Nanos,
 }
 
 impl TopBidTile {
-    pub fn new(new_connections: Receiver<RawWebSocket>) -> Self {
+    pub fn new(new_connections: Receiver<(RawWebSocket, TopBidPrecision)>) -> Self {
         Self { new_connections, connections: vec![], last_send: Nanos::now() }
     }
 }
@@ -62,16 +84,18 @@ impl TopBidTile {
 impl Tile<HelixSpine> for TopBidTile {
     fn loop_body(&mut self, adapter: &mut flux::spine::SpineAdapter<HelixSpine>) {
         // add any new connections
-        while let Ok(web_socket) = self.new_connections.try_recv() {
+        while let Ok((web_socket, precision)) = self.new_connections.try_recv() {
             let metric = TopBidMetrics::connection();
-            self.connections.push((web_socket, metric));
+            self.connections.push((web_socket, metric, precision));
         }
 
         // send top bids - note that `send` call is non-blocking.
         adapter.consume(|top_bid: TopBidUpdate, _producers| {
             let mut i = 0;
             while i < self.connections.len() {
-                match self.connections[i].0.send(Message::Binary(top_bid.as_ssz_bytes_fast().into())) {
+                let precision = self.connections[i].2;
+                let payload = top_bid.as_ssz_bytes_with_precision(precision);
+                match self.connections[i].0.send(Message::Binary(payload)) {
                     Ok(_) => i += 1,
                     Err(e) => {
                         error!(error=?e, peer=?self.connections[i].0.get_ref().peer_addr(), "Failed to send bid. Disconnecting.");

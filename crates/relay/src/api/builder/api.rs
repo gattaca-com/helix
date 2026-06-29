@@ -5,7 +5,10 @@ use bytes::Bytes;
 use crossbeam_channel::Sender;
 use flux::spine::StandaloneDCacheProducer;
 use flux_utils::SharedVector;
-use helix_common::{CurrentSlotInfo, RelayConfig, alerts::AlertManager, local_cache::LocalCache};
+use helix_common::{
+    CurrentSlotInfo, RelayConfig, alerts::AlertManager, api::builder_api::TopBidPrecision,
+    local_cache::LocalCache,
+};
 use helix_database::handle::DbHandle;
 
 use crate::{
@@ -25,7 +28,7 @@ pub struct BuilderApi<A: Api> {
     pub producer: StandaloneDCacheProducer<NewBidSubmission>,
     pub future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
     pub submission_payloads: Arc<SharedVector<Bytes>>,
-    pub web_socket_connections: Sender<RawWebSocket>,
+    pub web_socket_connections: Sender<(RawWebSocket, TopBidPrecision)>,
 }
 
 impl<A: Api> BuilderApi<A> {
@@ -40,7 +43,7 @@ impl<A: Api> BuilderApi<A> {
         producer: StandaloneDCacheProducer<NewBidSubmission>,
         future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
         submission_payloads: Arc<SharedVector<Bytes>>,
-        web_socket_connections: Sender<RawWebSocket>,
+        web_socket_connections: Sender<(RawWebSocket, TopBidPrecision)>,
     ) -> Self {
         Self {
             local_cache,
