@@ -463,6 +463,7 @@ impl RouterConfig {
             Route::GetValidators,
             Route::SubmitBlock,
             Route::GetTopBid,
+            Route::GetTopBidV2,
             Route::GetInclusionList,
             Route::PromoteBuilder,
         ]);
@@ -577,6 +578,7 @@ pub enum Route {
     GetValidators,
     SubmitBlock,
     GetTopBid,
+    GetTopBidV2,
     Status,
     RegisterValidators,
     GetHeader,
@@ -601,6 +603,7 @@ impl Route {
             Route::GetValidators => format!("{PATH_BUILDER_API}{PATH_GET_VALIDATORS}"),
             Route::SubmitBlock => format!("{PATH_BUILDER_API}{PATH_SUBMIT_BLOCK}"),
             Route::GetTopBid => format!("{PATH_BUILDER_API}{PATH_GET_TOP_BID}"),
+            Route::GetTopBidV2 => format!("{PATH_BUILDER_API_V2}{PATH_GET_TOP_BID}"),
             Route::GetInclusionList => format!("{PATH_BUILDER_API}{PATH_GET_INCLUSION_LIST}"),
             Route::Status => format!("{PATH_PROPOSER_API}{PATH_STATUS}"),
             Route::RegisterValidators => format!("{PATH_PROPOSER_API}{PATH_REGISTER_VALIDATORS}"),

@@ -6,6 +6,7 @@ use std::{
 use alloy_consensus::TxEnvelope;
 use alloy_primitives::{Address, B256, U256};
 use alloy_rlp::Decodable;
+use bytes::Bytes;
 use futures::task::AtomicWaker;
 use helix_types::{
     BlsPublicKeyBytes, SignedValidatorRegistration, Slot, Transaction, Transactions,
@@ -47,6 +48,12 @@ impl From<BuilderGetValidatorsResponseEntry> for BuilderGetValidatorsResponse {
     }
 }
 
+#[derive(Clone, Copy)]
+pub enum TopBidPrecision {
+    Millis,
+    Nanos,
+}
+
 #[derive(Clone, Copy, Debug, Encode, Decode)]
 pub struct TopBidUpdate {
     pub timestamp: u64,
@@ -62,7 +69,17 @@ pub struct TopBidUpdate {
 impl TopBidUpdate {
     const SSZ_SIZE: usize = 188;
 
-    pub fn as_ssz_bytes_fast(&self) -> Vec<u8> {
+    pub fn as_ssz_bytes_with_precision(mut self, precision: TopBidPrecision) -> Bytes {
+        match precision {
+            TopBidPrecision::Nanos => self.as_ssz_bytes_fast().into(),
+            TopBidPrecision::Millis => {
+                self.timestamp /= 1_000_000;
+                self.as_ssz_bytes_fast().into()
+            }
+        }
+    }
+
+    fn as_ssz_bytes_fast(&self) -> Vec<u8> {
         let mut vec = Vec::with_capacity(Self::SSZ_SIZE);
         self.ssz_append(&mut vec);
         vec
