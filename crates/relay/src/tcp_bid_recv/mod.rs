@@ -1,7 +1,7 @@
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
 use bytes::Bytes;
-use dashmap::DashMap;
+use dashmap::DashSet;
 use flux::{spine::FluxSpine, tile::Tile, timing::Nanos};
 use flux_network::{
     Token,
@@ -35,7 +35,7 @@ type SubmissionError = (Token, Option<u32>, Option<Uuid>, BidSubmissionError);
 pub struct BidSubmissionTcpListener {
     listener: TcpConnector,
 
-    api_key_cache: Arc<DashMap<String, Vec<BlsPublicKeyBytes>>>,
+    api_key_cache: Arc<DashSet<String>>,
 
     to_disconnect: Vec<Token>,
     registered: HashMap<Token, BlsPublicKeyBytes>,
@@ -49,7 +49,7 @@ pub struct BidSubmissionTcpListener {
 impl BidSubmissionTcpListener {
     pub fn new(
         listener_addr: SocketAddr,
-        api_key_cache: Arc<DashMap<String, Vec<BlsPublicKeyBytes>>>,
+        api_key_cache: Arc<DashSet<String>>,
         max_connections: usize,
         dcache_ptr: DCachePtr,
         http_submissions: Arc<SharedVector<Bytes>>,
@@ -143,11 +143,7 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                     match RegistrationMsg::from_ssz_bytes(payload) {
                         Ok(msg) => {
                             let api_key = Uuid::from_bytes(msg.api_key).to_string();
-                            if self
-                                .api_key_cache
-                                .get(&api_key)
-                                .is_some_and(|p| p.value().contains(&msg.builder_pubkey))
-                            {
+                            if self.api_key_cache.contains(&api_key) {
                                 self.registered.insert(token, msg.builder_pubkey);
                             } else {
                                 tracing::error!(

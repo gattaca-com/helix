@@ -320,7 +320,7 @@ impl DecoderTile {
 
             true
         } else {
-            header.api_key.is_some_and(|api_key| cache.validate_api_key(&api_key, &builder_pubkey))
+            header.api_key.is_some_and(|api_key| cache.contains_api_key(&api_key))
         };
 
         match submission {
