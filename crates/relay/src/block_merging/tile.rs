@@ -350,7 +350,12 @@ impl BlockMergingTile {
                         if merged.slot != slot.bid_slot ||
                             !slot.appendable.contains(&merged.base_block_hash)
                         {
-                            debug!(?token, slot = merged.slot, "stale or unknown merged block");
+                            debug!(
+                                ?token,
+                                slot = merged.slot,
+                                bid_slot = slot.bid_slot,
+                                "stale or unknown merged block"
+                            );
                             return;
                         }
                         // Builders only guarantee per-connection monotonicity;
