@@ -45,7 +45,6 @@ pub async fn start_db_service(
             let postgres_db = postgres_db.clone();
             let local_cache = local_cache.clone();
             let is_registration_instance = config.is_registration_instance;
-            let mut validator_reg_update_time = SystemTime::now();
             async move {
                 load_known_validators_with_snapshot(
                     &postgres_db,
@@ -54,7 +53,7 @@ pub async fn start_db_service(
                 )
                 .await;
 
-                load_validator_registrations_with_snapshot(
+                let mut validator_reg_update_time = load_validator_registrations_with_snapshot(
                     &postgres_db,
                     &local_cache,
                     snapshot_dir.as_deref(),
@@ -81,7 +80,7 @@ pub async fn start_db_service(
                     postgres_db.update_validator_registrations(validator_reg_update_time).await;
                     validator_reg_update_time = fetch_time;
                     if let Some(dir) = &snapshot_dir {
-                        save_validator_registrations_snapshot(&local_cache, dir);
+                        save_validator_registrations_snapshot(&local_cache, dir, fetch_time);
                     }
                     postgres_db.load_builder_infos(local_cache.clone()).await;
                 }
@@ -115,35 +114,42 @@ async fn load_known_validators_with_snapshot(
     }
 }
 
+/// Returns the fetch watermark to resume incremental registration updates from.
 async fn load_validator_registrations_with_snapshot(
     db: &PostgresDatabaseService,
     cache: &local_cache::LocalCache,
     snapshot_dir: Option<&std::path::Path>,
-) {
+) -> SystemTime {
     if let Some(dir) = snapshot_dir &&
-        let Some(entries) = snapshot::try_load_validator_registrations(dir).await
+        let Some((fetched_at, entries)) = snapshot::try_load_validator_registrations(dir).await
     {
         let count = entries.len();
         info!(count, "using validator_registrations snapshot");
         for (key, entry) in entries {
             cache.validator_registration_cache.insert(key, entry);
         }
-        return;
+        return fetched_at;
     }
     // Fallback to DB
+    let fetch_time = SystemTime::now();
     db.load_validator_registrations().await;
     // Save snapshot for next startup
     if let Some(dir) = snapshot_dir {
-        save_validator_registrations_snapshot(cache, dir);
+        save_validator_registrations_snapshot(cache, dir, fetch_time);
     }
+    fetch_time
 }
 
-fn save_validator_registrations_snapshot(cache: &local_cache::LocalCache, dir: &std::path::Path) {
+fn save_validator_registrations_snapshot(
+    cache: &local_cache::LocalCache,
+    dir: &std::path::Path,
+    fetched_at: SystemTime,
+) {
     let entries: Vec<_> =
         cache.validator_registration_cache.iter().map(|r| (*r.key(), r.value().clone())).collect();
     let dir = dir.to_path_buf();
     tokio::task::spawn_blocking(move || {
-        if let Err(e) = snapshot::save_validator_registrations(&dir, &entries) {
+        if let Err(e) = snapshot::save_validator_registrations(&dir, fetched_at, &entries) {
             tracing::warn!("failed to save validator_registrations snapshot: {e}");
         }
     });

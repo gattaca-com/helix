@@ -2,6 +2,7 @@ use std::{
     fs,
     io::{self, BufReader, BufWriter},
     path::Path,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use helix_common::SignedValidatorRegistrationEntry;
@@ -46,9 +47,13 @@ pub fn load_known_validators(dir: &Path) -> io::Result<FxHashSet<BlsPublicKeyByt
 }
 
 // -- Validator registrations --
+//
+// Format: (fetched_at unix ms, entries). `fetched_at` is captured before the DB fetch that
+// produced the entries, so resuming incremental updates from it cannot miss registrations.
 
 pub fn save_validator_registrations(
     dir: &Path,
+    fetched_at: SystemTime,
     entries: &[(BlsPublicKeyBytes, SignedValidatorRegistrationEntry)],
 ) -> io::Result<()> {
     fs::create_dir_all(dir)?;
@@ -56,7 +61,9 @@ pub fn save_validator_registrations(
     let tmp = path.with_extension("bin.tmp");
     let file = fs::File::create(&tmp)?;
     let writer = BufWriter::new(file);
-    serde_json::to_writer(writer, entries).map_err(io::Error::other)?;
+    let fetched_at_ms =
+        fetched_at.duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
+    serde_json::to_writer(writer, &(fetched_at_ms, entries)).map_err(io::Error::other)?;
     fs::rename(&tmp, &path)?;
     info!(count = entries.len(), "saved validator_registrations snapshot");
     Ok(())
@@ -64,15 +71,17 @@ pub fn save_validator_registrations(
 
 pub fn load_validator_registrations(
     dir: &Path,
-) -> io::Result<Vec<(BlsPublicKeyBytes, SignedValidatorRegistrationEntry)>> {
+) -> io::Result<(SystemTime, Vec<(BlsPublicKeyBytes, SignedValidatorRegistrationEntry)>)> {
     let path = dir.join(VALIDATOR_REGISTRATIONS_FILE);
     let file = fs::File::open(&path)?;
     let reader = BufReader::new(file);
-    let entries: Vec<(BlsPublicKeyBytes, SignedValidatorRegistrationEntry)> =
-        serde_json::from_reader(reader)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let (fetched_at_ms, entries): (
+        u64,
+        Vec<(BlsPublicKeyBytes, SignedValidatorRegistrationEntry)>,
+    ) = serde_json::from_reader(reader)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     info!(count = entries.len(), "loaded validator_registrations from snapshot");
-    Ok(entries)
+    Ok((UNIX_EPOCH + Duration::from_millis(fetched_at_ms), entries))
 }
 
 /// Try to load from snapshot, returning None on any failure (missing file, corrupt, etc).
@@ -93,10 +102,10 @@ pub async fn try_load_known_validators(dir: &Path) -> Option<FxHashSet<BlsPublic
 
 pub async fn try_load_validator_registrations(
     dir: &Path,
-) -> Option<Vec<(BlsPublicKeyBytes, SignedValidatorRegistrationEntry)>> {
+) -> Option<(SystemTime, Vec<(BlsPublicKeyBytes, SignedValidatorRegistrationEntry)>)> {
     let dir = dir.to_path_buf();
     match tokio::task::spawn_blocking(move || load_validator_registrations(&dir)).await {
-        Ok(Ok(entries)) => Some(entries),
+        Ok(Ok(snapshot)) => Some(snapshot),
         Ok(Err(e)) => {
             warn!("validator_registrations snapshot unavailable: {e}");
             None
