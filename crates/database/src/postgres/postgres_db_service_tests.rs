@@ -46,6 +46,7 @@ mod tests {
             user: "postgres".to_string(),
             region: REGION,
             region_name: REGION_NAME.to_string(),
+            pool_size: None,
         }
     }
 

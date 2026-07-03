@@ -8,7 +8,7 @@ use std::{
 };
 
 use alloy_primitives::{Address, B256, U256};
-use deadpool_postgres::{Config, GenericClient, ManagerConfig, Pool, RecyclingMethod};
+use deadpool_postgres::{Config, GenericClient, ManagerConfig, Pool, PoolConfig, RecyclingMethod};
 use helix_common::{
     DataAdjustmentsEntry, Filtering, GetHeaderTrace, GetPayloadTrace, GossipedPayloadTrace,
     PostgresConfig, ProposerInfo, RelayConfig, SignedValidatorRegistrationEntry, SubmissionTrace,
@@ -205,6 +205,9 @@ impl PostgresDatabaseService {
         cfg.user = Some(postgres.user.clone());
         cfg.password = Some(expect_env_var(POSTGRES_PASSWORD_ENV_VAR));
         cfg.manager = Some(ManagerConfig { recycling_method: RecyclingMethod::Fast });
+        if let Some(pool_size) = postgres.pool_size {
+            cfg.pool = Some(PoolConfig::new(pool_size));
+        }
 
         let pool = loop {
             match cfg.create_pool(None, NoTls) {

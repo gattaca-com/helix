@@ -6,6 +6,7 @@ postgres:
   user: postgres
   region: 0
   region_name: "LOCAL"
+  # pool_size: 20
 broadcasters:
   - !BeaconClient
     url: http://localhost:5052
