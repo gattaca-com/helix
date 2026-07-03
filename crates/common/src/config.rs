@@ -227,6 +227,12 @@ pub struct PostgresConfig {
     pub user: String,
     pub region: i16,
     pub region_name: String,
+    /// Overrides deadpool's default pool size (`physical_cpu_count * 4`) for both the
+    /// normal and high-priority pools. Without this, pool size scales with the host's
+    /// core count, which can let a single instance consume a large share of Postgres's
+    /// `max_connections` on beefier machines.
+    #[serde(default)]
+    pub pool_size: Option<usize>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
