@@ -40,8 +40,11 @@ impl<A: Api> BuilderApi<A> {
 
         api.db.db_promote_builder(builder_pubkey);
 
-        api.alert_manager
-            .send(&format!("✅ *Optimistic promotion successful*\n*Builder:* `{builder_pubkey}`"));
+        let builder_info = api.local_cache.get_builder_info(&builder_pubkey).unwrap_or_default();
+        api.alert_manager.send_promotion(
+            &format!("✅ *Optimistic promotion successful*\n*Builder:* `{builder_pubkey}`"),
+            builder_info.builder_id(),
+        );
 
         (StatusCode::OK, "builder promotion successful").into_response()
     }

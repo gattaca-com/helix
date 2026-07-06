@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use alloy_primitives::B256;
 use dashmap::DashMap;
@@ -35,7 +35,9 @@ pub enum AlertManager {
     Disabled,
     Telegram {
         bot: Bot,
-        chat_ids: Vec<ChatId>,
+        merged_blocks_chat_ids: Vec<ChatId>,
+        demotion_chat_id: Option<ChatId>,
+        builder_demotion_chat_ids: HashMap<String, ChatId>,
         promotion_tokens: PromotionTokenCache,
         relay_url: String,
     },
@@ -44,51 +46,72 @@ pub enum AlertManager {
 impl AlertManager {
     pub fn from_relay_config(cfg: &RelayConfig) -> Self {
         match &cfg.alerts_config {
-            Some(alerts)
-                if !alerts.telegram_bot_token.is_empty() && !alerts.chat_ids.is_empty() =>
-            {
-                AlertManager::Telegram {
-                    bot: Bot::new(&alerts.telegram_bot_token),
-                    chat_ids: alerts.chat_ids.clone(),
-                    promotion_tokens: PromotionTokenCache::default(),
-                    relay_url: alerts.relay_url.clone(),
-                }
-            }
+            Some(alerts) if !alerts.telegram_bot_token.is_empty() => AlertManager::Telegram {
+                bot: Bot::new(&alerts.telegram_bot_token),
+                merged_blocks_chat_ids: alerts.merged_blocks_chat_ids.clone(),
+                demotion_chat_id: alerts.demotion_chat_id,
+                builder_demotion_chat_ids: alerts.builder_demotion_chat_ids.clone(),
+                promotion_tokens: PromotionTokenCache::default(),
+                relay_url: alerts.relay_url.clone(),
+            },
             _ => AlertManager::Disabled,
         }
     }
 
-    pub fn send(&self, message: &str) {
-        match self {
-            AlertManager::Disabled => {}
-            AlertManager::Telegram { bot, chat_ids, .. } => {
-                let msg = message.to_owned();
+    pub fn send_merged_block(&self, message: &str) {
+        let AlertManager::Telegram { bot, merged_blocks_chat_ids, .. } = self else { return };
 
-                for chat_id in chat_ids {
-                    let bot = bot.clone();
-                    let chat_id = *chat_id;
-                    let msg = msg.clone();
+        for chat_id in merged_blocks_chat_ids {
+            let bot = bot.clone();
+            let chat_id = *chat_id;
+            let msg = message.to_owned();
 
-                    tokio::spawn(async move {
-                        if let Err(e) =
-                            bot.send_message(chat_id, msg).parse_mode(ParseMode::MarkdownV2).await
-                        {
-                            error!("alert send error: {}", e);
-                        }
-                    });
+            tokio::spawn(async move {
+                if let Err(e) =
+                    bot.send_message(chat_id, msg).parse_mode(ParseMode::MarkdownV2).await
+                {
+                    error!("alert send error: {}", e);
                 }
-            }
+            });
         }
     }
 
-    pub fn send_demotion(&self, message: &str, token: &str) {
-        let AlertManager::Telegram { bot, chat_ids, relay_url, .. } = self else { return };
+    pub fn send_promotion(&self, message: &str, builder_id: &str) {
+        let AlertManager::Telegram { bot, demotion_chat_id, builder_demotion_chat_ids, .. } = self
+        else {
+            return;
+        };
+
+        for chat_id in demotion_targets(*demotion_chat_id, builder_demotion_chat_ids, builder_id) {
+            let bot = bot.clone();
+            let msg = message.to_owned();
+
+            tokio::spawn(async move {
+                if let Err(e) =
+                    bot.send_message(chat_id, msg).parse_mode(ParseMode::MarkdownV2).await
+                {
+                    error!("promotion alert send error: {e}");
+                }
+            });
+        }
+    }
+
+    pub fn send_demotion(&self, message: &str, token: &str, builder_id: &str) {
+        let AlertManager::Telegram {
+            bot,
+            demotion_chat_id,
+            builder_demotion_chat_ids,
+            relay_url,
+            ..
+        } = self
+        else {
+            return;
+        };
 
         let url = format!("{relay_url}/relay/v2/data/promote?token={token}");
 
-        for chat_id in chat_ids {
+        for chat_id in demotion_targets(*demotion_chat_id, builder_demotion_chat_ids, builder_id) {
             let bot = bot.clone();
-            let chat_id = *chat_id;
             let msg = message.to_owned();
             let url = url.clone();
 
@@ -122,6 +145,19 @@ impl AlertManager {
             AlertManager::Disabled => None,
         }
     }
+}
+
+// shared demotion channel + builder-specific channel if configured
+fn demotion_targets(
+    demotion_chat_id: Option<ChatId>,
+    builder_demotion_chat_ids: &HashMap<String, ChatId>,
+    builder_id: &str,
+) -> impl Iterator<Item = ChatId> {
+    let builder_chat = builder_demotion_chat_ids
+        .get(builder_id)
+        .copied()
+        .filter(|id| Some(*id) != demotion_chat_id);
+    demotion_chat_id.into_iter().chain(builder_chat)
 }
 
 pub fn format_demotion_alert(
