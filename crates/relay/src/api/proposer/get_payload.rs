@@ -428,7 +428,7 @@ impl<A: Api> ProposerApi<A> {
         });
 
         if let Some(merged_block) = self.local_cache.get_merged_block(&block_hash) {
-            self.alert_manager.send(&merged_block.to_alert_message());
+            self.alert_manager.send_merged_block(&merged_block.to_alert_message());
         }
 
         if matches!(api_version, ProposerApiVersion::V1) {

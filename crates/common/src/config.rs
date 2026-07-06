@@ -1,4 +1,9 @@
-use std::{collections::HashSet, env, fs::File, path::PathBuf};
+use std::{
+    collections::{HashMap, HashSet},
+    env,
+    fs::File,
+    path::PathBuf,
+};
 
 use alloy_primitives::Address;
 use clap::Parser;
@@ -298,7 +303,14 @@ pub const fn default_u64<const D: u64>() -> u64 {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct AlertsConfig {
     pub telegram_bot_token: String,
-    pub chat_ids: Vec<ChatId>,
+    #[serde(default)]
+    pub merged_blocks_chat_ids: Vec<ChatId>,
+    /// Shared demotion channel, receives all demotions.
+    #[serde(default)]
+    pub demotion_chat_id: Option<ChatId>,
+    /// Extra demotion channel per builder, keyed by builder_id.
+    #[serde(default)]
+    pub builder_demotion_chat_ids: HashMap<String, ChatId>,
     pub relay_url: String,
 }
 

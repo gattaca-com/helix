@@ -121,7 +121,7 @@ impl DbHandle {
                 &block_hash,
                 &reason,
             );
-            alert_manager.send_demotion(&message, &token);
+            alert_manager.send_demotion(&message, &token, builder_id);
         }
     }
 
