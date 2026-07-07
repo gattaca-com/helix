@@ -5934,6 +5934,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "helix-test-harness"
+version = "0.0.1"
+dependencies = [
+ "axum 0.8.7",
+ "reqwest 0.13.2",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber 0.3.22",
+]
+
+[[package]]
 name = "helix-types"
 version = "0.0.1"
 dependencies = [

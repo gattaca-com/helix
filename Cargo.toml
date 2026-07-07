@@ -1,6 +1,6 @@
 [workspace]
 default-members = ["crates/relay"]
-members = ["crates/common", "crates/data-api", "crates/database", "crates/relay", "crates/simulator", "crates/tcp-types", "crates/types", "crates/website"]
+members = ["crates/common", "crates/data-api", "crates/database", "crates/relay", "crates/simulator", "crates/tcp-types", "crates/types", "crates/test-harness", "crates/website"]
 resolver = "2"
 
 [workspace.package]
