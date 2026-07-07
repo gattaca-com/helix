@@ -1,4 +1,4 @@
-use std::{collections::HashMap, str::FromStr, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
 use alloy_primitives::B256;
 use dashmap::DashMap;
@@ -66,7 +66,7 @@ impl AlertManager {
             let chat_id = *chat_id;
             let msg = message.to_owned();
 
-            tokio::spawn(async move {
+            crate::spawn_tracked!(async move {
                 if let Err(e) =
                     bot.send_message(chat_id, msg).parse_mode(ParseMode::MarkdownV2).await
                 {
@@ -86,7 +86,7 @@ impl AlertManager {
             let bot = bot.clone();
             let msg = message.to_owned();
 
-            tokio::spawn(async move {
+            crate::spawn_tracked!(async move {
                 if let Err(e) =
                     bot.send_message(chat_id, msg).parse_mode(ParseMode::MarkdownV2).await
                 {
@@ -115,7 +115,7 @@ impl AlertManager {
             let msg = message.to_owned();
             let url = url.clone();
 
-            tokio::spawn(async move {
+            crate::spawn_tracked!(async move {
                 let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::url(
                     "🔁 Repromote",
                     url.parse().expect("valid url"),
