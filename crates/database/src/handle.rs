@@ -17,7 +17,7 @@ use helix_common::{
     utils::alert_discord,
 };
 use helix_types::{BlsPublicKeyBytes, MergedBlock, SignedBidSubmission};
-use tracing::{error, warn};
+use tracing::{debug, error, warn};
 
 use crate::{
     postgres::postgres_db_service::{DbRequest, PendingBlockSubmissionValue},
@@ -122,6 +122,7 @@ impl DbHandle {
             &block_hash,
             &reason,
         );
+        debug!(%message, "sending demotion alert");
         alert_manager.send_demotion(&message, &token, builder_id);
     }
 
