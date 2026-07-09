@@ -154,6 +154,7 @@ impl<B: BidAdjustor> Tile<HelixSpine> for Auctioneer<B> {
                 tracing::error!(?msg, "merged block not found");
                 return;
             };
+            info!(%response.execution_payload.block_hash, "received merged block from tile");
             let event = Event::MergeResult((0, Ok(response.as_ref().clone())));
             self.state.step(event, &mut self.ctx, &mut self.tel, producers);
         });
