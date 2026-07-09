@@ -1,6 +1,6 @@
 [workspace]
 default-members = ["crates/relay"]
-members = ["crates/common", "crates/data-api", "crates/database", "crates/relay", "crates/simulator", "crates/tcp-types", "crates/types", "crates/test-harness", "crates/website"]
+members = ["crates/admin", "crates/common", "crates/data-api", "crates/database", "crates/relay", "crates/simulator", "crates/tcp-types", "crates/types", "crates/test-harness", "crates/website"]
 resolver = "2"
 
 [workspace.package]
@@ -52,6 +52,7 @@ flux-type-hash-derive = { package = "type-hash-derive", git = "https://github.co
 
 futures = "0.3"
 futures-util = { version = "0.3", features = ["compat"] }
+helix-admin = { path = "crates/admin" }
 helix-common = { path = "crates/common" }
 helix-data-api = { path = "crates/data-api" }
 helix-database = { path = "crates/database" }
@@ -73,6 +74,7 @@ lh-slot-clock = { package = "slot_clock", git = "https://github.com/sigp/lightho
 lh-test-random = { package = "test_random_derive", git = "https://github.com/sigp/lighthouse", tag = "v8.0.1" }
 lh-types = { package = "types", git = "https://github.com/sigp/lighthouse", tag = "v8.0.1" }
 metrics = "0.24.0"
+mime_guess = "2"
 mockito = "1.1.1"
 moka = { version = "0.12.10", features = ["sync"] }
 num-format = "0.4.4"
@@ -97,6 +99,7 @@ reth-node-builder = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.1
 reth-primitives = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.1" }
 reth-tasks = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.1" }
 revm = { version = "31.0.1", default-features = false }
+rust-embed = { version = "8", features = ["interpolate-folder-path"] }
 rustc-hash = "2.1.1"
 bincode = "1"
 serde = { version = "1.0.191", features = ["derive"] }

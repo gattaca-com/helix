@@ -1814,7 +1814,7 @@ impl PostgresDatabaseService {
     }
 
     #[instrument(skip_all)]
-    async fn get_all_builder_infos(&self) -> Result<Vec<BuilderInfoDocument>, DatabaseError> {
+    pub async fn get_all_builder_infos(&self) -> Result<Vec<BuilderInfoDocument>, DatabaseError> {
         let mut record = DbMetricRecord::new("get_all_builder_infos");
 
         let rows =

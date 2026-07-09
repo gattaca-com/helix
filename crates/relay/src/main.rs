@@ -171,7 +171,7 @@ async fn run(
     };
 
     spine.start(None, Some(termination_grace_period), |spine| {
-        start_admin_service(local_cache.clone(), expect_env_var(ADMIN_TOKEN_ENV_VAR));
+        start_admin_service(local_cache.clone(), db.clone(), expect_env_var(ADMIN_TOKEN_ENV_VAR));
 
         let auctioneer_handle = AuctioneerHandle::new(event_tx.clone());
         let registrations_handle = RegWorkerHandle::new(reg_worker_tx);

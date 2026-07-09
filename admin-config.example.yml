@@ -1,0 +1,16 @@
+postgres:
+  hostname: localhost
+  port: 5432
+  db_name: postgres
+  user: postgres
+  region: 0
+  region_name: "LOCAL"
+  # pool_size: 20
+
+# Port the admin API + website listens on
+api_port: 4060
+
+# Base URL of the relay's admin API (helix-relay listens on port 4050)
+relay_admin_url: "http://localhost:4050"
+
+# discord_webhook_url: "https://discord.com/api/webhooks/..."

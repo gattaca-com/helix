@@ -1,0 +1,34 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "helix-admin"
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+alloy-primitives.workspace = true
+async-trait.workspace = true
+axum.workspace = true
+clap = { workspace = true }
+deadpool-postgres.workspace = true
+ethereum_serde_utils.workspace = true
+eyre.workspace = true
+helix-common.workspace = true
+helix-database.workspace = true
+helix-types.workspace = true
+mime_guess.workspace = true
+reqwest.workspace = true
+rust-embed.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+
+[[bin]]
+name = "admin"
+path = "src/bin/admin.rs"

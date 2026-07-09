@@ -1,0 +1,12 @@
+@import "tailwindcss";
+
+@theme {
+  /* Status palette — reserved for state, never decorative */
+  --color-status-good: #0ca30c;
+  --color-status-warning: #fab219;
+  --color-status-critical: #d03b3b;
+
+  /* Surfaces */
+  --color-surface-light: #fcfcfb;
+  --color-surface-dark: #1a1a19;
+}
