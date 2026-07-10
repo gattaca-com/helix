@@ -1,6 +1,7 @@
 use std::{hash::Hasher, sync::Arc};
 
 use alloy_primitives::{Address, B256, U256};
+use flux_profiler::timed;
 use lh_types::{ForkName, ForkVersionDecode};
 use rustc_hash::{FxHashMap, FxHasher};
 use serde::{Deserialize, Serialize};
@@ -225,6 +226,7 @@ struct BlobItemFulu {
 }
 
 impl DehydratedBidSubmissionFulu {
+    #[timed]
     fn can_hydrate_inner(
         &self,
         txs: &FxHashMap<u64, Transaction>,
@@ -262,6 +264,7 @@ impl DehydratedBidSubmissionFulu {
         true
     }
 
+    #[timed]
     fn hydrate_inner(
         mut self,
         txs: &mut FxHashMap<u64, Transaction>,
@@ -463,6 +466,7 @@ impl HydrationCache {
         }
     }
 
+    #[timed]
     pub fn hydrate(
         &mut self,
         submission: DehydratedBidSubmission,

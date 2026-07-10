@@ -18,6 +18,7 @@ use std::{
 use alloy_primitives::B256;
 pub use block_merger::OrderValidationError;
 use flux::tile::Tile;
+use flux_profiler::timed;
 use flux_utils::SharedVector;
 pub use handle::{AuctioneerHandle, GetPayloadKind};
 use helix_common::{
@@ -237,6 +238,7 @@ impl State {
             .observe(step_dur.as_nanos() as f64 / 1000.);
     }
 
+    #[timed]
     fn _step<B: BidAdjustor>(
         &mut self,
         event: Event,
@@ -616,6 +618,7 @@ impl State {
         }
     }
 
+    #[timed]
     fn process_slot_data<B: BidAdjustor>(
         bid_slot: Slot,
         mut payload_attributes_map: FxHashMap<B256, PayloadAttributesUpdate>,

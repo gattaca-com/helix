@@ -5,6 +5,7 @@ use std::{
 
 use alloy_primitives::{Address, B256, U256};
 use flux::spine::SpineProducers;
+use flux_profiler::timed;
 use helix_common::{
     SubmissionTrace,
     api::builder_api::TopBidUpdate,
@@ -188,6 +189,7 @@ impl BidSorter {
     }
 
     /// Sort the bid and returns whether it became the top bid
+    #[timed]
     pub fn sort(
         &mut self,
         bid: Bid,
@@ -222,6 +224,7 @@ impl BidSorter {
         self.forks.get(parent_hash).and_then(|s| s.curr_bid.as_ref().map(|b| b.block_hash))
     }
 
+    #[timed]
     fn process_bid(
         &mut self,
         new_bid: Bid,
@@ -276,6 +279,7 @@ impl BidSorter {
 
     /// This is only for in-slot demotions. For builder that were demoted in a past slot we don't
     /// expect to receive optimistic bids here
+    #[timed]
     fn process_demotion(
         &mut self,
         demoted: BlsPublicKeyBytes,

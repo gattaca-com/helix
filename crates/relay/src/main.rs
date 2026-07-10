@@ -75,6 +75,10 @@ fn main() {
 
     init_runtime(&config);
 
+    if config.enable_flux_profiler {
+        flux_profiler::enable_profiler("helix");
+    }
+
     let keypair = load_keypair();
 
     let instance_id = config

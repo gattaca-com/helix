@@ -42,6 +42,7 @@ use crate::{
 };
 
 #[derive(Clone, Copy, Debug)]
+#[repr(C)]
 pub enum SubmissionRef {
     Http(usize),
     Tcp { id: Uuid, token: Token, seq_num: u32 },

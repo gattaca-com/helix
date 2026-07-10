@@ -29,6 +29,7 @@ flate2.workspace = true
 flux.workspace = true
 flux-network.workspace = true
 flux-utils.workspace = true
+flux-profiler.workspace = true
 futures.workspace = true
 helix-common.workspace = true
 helix-data-api.workspace = true

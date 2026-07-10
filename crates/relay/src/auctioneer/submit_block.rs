@@ -2,6 +2,7 @@ use std::sync::atomic::Ordering;
 
 use alloy_primitives::{Address, B256, U256};
 use flux::{spine::SpineProducers, timing::Nanos};
+use flux_profiler::timed;
 use helix_common::{
     self, BuilderInfo,
     bid_submission::OptimisticVersion,
@@ -27,6 +28,7 @@ use crate::{
 };
 
 impl<B: BidAdjustor> Context<B> {
+    #[timed]
     pub(super) fn handle_submission(
         &mut self,
         submission_data: &SubmissionData,
@@ -157,6 +159,7 @@ impl<B: BidAdjustor> Context<B> {
         }
     }
 
+    #[timed]
     fn try_adjustments_dry_run(
         &mut self,
         entry: &PayloadEntry,
@@ -183,6 +186,7 @@ impl<B: BidAdjustor> Context<B> {
         }
     }
 
+    #[timed]
     pub(super) fn sort_simulation_result(
         &mut self,
         result: &mut ValidationResult,
@@ -311,6 +315,7 @@ impl<B: BidAdjustor> Context<B> {
         }
     }
 
+    #[timed]
     fn hydrate(
         &mut self,
         submission: Submission,

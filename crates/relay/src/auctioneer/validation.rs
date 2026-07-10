@@ -1,4 +1,5 @@
 use alloy_primitives::B256;
+use flux_profiler::timed;
 use helix_common::{BuilderInfo, PayloadAttributesUpdate};
 use helix_types::{BlockValidationError, BlsPublicKeyBytes, Submission, SubmissionVersion};
 
@@ -9,6 +10,7 @@ use crate::auctioneer::{
 };
 
 impl<B: BidAdjustor> Context<B> {
+    #[timed]
     pub fn validate_submission<'a>(
         &mut self,
         submission_data: &SubmissionData,
@@ -51,6 +53,7 @@ impl<B: BidAdjustor> Context<B> {
         Ok(payload_attributes)
     }
 
+    #[timed]
     fn validate_submission_data(
         &self,
         payload: &Submission,

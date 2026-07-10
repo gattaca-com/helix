@@ -7,6 +7,7 @@ use std::{
 use alloy_consensus::{Bytes48, Transaction, TxEnvelope, TxType};
 use alloy_primitives::{Address, B256, Bytes, U256};
 use alloy_rlp::Decodable;
+use flux_profiler::timed;
 use helix_common::{
     RelayConfig,
     api::builder_api::InclusionListWithMetadata,
@@ -146,6 +147,7 @@ impl BlockMerger {
         self.found_orders_count = 0;
     }
 
+    #[timed]
     pub fn add_inclusion_list(&mut self, inclusion_list: &InclusionListWithMetadata) {
         if let Some(il_cfg) = &self.config.inclusion_list {
             debug!("adding {} inclusion list orders to merging pool", inclusion_list.txs.len());
@@ -166,6 +168,7 @@ impl BlockMerger {
         }
     }
 
+    #[timed]
     pub fn get_header(&self, original_bid: &PayloadEntry) -> Option<PayloadEntry> {
         trace!("fetching merged header");
         let start_time = Instant::now();
@@ -195,6 +198,7 @@ impl BlockMerger {
         Some(entry.bid.clone())
     }
 
+    #[timed]
     pub fn update_base_block(&mut self, base_block: BlockHash) {
         if let Some(base_block_data) = self.appendable_blocks.get(&base_block) {
             trace!(%base_block,"updating base block");
@@ -230,6 +234,7 @@ impl BlockMerger {
         }
     }
 
+    #[timed]
     pub fn fetch_merge_request(&mut self) -> Option<MergeRequest> {
         trace!("fetching merge request");
         self.fetch_merge_request_count += 1;
@@ -314,6 +319,7 @@ impl BlockMerger {
         Some(merge_request)
     }
 
+    #[timed]
     pub fn prepare_merged_payload_for_storage(
         &mut self,
         response: BlockMergeResponse,
@@ -409,6 +415,7 @@ impl BlockMerger {
         Ok(new_bid)
     }
 
+    #[timed]
     fn should_request_merge(&self) -> bool {
         if self.base_block.is_none() {
             return false;
@@ -425,6 +432,7 @@ impl BlockMerger {
         res
     }
 
+    #[timed]
     fn insert_appendable_block_data(
         &mut self,
         slot: u64,
@@ -511,6 +519,7 @@ impl BestMergeableOrders {
     /// Inserts the orders into the merging pool.
     /// Any duplicates are discarded, unless the bid value is higher than the
     /// existing one, in which case they replace the old order.
+    #[timed]
     fn insert_orders(&mut self, bid_value: U256, mergeable_orders: MergeableOrders) {
         let start_time = Instant::now();
         let origin = mergeable_orders.origin;
@@ -555,6 +564,7 @@ impl BestMergeableOrders {
 /// Expands the references in [`BlockMergingData`] from the transactions in the
 /// payload of the given submission. If any bundle references a transaction not in
 /// the payload, it will be silently ignored.
+#[timed]
 pub fn get_mergeable_orders(
     payload: &SignedBidSubmission,
     merging_data: &BlockMergingData,
@@ -587,6 +597,7 @@ pub fn get_mergeable_orders(
     Ok(MergeableOrders::new(merging_data.builder_address, mergeable_orders, blobs))
 }
 
+#[timed]
 fn order_to_mergeable(
     order: &Order,
     txs: &Transactions,
@@ -646,6 +657,7 @@ fn order_to_mergeable(
     }
 }
 
+#[timed]
 fn validate_blobs(
     raw_tx: &[u8],
     blob_versioned_hashes: &[B256],
@@ -664,6 +676,7 @@ fn validate_blobs(
     Ok(())
 }
 
+#[timed]
 fn validate_builder_payment(mut raw_tx: &[u8]) -> Result<(), OrderValidationError> {
     let tx = TxEnvelope::decode(&mut raw_tx)?;
     if tx.priority_fee_or_price() == 0 && tx.input().is_empty() {
@@ -719,6 +732,7 @@ fn calculate_versioned_hash(commitment: Bytes48) -> B256 {
 }
 
 /// Appends the merged blobs to the original blobs bundle.
+#[timed]
 fn append_merged_blobs(
     original_blobs_bundle: &mut BlobsBundle,
     blobs: &HashMap<B256, BlobWithMetadata>,

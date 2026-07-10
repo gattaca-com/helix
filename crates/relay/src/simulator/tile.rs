@@ -12,6 +12,7 @@ use flux::{
     tile::{Tile, TileName},
     timing::Nanos,
 };
+use flux_profiler::timed;
 use flux_utils::SharedVector;
 use helix_common::{
     SimulatorConfig, SubmissionTrace,
@@ -187,6 +188,7 @@ impl SimulatorTile {
         self.accept_optimistic.store(new, Ordering::Relaxed);
     }
 
+    #[timed]
     fn handle_sim_request(
         &mut self,
         req: crate::simulator::ValidationRequest,
@@ -228,6 +230,7 @@ impl SimulatorTile {
         }
     }
 
+    #[timed]
     fn handle_merge_request(&mut self, req: MergeRequest) {
         self.local_telemetry.merge_reqs += 1;
         if let Some(id) = self.next_client(|s| s.can_merge()) {
@@ -283,6 +286,7 @@ impl SimulatorTile {
         }
     }
 
+    #[timed]
     fn spawn_sim(&mut self, id: usize, req: ValidationRequest) {
         const PAUSE_DURATION: Duration = Duration::from_secs(60);
 
@@ -434,6 +438,7 @@ impl SimulatorTile {
     /// 1. Sticky sim with SSZ endpoint (state locality + binary protocol)
     /// 2. Any SSZ-capable sim, least pending (binary protocol)
     /// 3. Any sim, least pending (JSON-RPC fallback; stickiness irrelevant without SSZ)
+    #[timed]
     fn select_simulator(&self, builder_pubkey: &BlsPublicKeyBytes) -> Option<usize> {
         if !self.ssz_sim_indices.is_empty() {
             let sticky =
