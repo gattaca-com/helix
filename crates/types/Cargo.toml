@@ -17,6 +17,7 @@ ethereum_serde_utils.workspace = true
 helix-tcp-types.workspace = true
 ethereum_ssz.workspace = true
 ethereum_ssz_derive.workspace = true
+flux-profiler.workspace = true
 lh-bls.workspace = true
 lh-eth2.workspace = true
 lh-kzg.workspace = true

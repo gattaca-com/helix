@@ -70,6 +70,7 @@ pub struct RelayConfig {
     /// Directory for local cache snapshots (bincode). Enables fast startup.
     pub snapshot_dir: Option<PathBuf>,
     pub clickhouse: Option<ClickhouseConfig>,
+    pub enable_flux_profiler: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -121,6 +122,7 @@ impl RelayConfig {
             s3_config: None,
             snapshot_dir: None,
             clickhouse: None,
+            enable_flux_profiler: false,
         }
     }
 }

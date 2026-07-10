@@ -1,6 +1,7 @@
 use std::{sync::atomic::Ordering, time::Instant};
 
 use alloy_primitives::B256;
+use flux_profiler::timed;
 use helix_common::{api::proposer_api::GetHeaderParams, metrics::BID_ADJUSTMENT_LATENCY};
 use tokio::sync::oneshot;
 use tracing::{error, warn};
@@ -27,6 +28,7 @@ impl<B: BidAdjustor> Context<B> {
         let _ = res_tx.send(self.get_header(params.parent_hash, slot_data, producers));
     }
 
+    #[timed]
     fn get_header(
         &mut self,
         parent_hash: B256,

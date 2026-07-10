@@ -55,6 +55,7 @@ pub enum TopBidPrecision {
 }
 
 #[derive(Clone, Copy, Debug, Encode, Decode)]
+#[repr(C)]
 pub struct TopBidUpdate {
     pub timestamp: u64,
     pub slot: u64,

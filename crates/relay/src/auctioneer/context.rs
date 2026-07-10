@@ -9,6 +9,7 @@ use std::{
 
 use alloy_primitives::{B256, U256};
 use flux::spine::{SpineProducer, SpineProducers};
+use flux_profiler::timed;
 use flux_utils::SharedVector;
 use helix_common::{
     BuilderInfo, RelayConfig,
@@ -217,6 +218,7 @@ impl<B: BidAdjustor> Context<B> {
         }
     }
 
+    #[timed]
     pub fn on_new_slot(&mut self, bid_slot: Slot, producers: &mut HelixSpineProducers) {
         self.bid_slot = bid_slot;
         if let Some(pending) = self.pending_payload.take() {

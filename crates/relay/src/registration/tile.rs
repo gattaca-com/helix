@@ -4,6 +4,7 @@ use flux::{
     tile::{Tile, TileName},
     utils::{ShortTypename, short_typename},
 };
+use flux_profiler::timed;
 use helix_common::{chain_info::ChainInfo, utils::utcnow_ns};
 use helix_types::SignedValidatorRegistration;
 
@@ -98,6 +99,7 @@ impl RegistrationTile {
     }
 
     /// Returns whether the task completed (false = caller dropped the result channel).
+    #[timed]
     fn process_reg_task(&self, RegWorkerJob { regs, range, res_tx }: RegWorkerJob) -> bool {
         use helix_common::metrics::{WORKER_TASK_COUNT, WORKER_TASK_LATENCY_US};
 
@@ -136,6 +138,7 @@ impl Tile<HelixSpine> for RegistrationTile {
     }
 }
 
+#[timed]
 fn validate_registration(
     chain_info: &ChainInfo,
     registration: &SignedValidatorRegistration,

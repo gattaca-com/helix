@@ -5,6 +5,7 @@ use std::{
 
 use axum::response::{IntoResponse, Response};
 use flate2::read::GzDecoder;
+use flux_profiler::timed;
 use helix_types::{
     BidAdjustmentData, BlockMergingData, Compression, DehydratedBidSubmission,
     DehydratedBidSubmissionFuluWithAdjustments, ForkName, ForkVersionDecode, MergeType,
@@ -207,6 +208,7 @@ impl SubmissionDecoder {
         }
     }
 
+    #[timed]
     pub fn decompress(
         &mut self,
         payload: &[u8],
@@ -249,6 +251,7 @@ impl SubmissionDecoder {
         Some(Ok(()))
     }
 
+    #[timed]
     pub fn decode(
         &mut self,
         payload: &[u8],
@@ -270,6 +273,7 @@ impl SubmissionDecoder {
         }
     }
 
+    #[timed]
     fn decode_dehydrated(
         &mut self,
         body: &[u8],
@@ -308,6 +312,7 @@ impl SubmissionDecoder {
         Ok((Submission::Dehydrated(submission), merging_data, bid_adjustment))
     }
 
+    #[timed]
     fn decode_merge(
         &mut self,
         body: &[u8],
@@ -330,6 +335,7 @@ impl SubmissionDecoder {
         Ok((Submission::Full(sub_with_merging.submission), merging_data, None))
     }
 
+    #[timed]
     fn decode_default(
         &mut self,
         body: &[u8],
@@ -383,6 +389,7 @@ impl SubmissionDecoder {
         Ok(payload)
     }
 
+    #[timed]
     pub fn decode_by_fork<T: ForkVersionDecode + DeserializeOwned>(
         &mut self,
         body: &[u8],

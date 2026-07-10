@@ -5,6 +5,7 @@ use alloy_rpc_types::{
     beacon::{relay::SignedBidSubmissionV5, requests::ExecutionRequestsV4},
     engine::ExecutionPayloadV3,
 };
+use flux_profiler::timed;
 use lh_types::{ForkName, SignedRoot, Slot, test_utils::TestRandom};
 use serde::{Deserialize, Serialize};
 use ssz::{Decode, DecodeError};
@@ -490,6 +491,7 @@ impl SignedBidSubmission {
         Ok(())
     }
 
+    #[timed]
     pub fn verify_signature(&self, builder_domain: B256) -> Result<(), SigError> {
         let uncompressed_builder_pubkey =
             BlsPublicKey::deserialize(self.message.builder_pubkey.as_slice())

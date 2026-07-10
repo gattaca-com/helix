@@ -7,6 +7,7 @@ use flux::{
     tile::Tile,
     timing::{InternalMessage, Nanos},
 };
+use flux_profiler::timed;
 use flux_utils::SharedVector;
 use helix_common::{
     RelayConfig, SubmissionTrace,
@@ -190,6 +191,7 @@ impl DecoderTile {
         builder_id = tracing::field::Empty,
         block_hash = tracing::field::Empty,
     ))]
+    #[timed]
     fn handle_block_submission(
         cache: &LocalCache,
         chain_info: &ChainInfo,
@@ -271,6 +273,7 @@ impl DecoderTile {
     }
 
     #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    #[timed]
     fn try_handle_block_submission(
         cache: &LocalCache,
         chain_info: &ChainInfo,
@@ -382,6 +385,7 @@ impl DecoderTile {
     }
 }
 
+#[timed]
 fn verify_and_validate(
     submission: &mut SignedBidSubmission,
     skip_sigverify: bool,
