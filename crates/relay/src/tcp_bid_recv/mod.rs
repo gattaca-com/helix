@@ -2,7 +2,7 @@ use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
 use bytes::Bytes;
 use dashmap::DashMap;
-use flux::{spine::FluxSpine, tile::Tile, timing::Nanos};
+use flux::{tile::Tile, timing::Nanos};
 use flux_network::{
     Token,
     tcp::{PollEvent, SendBehavior, TcpConnector, TcpTelemetry},
@@ -54,8 +54,12 @@ impl BidSubmissionTcpListener {
         dcache_ptr: DCachePtr,
         http_submissions: Arc<SharedVector<Bytes>>,
     ) -> Self {
+        // TODO: enable telemetry once the per-connection shm queue leak is fixed
+        // Telemetry creates 4 shm queues per accepted connection keyed by peer
+        // addr incl. ephemeral port; never freed, so reconnect churn leaks
+        // /dev/shm until the fix lands in flux.
         let mut listener = TcpConnector::default()
-            .with_telemetry(TcpTelemetry::Enabled { app_name: HelixSpine::app_name() })
+            .with_telemetry(TcpTelemetry::Disabled)
             .with_socket_buf_size(64 * 1024 * 1024) // 64MB
             .with_dcache(dcache_ptr);
         listener.listen_at(listener_addr).expect("failed to initialise the TCP listener");
