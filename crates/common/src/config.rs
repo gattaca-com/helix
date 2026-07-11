@@ -70,6 +70,7 @@ pub struct RelayConfig {
     /// Directory for local cache snapshots (bincode). Enables fast startup.
     pub snapshot_dir: Option<PathBuf>,
     pub clickhouse: Option<ClickhouseConfig>,
+    #[serde(default)]
     pub enable_flux_profiler: bool,
 }
 
