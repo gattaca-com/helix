@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use alloy_primitives::{B256, U256};
 use flux::{
-    spine::{FluxSpine, SpineProducers},
+    spine::SpineProducers,
     tile::Tile,
     timing::{Duration, Repeater},
 };
@@ -183,8 +183,10 @@ impl BlockMergingTile {
             })
             .collect();
 
+        // TODO: enable telemetry once the per-connection shm queue leak is fixed
+        // Disabled: per-connection shm queue leak, see tcp_bid_recv/mod.rs.
         let connector = TcpConnector::default()
-            .with_telemetry(TcpTelemetry::Enabled { app_name: HelixSpine::app_name() })
+            .with_telemetry(TcpTelemetry::Disabled)
             .with_socket_buf_size(64 * 1024 * 1024);
 
         Self {
