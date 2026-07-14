@@ -108,7 +108,7 @@ impl AlertManager {
             return;
         };
 
-        let url = format!("{relay_url}/relay/v2/data/promote?token={token}");
+        let url = format!("{relay_url}/relay/v2/builder/promote?token={token}");
 
         for chat_id in demotion_targets(*demotion_chat_id, builder_demotion_chat_ids, builder_id) {
             let bot = bot.clone();
