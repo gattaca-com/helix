@@ -8,6 +8,7 @@ mod error;
 mod execution_payload;
 mod fields;
 mod hydration;
+mod operator;
 mod test_utils;
 mod utils;
 mod validator;
