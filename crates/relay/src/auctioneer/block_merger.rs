@@ -192,7 +192,7 @@ impl BlockMerger {
         trace!("fetched merged header");
 
         if self.config.block_merging_config.is_dry_run {
-            trace!("dry run mode enabled, not returning merged header");
+            info!("dry run mode enabled, not returning merged header");
             return None;
         }
         Some(entry.bid.clone())
