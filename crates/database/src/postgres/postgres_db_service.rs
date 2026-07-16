@@ -2770,6 +2770,7 @@ impl PostgresDatabaseService {
             sim_start_time_ns: i64,
             sim_end_time_ns: i64,
             finalize_time_ns: i64,
+            header_served_time_ns: Option<i64>,
             inserted_at: SystemTime,
         }
 
@@ -2794,12 +2795,13 @@ impl PostgresDatabaseService {
                 sim_start_time_ns: block.trace.sim_start_time_ns as i64,
                 sim_end_time_ns: block.trace.sim_end_time_ns as i64,
                 finalize_time_ns: block.trace.finalize_time_ns as i64,
+                header_served_time_ns: block.trace.header_served_time_ns.map(|v| v as i64),
                 inserted_at: SystemTime::now(),
             });
         }
 
         // Flatten into SQL params
-        const FIELD_COUNT: usize = 16;
+        const FIELD_COUNT: usize = 17;
         let mut params: Vec<&(dyn ToSql + Sync)> =
             Vec::with_capacity(structured_blocks.len() * FIELD_COUNT);
         for block in &structured_blocks {
@@ -2818,6 +2820,7 @@ impl PostgresDatabaseService {
             params.push(&block.sim_start_time_ns);
             params.push(&block.sim_end_time_ns);
             params.push(&block.finalize_time_ns);
+            params.push(&block.header_served_time_ns);
             params.push(&block.inserted_at);
         }
 
@@ -2838,6 +2841,7 @@ impl PostgresDatabaseService {
                 sim_start_time_ns,
                 sim_end_time_ns,
                 finalize_time_ns,
+                header_served_time_ns,
                 inserted_at
             ) VALUES ",
         );

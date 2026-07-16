@@ -98,7 +98,7 @@ impl<A: Api> ProposerApi<A> {
 
         trace!("done sleep");
 
-        let Ok(rx) = proposer_api.auctioneer_handle.get_header(params) else {
+        let Ok(rx) = proposer_api.auctioneer_handle.get_header(params, is_mev_boost) else {
             error!("failed to send get_header to auctioneer");
             return Err(ProposerApiError::InternalServerError);
         };

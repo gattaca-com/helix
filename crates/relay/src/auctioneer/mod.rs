@@ -406,7 +406,10 @@ impl State {
             }
 
             // get_header
-            (State::Sorting(slot_data), Event::GetHeader { params, res_tx, span }) => {
+            (
+                State::Sorting(slot_data),
+                Event::GetHeader { params, res_tx, span, is_mev_boost },
+            ) => {
                 let _guard = span.enter();
                 trace!("received in auctioneer");
 
@@ -425,7 +428,7 @@ impl State {
                     warn!(req =% params.pubkey, this =% slot_data.registration_data.entry.registration.message.pubkey, "get header for mismatched proposer");
                     let _ = res_tx.send(Err(ProposerApiError::NoBidPrepared));
                 } else {
-                    ctx.handle_get_header(params, slot_data, res_tx, producers)
+                    ctx.handle_get_header(params, slot_data, res_tx, producers, is_mev_boost)
                 }
 
                 trace!("finished processing");

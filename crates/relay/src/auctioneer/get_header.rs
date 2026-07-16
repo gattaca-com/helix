@@ -23,9 +23,11 @@ impl<B: BidAdjustor> Context<B> {
         slot_data: &SlotData,
         res_tx: oneshot::Sender<GetHeaderResult>,
         producers: &mut HelixSpineProducers,
+        is_mev_boost: bool,
     ) {
         assert_eq!(params.slot, self.bid_slot.as_u64(), "params should already be validated!");
-        let _ = res_tx.send(self.get_header(params.parent_hash, slot_data, producers));
+        let _ =
+            res_tx.send(self.get_header(params.parent_hash, slot_data, producers, is_mev_boost));
     }
 
     #[timed]
@@ -34,6 +36,7 @@ impl<B: BidAdjustor> Context<B> {
         parent_hash: B256,
         slot_data: &SlotData,
         producers: &mut HelixSpineProducers,
+        is_mev_boost: bool,
     ) -> GetHeaderResult {
         let Some(best_block_hash) = self.bid_sorter.get_header(&parent_hash) else {
             warn!(%parent_hash, "no bids for this fork");
@@ -45,7 +48,7 @@ impl<B: BidAdjustor> Context<B> {
             return Err(ProposerApiError::NoBidPrepared);
         };
 
-        if let Some(merged_bid) = self.block_merger.get_header(original_bid) {
+        if let Some(merged_bid) = self.block_merger.get_header(original_bid, is_mev_boost) {
             return Ok(merged_bid);
         };
 

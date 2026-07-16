@@ -50,11 +50,17 @@ impl AuctioneerHandle {
     pub fn get_header(
         &self,
         params: GetHeaderParams,
+        is_mev_boost: bool,
     ) -> Result<oneshot::Receiver<GetHeaderResult>, ChannelFull> {
         let (tx, rx) = oneshot::channel();
         trace!("sending to auctioneer");
         self.auctioneer
-            .try_send(Event::GetHeader { params, res_tx: tx, span: tracing::Span::current() })
+            .try_send(Event::GetHeader {
+                params,
+                res_tx: tx,
+                span: tracing::Span::current(),
+                is_mev_boost,
+            })
             .map_err(|_| ChannelFull)?;
         Ok(rx)
     }
