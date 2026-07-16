@@ -169,7 +169,7 @@ impl BlockMerger {
     }
 
     #[timed]
-    pub fn get_header(&self, original_bid: &PayloadEntry) -> Option<PayloadEntry> {
+    pub fn get_header(&self, original_bid: &PayloadEntry, is_mev_boost: bool) -> Option<PayloadEntry> {
         trace!("fetching merged header");
         let start_time = Instant::now();
         let entry = self.best_merged_block.as_ref()?;
@@ -190,6 +190,12 @@ impl BlockMerger {
 
         record_step("get_header", start_time.elapsed());
         trace!("fetched merged header");
+
+        let merged_bid = self.local_cache.get_merged_block(entry.bid.block_hash());
+        if is_mev_boost && let Some(mut merged_bid) = merged_bid {
+            merged_bid.trace.header_served_time_ns = Some(utcnow_ns());
+            self.local_cache.update_merged_block(merged_bid);
+        }
 
         if self.config.block_merging_config.is_dry_run {
             info!("dry run mode enabled, not returning merged header");
@@ -307,6 +313,7 @@ impl BlockMerger {
                     sim_start_time_ns: 0,
                     sim_end_time_ns: 0,
                     finalize_time_ns: 0,
+                    header_served_time_ns: None,
                 },
             }),
             block_hash: base_block_hash,

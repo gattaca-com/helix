@@ -255,6 +255,10 @@ impl LocalCache {
         CACHE_SIZE.with_label_values(&["merged_blocks"]).set(self.merged_blocks.len() as f64);
     }
 
+    pub fn update_merged_block(&self, merged_block: MergedBlock) {
+        self.merged_blocks.insert(merged_block.block_hash(), merged_block);
+    }
+
     pub fn get_merged_block(&self, block_hash: &B256) -> Option<MergedBlock> {
         self.merged_blocks.get(block_hash).map(|b| b.value().clone())
     }

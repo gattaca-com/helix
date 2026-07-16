@@ -269,6 +269,7 @@ pub struct MergedBlockTrace {
     pub sim_start_time_ns: u64,
     pub sim_end_time_ns: u64,
     pub finalize_time_ns: u64,
+    pub header_served_time_ns: Option<u64>,
 }
 
 #[cfg(test)]

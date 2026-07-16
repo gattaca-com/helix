@@ -454,6 +454,7 @@ pub enum Event {
         params: GetHeaderParams,
         res_tx: oneshot::Sender<GetHeaderResult>,
         span: tracing::Span,
+        is_mev_boost: bool,
     },
     // Receive multiple of these potentially, assume some light validation
     GetPayload {

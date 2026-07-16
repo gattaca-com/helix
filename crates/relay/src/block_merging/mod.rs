@@ -64,6 +64,7 @@ fn merged_block_to_response(m: MergedBlockV1) -> BlockMergeResponse {
             sim_start_time_ns: m.trace.sim_start_ns,
             sim_end_time_ns: m.trace.sim_end_ns,
             finalize_time_ns: m.trace.finalize_ns,
+            header_served_time_ns: None, // filled in by the auctioneer when it sends the header to the proposer
         },
     }
 }
