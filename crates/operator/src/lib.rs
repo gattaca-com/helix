@@ -43,6 +43,9 @@ impl Display for OperatorError {
 }
 
 /// Handle to operator pubsub.
+/// When this is first created, current builder collateral and demotions messages should
+/// be sent. These are cached internally (and updated) and sent automatically when new
+/// peers connect. 
 pub struct OperatorPubSub {
     outgoing_msgs: Sender<OperatorMessage>,
     incoming_msgs: Receiver<OperatorMessage>,
