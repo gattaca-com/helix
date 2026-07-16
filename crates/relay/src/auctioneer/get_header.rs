@@ -26,7 +26,8 @@ impl<B: BidAdjustor> Context<B> {
         is_mev_boost: bool,
     ) {
         assert_eq!(params.slot, self.bid_slot.as_u64(), "params should already be validated!");
-        let _ = res_tx.send(self.get_header(params.parent_hash, slot_data, producers, is_mev_boost));
+        let _ =
+            res_tx.send(self.get_header(params.parent_hash, slot_data, producers, is_mev_boost));
     }
 
     #[timed]

@@ -406,7 +406,10 @@ impl State {
             }
 
             // get_header
-            (State::Sorting(slot_data), Event::GetHeader { params, res_tx, span, is_mev_boost }) => {
+            (
+                State::Sorting(slot_data),
+                Event::GetHeader { params, res_tx, span, is_mev_boost },
+            ) => {
                 let _guard = span.enter();
                 trace!("received in auctioneer");
 

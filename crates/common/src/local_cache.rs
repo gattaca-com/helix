@@ -255,8 +255,10 @@ impl LocalCache {
         CACHE_SIZE.with_label_values(&["merged_blocks"]).set(self.merged_blocks.len() as f64);
     }
 
-    pub fn update_merged_block(&self, merged_block: MergedBlock) {
-        self.merged_blocks.insert(merged_block.block_hash(), merged_block);
+    pub fn set_merged_block_header_served(&self, block_hash: &B256, time_ns: u64) {
+        if let Some(mut b) = self.merged_blocks.get_mut(block_hash) {
+            b.trace.header_served_time_ns = Some(time_ns);
+        }
     }
 
     pub fn get_merged_block(&self, block_hash: &B256) -> Option<MergedBlock> {

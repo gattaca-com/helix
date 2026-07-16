@@ -55,7 +55,12 @@ impl AuctioneerHandle {
         let (tx, rx) = oneshot::channel();
         trace!("sending to auctioneer");
         self.auctioneer
-            .try_send(Event::GetHeader { params, res_tx: tx, span: tracing::Span::current(), is_mev_boost })
+            .try_send(Event::GetHeader {
+                params,
+                res_tx: tx,
+                span: tracing::Span::current(),
+                is_mev_boost,
+            })
             .map_err(|_| ChannelFull)?;
         Ok(rx)
     }
