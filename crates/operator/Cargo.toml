@@ -1,0 +1,21 @@
+[package]
+name = "helix-operator"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+async-channel.workspace = true
+ethereum_ssz.workspace = true
+helix-types.workspace = true
+hex.workspace = true
+libp2p.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+alloy-primitives.workspace = true
