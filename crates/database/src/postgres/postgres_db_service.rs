@@ -941,7 +941,8 @@ impl PostgresDatabaseService {
                     first_seen: item.trace.receive_ns.0 as i64,
                     region_id: self.region,
                     optimistic_version: item.optimistic_version as i16,
-                    metadata: item.trace.metadata.as_deref(),
+                    metadata: (!item.trace.metadata.is_empty())
+                        .then(|| item.trace.metadata.as_str()),
                     is_adjusted: item.is_adjusted,
                     live_ts: item.live_ts.map(|v| v as i64),
                 });

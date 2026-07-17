@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::{RequestTimings, metrics::SUB_TRACE_LATENCY, utils::utcnow_ns};
 
 #[derive(Debug, Clone, Copy, Default)]
+#[repr(C)]
 pub struct SubmissionTrace {
     // first packet
     pub receive_ns: Nanos,
@@ -14,7 +15,10 @@ pub struct SubmissionTrace {
     pub read_body_ns: Nanos,
     // when body finished being decoded
     pub decoded_ns: Nanos,
-    pub metadata: Option<ArrayStr<128>>,
+    /// Empty when no metadata was provided. Plain `ArrayStr` rather than
+    /// `Option<ArrayStr<128>>` because this type crosses the spine's
+    /// extern "C" queues, and `Option` has no guaranteed layout.
+    pub metadata: ArrayStr<128>,
 }
 
 impl SubmissionTrace {

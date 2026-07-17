@@ -119,7 +119,7 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                     .entered();
 
                     let submission_ref =
-                        SubmissionRef::Tcp { id, token, seq_num: header.sequence_number };
+                        SubmissionRef::Tcp { id, token: token.0, seq_num: header.sequence_number };
 
                     let now = utcnow_ns();
                     SUB_CLIENT_TO_SERVER_LATENCY
@@ -140,8 +140,9 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                         header: InternalBidSubmissionHeader::from_tcp_header(id, header),
                         submission_ref,
                         trace,
-                        expected_pubkey: Some(*expected_pubkey),
-                        http_submission_ix: Some(http_submission_ix),
+                        expected_pubkey: *expected_pubkey,
+                        has_expected_pubkey: true,
+                        http_submission_ix,
                     })
                 } else {
                     match RegistrationMsg::from_ssz_bytes(payload) {
@@ -188,7 +189,7 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
             let response =
                 response_from_submission_result(seq_num, id, r.tcp_status, r.error_msg.as_str());
             tracing::debug!("submission result: {}", response);
-            self.listener.write_or_enqueue_with(SendBehavior::Single(token), |buffer| {
+            self.listener.write_or_enqueue_with(SendBehavior::Single(Token(token)), |buffer| {
                 response.ssz_append(buffer);
             });
         });

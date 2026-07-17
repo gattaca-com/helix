@@ -56,8 +56,7 @@ impl Tile<HelixSpine> for DecoderTile {
                 // dcache bypass: the dcache slot can be mutated between publish and
                 // consume, read the stable staged copy when one is present.
                 let bytes;
-                let payload = if let Some(b) =
-                    new_bid.http_submission_ix.and_then(|ix| self.http_submissions.get(ix))
+                let payload = if let Some(b) = self.http_submissions.get(new_bid.http_submission_ix)
                 {
                     bytes = b;
                     &bytes.as_slice()[new_bid.payload_offset..]
@@ -75,7 +74,7 @@ impl Tile<HelixSpine> for DecoderTile {
                     &mut self.buffer.borrow_mut(),
                     new_bid.trace,
                     sent_at,
-                    new_bid.expected_pubkey.as_ref(),
+                    new_bid.expected_pubkey(),
                 )
             },
             |res, producers| match res {
@@ -91,8 +90,7 @@ impl Tile<HelixSpine> for DecoderTile {
                     );
                 }
                 DCacheRead::NoRef(new_bid) => {
-                    let Some(payload) =
-                        new_bid.http_submission_ix.and_then(|ix| self.http_submissions.get(ix))
+                    let Some(payload) = self.http_submissions.get(new_bid.http_submission_ix)
                     else {
                         tracing::error!(
                             "failed to find the payload for bid submission with id = {}",
@@ -117,7 +115,7 @@ impl Tile<HelixSpine> for DecoderTile {
                         &mut self.buffer.borrow_mut(),
                         new_bid.trace,
                         sent_at,
-                        new_bid.expected_pubkey.as_ref(),
+                        new_bid.expected_pubkey(),
                     );
                     Self::handle_result(
                         &self.decoded,
@@ -323,7 +321,7 @@ impl DecoderTile {
 
             true
         } else {
-            header.api_key.is_some_and(|api_key| cache.validate_api_key(&api_key, &builder_pubkey))
+            !header.api_key.is_empty() && cache.validate_api_key(&header.api_key, &builder_pubkey)
         };
 
         match submission {
@@ -332,7 +330,7 @@ impl DecoderTile {
             }
             Submission::Dehydrated { .. } => {
                 if !skip_sigverify &&
-                    !header.api_key.is_some_and(|api_key| cache.contains_api_key(&api_key))
+                    (header.api_key.is_empty() || !cache.contains_api_key(&header.api_key))
                 {
                     return Err(BuilderApiError::UntrustedBuilderOnDehydratedPayload);
                 }
@@ -341,8 +339,9 @@ impl DecoderTile {
 
         let withdrawals_root = submission.withdrawal_root();
 
+        let sequence_number = header.has_sequence_number.then_some(header.sequence_number);
         trace!(
-            ?header.sequence_number,
+            ?sequence_number,
             is_dehydrated,
             skip_sigverify,
             with_mergeable_data,
@@ -350,7 +349,7 @@ impl DecoderTile {
             "processed payload"
         );
 
-        let version = SubmissionVersion::new(trace.receive_ns.0, header.sequence_number);
+        let version = SubmissionVersion::new(trace.receive_ns.0, sequence_number);
         Ok((
             submission,
             withdrawals_root,

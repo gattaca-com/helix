@@ -1,7 +1,6 @@
 use std::{ops::Deref, sync::Arc, time::Instant};
 
 use alloy_primitives::{B256, U256};
-use flux_network::Token;
 use flux_utils::ArrayStr;
 use helix_common::{
     GetPayloadTrace, PayloadAttributesUpdate, SubmissionTrace,
@@ -45,7 +44,10 @@ use crate::{
 #[repr(C)]
 pub enum SubmissionRef {
     Http(usize),
-    Tcp { id: Uuid, token: Token, seq_num: u32 },
+    // `token` is a `flux_network::Token` (mio::Token) stored as its inner usize:
+    // mio::Token has no repr, so keeping it here would make this type FFI-unsafe
+    // for the spine's extern "C" queue functions.
+    Tcp { id: Uuid, token: usize, seq_num: u32 },
     Internal,
 }
 
@@ -53,14 +55,20 @@ pub type GetHeaderResult = Result<PayloadEntry, ProposerApiError>;
 pub type GetPayloadResult = Result<GetPayloadResultData, ProposerApiError>;
 
 #[derive(Debug, Clone, Copy)]
+#[repr(C)]
 pub struct InternalBidSubmissionHeader {
     pub id: Uuid,
-    pub sequence_number: Option<u32>,
+    // `Option<u32>`/`Option<ArrayStr<128>>` would make this type FFI-unsafe for
+    // the spine's extern "C" queue functions (Option has no guaranteed layout
+    // for non-niche inner types), so absence is tracked out of band here.
+    pub sequence_number: u32,
+    pub has_sequence_number: bool,
     pub merge_type: MergeType,
     pub flags: BidSubmissionFlags,
     pub encoding: Encoding,
     pub compression: Compression,
-    pub api_key: Option<ArrayStr<128>>,
+    /// Empty when no API key was provided.
+    pub api_key: ArrayStr<128>,
 }
 
 impl InternalBidSubmissionHeader {
@@ -87,6 +95,8 @@ impl InternalBidSubmissionHeader {
             .get(HEADER_SEQUENCE)
             .and_then(|seq| seq.to_str().ok())
             .and_then(|seq| seq.parse::<u32>().ok());
+        let has_sequence_number = sequence_number.is_some();
+        let sequence_number = sequence_number.unwrap_or(0);
 
         const GZIP_HEADER: HeaderValue = HeaderValue::from_static("gzip");
         const ZSTD_HEADER: HeaderValue = HeaderValue::from_static("zstd");
@@ -109,9 +119,19 @@ impl InternalBidSubmissionHeader {
         let api_key = headers
             .get(HEADER_API_KEY)
             .or(headers.get(HEADER_API_TOKEN))
-            .and_then(|key| key.to_str().map(ArrayStr::from_str_truncate).ok());
+            .and_then(|key| key.to_str().map(ArrayStr::from_str_truncate).ok())
+            .unwrap_or_default();
 
-        Self { id: request_id, sequence_number, merge_type, flags, encoding, compression, api_key }
+        Self {
+            id: request_id,
+            sequence_number,
+            has_sequence_number,
+            merge_type,
+            flags,
+            encoding,
+            compression,
+            api_key,
+        }
     }
 
     fn merge_type_from_headers(
@@ -137,26 +157,27 @@ impl InternalBidSubmissionHeader {
     pub fn from_tcp_header(request_id: Uuid, header: BidSubmissionHeader) -> Self {
         Self {
             id: request_id,
-            sequence_number: Some(header.sequence_number),
+            sequence_number: header.sequence_number,
+            has_sequence_number: true,
             merge_type: header.merge_type,
             flags: header.flags,
             encoding: Encoding::Ssz,
             compression: header.compression(),
-            api_key: None,
+            api_key: ArrayStr::default(),
         }
     }
 
     pub fn to_bytes(self) -> SerialisedHeader {
         let mut buf = [0u8; Self::MAX_SERIALISED_LEN];
         buf[0..16].copy_from_slice(self.id.as_bytes());
-        buf[16] = self.sequence_number.is_some() as u8;
-        buf[17..21].copy_from_slice(&self.sequence_number.unwrap_or(0).to_le_bytes());
+        buf[16] = self.has_sequence_number as u8;
+        buf[17..21].copy_from_slice(&self.sequence_number.to_le_bytes());
         buf[21] = self.merge_type as u8;
         buf[22] = self.flags.bits();
         buf[23] = self.encoding as u8;
         buf[24] = self.compression as u8;
-        let len = if let Some(key) = &self.api_key {
-            let b = key.as_str().as_bytes();
+        let len = if !self.api_key.is_empty() {
+            let b = self.api_key.as_str().as_bytes();
             buf[25] = b.len() as u8;
             buf[26..26 + b.len()].copy_from_slice(b);
             26 + b.len()
