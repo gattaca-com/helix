@@ -600,22 +600,22 @@ impl BlockMergingTile {
                 signed
             }
             // hydrating also feeds this submission's new txs into the cache
-            Submission::Dehydrated(d) => match self
-                .hydration_cache
-                .hydrate(d.clone(), self.chain_info.max_blobs_per_block())
-            {
-                Ok(h) => {
-                    if !is_replay {
-                        self.stats.forwarded_hydrated += 1;
+            Submission::Dehydrated(d) => {
+                match self.hydration_cache.hydrate(d.clone(), self.chain_info.max_blobs_per_block())
+                {
+                    Ok(h) => {
+                        if !is_replay {
+                            self.stats.forwarded_hydrated += 1;
+                        }
+                        hydrated = h.submission;
+                        &hydrated
                     }
-                    hydrated = h.submission;
-                    &hydrated
+                    Err(_) => {
+                        self.stats.hydration_failed += 1;
+                        return;
+                    }
                 }
-                Err(_) => {
-                    self.stats.hydration_failed += 1;
-                    return;
-                }
-            },
+            }
         };
 
         let mut merge_orders = Vec::with_capacity(merging.merge_orders.len());

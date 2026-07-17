@@ -10,6 +10,7 @@ use helix_common::{
     self, RequestTimings, SubmissionTrace, api_provider::ApiProvider,
     metrics::SUB_CLIENT_TO_SERVER_LATENCY, utils::extract_request_id,
 };
+use helix_types::BlsPublicKeyBytes;
 use http::{HeaderMap, StatusCode};
 use tokio::time::timeout;
 use tracing::trace;
@@ -46,8 +47,11 @@ impl<A: Api> BuilderApi<A> {
         trace!("start handler");
 
         let mut trace = SubmissionTrace::init_from_timings(timings);
-        trace.metadata =
-            api.api_provider.get_metadata(&headers).map(|s| ArrayStr::from_str_truncate(&s));
+        trace.metadata = api
+            .api_provider
+            .get_metadata(&headers)
+            .map(|s| ArrayStr::from_str_truncate(&s))
+            .unwrap_or_default();
 
         observe_client_to_server_latency(&headers, trace.receive_ns.0);
 
@@ -61,8 +65,9 @@ impl<A: Api> BuilderApi<A> {
             header,
             submission_ref: SubmissionRef::Http(future_ix),
             trace,
-            expected_pubkey: None,
-            http_submission_ix: Some(ix),
+            expected_pubkey: BlsPublicKeyBytes::default(),
+            has_expected_pubkey: false,
+            http_submission_ix: ix,
         };
 
         if let Err(e) = api.producer.produce_with_ingestion::<fn(&mut [u8])>(
@@ -88,7 +93,7 @@ impl<A: Api> BuilderApi<A> {
                 if result.should_report {
                     tracing::error!(err = result.error_msg.as_str());
                 }
-                (result.http_status, result.error_msg.to_string()).into_response()
+                (result.http_status(), result.error_msg.to_string()).into_response()
             }
         } else {
             tracing::error!("timeout while waiting for bid submission processing respopnse");

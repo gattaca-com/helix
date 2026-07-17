@@ -19,8 +19,20 @@ pub struct NewBidSubmission {
     pub submission_ref: SubmissionRef,
     pub header: InternalBidSubmissionHeader,
     pub trace: SubmissionTrace,
-    pub expected_pubkey: Option<BlsPublicKeyBytes>,
-    pub http_submission_ix: Option<usize>,
+    // `Option<BlsPublicKeyBytes>` would make this type FFI-unsafe for the
+    // spine's extern "C" queue functions (no niche to encode `None`), so
+    // absence is tracked out of band here.
+    pub expected_pubkey: BlsPublicKeyBytes,
+    pub has_expected_pubkey: bool,
+    // always populated by both construction sites; a plain index rather
+    // than `Option<usize>` for the same FFI-safety reason.
+    pub http_submission_ix: usize,
+}
+
+impl NewBidSubmission {
+    pub fn expected_pubkey(&self) -> Option<&BlsPublicKeyBytes> {
+        self.has_expected_pubkey.then_some(&self.expected_pubkey)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -28,7 +40,9 @@ pub struct NewBidSubmission {
 pub struct SubmissionResultWithRef {
     pub sub_ref: SubmissionRef,
     pub tcp_status: Status,
-    pub http_status: StatusCode,
+    // `http::StatusCode` has no repr attribute, so it can't cross the spine's
+    // extern "C" queues; stored as the raw code instead.
+    pub http_status_code: u16,
     pub error_msg: ArrayStr<256>,
     pub should_report: bool,
 }
@@ -39,7 +53,7 @@ impl SubmissionResultWithRef {
             Ok(()) => Self {
                 sub_ref,
                 tcp_status: Status::Okay,
-                http_status: StatusCode::OK,
+                http_status_code: StatusCode::OK.as_u16(),
                 error_msg: ArrayStr::default(),
                 should_report: false,
             },
@@ -53,12 +67,16 @@ impl SubmissionResultWithRef {
                 Self {
                     sub_ref,
                     tcp_status,
-                    http_status: e.http_status(),
+                    http_status_code: e.http_status().as_u16(),
                     error_msg: ArrayStr::from_str_truncate(&e.to_string()),
                     should_report: e.should_report(),
                 }
             }
         }
+    }
+
+    pub fn http_status(&self) -> StatusCode {
+        StatusCode::from_u16(self.http_status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
     }
 }
 
