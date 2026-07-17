@@ -1,4 +1,4 @@
-use std::{cell::RefCell, sync::Arc};
+use std::{cell::RefCell, collections::HashMap, sync::Arc};
 
 use alloy_primitives::B256;
 use bytes::Bytes;
@@ -18,8 +18,8 @@ use helix_common::{
     record_submission_step,
 };
 use helix_types::{
-    BidAdjustmentData, BlockMergingData, BlsPublicKeyBytes, MergeableOrdersWithPref,
-    SignedBidSubmission, Submission, SubmissionVersion,
+    BidAdjustmentData, BlockMergingData, BlsPublicKeyBytes, MergeableOrders,
+    MergeableOrdersWithPref, SignedBidSubmission, Submission, SubmissionVersion,
 };
 use tracing::trace;
 use zstd::zstd_safe::WriteBuf;
@@ -232,8 +232,8 @@ impl DecoderTile {
         trace!("sending to auctioneer");
 
         let merging_data = if config.block_merging_config.is_enabled {
-            merging_data.and_then(|data| {
-                if let Submission::Full(ref signed_bid_submission) = submission {
+            merging_data.and_then(|data| match &submission {
+                Submission::Full(signed_bid_submission) => {
                     // TODO: split up mergeable order and submission processing to
                     // avoid delaying the bid update
                     match get_mergeable_orders(signed_bid_submission, &data) {
@@ -247,9 +247,15 @@ impl DecoderTile {
                             None
                         }
                     }
-                } else {
-                    None
                 }
+                // transactions aren't resolved yet, so orders referencing tx indices can't be
+                // expanded here; only append-only submissions reach this point (see
+                // SubmissionDecoder::decode_dehydrated), so merge_orders is always empty.
+                Submission::Dehydrated(_) => Some(MergeableOrdersWithPref {
+                    allow_appending: data.allow_appending,
+                    orders: MergeableOrders::new(data.builder_address, Vec::new(), HashMap::new()),
+                    merge_orders: data.merge_orders,
+                }),
             })
         } else {
             None
