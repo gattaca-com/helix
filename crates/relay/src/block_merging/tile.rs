@@ -11,7 +11,7 @@ use flux_network::{
     tcp::{PollEvent, SendBehavior, TcpConnector, TcpTelemetry},
 };
 use flux_utils::SharedVector;
-use helix_common::{BlockMergingTcpConfig, api::builder_api::TopBidUpdate};
+use helix_common::{BlockMergingTcpConfig, api::builder_api::TopBidUpdate, chain_info::ChainInfo};
 use helix_tcp_types::merging::{
     MERGING_HEADER_SIZE, MERGING_PROTOCOL_VERSION, MergingFrameHeader, MergingHeaderError,
     MergingMsgId,
@@ -21,7 +21,7 @@ use helix_tcp_types::merging::{
     },
     relay_to_builder::{ActivateBaseBlockV1, MergeableBlockV1, SlotStartV1},
 };
-use helix_types::{Submission, payload_to_v3};
+use helix_types::{HydrationCache, Submission, payload_to_v3};
 use rustc_hash::{FxHashMap, FxHashSet};
 use ssz::Decode;
 use tracing::{debug, error, info, trace, warn};
@@ -87,6 +87,37 @@ struct SlotState {
     best_merged: FxHashMap<B256, U256>,
 }
 
+/// Per-slot counters, logged and reset on slot transition.
+#[derive(Default)]
+struct SlotStats {
+    /// Mergeable frames built from full submissions.
+    forwarded_full: usize,
+    /// Mergeable frames built from dehydrated submissions after hydration.
+    forwarded_hydrated: usize,
+    hydration_failed: usize,
+    skipped_no_slot_start: usize,
+    skipped_wrong_slot: usize,
+    skipped_no_merging_data: usize,
+    /// Per-connection sends skipped over builder limits.
+    skipped_over_limits: usize,
+    /// Merge orders dropped for an out of range tx index.
+    orders_dropped: usize,
+    /// Mergeable frames replayed on re-handshake.
+    replayed: usize,
+    merged_blocks: usize,
+    merged_stale: usize,
+    /// Merged blocks discarded because a better one was already stored.
+    merged_regressed: usize,
+    /// TopBidUpdate messages received for the current bid slot.
+    top_bid_updates: usize,
+    /// Per-connection ActivateBaseBlockV1 frames sent.
+    activations_sent: usize,
+    /// Gaps between consecutive top bid updates, from bid sorter send
+    /// timestamps.
+    top_bid_gaps_ns: Vec<u64>,
+    last_top_bid_ns: u64,
+}
+
 pub struct BlockMergingTile {
     connector: TcpConnector,
     relay_id: Vec<u8>,
@@ -95,6 +126,11 @@ pub struct BlockMergingTile {
     endpoints: Vec<Endpoint>,
     conns: FxHashMap<Token, Conn>,
     slot: SlotState,
+    stats: SlotStats,
+    chain_info: ChainInfo,
+    /// Rebuilds full payloads from dehydrated submissions; fed by every
+    /// dehydrated submission this slot, cleared on slot transition.
+    hydration_cache: HydrationCache,
 
     redial: Repeater,
     ping: Repeater,
@@ -152,6 +188,7 @@ impl BlockMergingTile {
         decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
         slot_events: Arc<SharedVector<SlotUpdate>>,
         merged_blocks: Arc<SharedVector<BlockMergeResponse>>,
+        chain_info: ChainInfo,
     ) -> Self {
         let relay_config_msg = RelayConfigV1 {
             relay_fee_recipient: config.relay_fee_recipient,
@@ -196,6 +233,9 @@ impl BlockMergingTile {
             endpoints,
             conns: FxHashMap::default(),
             slot: SlotState::default(),
+            stats: SlotStats::default(),
+            chain_info,
+            hydration_cache: HydrationCache::new(),
             redial: Repeater::every(Duration::from_secs(REDIAL_INTERVAL_S)),
             ping: Repeater::every(Duration::from_secs(PING_INTERVAL_S)),
             ping_nonce: 0,
@@ -269,6 +309,7 @@ impl BlockMergingTile {
             connector,
             conns,
             slot,
+            stats,
             to_disconnect,
             to_register,
             handshaken,
@@ -352,6 +393,7 @@ impl BlockMergingTile {
                         if merged.slot != slot.bid_slot ||
                             !slot.appendable.contains(&merged.base_block_hash)
                         {
+                            stats.merged_stale += 1;
                             debug!(
                                 ?token,
                                 slot = merged.slot,
@@ -366,9 +408,11 @@ impl BlockMergingTile {
                         let best =
                             slot.best_merged.entry(merged.base_block_hash).or_insert(U256::ZERO);
                         if merged.proposer_value <= *best {
+                            stats.merged_regressed += 1;
                             return;
                         }
                         *best = merged.proposer_value;
+                        stats.merged_blocks += 1;
                         let ix = merged_blocks.push(merged_block_to_response(merged));
                         merged_ixs.push(ix);
                     }
@@ -430,10 +474,12 @@ impl BlockMergingTile {
             return;
         }
         if bid_slot > self.slot.bid_slot {
+            self.report_slot_stats();
             self.slot = SlotState { bid_slot, ..Default::default() };
             for conn in self.conns.values_mut() {
                 conn.reset_slot();
             }
+            self.hydration_cache.clear();
             // sole producer; consumed indices are stale after the transition
             self.merged_blocks.clear();
         }
@@ -478,27 +524,105 @@ impl BlockMergingTile {
         self.slot.slot_start = Some(msg);
     }
 
+    fn report_slot_stats(&mut self) {
+        let mut stats = std::mem::take(&mut self.stats);
+        if self.slot.bid_slot == 0 {
+            return;
+        }
+        info!(
+            bid_slot = self.slot.bid_slot,
+            top_bid_updates = stats.top_bid_updates,
+            top_bid_median_gap_ms = Self::median(&mut stats.top_bid_gaps_ns) as f64 / 1e6,
+            activations_sent = stats.activations_sent,
+            forwarded_full = stats.forwarded_full,
+            forwarded_hydrated = stats.forwarded_hydrated,
+            hydration_failed = stats.hydration_failed,
+            skipped_no_slot_start = stats.skipped_no_slot_start,
+            skipped_wrong_slot = stats.skipped_wrong_slot,
+            skipped_no_merging_data = stats.skipped_no_merging_data,
+            skipped_over_limits = stats.skipped_over_limits,
+            orders_dropped = stats.orders_dropped,
+            replayed = stats.replayed,
+            merged_blocks = stats.merged_blocks,
+            merged_stale = stats.merged_stale,
+            merged_regressed = stats.merged_regressed,
+            appendable_blocks = self.slot.appendable.len(),
+            hydration_txs = self.hydration_cache.tx_count(),
+            hydration_builders = self.hydration_cache.builder_count(),
+            "block merging slot stats"
+        );
+    }
+
+    /// Even when a submission is not forwarded, its full transactions and
+    /// blobs must enter the cache so later dehydrated submissions from the
+    /// same builder can resolve their references.
+    fn feed_cache(&mut self, submission: &Submission) {
+        if let Submission::Dehydrated(d) = submission {
+            self.hydration_cache.feed(d);
+        }
+    }
+
     /// Forwards the decoded submission at `ix` as a `MergeableBlockV1` to all
     /// active connections, or to `only` on re-handshake replay.
     fn forward_decoded(&mut self, ix: usize, only: Option<Token>) {
-        if self.slot.slot_start.is_none() {
-            return;
+        let is_replay = only.is_some();
+        if is_replay {
+            self.stats.replayed += 1;
         }
         let Some(data) = self.decoded.get(ix) else { return };
         let sub = &data.submission_data;
-        let Some(merging) = &sub.merging_data else { return };
-        // mergeable submissions are always full (see decoder)
-        let Submission::Full(signed) = &sub.submission else { return };
-        // also guards replay ixs against the auctioneer's decoded.clear()
-        if signed.message.slot != self.slot.bid_slot {
+
+        if self.slot.slot_start.is_none() {
+            self.stats.skipped_no_slot_start += 1;
+            self.feed_cache(&sub.submission);
             return;
         }
+        // also guards replay ixs against the auctioneer's decoded.clear()
+        if sub.submission.bid_slot() != self.slot.bid_slot {
+            self.stats.skipped_wrong_slot += 1;
+            if !is_replay {
+                self.feed_cache(&sub.submission);
+            }
+            return;
+        }
+        let Some(merging) = &sub.merging_data else {
+            self.stats.skipped_no_merging_data += 1;
+            self.feed_cache(&sub.submission);
+            return;
+        };
+
+        let hydrated;
+        let signed = match &sub.submission {
+            Submission::Full(signed) => {
+                if !is_replay {
+                    self.stats.forwarded_full += 1;
+                }
+                signed
+            }
+            // hydrating also feeds this submission's new txs into the cache
+            Submission::Dehydrated(d) => match self
+                .hydration_cache
+                .hydrate(d.clone(), self.chain_info.max_blobs_per_block())
+            {
+                Ok(h) => {
+                    if !is_replay {
+                        self.stats.forwarded_hydrated += 1;
+                    }
+                    hydrated = h.submission;
+                    &hydrated
+                }
+                Err(_) => {
+                    self.stats.hydration_failed += 1;
+                    return;
+                }
+            },
+        };
 
         let mut merge_orders = Vec::with_capacity(merging.merge_orders.len());
         for order in &merging.merge_orders {
             match order_to_ref(order) {
                 Some(r) => merge_orders.push(r),
-                None => warn!("dropping merge order with out of range tx index"),
+                None => self.stats.orders_dropped += 1,
             }
         }
         let order_count = merge_orders.len() as u32;
@@ -539,6 +663,7 @@ impl BlockMergingTile {
             if conn.orders_sent.saturating_add(order_count) > conn.max_orders_per_slot ||
                 frame.len() > conn.max_frame_bytes as usize
             {
+                self.stats.skipped_over_limits += 1;
                 debug!(?token, %block_hash, "skipping mergeable block over builder limits");
                 continue;
             }
@@ -553,8 +678,18 @@ impl BlockMergingTile {
     }
 
     fn on_top_bid(&mut self, top_bid: TopBidUpdate) {
-        if top_bid.slot != self.slot.bid_slot || !self.slot.appendable.contains(&top_bid.block_hash)
-        {
+        if top_bid.slot != self.slot.bid_slot {
+            return;
+        }
+        self.stats.top_bid_updates += 1;
+        if self.stats.last_top_bid_ns > 0 {
+            self.stats
+                .top_bid_gaps_ns
+                .push(top_bid.timestamp.saturating_sub(self.stats.last_top_bid_ns));
+        }
+        self.stats.last_top_bid_ns = top_bid.timestamp;
+
+        if !self.slot.appendable.contains(&top_bid.block_hash) {
             return;
         }
         let msg = ActivateBaseBlockV1 { slot: top_bid.slot, block_hash: top_bid.block_hash };
@@ -566,9 +701,24 @@ impl BlockMergingTile {
                 continue;
             }
             conn.activated = Some(top_bid.block_hash);
+            self.stats.activations_sent += 1;
             self.connector.write_or_enqueue_with(SendBehavior::Single(*token), |buf| {
                 append_frame(buf, MergingMsgId::ActivateBaseBlockV1, &msg);
             });
+        }
+    }
+
+    /// Median of unsorted samples; 0 if empty.
+    fn median(samples: &mut [u64]) -> u64 {
+        if samples.is_empty() {
+            return 0;
+        }
+        samples.sort_unstable();
+        let mid = samples.len() / 2;
+        if samples.len().is_multiple_of(2) {
+            (samples[mid - 1] + samples[mid]) / 2
+        } else {
+            samples[mid]
         }
     }
 

@@ -313,6 +313,7 @@ async fn run(
                     decoded.clone(),
                     slot_events.clone(),
                     merged_blocks.clone(),
+                    chain_info.as_ref().clone(),
                 );
                 attach_tile(
                     merging_tile,

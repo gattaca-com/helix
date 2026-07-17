@@ -225,6 +225,10 @@ struct BlobItemFulu {
     blob: Blob,
 }
 
+/// Max size of the rlp encoded tx sig (v 1 byte, s,r 32 bytes each with a leading
+/// rlp length prefix)
+const TX_KEY_SIZE: usize = 67;
+
 impl DehydratedBidSubmissionFulu {
     #[timed]
     fn can_hydrate_inner(
@@ -236,10 +240,6 @@ impl DehydratedBidSubmissionFulu {
         if self.blobs_bundle.commitments.len() > max_blobs_per_block {
             return false;
         }
-
-        /// Max size of the rlp encoded tx sig (v 1 byte, s,r 32 bytes each with a leading
-        /// rlp length prefix)
-        const TX_KEY_SIZE: usize = 67;
 
         for tx in &self.execution_payload.transactions {
             if tx.len() == std::mem::size_of::<u64>() {
@@ -291,10 +291,6 @@ impl DehydratedBidSubmissionFulu {
                 tx_cache_hits += 1;
                 *tx = cached_tx.clone();
             } else {
-                /// Max size of the rlp encoded tx sig (v 1 byte, s,r 32 bytes each with a leading
-                /// rlp length prefix)
-                const TX_KEY_SIZE: usize = 67;
-
                 if tx.len() < TX_KEY_SIZE {
                     last_err = Err(HydrationError::InvalidTxLength { length: tx.len(), index });
                     continue;
@@ -352,6 +348,28 @@ impl DehydratedBidSubmissionFulu {
         };
 
         Ok(HydratedData { submission, tx_cache_hits, blob_cache_hits, tx_root: self.tx_root })
+    }
+
+    /// Inserts this submission's full transactions and new blobs into the
+    /// cache without building the hydrated payload, so later dehydrated
+    /// submissions can resolve their references even when this one is
+    /// otherwise dropped.
+    fn feed_inner(
+        &self,
+        txs: &mut FxHashMap<u64, Transaction>,
+        blobs: &mut FxHashMap<KzgCommitment, (Vec<KzgProof>, Blob)>,
+    ) {
+        for tx in &self.execution_payload.transactions {
+            if tx.len() == std::mem::size_of::<u64>() || tx.len() < TX_KEY_SIZE {
+                continue;
+            }
+            let mut hasher = FxHasher::default();
+            hasher.write(&tx[tx.len() - TX_KEY_SIZE..]);
+            txs.insert(hasher.finish(), tx.clone());
+        }
+        for blob_item in &self.blobs_bundle.new_items {
+            blobs.insert(blob_item.commitment, (blob_item.proof.clone(), blob_item.blob.clone()));
+        }
     }
 }
 
@@ -477,6 +495,17 @@ impl HydrationCache {
                 let pubkey = s.message.builder_pubkey;
                 let entry = self.caches.entry(pubkey).or_default();
                 s.hydrate_inner(&mut entry.transactions, &mut entry.blobs_fulu, max_blobs_per_block)
+            }
+        }
+    }
+
+    /// Inserts the submission's full transactions and new blobs into the
+    /// builder's cache without building the hydrated payload.
+    pub fn feed(&mut self, submission: &DehydratedBidSubmission) {
+        match submission {
+            DehydratedBidSubmission::Fulu(s) => {
+                let entry = self.caches.entry(s.message.builder_pubkey).or_default();
+                s.feed_inner(&mut entry.transactions, &mut entry.blobs_fulu);
             }
         }
     }
