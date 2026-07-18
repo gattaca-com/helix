@@ -1,6 +1,6 @@
 [workspace]
 default-members = ["crates/relay"]
-members = ["crates/common", "crates/data-api", "crates/database", "crates/relay", "crates/simulator", "crates/tcp-types", "crates/types", "crates/test-harness", "crates/website"]
+members = ["crates/builder", "crates/common", "crates/data-api", "crates/database", "crates/relay", "crates/simulator", "crates/tcp-types", "crates/types", "crates/test-harness", "crates/website"]
 resolver = "2"
 
 [workspace.package]
@@ -39,10 +39,29 @@ ethereum_serde_utils = "0.8"
 ethereum_ssz = "0.9"
 ethereum_ssz_derive = "0.9"
 ethers = "2.0.14"
+
+# ethrex embedded node (helix-builder), pinned by rev.
+# NOTE: the `ethrex` cmd-lib is deliberately NOT a dependency: it force-enables
+# ethrex-crypto's `aws-lc-rs` feature, whose cc >=1.2.26 requirement conflicts with
+# reth-mdbx-sys's exact `cc = 1.2.15` pin (via helix-simulator). The node is
+# assembled from the library crates instead.
+ethrex-blockchain = { git = "https://github.com/lambdaclass/ethrex", rev = "b4d5677812fdf58cb3e439c77906dda4d9b6f91a", default-features = false, features = ["secp256k1", "c-kzg", "metrics"] }
+ethrex-common = { git = "https://github.com/lambdaclass/ethrex", rev = "b4d5677812fdf58cb3e439c77906dda4d9b6f91a", default-features = false, features = ["secp256k1", "c-kzg"] }
+ethrex-config = { git = "https://github.com/lambdaclass/ethrex", rev = "b4d5677812fdf58cb3e439c77906dda4d9b6f91a" }
+# default features minus `aws-lc-rs` (see note above); P-256 verify uses the portable fallback
+ethrex-crypto = { git = "https://github.com/lambdaclass/ethrex", rev = "b4d5677812fdf58cb3e439c77906dda4d9b6f91a", default-features = false, features = ["std", "kzg-rs", "secp256k1", "blst", "c-kzg"] }
+ethrex-metrics = { git = "https://github.com/lambdaclass/ethrex", rev = "b4d5677812fdf58cb3e439c77906dda4d9b6f91a" }
+ethrex-p2p = { git = "https://github.com/lambdaclass/ethrex", rev = "b4d5677812fdf58cb3e439c77906dda4d9b6f91a", features = ["c-kzg", "rocksdb", "metrics"] }
+ethrex-rlp = { git = "https://github.com/lambdaclass/ethrex", rev = "b4d5677812fdf58cb3e439c77906dda4d9b6f91a" }
+ethrex-rpc = { git = "https://github.com/lambdaclass/ethrex", rev = "b4d5677812fdf58cb3e439c77906dda4d9b6f91a" }
+ethrex-storage = { git = "https://github.com/lambdaclass/ethrex", rev = "b4d5677812fdf58cb3e439c77906dda4d9b6f91a", features = ["rocksdb"] }
+ethrex-vm = { git = "https://github.com/lambdaclass/ethrex", rev = "b4d5677812fdf58cb3e439c77906dda4d9b6f91a", default-features = false, features = ["secp256k1", "c-kzg"] }
+
 eyre = "0.6.12"
 aws-sdk-s3 = "=1.35.0"
 clickhouse = "0.14.2"
 flate2 = "1.0"
+hex = "0.4"
 
 flux = { git = "https://github.com/gattaca-com/flux", rev = "ce40087" }
 flux-network = { package = "flux-network", git = "https://github.com/gattaca-com/flux", rev = "ce40087" }
@@ -53,6 +72,7 @@ flux-utils = { package = "flux-utils", git = "https://github.com/gattaca-com/flu
 
 futures = "0.3"
 futures-util = { version = "0.3", features = ["compat"] }
+helix-builder = { path = "crates/builder" }
 helix-common = { path = "crates/common" }
 helix-data-api = { path = "crates/data-api" }
 helix-database = { path = "crates/database" }
@@ -86,6 +106,7 @@ pin-project-lite = "0.2.16"
 prometheus = "0.13.4"
 prost = "0.12"
 rand = "0.9.2"
+rayon = "1.10"
 refinery = { version = "0.8", features = ["tokio-postgres"] }
 reqwest = { version = "0.13.2", default-features = false, features = ["blocking", "json", "rustls", "stream"] }
 reqwest-eventsource = "0.5"
@@ -99,6 +120,8 @@ reth-primitives = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.1" 
 reth-tasks = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.1" }
 revm = { version = "31.0.1", default-features = false }
 rustc-hash = "2.1.1"
+# matches ethrex's pin; used to construct the embedded node's p2p signing key
+secp256k1 = "0.30"
 bincode = "1"
 serde = { version = "1.0.191", features = ["derive"] }
 serde_json = "1.0.106"
@@ -115,6 +138,7 @@ thiserror = "1.0.49"
 tikv-jemallocator = { version = "0.6", features = ["profiling"] }
 tokio = { version = "1.43", features = ["full"] }
 tokio-postgres = { version = "0.7.10", features = ["with-serde_json-1"]}
+tokio-util = { version = "0.7", features = ["rt"] }
 tokio-tungstenite = "0.27.0"
 tonic = { version = "0.10", features = ["gzip"] }
 tonic-build = "0.10"
@@ -134,3 +158,9 @@ zstd = "0.13.3"
 [patch.crates-io]
 ethereum_ssz = { git = "https://github.com/sigp/ethereum_ssz", rev = "7aec9c0cdf886f08f15fe9296646c2451356084f" }
 ethereum_ssz_derive = { git = "https://github.com/sigp/ethereum_ssz", rev = "7aec9c0cdf886f08f15fe9296646c2451356084f", package = "ethereum_ssz_derive" }
+
+# Vendored with namespaced keccak asm symbols; upstream's collide with the
+# vendored OpenSSL that lighthouse's eth2 forces into every build. See
+# crates/vendored/ethrex-crypto/VENDORED.md.
+[patch."https://github.com/lambdaclass/ethrex"]
+ethrex-crypto = { path = "crates/vendored/ethrex-crypto" }

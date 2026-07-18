@@ -1,0 +1,32 @@
+# helix-builder merging configuration (--merging.config)
+
+# Address the merging TCP server listens on for relay connections.
+listen_addr: "0.0.0.0:9876"
+
+# Allowlisted relay api keys (MergerRegistrationV1.api_key, UUID form).
+api_keys:
+  - "00000000-0000-0000-0000-000000000001"
+
+# Advertised to the relay in MergerAckV1 and enforced on ingest.
+max_orders_per_slot: 8192
+max_frame_bytes: 33554432 # 32 MiB
+
+supports_zstd: true
+socket_buf_size: 67108864 # 64 MiB, matches the relay side
+
+handshake_timeout_ms: 3000
+idle_disconnect_s: 30
+
+max_blocks_per_slot: 256
+event_queue_capacity: 4096
+
+# Optional core pins for the latency-sensitive threads.
+cores:
+  server_tile: null
+  merge_worker: null
+
+emission:
+  # Only emit when proposer value improves by more than this many wei.
+  min_value_increase_wei: 0
+  # Minimum spacing between emissions for the same base block.
+  min_interval_ms: 25
