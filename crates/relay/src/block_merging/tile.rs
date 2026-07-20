@@ -224,7 +224,12 @@ impl BlockMergingTile {
         // Disabled: per-connection shm queue leak, see tcp_bid_recv/mod.rs.
         let connector = TcpConnector::default()
             .with_telemetry(TcpTelemetry::Disabled)
-            .with_socket_buf_size(64 * 1024 * 1024);
+            .with_socket_buf_size(64 * 1024 * 1024)
+            // Otherwise a stale message queued for the dead socket (e.g. an
+            // activation or ping) gets replayed on the new one ahead of the
+            // fresh MergerRegistrationV1, and the builder rejects it with
+            // "expected registration" — killing the connection again.
+            .with_drop_outbound_backlog_on_disconnect(true);
 
         Self {
             connector,
