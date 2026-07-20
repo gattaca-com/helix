@@ -11,7 +11,7 @@ use helix_common::{
 };
 use hyper::HeaderMap;
 use tokio_tungstenite::tungstenite::{Error as WebSocketError, Message};
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 use super::api::BuilderApi;
 use crate::{
@@ -69,15 +69,70 @@ impl<A: Api> BuilderApi<A> {
     }
 }
 
+/// Per-slot counters, logged and reset when `TopBidUpdate.slot` advances.
+/// Sends/pings are per-(update, connection) fan-out, a different unit from
+/// `top_bid_updates_received`, which is per-update.
+#[derive(Default)]
+struct SlotStats {
+    new_connections: u32,
+    top_bid_updates_received: u32,
+    sends_ok: u32,
+    sends_failed: u32,
+    pings_sent: u32,
+    pings_failed: u32,
+    pongs_sent: u32,
+    pongs_failed: u32,
+    closes_received: u32,
+    read_errors: u32,
+}
+
 pub struct TopBidTile {
     new_connections: Receiver<(RawWebSocket, TopBidPrecision)>,
     connections: Vec<(RawWebSocket, TopBidMetrics, TopBidPrecision)>,
     last_send: Nanos,
+    bid_slot: u64,
+    stats: SlotStats,
 }
 
 impl TopBidTile {
     pub fn new(new_connections: Receiver<(RawWebSocket, TopBidPrecision)>) -> Self {
-        Self { new_connections, connections: vec![], last_send: Nanos::now() }
+        Self {
+            new_connections,
+            connections: vec![],
+            last_send: Nanos::now(),
+            bid_slot: 0,
+            stats: SlotStats::default(),
+        }
+    }
+
+    fn on_top_bid_slot(&mut self, slot: u64) {
+        if slot <= self.bid_slot {
+            return;
+        }
+        self.report_slot_stats();
+        self.bid_slot = slot;
+    }
+
+    fn report_slot_stats(&mut self) {
+        if self.bid_slot == 0 {
+            return;
+        }
+        let stats = std::mem::take(&mut self.stats);
+        info!(
+            bid_slot = self.bid_slot,
+            connections = self.connections.len(),
+            new_connections = stats.new_connections,
+            top_bid_updates_received = stats.top_bid_updates_received,
+            sends_ok = stats.sends_ok,
+            sends_failed = stats.sends_failed,
+            pings_sent = stats.pings_sent,
+            pings_failed = stats.pings_failed,
+            pongs_sent = stats.pongs_sent,
+            pongs_failed = stats.pongs_failed,
+            closes_received = stats.closes_received,
+            read_errors = stats.read_errors,
+            "top bid slot stats"
+        );
     }
 }
 
@@ -87,17 +142,24 @@ impl Tile<HelixSpine> for TopBidTile {
         while let Ok((web_socket, precision)) = self.new_connections.try_recv() {
             let metric = TopBidMetrics::connection();
             self.connections.push((web_socket, metric, precision));
+            self.stats.new_connections += 1;
         }
 
         // send top bids - note that `send` call is non-blocking.
         adapter.consume(|top_bid: TopBidUpdate, _producers| {
+            self.on_top_bid_slot(top_bid.slot);
+            self.stats.top_bid_updates_received += 1;
             let mut i = 0;
             while i < self.connections.len() {
                 let precision = self.connections[i].2;
                 let payload = top_bid.as_ssz_bytes_with_precision(precision);
                 match self.connections[i].0.send(Message::Binary(payload)) {
-                    Ok(_) => i += 1,
+                    Ok(_) => {
+                        self.stats.sends_ok += 1;
+                        i += 1;
+                    }
                     Err(e) => {
+                        self.stats.sends_failed += 1;
                         error!(error=?e, peer=?self.connections[i].0.get_ref().peer_addr(), "Failed to send bid. Disconnecting.");
                         self.connections.swap_remove(i);
                     }
@@ -111,8 +173,12 @@ impl Tile<HelixSpine> for TopBidTile {
             let mut i = 0;
             while i < self.connections.len() {
                 match self.connections[i].0.send(Message::Ping(Bytes::new())) {
-                    Ok(_) => i += 1,
+                    Ok(_) => {
+                        self.stats.pings_sent += 1;
+                        i += 1;
+                    }
                     Err(e) => {
+                        self.stats.pings_failed += 1;
                         error!(error=?e, peer=?self.connections[i].0.get_ref().peer_addr(), "Failed to send ping. Disconnecting.");
                         self.connections.swap_remove(i);
                     }
@@ -127,14 +193,19 @@ impl Tile<HelixSpine> for TopBidTile {
             match self.connections[i].0.read() {
                 Ok(msg) => match msg {
                     Message::Ping(data) => match self.connections[i].0.send(Message::Pong(data)) {
-                        Ok(_) => i += 1,
+                        Ok(_) => {
+                            self.stats.pongs_sent += 1;
+                            i += 1;
+                        }
                         Err(e) => {
+                            self.stats.pongs_failed += 1;
                             error!(error=?e, peer=?self.connections[i].0.get_ref().peer_addr(), "Failed to send pong. Disconnecting.");
                             self.connections.swap_remove(i);
                         }
                     },
                     Message::Close(_) => {
                         debug!("Received close frame.");
+                        self.stats.closes_received += 1;
                         self.connections.swap_remove(i);
                     }
                     _ => i += 1,
@@ -143,6 +214,7 @@ impl Tile<HelixSpine> for TopBidTile {
                     i += 1;
                 }
                 Err(e) => {
+                    self.stats.read_errors += 1;
                     error!(error=?e, peer=?self.connections[i].0.get_ref().peer_addr(), "Failed to read. Disconnecting.");
                     self.connections.swap_remove(i);
                 }

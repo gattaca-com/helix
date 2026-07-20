@@ -1,4 +1,9 @@
-use std::{collections::HashMap, net::SocketAddr, sync::Arc};
+use std::{
+    collections::HashMap,
+    net::SocketAddr,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use bytes::Bytes;
 use dashmap::DashMap;
@@ -12,6 +17,7 @@ use helix_common::{SubmissionTrace, metrics::SUB_CLIENT_TO_SERVER_LATENCY, utils
 use helix_tcp_types::BID_SUB_HEADER_SIZE;
 use helix_types::BlsPublicKeyBytes;
 use ssz::{Decode, Encode};
+use tracing::info;
 use uuid::Uuid;
 
 use crate::{
@@ -32,6 +38,24 @@ pub use crate::tcp_bid_recv::types::{
 
 type SubmissionError = (Token, Option<u32>, Option<Uuid>, BidSubmissionError);
 
+/// Connections aren't slot-scoped, so this reports on a wall-clock cadence
+/// instead of a slot boundary. For a registered peer, every `Message` is
+/// either a decoded submission or a header-parse error:
+/// `submissions_received + header_parse_errors == messages_from_registered`.
+/// For an unregistered peer, every `Message` is a registration attempt:
+/// `registration_ok + registration_invalid == registration_attempts`.
+#[derive(Default)]
+struct Stats {
+    accepted: u32,
+    reconnected: u32,
+    disconnected: u32,
+    registration_ok: u32,
+    registration_invalid: u32,
+    submissions_received: u32,
+    header_parse_errors: u32,
+    results_sent: u32,
+}
+
 pub struct BidSubmissionTcpListener {
     listener: TcpConnector,
 
@@ -44,9 +68,14 @@ pub struct BidSubmissionTcpListener {
     // dcache bypass: stage a stable copy of the payload, the dcache slot can be
     // mutated out from under the decoder between publish and consume.
     http_submissions: Arc<SharedVector<Bytes>>,
+
+    stats: Stats,
+    next_report: Instant,
 }
 
 impl BidSubmissionTcpListener {
+    const REPORT_FREQ: Duration = Duration::from_millis(500);
+
     pub fn new(
         listener_addr: SocketAddr,
         api_key_cache: Arc<DashMap<String, Vec<BlsPublicKeyBytes>>>,
@@ -71,7 +100,32 @@ impl BidSubmissionTcpListener {
             registered: HashMap::with_capacity(max_connections),
             submission_errors: Vec::with_capacity(max_connections),
             http_submissions,
+            stats: Stats::default(),
+            next_report: Instant::now() + Self::REPORT_FREQ,
         }
+    }
+
+    fn maybe_report_stats(&mut self) {
+        let now = Instant::now();
+        if now < self.next_report {
+            return;
+        }
+        self.next_report = now + Self::REPORT_FREQ;
+
+        let stats = std::mem::take(&mut self.stats);
+        info!(
+            accepted = stats.accepted,
+            reconnected = stats.reconnected,
+            disconnected = stats.disconnected,
+            registration_attempts = stats.registration_ok + stats.registration_invalid,
+            registration_ok = stats.registration_ok,
+            registration_invalid = stats.registration_invalid,
+            messages_from_registered = stats.submissions_received + stats.header_parse_errors,
+            submissions_received = stats.submissions_received,
+            header_parse_errors = stats.header_parse_errors,
+            results_sent = stats.results_sent,
+            "tcp bid recv tile stats"
+        );
     }
 }
 
@@ -80,15 +134,18 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
         self.listener.poll_with_produce(&mut adapter.producers, |event| match event {
             PollEvent::Accept { listener: _, stream, peer_addr } => {
                 tracing::trace!("connected to new peer {:?} with token {:?}", peer_addr, stream);
+                self.stats.accepted += 1;
                 None
             }
             PollEvent::Reconnect { token } => {
                 tracing::trace!("reconnected to peer with token {:?}", token);
+                self.stats.reconnected += 1;
                 None
             }
             PollEvent::Disconnect { token } => {
                 tracing::trace!("disconnected from peer with token {:?}", token);
                 self.registered.remove(&token);
+                self.stats.disconnected += 1;
                 None
             }
             PollEvent::Message { token, payload, send_ts } => {
@@ -97,6 +154,7 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                         Ok(header) => header,
                         Err(e) => {
                             tracing::error!("{e} failed to parse the bid submission header");
+                            self.stats.header_parse_errors += 1;
                             self.submission_errors.push((
                                 token,
                                 None,
@@ -106,6 +164,7 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                             return None;
                         }
                     };
+                    self.stats.submissions_received += 1;
 
                     let id = Uuid::new_v4();
                     let _enter = tracing::info_span!(
@@ -154,17 +213,20 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                                 .is_some_and(|p| p.value().contains(&msg.builder_pubkey))
                             {
                                 self.registered.insert(token, msg.builder_pubkey);
+                                self.stats.registration_ok += 1;
                             } else {
                                 tracing::error!(
                                     "unknown api key and pubkey pair: {} {}, disconnecting peer",
                                     api_key,
                                     msg.builder_pubkey
                                 );
+                                self.stats.registration_invalid += 1;
                                 self.to_disconnect.push(token);
                             }
                         }
                         Err(e) => {
                             tracing::error!(err=?e, "invalid registration message");
+                            self.stats.registration_invalid += 1;
                             self.to_disconnect.push(token);
                         }
                     }
@@ -189,9 +251,12 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
             let response =
                 response_from_submission_result(seq_num, id, r.tcp_status, r.error_msg.as_str());
             tracing::debug!("submission result: {}", response);
+            self.stats.results_sent += 1;
             self.listener.write_or_enqueue_with(SendBehavior::Single(Token(token)), |buffer| {
                 response.ssz_append(buffer);
             });
         });
+
+        self.maybe_report_stats();
     }
 }

@@ -54,6 +54,33 @@ pub struct SlotUpdate {
     pub il: Option<InclusionListWithMetadata>,
 }
 
+/// Counters accumulated between two `send_slot_event` calls, logged and reset
+/// alongside the slot event. Each fetch/poll's outcomes are mutually
+/// exclusive, so e.g. `duties_fetch_ok + duties_fetch_empty +
+/// duties_fetch_err` is the total number of duties fetches this window.
+#[derive(Default)]
+struct HousekeeperStats {
+    head_sse_events: u32,
+    head_sse_parse_errors: u32,
+    payload_attr_sse_events: u32,
+    payload_attr_parse_errors: u32,
+    duties_fetch_ok: u32,
+    duties_fetch_empty: u32,
+    duties_fetch_err: u32,
+    il_fetch_ok: u32,
+    il_fetch_timeout: u32,
+    il_fetch_decode_err: u32,
+    il_consensus_ok: u32,
+    il_consensus_err: u32,
+    primev_builders_fetched: u32,
+    primev_validators_fetched: u32,
+    known_validators_refresh_ok: u32,
+    known_validators_refresh_err: u32,
+    sync_status_ok: u32,
+    sync_status_err: u32,
+    sync_status_timeout: u32,
+}
+
 pub struct HousekeeperTile {
     // Internal state
     chain_head: ChainHead,
@@ -93,6 +120,8 @@ pub struct HousekeeperTile {
     sync_check_pending: Vec<(usize, Instant, PendingResponse)>,
     sync_check_next: Instant,
     sync_best: Option<(usize, u64)>,
+
+    stats: HousekeeperStats,
 }
 
 impl HousekeeperTile {
@@ -156,6 +185,7 @@ impl HousekeeperTile {
             sync_check_pending: Vec::new(),
             sync_check_next: Instant::now(),
             sync_best: None,
+            stats: HousekeeperStats::default(),
         };
         (tile, curr_slot_info)
     }
@@ -231,6 +261,7 @@ impl Tile<HelixSpine> for HousekeeperTile {
         let mut new_slot_from_sse = false;
         for stream in &mut self.head_sse {
             if let Poll::Ready(ev) = stream.poll() {
+                self.stats.head_sse_events += 1;
                 match serde_json::from_str::<HeadEventData>(&ev.data) {
                     Ok(data) => {
                         if self.chain_head.update(data) {
@@ -238,7 +269,10 @@ impl Tile<HelixSpine> for HousekeeperTile {
                             break;
                         }
                     }
-                    Err(e) => error!(err = %e, "head SSE parse error"),
+                    Err(e) => {
+                        self.stats.head_sse_parse_errors += 1;
+                        error!(err = %e, "head SSE parse error");
+                    }
                 }
             }
         }
@@ -249,13 +283,17 @@ impl Tile<HelixSpine> for HousekeeperTile {
         }
         for stream in &mut self.payload_attr_sse {
             if let Poll::Ready(ev) = stream.poll() {
+                self.stats.payload_attr_sse_events += 1;
                 match serde_json::from_str::<PayloadAttributesEvent>(&ev.data) {
                     Ok(data) => process_payload_attributes(
                         &mut self.chain_head,
                         data,
                         &mut self.known_payload_attributes,
                     ),
-                    Err(e) => error!(err = %e, "payload_attributes SSE parse error"),
+                    Err(e) => {
+                        self.stats.payload_attr_parse_errors += 1;
+                        error!(err = %e, "payload_attributes SSE parse error");
+                    }
                 }
             }
         }
@@ -270,15 +308,20 @@ impl Tile<HelixSpine> for HousekeeperTile {
             self.duties_fetch = None;
             match result {
                 Ok(proposer_duties) if proposer_duties.is_empty() => {
+                    self.stats.duties_fetch_empty += 1;
                     warn!("no proposer duties found");
                 }
                 Ok(proposer_duties) => {
+                    self.stats.duties_fetch_ok += 1;
                     process_duties(&proposer_duties, &self.local_cache, &self.db);
                     self.duties = proposer_duties;
                     self.chain_head.mark_duties_done();
                     self.maybe_fetch_primev();
                 }
-                Err(e) => error!(%e, "failed to fetch proposer duties"),
+                Err(e) => {
+                    self.stats.duties_fetch_err += 1;
+                    error!(%e, "failed to fetch proposer duties");
+                }
             }
         }
 
@@ -287,6 +330,7 @@ impl Tile<HelixSpine> for HousekeeperTile {
             let Poll::Ready(builders) = state.poll()
         {
             self.primev_builders_fetch = None;
+            self.stats.primev_builders_fetched += 1;
             if !builders.is_empty() {
                 info!(builders = builders.len(), "fetched primev builders");
                 let configs = build_primev_builder_configs(builders, &self.local_cache);
@@ -300,6 +344,7 @@ impl Tile<HelixSpine> for HousekeeperTile {
             let Poll::Ready(validators) = state.poll()
         {
             self.primev_validators_fetch = None;
+            self.stats.primev_validators_fetched += 1;
             if !validators.is_empty() {
                 info!(validators = validators.len(), "fetched primev validators");
                 self.local_cache.update_primev_proposers(&validators);
@@ -318,6 +363,7 @@ impl Tile<HelixSpine> for HousekeeperTile {
                     let head = self.chain_head.head();
                     match InclusionListWithMetadata::try_from(il.clone()) {
                         Ok(il_meta) => {
+                            self.stats.il_fetch_ok += 1;
                             info!(txs = il_meta.txs.len(), "fetched inclusion list");
                             if let Some(parent_hash) = self.chain_head.block() &&
                                 let Some(duty) = self.duties.iter().find(|d| d.slot == head)
@@ -335,13 +381,17 @@ impl Tile<HelixSpine> for HousekeeperTile {
                             }
                             self.pending_il = Some(il_meta);
                         }
-                        Err(err) => warn!(%err, %head, "could not decode inclusion list RLP"),
+                        Err(err) => {
+                            self.stats.il_fetch_decode_err += 1;
+                            warn!(%err, %head, "could not decode inclusion list RLP");
+                        }
                     }
                     self.chain_head.mark_il_done();
                     self.il_consensus_rx =
                         self.relay_network_api.try_share_inclusion_list(head.as_u64(), il);
                 }
                 None => {
+                    self.stats.il_fetch_timeout += 1;
                     warn!("inclusion list fetch timed out");
                     self.chain_head.mark_il_done();
                 }
@@ -356,10 +406,14 @@ impl Tile<HelixSpine> for HousekeeperTile {
                     self.known_validators_fetch = None;
                     match result {
                         Ok(resp) => {
+                            self.stats.known_validators_refresh_ok += 1;
                             debug!(validators = resp.data.len(), duration = ?start.elapsed(), "refreshed known validators");
                             self.db.set_known_validators(resp.data);
                         }
-                        Err(err) => error!(%err, "failed to refresh known validators"),
+                        Err(err) => {
+                            self.stats.known_validators_refresh_err += 1;
+                            error!(%err, "failed to refresh known validators");
+                        }
                     }
                 }
             }
@@ -386,16 +440,21 @@ impl Tile<HelixSpine> for HousekeeperTile {
                         if started.elapsed() < SYNC_STATUS_REQUEST_TIMEOUT {
                             self.sync_check_pending.push((idx, started, req));
                         } else {
+                            self.stats.sync_status_timeout += 1;
                             warn!(idx, "sync status request timed out");
                         }
                     }
                     Poll::Ready(Ok(resp)) => {
+                        self.stats.sync_status_ok += 1;
                         let slot = resp.data.head_slot.as_u64();
                         if self.sync_best.as_ref().is_none_or(|(_, s)| slot > *s) {
                             self.sync_best = Some((idx, slot));
                         }
                     }
-                    Poll::Ready(Err(e)) => warn!(%e, idx, "sync status fetch failed"),
+                    Poll::Ready(Err(e)) => {
+                        self.stats.sync_status_err += 1;
+                        warn!(%e, idx, "sync status fetch failed");
+                    }
                 }
             }
             if self.sync_check_pending.is_empty() &&
@@ -422,8 +481,14 @@ impl Tile<HelixSpine> for HousekeeperTile {
             match rx.try_recv() {
                 Ok(Some(il)) => {
                     match InclusionListWithMetadata::try_from(il) {
-                        Ok(il_meta) => self.pending_il = Some(il_meta),
-                        Err(e) => warn!(%e, "could not decode consensus IL"),
+                        Ok(il_meta) => {
+                            self.stats.il_consensus_ok += 1;
+                            self.pending_il = Some(il_meta);
+                        }
+                        Err(e) => {
+                            self.stats.il_consensus_err += 1;
+                            warn!(%e, "could not decode consensus IL");
+                        }
                     }
                     self.il_consensus_rx = None;
                 }
@@ -432,6 +497,7 @@ impl Tile<HelixSpine> for HousekeeperTile {
                 }
                 Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
                 Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                    self.stats.il_consensus_err += 1;
                     warn!("IL consensus channel closed before result");
                     self.il_consensus_rx = None;
                 }
@@ -447,6 +513,7 @@ impl Tile<HelixSpine> for HousekeeperTile {
                 &self.slot_events,
                 &self.known_payload_attributes,
                 self.pending_il.take(),
+                std::mem::take(&mut self.stats),
             );
         }
     }
@@ -456,6 +523,7 @@ impl Tile<HelixSpine> for HousekeeperTile {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn send_slot_event(
     adapter: &mut flux::spine::SpineAdapter<HelixSpine>,
     chain_head: &mut ChainHead,
@@ -464,6 +532,7 @@ fn send_slot_event(
     slot_events: &SharedVector<SlotUpdate>,
     known_payload_attributes: &HashMap<(B256, Slot), PayloadAttributesUpdate>,
     il: Option<InclusionListWithMetadata>,
+    stats: HousekeeperStats,
 ) {
     let slot = chain_head.head();
     let bid_slot = slot + 1;
@@ -493,7 +562,26 @@ fn send_slot_event(
         duties_available = !new_duties.is_empty(),
         has_next_duty = next_duty.is_some(),
         has_payload_attrs = !next_payload_attributes.is_empty(),
-        "sending slot event to auctioneer",
+        head_sse_events = stats.head_sse_events,
+        head_sse_parse_errors = stats.head_sse_parse_errors,
+        payload_attr_sse_events = stats.payload_attr_sse_events,
+        payload_attr_parse_errors = stats.payload_attr_parse_errors,
+        duties_fetch_ok = stats.duties_fetch_ok,
+        duties_fetch_empty = stats.duties_fetch_empty,
+        duties_fetch_err = stats.duties_fetch_err,
+        il_fetch_ok = stats.il_fetch_ok,
+        il_fetch_timeout = stats.il_fetch_timeout,
+        il_fetch_decode_err = stats.il_fetch_decode_err,
+        il_consensus_ok = stats.il_consensus_ok,
+        il_consensus_err = stats.il_consensus_err,
+        primev_builders_fetched = stats.primev_builders_fetched,
+        primev_validators_fetched = stats.primev_validators_fetched,
+        known_validators_refresh_ok = stats.known_validators_refresh_ok,
+        known_validators_refresh_err = stats.known_validators_refresh_err,
+        sync_status_ok = stats.sync_status_ok,
+        sync_status_err = stats.sync_status_err,
+        sync_status_timeout = stats.sync_status_timeout,
+        "housekeeper slot stats",
     );
 
     let update = SlotDuties { slot, new_duties: Some(new_duties), next_duty: next_duty.clone() };
