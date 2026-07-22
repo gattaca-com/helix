@@ -221,6 +221,9 @@ impl BlockMerger {
     }
 
     pub fn insert_merge_data(&mut self, merging_data: MergeData) {
+        // Dehydrated submissions never populate `orders` (see bid_decoder/tile.rs) since
+        // transaction indices can't be expanded to bytes before hydration runs; only
+        // `allow_appending`/`merge_orders` (forwarded raw to the merge-builder tile) apply to them.
         if !merging_data.merging_data.orders.orders.is_empty() {
             trace!(%merging_data.block_hash,"inserting merge orders from block");
             self.inserted_orders_count += 1;

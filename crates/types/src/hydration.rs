@@ -2,7 +2,7 @@ use std::{hash::Hasher, sync::Arc};
 
 use alloy_primitives::{Address, B256, U256};
 use flux_profiler::timed;
-use lh_types::{ForkName, ForkVersionDecode};
+use lh_types::{ForkName, ForkVersionDecode, test_utils::TestRandom};
 use rustc_hash::{FxHashMap, FxHasher};
 use serde::{Deserialize, Serialize};
 use ssz::{Decode, DecodeError};
@@ -11,8 +11,8 @@ use tracing::trace;
 use tree_hash::TreeHash;
 
 use crate::{
-    BidTrace, Blob, BlobsBundle, BlockValidationError, BlsPublicKeyBytes, BlsSignatureBytes,
-    ExecutionPayload, SignedBidSubmission,
+    BidTrace, Blob, BlobsBundle, BlockMergingData, BlockValidationError, BlsPublicKeyBytes,
+    BlsSignatureBytes, ExecutionPayload, SignedBidSubmission,
     bid_adjustment_data::BidAdjustmentData,
     bid_submission,
     fields::{ExecutionRequests, KzgCommitment, KzgProof, Transaction},
@@ -208,6 +208,62 @@ impl ForkVersionDecode for DehydratedBidSubmissionFuluWithAdjustments {
             ForkName::Gloas |
             ForkName::Electra => Err(DecodeError::NoMatchingVariant),
             ForkName::Fulu => DehydratedBidSubmissionFuluWithAdjustments::from_ssz_bytes(bytes),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
+pub struct DehydratedBidSubmissionFuluWithMergingData {
+    message: BidTrace,
+    execution_payload: ExecutionPayload,
+    blobs_bundle: DehydratedBlobsFulu,
+    execution_requests: Arc<ExecutionRequests>,
+    signature: BlsSignatureBytes,
+    tx_root: Option<B256>,
+    merging_data: BlockMergingData,
+}
+
+impl DehydratedBidSubmissionFuluWithMergingData {
+    pub fn split(self) -> (DehydratedBidSubmission, BlockMergingData) {
+        (
+            DehydratedBidSubmission::Fulu(DehydratedBidSubmissionFulu {
+                message: self.message,
+                execution_payload: self.execution_payload,
+                blobs_bundle: self.blobs_bundle,
+                execution_requests: self.execution_requests,
+                signature: self.signature,
+                tx_root: self.tx_root,
+            }),
+            self.merging_data,
+        )
+    }
+}
+
+impl ForkVersionDecode for DehydratedBidSubmissionFuluWithMergingData {
+    fn from_ssz_bytes_by_fork(bytes: &[u8], fork: ForkName) -> Result<Self, DecodeError> {
+        match fork {
+            ForkName::Base |
+            ForkName::Altair |
+            ForkName::Bellatrix |
+            ForkName::Capella |
+            ForkName::Deneb |
+            ForkName::Gloas |
+            ForkName::Electra => Err(DecodeError::NoMatchingVariant),
+            ForkName::Fulu => DehydratedBidSubmissionFuluWithMergingData::from_ssz_bytes(bytes),
+        }
+    }
+}
+
+impl TestRandom for DehydratedBidSubmissionFuluWithMergingData {
+    fn random_for_test(rng: &mut impl rand::RngCore) -> Self {
+        Self {
+            message: BidTrace::random_for_test(rng),
+            execution_payload: ExecutionPayload::random_for_test(rng),
+            blobs_bundle: DehydratedBlobsFulu { commitments: vec![], new_items: vec![] },
+            execution_requests: Arc::new(ExecutionRequests::random_for_test(rng)),
+            signature: BlsSignatureBytes::random(),
+            tx_root: None,
+            merging_data: BlockMergingData::random_for_test(rng),
         }
     }
 }
@@ -548,4 +604,36 @@ pub enum HydrationError {
 
     #[error("too many blobs: blobs {blobs}, max {max}")]
     TooManyBlobs { blobs: usize, max: usize },
+}
+
+#[cfg(test)]
+mod tests {
+    use ssz::Encode;
+
+    use super::*;
+
+    #[test]
+    fn dehydrated_with_merging_data_ssz_round_trip() {
+        let submission =
+            DehydratedBidSubmissionFuluWithMergingData::random_for_test(&mut rand::rng());
+
+        let bytes = submission.as_ssz_bytes();
+        let decoded = DehydratedBidSubmissionFuluWithMergingData::from_ssz_bytes(&bytes)
+            .expect("SSZ decode should succeed");
+
+        assert_eq!(submission.merging_data, decoded.merging_data);
+        assert_eq!(submission.message, decoded.message);
+    }
+
+    #[test]
+    fn dehydrated_with_merging_data_split_preserves_merge_orders() {
+        let submission =
+            DehydratedBidSubmissionFuluWithMergingData::random_for_test(&mut rand::rng());
+        let expected_merging_data = submission.merging_data.clone();
+
+        let (dehydrated, split_merging_data) = submission.split();
+
+        assert_eq!(split_merging_data, expected_merging_data);
+        assert!(matches!(dehydrated, DehydratedBidSubmission::Fulu(_)));
+    }
 }

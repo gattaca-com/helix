@@ -311,8 +311,11 @@ impl DecoderTile {
                     }
                 }
                 // transactions aren't resolved yet, so orders referencing tx indices can't be
-                // expanded here; only append-only submissions reach this point (see
-                // SubmissionDecoder::decode_dehydrated), so merge_orders is always empty.
+                // expanded into `orders` here for either append-only or mergeable dehydrated
+                // submissions. `merge_orders` is carried through raw so the external
+                // merge-builder tile (which hydrates independently) can still resolve them; the
+                // local `BestMergeableOrders` pool never receives expanded orders for dehydrated
+                // submissions.
                 Submission::Dehydrated(_) => Some(MergeableOrdersWithPref {
                     allow_appending: data.allow_appending,
                     orders: MergeableOrders::new(data.builder_address, Vec::new(), HashMap::new()),
