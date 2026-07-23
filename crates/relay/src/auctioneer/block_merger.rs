@@ -71,7 +71,7 @@ pub struct BlockMerger {
     config: RelayConfig,
     chain_info: ChainInfo,
     local_cache: LocalCache,
-    best_merged_block: Option<BestMergedBlock>,
+    best_merged_blocks: HashMap<Address, BestMergedBlock>,
     best_mergeable_orders: BestMergeableOrders,
     appendable_blocks: HashMap<BlockHash, AppendableBlockData>,
     base_block: Option<BlockHash>,
@@ -107,7 +107,7 @@ impl BlockMerger {
             config,
             chain_info,
             local_cache,
-            best_merged_block: None,
+            best_merged_blocks: HashMap::with_capacity(16),
             best_mergeable_orders: BestMergeableOrders::new(),
             appendable_blocks: HashMap::with_capacity(00),
             base_block: None,
@@ -133,7 +133,7 @@ impl BlockMerger {
     pub fn on_new_slot(&mut self, bid_slot: u64) {
         info!(old_slot = %self.curr_bid_slot, new_slot = %bid_slot, inserted_appendable_blocks_count = %self.inserted_appendable_blocks_count, inserted_orders_count = %self.inserted_orders_count, updated_base_block_count = %self.updated_base_block_count, fetch_merge_request_count = %self.fetch_merge_request_count, proceeding_merge_request_count = %self.proceeding_merge_request_count, no_base_block_count = %self.no_base_block_count, no_appendable_block_data_count = %self.no_appendable_block_data_count, found_orders_count = %self.found_orders_count, "resetting block merger slot");
         self.curr_bid_slot = bid_slot;
-        self.best_merged_block = None;
+        self.best_merged_blocks.clear();
         self.best_mergeable_orders.reset();
         self.appendable_blocks.clear();
         self.base_block = None;
@@ -183,7 +183,8 @@ impl BlockMerger {
     ) -> Option<PayloadEntry> {
         trace!("fetching merged header");
         let start_time = Instant::now();
-        let entry = self.best_merged_block.as_ref()?;
+        let coinbase = original_bid.execution_payload().fee_recipient;
+        let entry = self.best_merged_blocks.get(&coinbase)?;
 
         if !merged_bid_higher(
             &entry.bid,
@@ -442,8 +443,11 @@ impl BlockMerger {
 
         let new_bid = PayloadEntry::new_gossip(payload_and_blobs, bid_data);
 
-        // Store locally to serve header requests
-        self.best_merged_block = Some(BestMergedBlock {
+        // Store locally to serve header requests, keyed by the beneficiary/coinbase
+        // address of the base block the merge was built from, so that a merge for one
+        // builder's block can never be served in place of another builder's original bid.
+        let coinbase = base_block_data.execution_payload.fee_recipient;
+        self.best_merged_blocks.insert(coinbase, BestMergedBlock {
             base_block_time_ms: base_block_data.time_ms,
             bid: new_bid.clone(),
         });
