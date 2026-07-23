@@ -43,16 +43,15 @@ impl<B: BidAdjustor> Context<B> {
             return Err(ProposerApiError::NoBidPrepared);
         };
 
-        let Some(original_bid) = self.payloads.get(&best_block_hash) else {
+        let Some(original_bid) = self.payloads.get(&best_block_hash).cloned() else {
             error!("failed to get payload from bid sorter best, this should never happen!");
             return Err(ProposerApiError::NoBidPrepared);
         };
 
-        if let Some(merged_bid) = self.block_merger.get_header(original_bid, is_mev_boost) {
+        if let Some(merged_bid) = self.block_merger.get_header(&original_bid, is_mev_boost) {
             return Ok(merged_bid);
         };
 
-        let original_bid = original_bid.clone();
         if self.cache.adjustments_enabled.load(Ordering::Relaxed) {
             let start = Instant::now();
             if let Some((adjusted_bid, sim_request, is_adjustable_slot, strategy)) =

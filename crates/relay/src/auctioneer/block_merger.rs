@@ -78,6 +78,11 @@ pub struct BlockMerger {
     has_new_base_block: bool,
     last_merge_request_time_ms: u64,
     base_txs_set: FxHashSet<Bytes>,
+    /// Base block hashes for which `get_header` found that the merged bid only differed
+    /// from the original in the payment tx (and lost out on value because of it). Checked
+    /// again in `prepare_merged_payload_for_storage` so we can log when the same original
+    /// block gets reprocessed.
+    flagged_payment_tx_only_blocks: FxHashSet<BlockHash>,
     trimmed_orders_buf: Vec<MergeableOrderWithOrigin>,
     inserted_orders_count: usize,
     inserted_appendable_blocks_count: usize,
@@ -109,6 +114,7 @@ impl BlockMerger {
             has_new_base_block: false,
             last_merge_request_time_ms: 0,
             base_txs_set: FxHashSet::with_capacity_and_hasher(400, FxBuildHasher),
+            flagged_payment_tx_only_blocks: FxHashSet::with_capacity_and_hasher(16, FxBuildHasher),
             trimmed_orders_buf: Vec::with_capacity(400),
             inserted_orders_count: 0,
             inserted_appendable_blocks_count: 0,
@@ -134,6 +140,7 @@ impl BlockMerger {
         self.has_new_base_block = false;
         self.last_merge_request_time_ms = 0;
         self.base_txs_set.clear();
+        self.flagged_payment_tx_only_blocks.clear();
         self.trimmed_orders_buf.clear();
         self.found_orders_count = 0;
         self.inserted_orders_count = 0;
@@ -170,13 +177,14 @@ impl BlockMerger {
 
     #[timed]
     pub fn get_header(
-        &self,
+        &mut self,
         original_bid: &PayloadEntry,
         is_mev_boost: bool,
     ) -> Option<PayloadEntry> {
         trace!("fetching merged header");
         let start_time = Instant::now();
         let entry = self.best_merged_block.as_ref()?;
+
         if !merged_bid_higher(
             &entry.bid,
             original_bid,
@@ -184,6 +192,16 @@ impl BlockMerger {
             self.config.block_merging_config.max_merged_bid_age_ms,
         ) {
             trace!("merged bid not higher");
+            let original_block_hash = *original_bid.block_hash();
+            if log_if_only_payment_tx_changed(
+                original_block_hash,
+                *entry.bid.block_hash(),
+                entry.bid.bid_data_ref().builder_pubkey,
+                &original_bid.execution_payload().transactions,
+                &entry.bid.execution_payload().transactions,
+            ) {
+                self.flagged_payment_tx_only_blocks.insert(original_block_hash);
+            }
             return None;
         }
 
@@ -342,6 +360,15 @@ impl BlockMerger {
         let start_time = Instant::now();
         let bid_slot = self.curr_bid_slot;
         let max_blobs_per_block = self.chain_info.max_blobs_per_block();
+
+        let original_block_hash = original_payload.execution_payload.block_hash;
+        if self.flagged_payment_tx_only_blocks.remove(&original_block_hash) {
+            info!(
+                %original_block_hash,
+                %builder_pubkey,
+                "original payload previously flagged for a payment-tx-only merge is being merged again"
+            );
+        }
 
         let base_block_data = match self.appendable_blocks.get(&response.base_block_hash) {
             Some(data) => data,
@@ -764,6 +791,46 @@ fn append_merged_blobs(
     }
 
     Ok(())
+}
+
+/// Checks whether the merged block kept the original builder's tx ordering completely
+/// unchanged except for the payment tx (the last tx in the original block), with any
+/// additional orders appended after it. When that's the case, this is logged since it
+/// indicates the merge only affected the payment tx rather than tx ordering/content.
+/// Returns whether the condition was detected (and thus logged).
+fn log_if_only_payment_tx_changed(
+    base_block_hash: B256,
+    merged_block_hash: B256,
+    builder_pubkey: &BlsPublicKeyBytes,
+    original_txs: &Transactions,
+    merged_txs: &Transactions,
+) -> bool {
+    let Some(payment_tx_index) = original_txs.len().checked_sub(1) else {
+        return false;
+    };
+
+    if merged_txs.len() <= payment_tx_index {
+        return false;
+    }
+
+    let prefix_unchanged = original_txs[..payment_tx_index] == merged_txs[..payment_tx_index];
+    let payment_tx_changed = original_txs[payment_tx_index] != merged_txs[payment_tx_index];
+
+    if !(prefix_unchanged && payment_tx_changed) {
+        return false;
+    }
+
+    info!(
+        %base_block_hash,
+        %merged_block_hash,
+        %builder_pubkey,
+        prefix_tx_count = payment_tx_index,
+        appended_tx_count = merged_txs.len() - original_txs.len(),
+        original_payment_tx = %original_txs[payment_tx_index].0,
+        merged_payment_tx = %merged_txs[payment_tx_index].0,
+        "merge kept original builder tx ordering unchanged except for the payment tx"
+    );
+    true
 }
 
 fn merged_bid_higher(
