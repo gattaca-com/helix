@@ -73,6 +73,12 @@ impl DehydratedBidSubmission {
         }
     }
 
+    pub fn num_txs(&self) -> usize {
+        match self {
+            DehydratedBidSubmission::Fulu(s) => s.execution_payload.transactions.len(),
+        }
+    }
+
     pub fn withdrawal_root(&self) -> B256 {
         match self {
             DehydratedBidSubmission::Fulu(s) => s.execution_payload.withdrawals.tree_hash_root(),

@@ -306,7 +306,10 @@ impl SubmissionDecoder {
             }
             MergeType::None => {
                 if self.block_merging_dry_run {
-                    Some(BlockMergingData::append_only(submission.fee_recipient()))
+                    Some(BlockMergingData::allow_all(
+                        submission.fee_recipient(),
+                        submission.num_txs(),
+                    ))
                 } else {
                     None
                 }
