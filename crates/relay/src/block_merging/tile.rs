@@ -29,7 +29,7 @@ use uuid::Uuid;
 
 use crate::{
     HelixSpine, SubmissionDataWithSpan,
-    block_merging::{append_frame, merged_block_to_response, order_to_ref},
+    block_merging::{append_frame, merged_block_to_response, order_ref_hash, order_to_ref},
     housekeeper::SlotUpdate,
     simulator::BlockMergeResponse,
     spine::messages::{DecodedSubmission, MergedBlockMsg, SlotMsg},
@@ -49,7 +49,14 @@ struct Conn {
     active: bool,
     max_orders_per_slot: u32,
     max_frame_bytes: u32,
-    orders_sent: u32,
+    /// Distinct order hashes (see `order_ref_hash`) sent on this connection
+    /// this slot, against the builder's advertised `max_orders_per_slot`.
+    /// Keyed by identity rather than counted per-announcement: the same
+    /// order gets re-declared across every resubmission/every builder that
+    /// also saw it, and a raw per-announcement count would exhaust the
+    /// budget on that repetition alone rather than genuinely distinct
+    /// orders.
+    orders_sent: FxHashSet<B256>,
     /// Appendable block hashes forwarded on this connection this slot.
     forwarded: FxHashSet<B256>,
     activated: Option<B256>,
@@ -68,7 +75,7 @@ impl Conn {
     }
 
     fn reset_slot(&mut self) {
-        self.orders_sent = 0;
+        self.orders_sent.clear();
         self.forwarded.clear();
         self.activated = None;
         self.sent_txs.clear();
@@ -654,12 +661,31 @@ impl BlockMergingTile {
             execution_payload: payload_to_v3(&signed.execution_payload),
         };
 
+        // Hashed once up front: reused both to decide full-bytes-vs-reference
+        // below and to key each order's distinct identity (`order_ref_hash`),
+        // so a tx forwarded as a hash reference still contributes the same
+        // identity it would have as a full tx.
+        let tx_hashes: Vec<B256> = msg
+            .execution_payload
+            .payload_inner
+            .payload_inner
+            .transactions
+            .iter()
+            .map(|tx| keccak256(tx.as_ref()))
+            .collect();
+
         // Dehydrate relative to this connection: a tx already sent whole
         // earlier this slot (from this block or any other, any builder) goes
         // out as a hash reference instead. See MergeableBlockV1's doc comment
         // for the wire convention.
-        for tx in &mut msg.execution_payload.payload_inner.payload_inner.transactions {
-            let hash = keccak256(tx.as_ref());
+        for (tx, &hash) in msg
+            .execution_payload
+            .payload_inner
+            .payload_inner
+            .transactions
+            .iter_mut()
+            .zip(&tx_hashes)
+        {
             if self.conn.sent_txs.insert(hash) {
                 self.stats.tx_bytes_sent += 1;
             } else {
@@ -667,7 +693,17 @@ impl BlockMergingTile {
                 self.stats.tx_refs_sent += 1;
             }
         }
-        let order_count = msg.merge_orders.len() as u32;
+
+        // A repeat announcement of the same order — the common case, since
+        // builders resubmit near-identical blocks as their bid ratchets, and
+        // popular public txs show up in most builders' blocks — must not
+        // count again against the per-slot budget; only genuinely new
+        // distinct orders should.
+        let order_hashes: Vec<B256> = msg
+            .merge_orders
+            .iter()
+            .map(|order_ref| order_ref_hash(order_ref, &tx_hashes))
+            .collect();
 
         self.encode_buf.clear();
         append_frame(&mut self.encode_buf, MergingMsgId::MergeableBlockV1, &msg);
@@ -684,14 +720,18 @@ impl BlockMergingTile {
             return;
         }
         let frame = &self.encode_buf;
-        if self.conn.orders_sent.saturating_add(order_count) > self.conn.max_orders_per_slot ||
+        let new_orders =
+            order_hashes.iter().filter(|hash| !self.conn.orders_sent.contains(*hash)).count()
+                as u32;
+        if (self.conn.orders_sent.len() as u32).saturating_add(new_orders) >
+            self.conn.max_orders_per_slot ||
             frame.len() > self.conn.max_frame_bytes as usize
         {
             self.stats.skipped_over_limits += 1;
             debug!(?token, %block_hash, "skipping mergeable block over builder limits");
             return;
         }
-        self.conn.orders_sent += order_count;
+        self.conn.orders_sent.extend(order_hashes);
         if msg.allow_appending {
             self.conn.forwarded.insert(block_hash);
         }
