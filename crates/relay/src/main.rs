@@ -75,10 +75,6 @@ fn main() {
 
     init_runtime(&config);
 
-    if config.enable_flux_profiler {
-        flux_profiler::enable_profiler("helix");
-    }
-
     let keypair = load_keypair();
 
     let instance_id = config
@@ -168,6 +164,11 @@ async fn run(
     spawn_tokio_monitoring();
 
     HelixSpine::remove_all_files();
+
+    if config.enable_flux_profiler {
+        flux_profiler::enable_profiler("helix");
+    }
+
     let spine = if let Some(spine_config) = spine_config {
         HelixSpine::new_with_config(None, spine_config)
     } else {
@@ -258,6 +259,7 @@ async fn run(
                     future_results.clone(),
                     decoded.clone(),
                     http_submissions.clone(),
+                    slot_events.clone(),
                     *core,
                 );
                 attach_tile(decoder_tile, spine, TileConfig::new(*core, ThreadPriority::OSDefault));

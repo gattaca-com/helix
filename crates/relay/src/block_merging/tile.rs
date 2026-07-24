@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use alloy_primitives::{B256, U256};
+use alloy_primitives::{B256, Bytes, U256, keccak256};
 use flux::{
     spine::SpineProducers,
     tile::Tile,
@@ -29,7 +29,7 @@ use uuid::Uuid;
 
 use crate::{
     HelixSpine, SubmissionDataWithSpan,
-    block_merging::{append_frame, merged_block_to_response, order_to_ref},
+    block_merging::{append_frame, merged_block_to_response, order_ref_hash, order_to_ref},
     housekeeper::SlotUpdate,
     simulator::BlockMergeResponse,
     spine::messages::{DecodedSubmission, MergedBlockMsg, SlotMsg},
@@ -41,20 +41,31 @@ const PING_INTERVAL_S: u64 = 5;
 struct Endpoint {
     addr: std::net::SocketAddr,
     api_key: [u8; 16],
-    token: Option<Token>,
 }
 
 #[derive(Default)]
 struct Conn {
-    endpoint_ix: usize,
     /// Handshake completed (ack received with ok status).
     active: bool,
     max_orders_per_slot: u32,
     max_frame_bytes: u32,
-    orders_sent: u32,
+    /// Distinct order hashes (see `order_ref_hash`) sent on this connection
+    /// this slot, against the builder's advertised `max_orders_per_slot`.
+    /// Keyed by identity rather than counted per-announcement: the same
+    /// order gets re-declared across every resubmission/every builder that
+    /// also saw it, and a raw per-announcement count would exhaust the
+    /// budget on that repetition alone rather than genuinely distinct
+    /// orders.
+    orders_sent: FxHashSet<B256>,
     /// Appendable block hashes forwarded on this connection this slot.
     forwarded: FxHashSet<B256>,
     activated: Option<B256>,
+    /// Tx hashes already sent whole on this connection this slot; a repeat
+    /// tx is forwarded as a hash reference instead. Cleared with the rest of
+    /// the per-slot state so it never outlives the builder's own per-slot
+    /// resolution cache, and on reconnect since a fresh connection can't
+    /// resolve references to bytes it was never sent.
+    sent_txs: FxHashSet<B256>,
 }
 
 impl Conn {
@@ -64,9 +75,10 @@ impl Conn {
     }
 
     fn reset_slot(&mut self) {
-        self.orders_sent = 0;
+        self.orders_sent.clear();
         self.forwarded.clear();
         self.activated = None;
+        self.sent_txs.clear();
     }
 }
 
@@ -79,7 +91,7 @@ struct SlotState {
     fee_recipient: Option<alloy_primitives::Address>,
     /// parent_hash -> parent_beacon_block_root.
     attrs: FxHashMap<B256, B256>,
-    /// Appendable block hashes forwarded this slot (any connection).
+    /// Appendable block hashes forwarded this slot.
     appendable: FxHashSet<B256>,
     /// Decoded ixs forwarded this slot, replayed on re-handshake.
     mergeable_ixs: Vec<usize>,
@@ -98,7 +110,7 @@ struct SlotStats {
     skipped_no_slot_start: usize,
     skipped_wrong_slot: usize,
     skipped_no_merging_data: usize,
-    /// Per-connection sends skipped over builder limits.
+    /// Sends skipped over the builder's advertised limits.
     skipped_over_limits: usize,
     /// Merge orders dropped for an out of range tx index.
     orders_dropped: usize,
@@ -110,12 +122,16 @@ struct SlotStats {
     merged_regressed: usize,
     /// TopBidUpdate messages received for the current bid slot.
     top_bid_updates: usize,
-    /// Per-connection ActivateBaseBlockV1 frames sent.
+    /// ActivateBaseBlockV1 frames sent.
     activations_sent: usize,
     /// Gaps between consecutive top bid updates, from bid sorter send
     /// timestamps.
     top_bid_gaps_ns: Vec<u64>,
     last_top_bid_ns: u64,
+    /// Txs sent as full bytes: new to this connection this slot.
+    tx_bytes_sent: usize,
+    /// Txs sent as a hash reference: already sent whole earlier this slot.
+    tx_refs_sent: usize,
 }
 
 pub struct BlockMergingTile {
@@ -123,8 +139,9 @@ pub struct BlockMergingTile {
     relay_id: Vec<u8>,
     relay_config_msg: RelayConfigV1,
 
-    endpoints: Vec<Endpoint>,
-    conns: FxHashMap<Token, Conn>,
+    endpoint: Endpoint,
+    token: Option<Token>,
+    conn: Conn,
     slot: SlotState,
     stats: SlotStats,
     chain_info: ChainInfo,
@@ -159,7 +176,7 @@ impl Tile<HelixSpine> for BlockMergingTile {
         }
 
         if self.redial.fired() {
-            self.dial_endpoints();
+            self.dial_endpoint();
         }
         if self.ping.fired() {
             self.send_pings();
@@ -171,7 +188,7 @@ impl Tile<HelixSpine> for BlockMergingTile {
     }
 
     fn try_init(&mut self, _adapter: &mut flux::spine::SpineAdapter<HelixSpine>) -> bool {
-        self.dial_endpoints();
+        self.dial_endpoint();
         info!("starting");
         true
     }
@@ -208,30 +225,31 @@ impl BlockMergingTile {
         };
         relay_config_msg.validate().expect("invalid block merging relay config");
 
-        let endpoints = config
-            .builders
-            .iter()
-            .map(|b| Endpoint {
-                addr: b.addr,
-                api_key: Uuid::parse_str(&b.api_key)
-                    .expect("invalid block merging api key")
-                    .into_bytes(),
-                token: None,
-            })
-            .collect();
+        let endpoint = Endpoint {
+            addr: config.builder.addr,
+            api_key: Uuid::parse_str(&config.builder.api_key)
+                .expect("invalid block merging api key")
+                .into_bytes(),
+        };
 
         // TODO: enable telemetry once the per-connection shm queue leak is fixed
         // Disabled: per-connection shm queue leak, see tcp_bid_recv/mod.rs.
         let connector = TcpConnector::default()
             .with_telemetry(TcpTelemetry::Disabled)
-            .with_socket_buf_size(64 * 1024 * 1024);
+            .with_socket_buf_size(64 * 1024 * 1024)
+            // Otherwise a stale message queued for the dead socket (e.g. an
+            // activation or ping) gets replayed on the new one ahead of the
+            // fresh MergerRegistrationV1, and the builder rejects it with
+            // "expected registration" — killing the connection again.
+            .with_drop_outbound_backlog_on_disconnect(true);
 
         Self {
             connector,
             relay_id: relay_id.into_bytes(),
             relay_config_msg,
-            endpoints,
-            conns: FxHashMap::default(),
+            endpoint,
+            token: None,
+            conn: Conn::default(),
             slot: SlotState::default(),
             stats: SlotStats::default(),
             chain_info,
@@ -251,30 +269,27 @@ impl BlockMergingTile {
         }
     }
 
-    /// Dials endpoints that have no token yet. A failed initial `connect` is
-    /// not retried by the connector (unlike established conns, which
-    /// auto-reconnect), so this runs on a repeater.
-    fn dial_endpoints(&mut self) {
-        for ix in 0..self.endpoints.len() {
-            if self.endpoints[ix].token.is_some() {
-                continue;
-            }
-            let addr = self.endpoints[ix].addr;
-            let Some(token) = self.connector.connect(addr) else {
-                warn!(%addr, "failed to dial merging builder");
-                continue;
-            };
-            info!(%addr, ?token, "dialing merging builder");
-            self.endpoints[ix].token = Some(token);
-            self.conns.insert(token, Conn { endpoint_ix: ix, ..Default::default() });
-            self.send_registration(token);
+    /// Dials the builder if not already connected. A failed initial `connect`
+    /// is not retried by the connector (unlike an established conn, which
+    /// auto-reconnects), so this runs on a repeater.
+    fn dial_endpoint(&mut self) {
+        if self.token.is_some() {
+            return;
         }
+        let addr = self.endpoint.addr;
+        let Some(token) = self.connector.connect(addr) else {
+            warn!(%addr, "failed to dial merging builder");
+            return;
+        };
+        info!(%addr, ?token, "dialing merging builder");
+        self.token = Some(token);
+        self.conn = Conn::default();
+        self.send_registration(token);
     }
 
     fn send_registration(&mut self, token: Token) {
-        let Some(conn) = self.conns.get(&token) else { return };
         let msg = MergerRegistrationV1 {
-            api_key: self.endpoints[conn.endpoint_ix].api_key,
+            api_key: self.endpoint.api_key,
             relay_id: self.relay_id.clone(),
             min_version: MERGING_PROTOCOL_VERSION,
             max_version: MERGING_PROTOCOL_VERSION,
@@ -307,7 +322,8 @@ impl BlockMergingTile {
         // poll, all reactions are buffered.
         let Self {
             connector,
-            conns,
+            token: my_token,
+            conn,
             slot,
             stats,
             to_disconnect,
@@ -323,18 +339,21 @@ impl BlockMergingTile {
             PollEvent::Accept { .. } => error!("unexpected inbound connection on merging tile"),
             PollEvent::Reconnect { token } => {
                 info!(?token, "reconnected to merging builder");
-                if let Some(conn) = conns.get_mut(&token) {
+                if *my_token == Some(token) {
                     conn.reset();
                     to_register.push(token);
                 }
             }
             PollEvent::Disconnect { token } => {
                 warn!(?token, "merging builder disconnected");
-                if let Some(conn) = conns.get_mut(&token) {
+                if *my_token == Some(token) {
                     conn.reset();
                 }
             }
             PollEvent::Message { token, payload, send_ts: _ } => {
+                if *my_token != Some(token) {
+                    return;
+                }
                 let header = match MergingFrameHeader::decode(payload) {
                     Ok(header) => header,
                     // extension ids must be ignored
@@ -368,12 +387,10 @@ impl BlockMergingTile {
                             return;
                         }
                         info!(?token, version = ack.version, "merging builder handshake ok");
-                        if let Some(conn) = conns.get_mut(&token) {
-                            conn.active = true;
-                            conn.max_orders_per_slot = ack.max_orders_per_slot;
-                            conn.max_frame_bytes = ack.max_frame_bytes;
-                            handshaken.push(token);
-                        }
+                        conn.active = true;
+                        conn.max_orders_per_slot = ack.max_orders_per_slot;
+                        conn.max_frame_bytes = ack.max_frame_bytes;
+                        handshaken.push(token);
                     }
                     MergingMsgId::PongV1 => {
                         if let Ok(pong) = PongV1::from_ssz_bytes(body) {
@@ -402,9 +419,9 @@ impl BlockMergingTile {
                             );
                             return;
                         }
-                        // Builders only guarantee per-connection monotonicity;
-                        // filter across builders so the stored merged bid
-                        // never regresses.
+                        // Builders only guarantee monotonicity within a
+                        // connection; filter so the stored merged bid never
+                        // regresses.
                         let best =
                             slot.best_merged.entry(merged.base_block_hash).or_insert(U256::ZERO);
                         if merged.proposer_value <= *best {
@@ -450,8 +467,8 @@ impl BlockMergingTile {
         for token in std::mem::take(&mut self.to_disconnect) {
             // outbound: schedules an auto-reconnect, which re-handshakes
             self.connector.disconnect(token);
-            if let Some(conn) = self.conns.get_mut(&token) {
-                conn.reset();
+            if self.token == Some(token) {
+                self.conn.reset();
             }
         }
         for token in std::mem::take(&mut self.to_register) {
@@ -476,9 +493,7 @@ impl BlockMergingTile {
         if bid_slot > self.slot.bid_slot {
             self.report_slot_stats();
             self.slot = SlotState { bid_slot, ..Default::default() };
-            for conn in self.conns.values_mut() {
-                conn.reset_slot();
-            }
+            self.conn.reset_slot();
             self.hydration_cache.clear();
             // sole producer; consumed indices are stale after the transition
             self.merged_blocks.clear();
@@ -514,12 +529,12 @@ impl BlockMergingTile {
         };
         debug!(slot = self.slot.bid_slot, "merging slot start");
 
-        for (token, conn) in self.conns.iter() {
-            if conn.active {
-                self.connector.write_or_enqueue_with(SendBehavior::Single(*token), |buf| {
-                    append_frame(buf, MergingMsgId::SlotStartV1, &msg);
-                });
-            }
+        if self.conn.active &&
+            let Some(token) = self.token
+        {
+            self.connector.write_or_enqueue_with(SendBehavior::Single(token), |buf| {
+                append_frame(buf, MergingMsgId::SlotStartV1, &msg);
+            });
         }
         self.slot.slot_start = Some(msg);
     }
@@ -549,6 +564,8 @@ impl BlockMergingTile {
             appendable_blocks = self.slot.appendable.len(),
             hydration_txs = self.hydration_cache.tx_count(),
             hydration_builders = self.hydration_cache.builder_count(),
+            tx_bytes_sent = stats.tx_bytes_sent,
+            tx_refs_sent = stats.tx_refs_sent,
             "block merging slot stats"
         );
     }
@@ -562,8 +579,8 @@ impl BlockMergingTile {
         }
     }
 
-    /// Forwards the decoded submission at `ix` as a `MergeableBlockV1` to all
-    /// active connections, or to `only` on re-handshake replay.
+    /// Forwards the decoded submission at `ix` as a `MergeableBlockV1`, or
+    /// replays it to `only` on re-handshake.
     fn forward_decoded(&mut self, ix: usize, only: Option<Token>) {
         let is_replay = only.is_some();
         if is_replay {
@@ -625,10 +642,9 @@ impl BlockMergingTile {
                 None => self.stats.orders_dropped += 1,
             }
         }
-        let order_count = merge_orders.len() as u32;
         let block_hash = signed.message.block_hash;
 
-        let msg = MergeableBlockV1 {
+        let mut msg = MergeableBlockV1 {
             slot: signed.message.slot,
             builder_pubkey: signed.message.builder_pubkey,
             block_value: signed.message.value,
@@ -645,6 +661,50 @@ impl BlockMergingTile {
             execution_payload: payload_to_v3(&signed.execution_payload),
         };
 
+        // Hashed once up front: reused both to decide full-bytes-vs-reference
+        // below and to key each order's distinct identity (`order_ref_hash`),
+        // so a tx forwarded as a hash reference still contributes the same
+        // identity it would have as a full tx.
+        let tx_hashes: Vec<B256> = msg
+            .execution_payload
+            .payload_inner
+            .payload_inner
+            .transactions
+            .iter()
+            .map(|tx| keccak256(tx.as_ref()))
+            .collect();
+
+        // Dehydrate relative to this connection: a tx already sent whole
+        // earlier this slot (from this block or any other, any builder) goes
+        // out as a hash reference instead. See MergeableBlockV1's doc comment
+        // for the wire convention.
+        for (tx, &hash) in msg
+            .execution_payload
+            .payload_inner
+            .payload_inner
+            .transactions
+            .iter_mut()
+            .zip(&tx_hashes)
+        {
+            if self.conn.sent_txs.insert(hash) {
+                self.stats.tx_bytes_sent += 1;
+            } else {
+                *tx = Bytes::copy_from_slice(hash.as_slice());
+                self.stats.tx_refs_sent += 1;
+            }
+        }
+
+        // A repeat announcement of the same order — the common case, since
+        // builders resubmit near-identical blocks as their bid ratchets, and
+        // popular public txs show up in most builders' blocks — must not
+        // count again against the per-slot budget; only genuinely new
+        // distinct orders should.
+        let order_hashes: Vec<B256> = msg
+            .merge_orders
+            .iter()
+            .map(|order_ref| order_ref_hash(order_ref, &tx_hashes))
+            .collect();
+
         self.encode_buf.clear();
         append_frame(&mut self.encode_buf, MergingMsgId::MergeableBlockV1, &msg);
 
@@ -655,26 +715,29 @@ impl BlockMergingTile {
             self.slot.mergeable_ixs.push(ix);
         }
 
-        let frame = &self.encode_buf;
-        for (token, conn) in self.conns.iter_mut() {
-            if !conn.active || only.is_some_and(|t| t != *token) {
-                continue;
-            }
-            if conn.orders_sent.saturating_add(order_count) > conn.max_orders_per_slot ||
-                frame.len() > conn.max_frame_bytes as usize
-            {
-                self.stats.skipped_over_limits += 1;
-                debug!(?token, %block_hash, "skipping mergeable block over builder limits");
-                continue;
-            }
-            conn.orders_sent += order_count;
-            if msg.allow_appending {
-                conn.forwarded.insert(block_hash);
-            }
-            self.connector.write_or_enqueue_with(SendBehavior::Single(*token), |buf| {
-                buf.extend_from_slice(frame);
-            });
+        let Some(token) = self.token else { return };
+        if !self.conn.active || only.is_some_and(|t| t != token) {
+            return;
         }
+        let frame = &self.encode_buf;
+        let new_orders =
+            order_hashes.iter().filter(|hash| !self.conn.orders_sent.contains(*hash)).count()
+                as u32;
+        if (self.conn.orders_sent.len() as u32).saturating_add(new_orders) >
+            self.conn.max_orders_per_slot ||
+            frame.len() > self.conn.max_frame_bytes as usize
+        {
+            self.stats.skipped_over_limits += 1;
+            debug!(?token, %block_hash, "skipping mergeable block over builder limits");
+            return;
+        }
+        self.conn.orders_sent.extend(order_hashes);
+        if msg.allow_appending {
+            self.conn.forwarded.insert(block_hash);
+        }
+        self.connector.write_or_enqueue_with(SendBehavior::Single(token), |buf| {
+            buf.extend_from_slice(frame);
+        });
     }
 
     fn on_top_bid(&mut self, top_bid: TopBidUpdate) {
@@ -692,20 +755,19 @@ impl BlockMergingTile {
         if !self.slot.appendable.contains(&top_bid.block_hash) {
             return;
         }
-        let msg = ActivateBaseBlockV1 { slot: top_bid.slot, block_hash: top_bid.block_hash };
-        for (token, conn) in self.conns.iter_mut() {
-            if !conn.active ||
-                !conn.forwarded.contains(&top_bid.block_hash) ||
-                conn.activated == Some(top_bid.block_hash)
-            {
-                continue;
-            }
-            conn.activated = Some(top_bid.block_hash);
-            self.stats.activations_sent += 1;
-            self.connector.write_or_enqueue_with(SendBehavior::Single(*token), |buf| {
-                append_frame(buf, MergingMsgId::ActivateBaseBlockV1, &msg);
-            });
+        let Some(token) = self.token else { return };
+        if !self.conn.active ||
+            !self.conn.forwarded.contains(&top_bid.block_hash) ||
+            self.conn.activated == Some(top_bid.block_hash)
+        {
+            return;
         }
+        self.conn.activated = Some(top_bid.block_hash);
+        self.stats.activations_sent += 1;
+        let msg = ActivateBaseBlockV1 { slot: top_bid.slot, block_hash: top_bid.block_hash };
+        self.connector.write_or_enqueue_with(SendBehavior::Single(token), |buf| {
+            append_frame(buf, MergingMsgId::ActivateBaseBlockV1, &msg);
+        });
     }
 
     /// Median of unsorted samples; 0 if empty.
@@ -724,13 +786,13 @@ impl BlockMergingTile {
 
     fn send_pings(&mut self) {
         self.ping_nonce += 1;
-        let msg = PingV1 { nonce: self.ping_nonce };
-        for (token, conn) in self.conns.iter() {
-            if conn.active {
-                self.connector.write_or_enqueue_with(SendBehavior::Single(*token), |buf| {
-                    append_frame(buf, MergingMsgId::PingV1, &msg);
-                });
-            }
+        let Some(token) = self.token else { return };
+        if !self.conn.active {
+            return;
         }
+        let msg = PingV1 { nonce: self.ping_nonce };
+        self.connector.write_or_enqueue_with(SendBehavior::Single(token), |buf| {
+            append_frame(buf, MergingMsgId::PingV1, &msg);
+        });
     }
 }

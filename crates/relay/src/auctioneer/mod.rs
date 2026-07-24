@@ -223,10 +223,18 @@ impl State {
         let start = Instant::now();
         let start_state = self.as_str();
         let event_tag = event.as_str();
+        let prev_bid_slot = self.bid_slot();
+
+        *tel.event_counts.entry(event_tag).or_insert(0) += 1;
 
         self._step(event, ctx, producers);
 
         let end_state = self.as_str();
+
+        let new_bid_slot = self.bid_slot();
+        if new_bid_slot > prev_bid_slot {
+            tel.report_slot_stats(prev_bid_slot);
+        }
         let step_dur = start.elapsed();
         tel.loop_worked += step_dur;
 
@@ -696,6 +704,14 @@ impl State {
             State::Broadcasting { .. } => "Broadcasting",
         }
     }
+
+    fn bid_slot(&self) -> u64 {
+        match self {
+            State::Slot { bid_slot, .. } => bid_slot.as_u64(),
+            State::Sorting(slot_data) => slot_data.bid_slot.as_u64(),
+            State::Broadcasting { slot_data, .. } => slot_data.bid_slot.as_u64(),
+        }
+    }
 }
 
 pub struct Telemetry {
@@ -705,6 +721,9 @@ pub struct Telemetry {
     next_record: Instant,
     loop_start: Instant,
     loop_worked: Duration,
+    /// Count of every event handled this slot, keyed by `Event::as_str()`.
+    /// Sums to the total number of events the state machine processed.
+    event_counts: FxHashMap<&'static str, u32>,
 }
 
 impl Telemetry {
@@ -718,7 +737,19 @@ impl Telemetry {
             next_record: Instant::now() + Self::REPORT_FREQ,
             loop_start: Instant::now(),
             loop_worked: Duration::ZERO,
+            event_counts: FxHashMap::default(),
         }
+    }
+
+    /// Logged on every slot transition; `bid_slot` is the slot that just
+    /// ended.
+    fn report_slot_stats(&mut self, bid_slot: u64) {
+        if bid_slot == 0 {
+            return;
+        }
+        let counts = std::mem::take(&mut self.event_counts);
+        let total_events: u32 = counts.values().sum();
+        info!(bid_slot, total_events, ?counts, "auctioneer slot stats");
     }
 
     fn telemetry<T>(&mut self, rx: &crossbeam_channel::Receiver<T>) {

@@ -7,6 +7,7 @@ use helix_common::{
     S3Config, api::builder_api::TopBidUpdate, config::ClickhouseConfig, decoder::Encoding,
 };
 use helix_types::{BlsPublicKeyBytes, Compression, MergeType};
+use tracing::info;
 
 use crate::{
     HelixSpine, SubmissionDataWithSpan,
@@ -17,12 +18,27 @@ use crate::{
     spine::messages::{BidEvent, BidUpdate, DecodedSubmission, NewBidSubmission},
 };
 
+/// Per-slot counters, logged and reset on slot transition.
+/// `extract_ok + extract_failed + compressed_skipped ==` raw
+/// `NewBidSubmission` events seen this slot.
+#[derive(Default)]
+struct SlotStats {
+    s3_uploads: u32,
+    extract_ok: u32,
+    extract_failed: u32,
+    compressed_skipped: u32,
+    decoded_seen: u32,
+    bid_live_events: u32,
+    top_bid_updates_seen: u32,
+}
+
 pub struct DataGatherer {
     decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
     ch: Option<ClickhouseData>,
     s3: Option<S3Data>,
     current_slot: u64,
     rt: tokio::runtime::Runtime,
+    stats: SlotStats,
 }
 
 impl DataGatherer {
@@ -42,16 +58,36 @@ impl DataGatherer {
             s3: s3_config.map(S3Data::new),
             current_slot: 0,
             rt,
+            stats: SlotStats::default(),
         }
     }
 
     pub fn on_new_slot(&mut self, new_slot: u64) {
+        self.report_slot_stats();
         self.current_slot = new_slot;
         if let Some(ch) = self.ch.as_mut() &&
             let Some(future) = ch.publish_snapshot(new_slot)
         {
             self.rt.spawn(future);
         }
+    }
+
+    fn report_slot_stats(&mut self) {
+        if self.current_slot == 0 {
+            return;
+        }
+        let stats = std::mem::take(&mut self.stats);
+        info!(
+            bid_slot = self.current_slot,
+            s3_uploads = stats.s3_uploads,
+            extract_ok = stats.extract_ok,
+            extract_failed = stats.extract_failed,
+            compressed_skipped = stats.compressed_skipped,
+            decoded_seen = stats.decoded_seen,
+            bid_live_events = stats.bid_live_events,
+            top_bid_updates_seen = stats.top_bid_updates_seen,
+            "data gatherer slot stats"
+        );
     }
 
     fn extract_block_hash_and_pubkey(
@@ -120,6 +156,7 @@ impl Tile<HelixSpine> for DataGatherer {
             |bid: &InternalMessage<NewBidSubmission>, payload| {
                 let payload = &payload[bid.payload_offset..];
                 if let Some(s3) = self.s3.as_ref() {
+                    self.stats.s3_uploads += 1;
                     self.rt.spawn(s3.upload_task(bid.header, payload));
                 }
 
@@ -128,6 +165,7 @@ impl Tile<HelixSpine> for DataGatherer {
                     if let Some((slot, block_hash, builder_pubkey)) =
                         Self::extract_block_hash_and_pubkey(bid.header.encoding, payload, is_mergeable)
                     {
+                        self.stats.extract_ok += 1;
                         max_slot = max_slot.max(slot);
                         if let Some(ch) = self.ch.as_mut() {
                             ch.insert(block_hash, BlockInfo {
@@ -140,11 +178,14 @@ impl Tile<HelixSpine> for DataGatherer {
                             });
                         }
                     } else {
+                        self.stats.extract_failed += 1;
                         tracing::error!(
                             "failed to extract builder_pubkey & block hash from submission with id {}",
                             bid.header.id
                         );
                     }
+                } else {
+                    self.stats.compressed_skipped += 1;
                 }
             },
             |_, _| {},
@@ -152,6 +193,7 @@ impl Tile<HelixSpine> for DataGatherer {
 
         adapter.consume_internal_message(|msg: &mut InternalMessage<DecodedSubmission>, _| {
             if let Some(bid) = self.decoded.get(msg.ix) {
+                self.stats.decoded_seen += 1;
                 max_slot = max_slot.max(bid.submission_data.bid_slot());
                 if let Some(ch) = self.ch.as_mut() {
                     let info =
@@ -177,12 +219,14 @@ impl Tile<HelixSpine> for DataGatherer {
                 // todo @nina - will we ever need other events?
                 #[allow(irrefutable_let_patterns)]
                 if let BidEvent::Live = msg.event {
+                    self.stats.bid_live_events += 1;
                     info.live_ns = Some(msg.ingestion_time().real().0 as i64);
                 }
             }
         });
 
         adapter.consume_internal_message(|msg: &mut InternalMessage<TopBidUpdate>, _| {
+            self.stats.top_bid_updates_seen += 1;
             max_slot = max_slot.max(msg.slot);
             if let Some(ch) = self.ch.as_mut() &&
                 let Some(info) = ch.get_mut(&msg.block_hash)

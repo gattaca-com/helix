@@ -8,9 +8,9 @@ use flate2::read::GzDecoder;
 use flux_profiler::timed;
 use helix_types::{
     BidAdjustmentData, BlockMergingData, Compression, DehydratedBidSubmission,
-    DehydratedBidSubmissionFuluWithAdjustments, ForkName, ForkVersionDecode, MergeType,
-    SignedBidSubmission, SignedBidSubmissionWithAdjustments, SignedBidSubmissionWithMergingData,
-    Submission,
+    DehydratedBidSubmissionFuluWithAdjustments, DehydratedBidSubmissionFuluWithMergingData,
+    ForkName, ForkVersionDecode, MergeType, SignedBidSubmission, SignedBidSubmissionWithAdjustments,
+    SignedBidSubmissionWithMergingData, Submission,
 };
 use http::{
     HeaderMap, HeaderValue, StatusCode,
@@ -279,6 +279,14 @@ impl SubmissionDecoder {
         body: &[u8],
     ) -> Result<(Submission, Option<BlockMergingData>, Option<BidAdjustmentData>), DecoderError>
     {
+        if self.merge_type == MergeType::Mergeable {
+            let sub_with_merging: DehydratedBidSubmissionFuluWithMergingData =
+                self.decode_by_fork(body, self.fork_name)?;
+            let (submission, merging_data) = sub_with_merging.split();
+
+            return Ok((Submission::Dehydrated(submission), Some(merging_data), None));
+        }
+
         let (submission, bid_adjustment) = if self.with_adjustments {
             let sub_with_adjustment: DehydratedBidSubmissionFuluWithAdjustments =
                 self.decode_by_fork(body, self.fork_name)?;
@@ -292,17 +300,16 @@ impl SubmissionDecoder {
         };
 
         let merging_data = match self.merge_type {
-            MergeType::Mergeable => {
-                //Should this return an error instead?
-                error!("mergeable dehydrated submissions are not supported");
-                None
-            }
+            MergeType::Mergeable => unreachable!("handled above"),
             MergeType::AppendOnly => {
                 Some(BlockMergingData::append_only(submission.fee_recipient()))
             }
             MergeType::None => {
                 if self.block_merging_dry_run {
-                    Some(BlockMergingData::append_only(submission.fee_recipient()))
+                    Some(BlockMergingData::allow_all(
+                        submission.fee_recipient(),
+                        submission.num_txs(),
+                    ))
                 } else {
                     None
                 }
@@ -474,7 +481,8 @@ fn gzip_size_hint(buf: &[u8]) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use helix_types::MergeType;
+    use helix_types::{DehydratedBidSubmissionFuluWithMergingData, MergeType, TestRandom};
+    use ssz::Encode;
 
     use super::*;
 
@@ -519,5 +527,43 @@ mod tests {
         // Test that invalid values fail
         assert!("invalid".parse::<MergeType>().is_err());
         assert!("AppendOnly".parse::<MergeType>().is_err()); // CamelCase should fail
+    }
+
+    #[test]
+    fn decode_dehydrated_mergeable_carries_real_merge_orders() {
+        // `random_for_test` may produce an empty `merge_orders` (it's randomly sized); retry
+        // until we get a non-empty one, since that's specifically what this test is proving
+        // survives the decode (previously it was always dropped/forced-empty for dehydrated
+        // submissions).
+        let (body, expected_merging_data) = (0..100)
+            .find_map(|_| {
+                let submission =
+                    DehydratedBidSubmissionFuluWithMergingData::random_for_test(&mut rand::rng());
+                let (_, merging_data) = submission.clone().split();
+                if merging_data.merge_orders.is_empty() {
+                    return None;
+                }
+                Some((submission.as_ssz_bytes(), merging_data))
+            })
+            .expect("should produce a submission with non-empty merge_orders within 100 tries");
+
+        let params = SubmissionDecoderParams {
+            compression: Compression::None,
+            encoding: Encoding::Ssz,
+            merge_type: MergeType::Mergeable,
+            is_dehydrated: true,
+            with_mergeable_data: false,
+            with_adjustments: false,
+            block_merging_dry_run: false,
+            fork_name: ForkName::Fulu,
+        };
+        let mut decoder = SubmissionDecoder::new(&params);
+        let mut buf = Vec::new();
+        let (decoded_submission, merging_data, bid_adjustment_data) =
+            decoder.decode(&body, &mut buf).expect("decode should succeed");
+
+        assert!(matches!(decoded_submission, Submission::Dehydrated(_)));
+        assert!(bid_adjustment_data.is_none());
+        assert_eq!(merging_data.expect("mergeable submission should carry merging data"), expected_merging_data);
     }
 }

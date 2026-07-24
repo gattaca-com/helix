@@ -71,13 +71,18 @@ pub struct BlockMerger {
     config: RelayConfig,
     chain_info: ChainInfo,
     local_cache: LocalCache,
-    best_merged_block: Option<BestMergedBlock>,
+    best_merged_blocks: HashMap<Address, BestMergedBlock>,
     best_mergeable_orders: BestMergeableOrders,
     appendable_blocks: HashMap<BlockHash, AppendableBlockData>,
     base_block: Option<BlockHash>,
     has_new_base_block: bool,
     last_merge_request_time_ms: u64,
     base_txs_set: FxHashSet<Bytes>,
+    /// Base block hashes for which `get_header` found that the merged bid only differed
+    /// from the original in the payment tx (and lost out on value because of it). Checked
+    /// again in `prepare_merged_payload_for_storage` so we can log when the same original
+    /// block gets reprocessed.
+    flagged_payment_tx_only_blocks: FxHashSet<BlockHash>,
     trimmed_orders_buf: Vec<MergeableOrderWithOrigin>,
     inserted_orders_count: usize,
     inserted_appendable_blocks_count: usize,
@@ -102,13 +107,14 @@ impl BlockMerger {
             config,
             chain_info,
             local_cache,
-            best_merged_block: None,
+            best_merged_blocks: HashMap::with_capacity(16),
             best_mergeable_orders: BestMergeableOrders::new(),
             appendable_blocks: HashMap::with_capacity(00),
             base_block: None,
             has_new_base_block: false,
             last_merge_request_time_ms: 0,
             base_txs_set: FxHashSet::with_capacity_and_hasher(400, FxBuildHasher),
+            flagged_payment_tx_only_blocks: FxHashSet::with_capacity_and_hasher(16, FxBuildHasher),
             trimmed_orders_buf: Vec::with_capacity(400),
             inserted_orders_count: 0,
             inserted_appendable_blocks_count: 0,
@@ -127,13 +133,14 @@ impl BlockMerger {
     pub fn on_new_slot(&mut self, bid_slot: u64) {
         info!(old_slot = %self.curr_bid_slot, new_slot = %bid_slot, inserted_appendable_blocks_count = %self.inserted_appendable_blocks_count, inserted_orders_count = %self.inserted_orders_count, updated_base_block_count = %self.updated_base_block_count, fetch_merge_request_count = %self.fetch_merge_request_count, proceeding_merge_request_count = %self.proceeding_merge_request_count, no_base_block_count = %self.no_base_block_count, no_appendable_block_data_count = %self.no_appendable_block_data_count, found_orders_count = %self.found_orders_count, "resetting block merger slot");
         self.curr_bid_slot = bid_slot;
-        self.best_merged_block = None;
+        self.best_merged_blocks.clear();
         self.best_mergeable_orders.reset();
         self.appendable_blocks.clear();
         self.base_block = None;
         self.has_new_base_block = false;
         self.last_merge_request_time_ms = 0;
         self.base_txs_set.clear();
+        self.flagged_payment_tx_only_blocks.clear();
         self.trimmed_orders_buf.clear();
         self.found_orders_count = 0;
         self.inserted_orders_count = 0;
@@ -170,13 +177,15 @@ impl BlockMerger {
 
     #[timed]
     pub fn get_header(
-        &self,
+        &mut self,
         original_bid: &PayloadEntry,
         is_mev_boost: bool,
     ) -> Option<PayloadEntry> {
         trace!("fetching merged header");
         let start_time = Instant::now();
-        let entry = self.best_merged_block.as_ref()?;
+        let coinbase = original_bid.execution_payload().fee_recipient;
+        let entry = self.best_merged_blocks.get(&coinbase)?;
+
         if !merged_bid_higher(
             &entry.bid,
             original_bid,
@@ -184,6 +193,16 @@ impl BlockMerger {
             self.config.block_merging_config.max_merged_bid_age_ms,
         ) {
             trace!("merged bid not higher");
+            let original_block_hash = *original_bid.block_hash();
+            if log_if_only_payment_tx_changed(
+                original_block_hash,
+                *entry.bid.block_hash(),
+                entry.bid.bid_data_ref().builder_pubkey,
+                &original_bid.execution_payload().transactions,
+                &entry.bid.execution_payload().transactions,
+            ) {
+                self.flagged_payment_tx_only_blocks.insert(original_block_hash);
+            }
             return None;
         }
 
@@ -221,6 +240,9 @@ impl BlockMerger {
     }
 
     pub fn insert_merge_data(&mut self, merging_data: MergeData) {
+        // Dehydrated submissions never populate `orders` (see bid_decoder/tile.rs) since
+        // transaction indices can't be expanded to bytes before hydration runs; only
+        // `allow_appending`/`merge_orders` (forwarded raw to the merge-builder tile) apply to them.
         if !merging_data.merging_data.orders.orders.is_empty() {
             trace!(%merging_data.block_hash,"inserting merge orders from block");
             self.inserted_orders_count += 1;
@@ -340,6 +362,15 @@ impl BlockMerger {
         let bid_slot = self.curr_bid_slot;
         let max_blobs_per_block = self.chain_info.max_blobs_per_block();
 
+        let original_block_hash = original_payload.execution_payload.block_hash;
+        if self.flagged_payment_tx_only_blocks.remove(&original_block_hash) {
+            info!(
+                %original_block_hash,
+                %builder_pubkey,
+                "original payload previously flagged for a payment-tx-only merge is being merged again"
+            );
+        }
+
         let base_block_data = match self.appendable_blocks.get(&response.base_block_hash) {
             Some(data) => data,
             None => {
@@ -412,8 +443,11 @@ impl BlockMerger {
 
         let new_bid = PayloadEntry::new_gossip(payload_and_blobs, bid_data);
 
-        // Store locally to serve header requests
-        self.best_merged_block = Some(BestMergedBlock {
+        // Store locally to serve header requests, keyed by the beneficiary/coinbase
+        // address of the base block the merge was built from, so that a merge for one
+        // builder's block can never be served in place of another builder's original bid.
+        let coinbase = base_block_data.execution_payload.fee_recipient;
+        self.best_merged_blocks.insert(coinbase, BestMergedBlock {
             base_block_time_ms: base_block_data.time_ms,
             bid: new_bid.clone(),
         });
@@ -761,6 +795,46 @@ fn append_merged_blobs(
     }
 
     Ok(())
+}
+
+/// Checks whether the merged block kept the original builder's tx ordering completely
+/// unchanged except for the payment tx (the last tx in the original block), with any
+/// additional orders appended after it. When that's the case, this is logged since it
+/// indicates the merge only affected the payment tx rather than tx ordering/content.
+/// Returns whether the condition was detected (and thus logged).
+fn log_if_only_payment_tx_changed(
+    base_block_hash: B256,
+    merged_block_hash: B256,
+    builder_pubkey: &BlsPublicKeyBytes,
+    original_txs: &Transactions,
+    merged_txs: &Transactions,
+) -> bool {
+    let Some(payment_tx_index) = original_txs.len().checked_sub(1) else {
+        return false;
+    };
+
+    if merged_txs.len() <= payment_tx_index {
+        return false;
+    }
+
+    let prefix_unchanged = original_txs[..payment_tx_index] == merged_txs[..payment_tx_index];
+    let payment_tx_changed = original_txs[payment_tx_index] != merged_txs[payment_tx_index];
+
+    if !(prefix_unchanged && payment_tx_changed) {
+        return false;
+    }
+
+    info!(
+        %base_block_hash,
+        %merged_block_hash,
+        %builder_pubkey,
+        prefix_tx_count = payment_tx_index,
+        appended_tx_count = merged_txs.len() - original_txs.len(),
+        original_payment_tx = %original_txs[payment_tx_index].0,
+        merged_payment_tx = %merged_txs[payment_tx_index].0,
+        "merge kept original builder tx ordering unchanged except for the payment tx"
+    );
+    true
 }
 
 fn merged_bid_higher(

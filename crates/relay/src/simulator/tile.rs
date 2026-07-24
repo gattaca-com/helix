@@ -213,6 +213,7 @@ impl SimulatorTile {
             self.local_telemetry.sims_sent_immediately += 1;
             self.spawn_sim(id, req)
         } else {
+            self.local_telemetry.queued += 1;
             let evicted = if fast_track {
                 self.priority_requests.store(req, builder_pubkey, &mut self.local_telemetry)
             } else {
@@ -282,6 +283,7 @@ impl SimulatorTile {
         if let Some(id) = self.next_client(|s| s.can_simulate()) &&
             let Some(req) = self.priority_requests.next_req().or(self.requests.next_req())
         {
+            self.local_telemetry.sims_sent_from_queue += 1;
             self.spawn_sim(id, req);
         }
     }
@@ -487,6 +489,7 @@ impl SimulatorTile {
 
     fn report(&mut self) {
         let tel = std::mem::take(&mut self.local_telemetry);
+        let queue_left = self.requests.reqs.len() + self.priority_requests.reqs.len();
 
         SimulatorMetrics::sim_mananger_count("sims_sent_immediately", tel.sims_sent_immediately);
         SimulatorMetrics::sim_mananger_count("sims_reqs_dropped", tel.sims_reqs_dropped);
@@ -500,13 +503,16 @@ impl SimulatorTile {
             bid_slot = self.last_bid_slot,
             sims_reqs = tel.sims_reqs,
             sims_sent_immediately = tel.sims_sent_immediately,
+            queued = tel.queued,
+            sims_sent_from_queue = tel.sims_sent_from_queue,
             sims_reqs_dropped = tel.sims_reqs_dropped,
+            queue_left,
             stale_sim_reqs = tel.stale_sim_reqs,
             max_pending = tel.max_pending,
             max_in_flight = tel.max_in_flight,
             merge_reqs = tel.merge_reqs,
             dropped_merge_reqs = tel.dropped_merge_reqs,
-            "sim manager telemetry"
+            "simulator slot stats"
         )
     }
 }
@@ -557,6 +563,14 @@ struct LocalTelemetry {
     max_in_flight: usize,
     merge_reqs: usize,
     dropped_merge_reqs: usize,
+    /// Requests with no simulator free at intake, queued for later dispatch.
+    /// `sims_reqs == sims_sent_immediately + queued`.
+    queued: usize,
+    /// Queued requests dispatched once a simulator freed up (queued ->
+    /// sims_sent_from_queue, or evicted by a fresher request for the same
+    /// builder -> sims_reqs_dropped, or still resident at slot end ->
+    /// `queue_left`, read live from the queues rather than stored here).
+    sims_sent_from_queue: usize,
 }
 
 // Sim id / Simulation Result, so we can use this for merging requests
