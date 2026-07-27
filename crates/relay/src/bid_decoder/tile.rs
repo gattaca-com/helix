@@ -23,12 +23,13 @@ use helix_types::{
 };
 use rustc_hash::FxHashMap;
 use tracing::{info, trace};
-use zstd::zstd_safe::WriteBuf;
 
 use crate::{
     HelixSpine,
     api::{FutureBidSubmissionResult, builder::error::BuilderApiError},
-    auctioneer::{InternalBidSubmissionHeader, SubmissionData, SubmissionRef, send_submission_result},
+    auctioneer::{
+        InternalBidSubmissionHeader, SubmissionData, SubmissionRef, send_submission_result,
+    },
     bid_decoder::SubmissionDataWithSpan,
     housekeeper::SlotUpdate,
     spine::{
@@ -71,7 +72,7 @@ impl Tile<HelixSpine> for DecoderTile {
                 let payload = if let Some(b) = self.http_submissions.get(new_bid.http_submission_ix)
                 {
                     bytes = b;
-                    &bytes.as_slice()[new_bid.payload_offset..]
+                    &bytes[new_bid.payload_offset..]
                 } else {
                     &dcache_payload[new_bid.payload_offset..]
                 };
@@ -125,7 +126,7 @@ impl Tile<HelixSpine> for DecoderTile {
                         &self.config,
                         &new_bid.submission_ref,
                         &new_bid.header,
-                        payload.as_slice(),
+                        &payload,
                         &mut self.buffer.borrow_mut(),
                         new_bid.trace,
                         sent_at,

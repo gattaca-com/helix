@@ -4,8 +4,7 @@ use reth_ethereum::{
     Block, EthPrimitives,
     consensus::{ConsensusError, FullConsensus},
     node::EthereumNode,
-    provider::db::DatabaseEnv,
-    provider::providers::BlockchainProvider,
+    provider::{db::DatabaseEnv, providers::BlockchainProvider},
 };
 use reth_ethereum_engine_primitives::EthPayloadTypes;
 use reth_node_builder::{NodeTypesWithDBAdapter, PayloadValidator};

@@ -187,7 +187,11 @@ impl BlockMerger {
         trace!(%block_hash, "stored merged block in local cache");
 
         let mut merged_blobs_bundle = original_payload.blobs_bundle.as_ref().to_owned();
-        append_merged_blobs(&mut merged_blobs_bundle, response.appended_blobs, max_blobs_per_block)?;
+        append_merged_blobs(
+            &mut merged_blobs_bundle,
+            response.appended_blobs,
+            max_blobs_per_block,
+        )?;
 
         let withdrawals_root = response.execution_payload.withdrawals_root();
 

@@ -13,7 +13,6 @@ use serde_json::{Value, json};
 use ssz::Encode;
 use tracing::error;
 
-
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct JsonRpcError {
     message: String,

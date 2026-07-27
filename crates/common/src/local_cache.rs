@@ -12,7 +12,6 @@ use dashmap::{DashMap, DashSet};
 use helix_types::{BlsPublicKeyBytes, CryptoError, MergedBlock, SignedValidatorRegistration};
 use parking_lot::RwLock;
 use rustc_hash::FxHashSet;
-use tracing::error;
 
 use crate::{
     BuilderConfig, BuilderInfo, SignedValidatorRegistrationEntry,

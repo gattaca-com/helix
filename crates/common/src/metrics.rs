@@ -58,7 +58,7 @@ impl MetricsProvider {
 
         axum::serve(listener, router).await?;
 
-        bail!("metrics server stopped")
+        bail!("metrics server stopped");
     }
 }
 

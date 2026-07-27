@@ -80,8 +80,11 @@ fn merged_block_to_response(
     m: MergedBlockV1,
     blob_sidecars: &FxHashMap<B256, BlobWithMetadata>,
 ) -> Option<BlockMergeResponse> {
-    let appended_blobs =
-        m.appended_blobs.iter().map(|h| blob_sidecars.get(h).cloned()).collect::<Option<Vec<_>>>()?;
+    let appended_blobs = m
+        .appended_blobs
+        .iter()
+        .map(|h| blob_sidecars.get(h).cloned())
+        .collect::<Option<Vec<_>>>()?;
 
     let builder_inclusions: HashMap<_, _> = m
         .builder_inclusions
@@ -108,7 +111,9 @@ fn merged_block_to_response(
 
 /// This submission's own blob sidecars, keyed by KZG versioned hash — cached so a later
 /// merged block can re-attach one if it appended a blob tx originating from this submission.
-fn submission_blob_sidecars(bundle: &BlobsBundle) -> impl Iterator<Item = (B256, BlobWithMetadata)> + '_ {
+fn submission_blob_sidecars(
+    bundle: &BlobsBundle,
+) -> impl Iterator<Item = (B256, BlobWithMetadata)> + '_ {
     bundle.iter_blobs().map(|(blob, commitment, proofs)| {
         (calculate_versioned_hash(*commitment), BlobWithMetadata {
             commitment: *commitment,

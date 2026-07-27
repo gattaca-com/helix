@@ -442,7 +442,10 @@ impl BlockMergingTile {
                         *best = merged.proposer_value;
                         let Some(response) = merged_block_to_response(merged, blob_sidecars) else {
                             stats.merged_blob_missing += 1;
-                            warn!(?token, "could not resolve appended blob sidecar, dropping merged block");
+                            warn!(
+                                ?token,
+                                "could not resolve appended blob sidecar, dropping merged block"
+                            );
                             return;
                         };
                         stats.merged_blocks += 1;

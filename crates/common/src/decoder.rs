@@ -9,8 +9,8 @@ use flux_profiler::timed;
 use helix_types::{
     BidAdjustmentData, BlockMergingData, Compression, DehydratedBidSubmission,
     DehydratedBidSubmissionFuluWithAdjustments, DehydratedBidSubmissionFuluWithMergingData,
-    ForkName, ForkVersionDecode, MergeType, SignedBidSubmission, SignedBidSubmissionWithAdjustments,
-    SignedBidSubmissionWithMergingData, Submission,
+    ForkName, ForkVersionDecode, MergeType, SignedBidSubmission,
+    SignedBidSubmissionWithAdjustments, SignedBidSubmissionWithMergingData, Submission,
 };
 use http::{
     HeaderMap, HeaderValue, StatusCode,
@@ -564,6 +564,9 @@ mod tests {
 
         assert!(matches!(decoded_submission, Submission::Dehydrated(_)));
         assert!(bid_adjustment_data.is_none());
-        assert_eq!(merging_data.expect("mergeable submission should carry merging data"), expected_merging_data);
+        assert_eq!(
+            merging_data.expect("mergeable submission should carry merging data"),
+            expected_merging_data
+        );
     }
 }
