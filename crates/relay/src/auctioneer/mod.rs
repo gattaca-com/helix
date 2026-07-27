@@ -16,7 +16,6 @@ use std::{
 };
 
 use alloy_primitives::B256;
-pub use block_merger::OrderValidationError;
 use flux::tile::Tile;
 use flux_profiler::timed;
 use flux_utils::SharedVector;
@@ -54,7 +53,6 @@ pub use crate::{
     auctioneer::{
         bid_adjustor::{BidAdjustor, DefaultBidAdjustor},
         bid_sorter::{Bid, BidSorter},
-        block_merger::get_mergeable_orders,
         context::{Context, send_submission_result},
         types::{InternalBidSubmissionHeader, SubmissionRef},
     },
@@ -143,10 +141,8 @@ impl<B: BidAdjustor> Tile<HelixSpine> for Auctioneer<B> {
                 tracing::error!(?msg, "sim outbound payload not found");
                 return;
             };
-            let event = match payload.as_ref() {
-                SimResult::Validate(sim_result) => Event::SimResult(sim_result.clone()),
-                SimResult::Merge(merge_result) => Event::MergeResult(merge_result.clone()),
-            };
+            let SimResult::Validate(sim_result) = payload.as_ref();
+            let event = Event::SimResult(sim_result.clone());
             self.state.step(event, &mut self.ctx, &mut self.tel, producers);
         });
 
@@ -640,10 +636,6 @@ impl State {
     ) -> Self {
         for update in payload_attributes {
             payload_attributes_map.insert(update.parent_hash, update);
-        }
-
-        if let Some(il) = &il {
-            ctx.block_merger.add_inclusion_list(il);
         }
 
         match (registration_data, payload_attributes_map.is_empty()) {

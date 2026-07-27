@@ -323,8 +323,6 @@ pub struct SimulatorConfig {
     pub url: String,
     #[serde(default = "default_namespace")]
     pub namespace: String,
-    #[serde(default = "default_bool::<false>")]
-    pub is_merging_simulator: bool,
     /// roughly number of cores on simulator
     #[serde(default = "default_usize::<32>")]
     pub max_concurrent_tasks: usize,

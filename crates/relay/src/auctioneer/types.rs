@@ -13,10 +13,10 @@ use helix_common::{
 };
 use helix_tcp_types::{BidSubmissionFlags, BidSubmissionHeader};
 use helix_types::{
-    BidAdjustmentData, BlsPublicKeyBytes, BuilderBid, Compression, ExecutionPayload,
-    ExecutionRequests, ForkName, GetPayloadResponse, MergeType, MergeableOrdersWithPref,
-    PayloadAndBlobs, SignedBidSubmission, SignedBlindedBeaconBlock, Slot, Submission,
-    SubmissionVersion, VersionedSignedProposal, mock_public_key_bytes,
+    BidAdjustmentData, BlockMergingData, BlsPublicKeyBytes, BuilderBid, Compression,
+    ExecutionPayload, ExecutionRequests, ForkName, GetPayloadResponse, MergeType, PayloadAndBlobs,
+    SignedBidSubmission, SignedBlindedBeaconBlock, Slot, Submission, SubmissionVersion,
+    VersionedSignedProposal, mock_public_key_bytes,
 };
 use http::{
     HeaderMap, HeaderValue,
@@ -216,7 +216,7 @@ pub struct GetPayloadResultData {
 pub struct SubmissionData {
     pub submission_ref: SubmissionRef,
     pub submission: Submission,
-    pub merging_data: Option<MergeableOrdersWithPref>,
+    pub merging_data: Option<BlockMergingData>,
     pub bid_adjustment_data: Option<BidAdjustmentData>,
     pub version: SubmissionVersion,
     pub withdrawals_root: B256,

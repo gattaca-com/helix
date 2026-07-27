@@ -291,6 +291,7 @@ impl<B: BidAdjustor> Context<B> {
         };
 
         let original_payload_and_blobs = original_payload.payload_and_blobs();
+        let original_value = *original_payload.value();
         let builder_pubkey = *original_payload.bid_data_ref().builder_pubkey;
 
         //TODO: this function does a lot of work, should move that work away from the event loop
@@ -299,6 +300,7 @@ impl<B: BidAdjustor> Context<B> {
             .prepare_merged_payload_for_storage(
                 response,
                 original_payload_and_blobs,
+                original_value,
                 builder_pubkey,
             )
             .ok()

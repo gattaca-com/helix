@@ -21,7 +21,7 @@ use helix_tcp_types::merging::{
     },
     relay_to_builder::{ActivateBaseBlockV1, MergeableBlockV1, SlotStartV1},
 };
-use helix_types::{HydrationCache, Submission, payload_to_v3};
+use helix_types::{BlobWithMetadata, HydrationCache, Submission, payload_to_v3};
 use rustc_hash::{FxHashMap, FxHashSet};
 use ssz::Decode;
 use tracing::{debug, error, info, trace, warn};
@@ -29,7 +29,10 @@ use uuid::Uuid;
 
 use crate::{
     HelixSpine, SubmissionDataWithSpan,
-    block_merging::{append_frame, merged_block_to_response, order_ref_hash, order_to_ref},
+    block_merging::{
+        append_frame, merged_block_to_response, order_ref_hash, order_to_ref,
+        submission_blob_sidecars,
+    },
     housekeeper::SlotUpdate,
     simulator::BlockMergeResponse,
     spine::messages::{DecodedSubmission, MergedBlockMsg, SlotMsg},
@@ -120,6 +123,8 @@ struct SlotStats {
     merged_stale: usize,
     /// Merged blocks discarded because a better one was already stored.
     merged_regressed: usize,
+    /// Merged blocks dropped because an appended blob's sidecar wasn't in our cache.
+    merged_blob_missing: usize,
     /// TopBidUpdate messages received for the current bid slot.
     top_bid_updates: usize,
     /// ActivateBaseBlockV1 frames sent.
@@ -148,6 +153,10 @@ pub struct BlockMergingTile {
     /// Rebuilds full payloads from dehydrated submissions; fed by every
     /// dehydrated submission this slot, cleared on slot transition.
     hydration_cache: HydrationCache,
+    /// Blob sidecars from every submission with mergeable orders this slot, keyed by KZG
+    /// versioned hash, so an appended blob tx can be re-attached regardless of which
+    /// builder's submission it originated from. Cleared on slot transition.
+    blob_sidecars: FxHashMap<B256, BlobWithMetadata>,
 
     redial: Repeater,
     ping: Repeater,
@@ -254,6 +263,7 @@ impl BlockMergingTile {
             stats: SlotStats::default(),
             chain_info,
             hydration_cache: HydrationCache::new(),
+            blob_sidecars: FxHashMap::default(),
             redial: Repeater::every(Duration::from_secs(REDIAL_INTERVAL_S)),
             ping: Repeater::every(Duration::from_secs(PING_INTERVAL_S)),
             ping_nonce: 0,
@@ -332,6 +342,7 @@ impl BlockMergingTile {
             pongs,
             merged_ixs,
             merged_blocks,
+            blob_sidecars,
             ..
         } = self;
 
@@ -429,8 +440,13 @@ impl BlockMergingTile {
                             return;
                         }
                         *best = merged.proposer_value;
+                        let Some(response) = merged_block_to_response(merged, blob_sidecars) else {
+                            stats.merged_blob_missing += 1;
+                            warn!(?token, "could not resolve appended blob sidecar, dropping merged block");
+                            return;
+                        };
                         stats.merged_blocks += 1;
-                        let ix = merged_blocks.push(merged_block_to_response(merged));
+                        let ix = merged_blocks.push(response);
                         merged_ixs.push(ix);
                     }
                     MergingMsgId::RejectV1 => {
@@ -495,6 +511,7 @@ impl BlockMergingTile {
             self.slot = SlotState { bid_slot, ..Default::default() };
             self.conn.reset_slot();
             self.hydration_cache.clear();
+            self.blob_sidecars.clear();
             // sole producer; consumed indices are stale after the transition
             self.merged_blocks.clear();
         }
@@ -561,6 +578,7 @@ impl BlockMergingTile {
             merged_blocks = stats.merged_blocks,
             merged_stale = stats.merged_stale,
             merged_regressed = stats.merged_regressed,
+            merged_blob_missing = stats.merged_blob_missing,
             appendable_blocks = self.slot.appendable.len(),
             hydration_txs = self.hydration_cache.tx_count(),
             hydration_builders = self.hydration_cache.builder_count(),
@@ -635,6 +653,10 @@ impl BlockMergingTile {
             }
         };
 
+        // Cache this submission's own blob sidecars so any of its blob txs that get merged
+        // into another builder's base block can be re-attached from here later.
+        self.blob_sidecars.extend(submission_blob_sidecars(&signed.blobs_bundle()));
+
         let mut merge_orders = Vec::with_capacity(merging.merge_orders.len());
         for order in &merging.merge_orders {
             match order_to_ref(order) {
@@ -648,7 +670,7 @@ impl BlockMergingTile {
             slot: signed.message.slot,
             builder_pubkey: signed.message.builder_pubkey,
             block_value: signed.message.value,
-            builder_address: merging.orders.origin,
+            builder_address: merging.builder_address,
             proposer_fee_recipient: signed.message.proposer_fee_recipient,
             parent_beacon_block_root: self
                 .slot

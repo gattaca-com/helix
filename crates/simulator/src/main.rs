@@ -1,4 +1,3 @@
-mod block_merging;
 mod common;
 mod inclusion;
 mod ssz_server;
@@ -6,9 +5,9 @@ mod state_recorder;
 mod tx_sink;
 mod validation;
 
-use std::{path::PathBuf, sync::Arc};
+use std::sync::Arc;
 
-use alloy_primitives::{Address, Bytes};
+use alloy_primitives::Bytes;
 use clap::Parser;
 use helix_common::config::ClickhouseConfig;
 use reth_chain_state::CanonStateSubscriptions;
@@ -22,7 +21,6 @@ use tx_sink::TxSimSink;
 use validation::{ValidationApi, ValidationApiConfig};
 
 use crate::{
-    block_merging::{BlockMergingApi, BlockMergingApiServer, types::BlockMergingConfig},
     inclusion::{
         api::{InclusionExt, InclusionExtApiServer},
         inclusion_producer::inclusion_producer,
@@ -76,11 +74,6 @@ fn main() {
                             &ctx.node().task_executor,
                         ));
                         validation_api = validation_api.with_tx_sink(sink);
-                    }
-                    if args.enable_block_merging_ext {
-                        let block_merging_api =
-                            BlockMergingApi::new(validation_api.clone(), args.clone().into());
-                        ctx.modules.merge_configured(block_merging_api.into_rpc())?;
                     }
 
                     if let Some(port) = args.sim_ssz_port {
@@ -137,24 +130,6 @@ struct CliExt {
     #[arg(long, default_value_t = true)]
     pub enable_inclusion_ext: bool,
 
-    #[arg(long, default_value_t = true)]
-    pub enable_block_merging_ext: bool,
-
-    /// Path to a file with a mapping `builder coinbase -> collateral safe`.
-    /// The base block coinbase will accrue fees and disperse from its
-    /// collateral address
-    #[arg(long)]
-    pub builder_collateral_map_path: PathBuf,
-
-    #[arg(long)]
-    pub relay_fee_recipient: Address,
-
-    #[arg(long)]
-    pub multisend_contract: Address,
-
-    #[arg(long)]
-    pub validate_merged_blocks: bool,
-
     /// If set, start an SSZ binary validation endpoint on this port
     #[arg(long)]
     pub sim_ssz_port: Option<u16>,
@@ -167,20 +142,4 @@ struct CliExt {
 
     #[arg(long)]
     pub clickhouse_user: Option<String>,
-}
-
-impl From<CliExt> for BlockMergingConfig {
-    fn from(cli: CliExt) -> Self {
-        let builder_collateral_path = std::fs::read_to_string(cli.builder_collateral_map_path)
-            .expect("Failed to read builder collateral map from file");
-        let builder_collateral_map = serde_json::from_str(&builder_collateral_path)
-            .expect("Failed to parse builder collateral map");
-        BlockMergingConfig {
-            builder_collateral_map,
-            relay_fee_recipient: cli.relay_fee_recipient,
-            multisend_contract: cli.multisend_contract,
-            distribution_config: Default::default(),
-            validate_merged_blocks: cli.validate_merged_blocks,
-        }
-    }
 }

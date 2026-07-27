@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::HashMap, sync::Arc};
+use std::{cell::RefCell, sync::Arc};
 
 use alloy_primitives::B256;
 use bytes::Bytes;
@@ -18,8 +18,8 @@ use helix_common::{
     record_submission_step,
 };
 use helix_types::{
-    BidAdjustmentData, BlockMergingData, BlsPublicKeyBytes, MergeableOrders,
-    MergeableOrdersWithPref, SignedBidSubmission, Submission, SubmissionVersion,
+    BidAdjustmentData, BlockMergingData, BlsPublicKeyBytes, SignedBidSubmission, Submission,
+    SubmissionVersion,
 };
 use rustc_hash::FxHashMap;
 use tracing::{info, trace};
@@ -28,10 +28,7 @@ use zstd::zstd_safe::WriteBuf;
 use crate::{
     HelixSpine,
     api::{FutureBidSubmissionResult, builder::error::BuilderApiError},
-    auctioneer::{
-        InternalBidSubmissionHeader, SubmissionData, SubmissionRef, get_mergeable_orders,
-        send_submission_result,
-    },
+    auctioneer::{InternalBidSubmissionHeader, SubmissionData, SubmissionRef, send_submission_result},
     bid_decoder::SubmissionDataWithSpan,
     housekeeper::SlotUpdate,
     spine::{
@@ -293,38 +290,10 @@ impl DecoderTile {
 
         trace!("sending to auctioneer");
 
-        let merging_data = if config.block_merging_config.is_enabled {
-            merging_data.and_then(|data| match &submission {
-                Submission::Full(signed_bid_submission) => {
-                    // TODO: split up mergeable order and submission processing to
-                    // avoid delaying the bid update
-                    match get_mergeable_orders(signed_bid_submission, &data) {
-                        Ok(orders) => Some(MergeableOrdersWithPref {
-                            allow_appending: data.allow_appending,
-                            orders,
-                            merge_orders: data.merge_orders,
-                        }),
-                        Err(err) => {
-                            tracing::error!(%err, "failed to process mergeable orders");
-                            None
-                        }
-                    }
-                }
-                // transactions aren't resolved yet, so orders referencing tx indices can't be
-                // expanded into `orders` here for either append-only or mergeable dehydrated
-                // submissions. `merge_orders` is carried through raw so the external
-                // merge-builder tile (which hydrates independently) can still resolve them; the
-                // local `BestMergeableOrders` pool never receives expanded orders for dehydrated
-                // submissions.
-                Submission::Dehydrated(_) => Some(MergeableOrdersWithPref {
-                    allow_appending: data.allow_appending,
-                    orders: MergeableOrders::new(data.builder_address, Vec::new(), HashMap::new()),
-                    merge_orders: data.merge_orders,
-                }),
-            })
-        } else {
-            None
-        };
+        // Carried through raw (index-based, unexpanded) for `BlockMergingTile`, which
+        // resolves tx bytes and caches blob sidecars itself when forwarding to the merge
+        // builder — no need to do that work here on the submission hot path.
+        let merging_data = if config.block_merging_config.is_enabled { merging_data } else { None };
 
         let submission_data = SubmissionData {
             submission_ref: *submission_ref,

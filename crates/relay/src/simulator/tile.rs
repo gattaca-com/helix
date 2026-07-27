@@ -33,7 +33,7 @@ use crate::{
     HelixSpine, SimRequest, ValidationRequest,
     auctioneer::Bid,
     bid_decoder::SubmissionDataWithSpan,
-    simulator::{MergeRequest, SimResult, client::SimulatorClient},
+    simulator::{SimResult, client::SimulatorClient},
     spine::{
         HelixSpineProducers,
         messages::{FromSimMsg, ToSimKind, ToSimMsg},
@@ -84,9 +84,6 @@ impl Tile<HelixSpine> for SimulatorTile {
                 Some(payload) => match payload.as_ref() {
                     SimRequest::Validate { req, fast_track } => {
                         self.handle_sim_request((**req).clone(), *fast_track, producers);
-                    }
-                    SimRequest::Merge(req) => {
-                        self.handle_merge_request(req.clone());
                     }
                 },
                 None => error!(?msg, "sim inbound payload not found"),
@@ -228,42 +225,6 @@ impl SimulatorTile {
             {
                 let _ = self.hydration_cache.hydrate(d, self.chain_info.max_blobs_per_block());
             }
-        }
-    }
-
-    #[timed]
-    fn handle_merge_request(&mut self, req: MergeRequest) {
-        self.local_telemetry.merge_reqs += 1;
-        if let Some(id) = self.next_client(|s| s.can_merge()) {
-            let sim = &mut self.simulators[id];
-            let to_send = sim.client.merge_request_builder();
-            sim.pending += 1;
-
-            self.local_telemetry.max_in_flight =
-                self.local_telemetry.max_in_flight.max(sim.pending);
-            let timer = SimulatorMetrics::block_merge_timer(sim.client.endpoint());
-            let task_tx = self.task_tx.clone();
-            let sim_results = self.sim_results.clone();
-            spawn_tracked!(async move {
-                debug!(bid_slot = %req.bid_slot, block_hash = %req.block_hash, "sending merge request");
-                let res = SimulatorClient::do_merge_request(&req, to_send).await;
-                if res.is_ok() {
-                    timer.stop_and_record();
-                } else {
-                    timer.stop_and_discard();
-                }
-                SimulatorMetrics::block_merge_status(res.is_ok());
-
-                let result_ix = sim_results.push(SimResult::Merge((id, res)));
-                let _ = task_tx.try_send(SimTileInternalEvent::TaskDone {
-                    id,
-                    paused_until: None,
-                    result_ix,
-                });
-            });
-        } else {
-            self.local_telemetry.dropped_merge_reqs += 1;
-            warn!("no client available for merging! Dropping request");
         }
     }
 
@@ -496,8 +457,6 @@ impl SimulatorTile {
         SimulatorMetrics::sim_mananger_count("stale_sim_reqs", tel.stale_sim_reqs);
         SimulatorMetrics::sim_manager_gauge("max_pending", tel.max_pending);
         SimulatorMetrics::sim_manager_gauge("max_in_flight", tel.max_in_flight);
-        SimulatorMetrics::sim_mananger_count("merge_reqs", tel.merge_reqs);
-        SimulatorMetrics::sim_mananger_count("dropped_merge_reqs", tel.dropped_merge_reqs);
 
         info!(
             bid_slot = self.last_bid_slot,
@@ -510,8 +469,6 @@ impl SimulatorTile {
             stale_sim_reqs = tel.stale_sim_reqs,
             max_pending = tel.max_pending,
             max_in_flight = tel.max_in_flight,
-            merge_reqs = tel.merge_reqs,
-            dropped_merge_reqs = tel.dropped_merge_reqs,
             "simulator slot stats"
         )
     }
@@ -543,10 +500,6 @@ impl SimEntry {
     fn can_simulate(&self) -> bool {
         self.can_simulate_light() && self.pending < self.client.config.max_concurrent_tasks
     }
-
-    fn can_merge(&self) -> bool {
-        self.can_simulate() && self.client.config.is_merging_simulator
-    }
 }
 
 pub(crate) const SIMULATOR_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
@@ -561,8 +514,6 @@ struct LocalTelemetry {
     max_pending: usize,
     // waiting for result
     max_in_flight: usize,
-    merge_reqs: usize,
-    dropped_merge_reqs: usize,
     /// Requests with no simulator free at intake, queued for later dispatch.
     /// `sims_reqs == sims_sent_immediately + queued`.
     queued: usize,
@@ -573,7 +524,6 @@ struct LocalTelemetry {
     sims_sent_from_queue: usize,
 }
 
-// Sim id / Simulation Result, so we can use this for merging requests
 pub type ValidationResult = (usize, Option<SimulationResultInner>);
 #[derive(Clone)]
 pub struct SimulationResultInner {

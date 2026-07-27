@@ -7,6 +7,7 @@ mod tile;
 
 use std::collections::HashMap;
 
+use alloy_consensus::Bytes48;
 use alloy_primitives::B256;
 use helix_tcp_types::merging::{
     MergingFrameHeader, MergingMsgId,
@@ -14,8 +15,10 @@ use helix_tcp_types::merging::{
     order::{BundleOrderRef, MergeOrderRef, TxOrderRef, bundle_order_hash},
 };
 use helix_types::{
-    BuilderInclusionResult, MergedBlockTrace, Order, payload_from_v3, requests_from_v4,
+    BlobWithMetadata, BlobsBundle, BuilderInclusionResult, KzgCommitment, MergedBlockTrace, Order,
+    payload_from_v3, requests_from_v4,
 };
+use rustc_hash::FxHashMap;
 use ssz::Encode;
 pub use tile::BlockMergingTile;
 
@@ -69,19 +72,27 @@ fn order_ref_hash(order_ref: &MergeOrderRef, tx_hashes: &[B256]) -> B256 {
     }
 }
 
-/// Maps the wire message onto the simulator response type so the auctioneer
-/// reuses `handle_merge_response` unchanged.
-fn merged_block_to_response(m: MergedBlockV1) -> BlockMergeResponse {
+/// Maps the wire message onto the simulator response type so the auctioneer reuses
+/// `handle_merge_response` unchanged. Resolves each appended blob hash from `blob_sidecars`
+/// (this tile's own cache of blob sidecars seen in submissions this slot); `None` if any
+/// hash can't be resolved, since a merged block missing a blob sidecar can't be finalized.
+fn merged_block_to_response(
+    m: MergedBlockV1,
+    blob_sidecars: &FxHashMap<B256, BlobWithMetadata>,
+) -> Option<BlockMergeResponse> {
+    let appended_blobs =
+        m.appended_blobs.iter().map(|h| blob_sidecars.get(h).cloned()).collect::<Option<Vec<_>>>()?;
+
     let builder_inclusions: HashMap<_, _> = m
         .builder_inclusions
         .into_iter()
         .map(|i| (i.origin_coinbase, BuilderInclusionResult { revenue: i.revenue, txs: i.txs }))
         .collect();
-    BlockMergeResponse {
+    Some(BlockMergeResponse {
         base_block_hash: m.base_block_hash,
         execution_payload: payload_from_v3(m.execution_payload),
         execution_requests: requests_from_v4(m.execution_requests),
-        appended_blobs: m.appended_blobs,
+        appended_blobs,
         proposer_value: m.proposer_value,
         builder_inclusions,
         trace: MergedBlockTrace {
@@ -92,7 +103,23 @@ fn merged_block_to_response(m: MergedBlockV1) -> BlockMergeResponse {
             header_served_time_ns: None, /* filled in by the auctioneer when it sends the header
                                           * to the proposer */
         },
-    }
+    })
+}
+
+/// This submission's own blob sidecars, keyed by KZG versioned hash — cached so a later
+/// merged block can re-attach one if it appended a blob tx originating from this submission.
+fn submission_blob_sidecars(bundle: &BlobsBundle) -> impl Iterator<Item = (B256, BlobWithMetadata)> + '_ {
+    bundle.iter_blobs().map(|(blob, commitment, proofs)| {
+        (calculate_versioned_hash(*commitment), BlobWithMetadata {
+            commitment: *commitment,
+            proofs: proofs.to_vec(),
+            blob: blob.clone(),
+        })
+    })
+}
+
+fn calculate_versioned_hash(commitment: Bytes48) -> B256 {
+    KzgCommitment(*commitment).calculate_versioned_hash()
 }
 
 #[cfg(test)]
