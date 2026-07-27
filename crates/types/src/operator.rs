@@ -4,7 +4,7 @@ use ssz_derive::{Decode, Encode};
 use crate::BlsPublicKeyBytes;
 
 #[derive(Debug, Decode, Encode)]
-#[ssz(enum_behaviour = "transparent")]
+#[ssz(enum_behaviour = "union")]
 pub enum OperatorMessage {
     Demotion(Demotion),
     Promotion(Promotion),

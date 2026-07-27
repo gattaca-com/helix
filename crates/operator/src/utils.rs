@@ -10,7 +10,7 @@ where
     serializer.serialize_str(&hex::encode(&key.to_bytes()))
 }
 
-/// Deserialize a hex-encoded scp256k1 pubkey.
+/// Deserialize a hex-encoded secp256k1 pubkey.
 pub(super) fn deserialize_pubkey<'de, D>(d: D) -> Result<PublicKey, D::Error>
 where
     D: Deserializer<'de>,

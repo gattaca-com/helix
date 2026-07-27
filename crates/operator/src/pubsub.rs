@@ -3,12 +3,7 @@ use std::{collections::HashMap, time::Duration};
 use async_channel::{Receiver, Sender};
 use helix_types::OperatorMessage;
 use libp2p::{
-    PeerId, SwarmBuilder,
-    floodsub::{self, Event, FloodsubMessage},
-    futures::StreamExt,
-    identity::Keypair,
-    ping,
-    swarm::{NetworkBehaviour, SwarmEvent},
+    PeerId, SwarmBuilder, allow_block_list::{self, AllowedPeers}, floodsub::{self, Event, FloodsubMessage}, futures::StreamExt, identity::Keypair, ping, swarm::{NetworkBehaviour, SwarmEvent},
 };
 use ssz::{Decode, Encode};
 
@@ -16,6 +11,7 @@ use super::{Operator, OperatorError};
 
 #[derive(NetworkBehaviour)]
 struct NetBehaviour {
+    allow_list: allow_block_list::Behaviour<AllowedPeers>,
     floodsub: floodsub::Behaviour,
     ping: ping::Behaviour,
 }
@@ -30,11 +26,17 @@ pub(super) async fn run_operator_connection(
     let floodsub_topic = floodsub::Topic::new("operator");
     let local_peer_id = PeerId::from_public_key(&keypair.public());
 
+    let mut allow_list = allow_block_list::Behaviour::default();
+    for op in &operators {
+        allow_list.allow_peer(PeerId::from_public_key(&op.pubkey));
+    }
+
     let mut swarm = SwarmBuilder::with_existing_identity(keypair)
         .with_tokio()
         .with_quic()
         .with_behaviour(|_key| {
             Ok(NetBehaviour {
+                allow_list,
                 floodsub: floodsub::Behaviour::new(local_peer_id),
                 ping: ping::Behaviour::default(),
             })
