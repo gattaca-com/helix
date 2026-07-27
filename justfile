@@ -1,4 +1,4 @@
-toolchain := "nightly-2025-09-18"
+toolchain := "nightly-2026-07-26"
 
 fmt:
   rustup toolchain install {{toolchain}} > /dev/null 2>&1 && \

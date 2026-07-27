@@ -263,7 +263,8 @@ pub struct BlockMergingConfig {
 /// on helix-tcp-types.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct BlockMergingTcpConfig {
-    pub builders: Vec<MergingBuilderEndpoint>,
+    /// The single merging builder this relay dials.
+    pub builder: MergingBuilderEndpoint,
     pub relay_fee_recipient: Address,
     pub multisend_contract: Address,
     pub relay_bps: u64,
@@ -322,8 +323,6 @@ pub struct SimulatorConfig {
     pub url: String,
     #[serde(default = "default_namespace")]
     pub namespace: String,
-    #[serde(default = "default_bool::<false>")]
-    pub is_merging_simulator: bool,
     /// roughly number of cores on simulator
     #[serde(default = "default_usize::<32>")]
     pub max_concurrent_tasks: usize,

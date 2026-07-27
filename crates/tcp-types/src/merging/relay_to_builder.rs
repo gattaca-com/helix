@@ -21,6 +21,17 @@ pub struct SlotStartV1 {
 /// highest-value block on duplicates) and, when `allow_appending`, stores the
 /// payload as a merge-base candidate so a later `ActivateBaseBlockV1` is the
 /// only message on the top-bid critical path.
+///
+/// `execution_payload.transactions` entries are dehydrated relative to this
+/// connection: an entry of `order::TX_HASH_REF_LEN` bytes
+/// (`order::is_tx_hash_ref`) is `keccak256(rlp)` of a tx already sent once on
+/// this same connection (by any block, from any originating builder — the
+/// cache is shared, not partitioned per source), to be resolved from that
+/// side's own cache; anything else is a raw tx, which the receiver caches by
+/// its hash for later references. The cache is connection-scoped: a fresh
+/// connection starts empty, so the relay must resend full bytes for anything
+/// replayed after a reconnect rather than reusing hashes from before the
+/// drop.
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub struct MergeableBlockV1 {
     pub slot: u64,

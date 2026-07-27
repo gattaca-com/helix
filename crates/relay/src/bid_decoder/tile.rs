@@ -18,25 +18,33 @@ use helix_common::{
     record_submission_step,
 };
 use helix_types::{
-    BidAdjustmentData, BlockMergingData, BlsPublicKeyBytes, MergeableOrdersWithPref,
-    SignedBidSubmission, Submission, SubmissionVersion,
+    BidAdjustmentData, BlockMergingData, BlsPublicKeyBytes, SignedBidSubmission, Submission,
+    SubmissionVersion,
 };
-use tracing::trace;
-use zstd::zstd_safe::WriteBuf;
+use rustc_hash::FxHashMap;
+use tracing::{info, trace};
 
 use crate::{
     HelixSpine,
     api::{FutureBidSubmissionResult, builder::error::BuilderApiError},
     auctioneer::{
-        InternalBidSubmissionHeader, SubmissionData, SubmissionRef, get_mergeable_orders,
-        send_submission_result,
+        InternalBidSubmissionHeader, SubmissionData, SubmissionRef, send_submission_result,
     },
     bid_decoder::SubmissionDataWithSpan,
+    housekeeper::SlotUpdate,
     spine::{
         HelixSpineProducers,
-        messages::{DecodedSubmission, NewBidSubmission},
+        messages::{DecodedSubmission, NewBidSubmission, SlotMsg},
     },
 };
+
+/// Per-slot decode outcomes. `decoded_ok + decode_errors.values().sum() ==`
+/// total submissions the decoder saw this slot.
+#[derive(Default)]
+struct DecodeStats {
+    decoded_ok: u32,
+    decode_errors: FxHashMap<&'static str, u32>,
+}
 
 pub struct DecoderTile {
     chain_info: ChainInfo,
@@ -47,10 +55,15 @@ pub struct DecoderTile {
     http_submissions: Arc<SharedVector<Bytes>>,
     buffer: RefCell<Vec<u8>>,
     core: usize,
+    slot_events: Arc<SharedVector<SlotUpdate>>,
+    bid_slot: u64,
+    stats: RefCell<DecodeStats>,
 }
 
 impl Tile<HelixSpine> for DecoderTile {
     fn loop_body(&mut self, adapter: &mut flux::spine::SpineAdapter<HelixSpine>) {
+        adapter.consume(|msg: SlotMsg, _| self.on_slot_msg(msg));
+
         adapter.consume_with_dcache_collaborative_internal_message(
             |new_bid: &InternalMessage<NewBidSubmission>, dcache_payload| {
                 // dcache bypass: the dcache slot can be mutated between publish and
@@ -59,7 +72,7 @@ impl Tile<HelixSpine> for DecoderTile {
                 let payload = if let Some(b) = self.http_submissions.get(new_bid.http_submission_ix)
                 {
                     bytes = b;
-                    &bytes.as_slice()[new_bid.payload_offset..]
+                    &bytes[new_bid.payload_offset..]
                 } else {
                     &dcache_payload[new_bid.payload_offset..]
                 };
@@ -79,6 +92,7 @@ impl Tile<HelixSpine> for DecoderTile {
             },
             |res, producers| match res {
                 DCacheRead::Ok((new_bid, result)) => {
+                    self.record_decode_result(&result);
                     let sent_at = new_bid.tracking_timestamp().publish_t();
                     Self::handle_result(
                         &self.decoded,
@@ -96,6 +110,7 @@ impl Tile<HelixSpine> for DecoderTile {
                             "failed to find the payload for bid submission with id = {}",
                             new_bid.header.id
                         );
+                        self.record_decode_result(&Err(BuilderApiError::InternalError));
                         return send_submission_result(
                             producers,
                             &self.future_results,
@@ -111,12 +126,13 @@ impl Tile<HelixSpine> for DecoderTile {
                         &self.config,
                         &new_bid.submission_ref,
                         &new_bid.header,
-                        payload.as_slice(),
+                        &payload,
                         &mut self.buffer.borrow_mut(),
                         new_bid.trace,
                         sent_at,
                         new_bid.expected_pubkey(),
                     );
+                    self.record_decode_result(&result);
                     Self::handle_result(
                         &self.decoded,
                         &self.future_results,
@@ -131,6 +147,7 @@ impl Tile<HelixSpine> for DecoderTile {
                         "dcache read failed for bid submission with id {}",
                         new_bid.header.id
                     );
+                    self.record_decode_result(&Err(BuilderApiError::InternalError));
                     send_submission_result(
                         producers,
                         &self.future_results,
@@ -159,6 +176,7 @@ impl Tile<HelixSpine> for DecoderTile {
 }
 
 impl DecoderTile {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         cache: LocalCache,
         chain_info: ChainInfo,
@@ -166,6 +184,7 @@ impl DecoderTile {
         future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
         decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
         http_submissions: Arc<SharedVector<Bytes>>,
+        slot_events: Arc<SharedVector<SlotUpdate>>,
         core: usize,
     ) -> Self {
         Self {
@@ -177,6 +196,47 @@ impl DecoderTile {
             http_submissions,
             buffer: RefCell::new(Vec::with_capacity(MAX_PAYLOAD_LENGTH)),
             core,
+            slot_events,
+            bid_slot: 0,
+            stats: RefCell::new(DecodeStats::default()),
+        }
+    }
+
+    fn on_slot_msg(&mut self, msg: SlotMsg) {
+        let Some(ev) = self.slot_events.get(msg.ix) else { return };
+        let bid_slot = ev.bid_slot.as_u64();
+        if bid_slot <= self.bid_slot {
+            return;
+        }
+        self.report_slot_stats();
+        self.bid_slot = bid_slot;
+    }
+
+    fn report_slot_stats(&self) {
+        if self.bid_slot == 0 {
+            return;
+        }
+        let stats = std::mem::take(&mut *self.stats.borrow_mut());
+        let decode_errors: u32 = stats.decode_errors.values().sum();
+        let errors_by_category = stats.decode_errors;
+        info!(
+            bid_slot = self.bid_slot,
+            submissions_seen = stats.decoded_ok + decode_errors,
+            decoded_ok = stats.decoded_ok,
+            decode_errors,
+            ?errors_by_category,
+            "bid decoder slot stats"
+        );
+    }
+
+    fn record_decode_result(
+        &self,
+        result: &Result<(SubmissionData, tracing::Span), BuilderApiError>,
+    ) {
+        let mut stats = self.stats.borrow_mut();
+        match result {
+            Ok(_) => stats.decoded_ok += 1,
+            Err(e) => *stats.decode_errors.entry(error_category(e)).or_insert(0) += 1,
         }
     }
 
@@ -231,29 +291,10 @@ impl DecoderTile {
 
         trace!("sending to auctioneer");
 
-        let merging_data = if config.block_merging_config.is_enabled {
-            merging_data.and_then(|data| {
-                if let Submission::Full(ref signed_bid_submission) = submission {
-                    // TODO: split up mergeable order and submission processing to
-                    // avoid delaying the bid update
-                    match get_mergeable_orders(signed_bid_submission, &data) {
-                        Ok(orders) => Some(MergeableOrdersWithPref {
-                            allow_appending: data.allow_appending,
-                            orders,
-                            merge_orders: data.merge_orders,
-                        }),
-                        Err(err) => {
-                            tracing::error!(%err, "failed to process mergeable orders");
-                            None
-                        }
-                    }
-                } else {
-                    None
-                }
-            })
-        } else {
-            None
-        };
+        // Carried through raw (index-based, unexpanded) for `BlockMergingTile`, which
+        // resolves tx bytes and caches blob sidecars itself when forwarding to the merge
+        // builder — no need to do that work here on the submission hot path.
+        let merging_data = if config.block_merging_config.is_enabled { merging_data } else { None };
 
         let submission_data = SubmissionData {
             submission_ref: *submission_ref,
@@ -381,6 +422,24 @@ impl DecoderTile {
                 send_submission_result(producers, future_results, submission_ref, Err(e));
             }
         }
+    }
+}
+
+/// Coarse, low-cardinality bucket for a decode failure; several
+/// `BuilderApiError` variants carry per-request data unsuited to a metric key.
+fn error_category(err: &BuilderApiError) -> &'static str {
+    match err {
+        BuilderApiError::JsonDecodeError(_) => "json_decode",
+        BuilderApiError::SszDecode(_) => "ssz_decode",
+        BuilderApiError::IOError(_) => "io",
+        BuilderApiError::PayloadDecode(_) => "payload_decode",
+        BuilderApiError::BidValidation(_) => "bid_validation",
+        BuilderApiError::SigError(_) => "sig_error",
+        BuilderApiError::HydrationError(_) => "hydration",
+        BuilderApiError::UntrustedBuilderOnDehydratedPayload => "untrusted_builder",
+        BuilderApiError::InvalidBuilderPubkey(..) => "invalid_pubkey",
+        BuilderApiError::InternalError => "internal_error",
+        _ => "other",
     }
 }
 

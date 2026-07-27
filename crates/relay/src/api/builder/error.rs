@@ -4,8 +4,6 @@ use helix_database::error::DatabaseError;
 use helix_types::{BlockValidationError, BlsPublicKeyBytes, HydrationError, SigError};
 use http::StatusCode;
 
-use crate::auctioneer::OrderValidationError;
-
 #[derive(Debug, thiserror::Error)]
 pub enum BuilderApiError {
     #[error("json decode error: {0}")]
@@ -53,9 +51,6 @@ pub enum BuilderApiError {
     #[error("datastore error: {0}")]
     AuctioneerError(#[from] AuctioneerError),
 
-    #[error("could not find mergeable orders: {0}")]
-    MergeableOrdersNotFound(#[from] OrderValidationError),
-
     #[error("database error: {0}")]
     DatabaseError(#[from] DatabaseError),
 
@@ -92,7 +87,6 @@ impl BuilderApiError {
             BuilderApiError::HydrationError(_) |
             BuilderApiError::SigError(_) |
             BuilderApiError::SimOnNextSlot |
-            BuilderApiError::MergeableOrdersNotFound(_) |
             BuilderApiError::InvalidBuilderPubkey(_, _) |
             BuilderApiError::DeliveringPayload { .. } => StatusCode::BAD_REQUEST,
 

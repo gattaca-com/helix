@@ -68,6 +68,9 @@ struct BidSorterTelemetry {
     subs: u32,
     /// Internal bid processing time of the sorter
     subs_process_time: Duration,
+    /// Submissions rejected as stale (a newer version already recorded for
+    /// that builder on that fork). `subs == stale_subs + sum(fork.subs)`.
+    stale_subs: u32,
 }
 
 struct ForkState {
@@ -238,7 +241,7 @@ impl BidSorter {
                 let entry = entry.get_mut();
                 if entry.version >= new_bid.version {
                     trace!("bid is stale, ignore");
-                    // stale
+                    self.local_telemetry.stale_subs += 1;
                     return false;
                 } else {
                     *entry = new_bid;
@@ -313,6 +316,7 @@ impl BidSorter {
         let tel = std::mem::take(&mut self.local_telemetry);
 
         let avg_sub_process = avg_duration(tel.subs_process_time, tel.subs);
+        let accepted_subs: u32 = self.forks.values().map(|s| s.subs).sum();
         let fork_report: Vec<_> = self
             .forks
             .iter()
@@ -320,11 +324,13 @@ impl BidSorter {
             .collect();
 
         info!(
-            slot = self.curr_bid_slot,
+            bid_slot = self.curr_bid_slot,
             valid_subs = tel.subs,
+            accepted_subs,
+            stale_subs = tel.stale_subs,
             ?avg_sub_process,
             ?fork_report,
-            "bid sorter telemetry"
+            "bid sorter slot stats"
         )
     }
 }

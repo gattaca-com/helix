@@ -38,9 +38,9 @@ block_merging_config:
   is_enabled: false
   max_merged_bid_age_ms: 250
   # tcp:
-  #   builders:
-  #     - addr: "127.0.0.1:9876"
-  #       api_key: "00000000-0000-0000-0000-000000000001"
+  #   builder:
+  #     addr: "127.0.0.1:9876"
+  #     api_key: "00000000-0000-0000-0000-000000000001"
   #   relay_fee_recipient: "0x0000000000000000000000000000000000000000"
   #   multisend_contract: "0x0000000000000000000000000000000000000000"
   #   relay_bps: 2500

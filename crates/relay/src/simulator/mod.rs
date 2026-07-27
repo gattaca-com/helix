@@ -6,8 +6,7 @@ use helix_common::{
     simulator::BlockSimError,
 };
 use helix_types::{
-    BuilderInclusionResult, ExecutionPayload, ExecutionRequests, MergeableOrderWithOrigin,
-    MergedBlockTrace,
+    BlobWithMetadata, BuilderInclusionResult, ExecutionPayload, ExecutionRequests, MergedBlockTrace,
 };
 
 use crate::{SubmissionRef, simulator::tile::ValidationResult};
@@ -30,26 +29,6 @@ pub struct ValidationRequest {
     pub submission_ref: SubmissionRef,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct BlockMergeRequestRef<'a> {
-    /// The original payload value
-    pub original_value: U256,
-    pub proposer_fee_recipient: Address,
-    pub execution_payload: &'a ExecutionPayload,
-    pub parent_beacon_block_root: Option<B256>,
-    pub merging_data: &'a [MergeableOrderWithOrigin],
-    pub trace: MergedBlockTrace,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct MergeRequest {
-    pub bid_slot: u64,
-    /// The serialized request
-    pub request: serde_json::Value,
-    /// The block hash of the execution payload
-    pub block_hash: B256,
-}
-
 pub type MergeResult = (usize, Result<BlockMergeResponse, BlockSimError>);
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -57,8 +36,9 @@ pub struct BlockMergeResponse {
     pub base_block_hash: B256,
     pub execution_payload: ExecutionPayload,
     pub execution_requests: ExecutionRequests,
-    /// Versioned hashes of the appended blob transactions.
-    pub appended_blobs: Vec<B256>,
+    /// Blob sidecars for appended blob transactions, re-attached from `BlockMergingTile`'s
+    /// own cache of blobs seen in submissions this slot.
+    pub appended_blobs: Vec<BlobWithMetadata>,
     /// Total value for the proposer
     pub proposer_value: U256,
     pub builder_inclusions: HashMap<Address, BuilderInclusionResult>,
@@ -68,7 +48,6 @@ pub struct BlockMergeResponse {
 /// Large payload stored in `SharedVector` for auctioneer → sim tile transfer.
 pub enum SimRequest {
     Validate { req: Box<ValidationRequest>, fast_track: bool },
-    Merge(MergeRequest),
 }
 
 /// Large payload stored in `SharedVector` for sim tile → auctioneer transfer.
@@ -76,7 +55,6 @@ pub enum SimRequest {
 #[allow(clippy::large_enum_variant)]
 pub enum SimResult {
     Validate(ValidationResult),
-    Merge(MergeResult),
 }
 
 impl ValidationRequest {

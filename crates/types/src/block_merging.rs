@@ -1,6 +1,6 @@
-use std::{collections::HashMap, hash::Hash};
+use std::collections::HashMap;
 
-use alloy_primitives::{Address, B256, Bytes, U256};
+use alloy_primitives::{Address, B256, U256};
 use lh_test_random::TestRandom;
 use lh_types::test_utils::TestRandom;
 use rand::Rng;
@@ -9,7 +9,7 @@ use smallvec::SmallVec;
 use ssz_derive::{Decode, Encode};
 
 use crate::{
-    Blob, SignedBidSubmission, Transaction,
+    Blob, SignedBidSubmission,
     fields::{KzgCommitment, KzgProof},
 };
 
@@ -103,102 +103,11 @@ impl BlockMergingData {
     }
 }
 
-/// Represents one or more transactions to be appended into a block atomically.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Hash)]
-#[serde(untagged)]
-pub enum MergeableOrder {
-    Tx(MergeableTransaction),
-    Bundle(MergeableBundle),
-}
-
-impl From<MergeableTransaction> for MergeableOrder {
-    fn from(tx: MergeableTransaction) -> Self {
-        MergeableOrder::Tx(tx)
-    }
-}
-
-impl From<MergeableBundle> for MergeableOrder {
-    fn from(bundle: MergeableBundle) -> Self {
-        MergeableOrder::Bundle(bundle)
-    }
-}
-
-impl From<Transaction> for MergeableOrder {
-    fn from(tx: Transaction) -> Self {
-        MergeableOrder::Tx(MergeableTransaction { transaction: tx.0.into(), can_revert: true })
-    }
-}
-
-/// Represents a single transaction to be appended into a block atomically.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
-pub struct MergeableTransaction {
-    /// Transaction that can be merged into the block.
-    pub transaction: Bytes,
-    /// If the transaction may revert.
-    pub can_revert: bool,
-}
-
-/// Represents a bundle of transactions to be appended into a block atomically.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
-pub struct MergeableBundle {
-    /// List of transactions that can be merged into the block.
-    pub transactions: Vec<Bytes>,
-    /// Txs that may revert.
-    /// Indices are for the [transactions](Self::transactions) array.
-    pub reverting_txs: TxIndices,
-    /// Txs that are allowed to be omitted, but not revert.
-    /// Indices are for the [transactions](Self::transactions) array.
-    pub dropping_txs: TxIndices,
-}
-
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct BlobWithMetadata {
     pub commitment: KzgCommitment,
     pub proofs: Vec<KzgProof>,
     pub blob: Blob,
-}
-
-#[derive(Clone, Debug)]
-pub struct MergeableOrdersWithPref {
-    pub allow_appending: bool,
-    pub orders: MergeableOrders,
-    /// Raw index-based refs into the submission's transactions, as submitted.
-    pub merge_orders: Vec<Order>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct MergeableOrders {
-    /// Address of the builder that submitted these orders.
-    pub origin: Address,
-    /// List of mergeable orders.
-    pub orders: Vec<MergeableOrder>,
-    /// Blobs used by the orders, keyed by their versioned hash.
-    pub blobs: HashMap<B256, BlobWithMetadata>,
-}
-
-impl MergeableOrders {
-    pub fn new(
-        origin: Address,
-        orders: Vec<MergeableOrder>,
-        blobs: HashMap<B256, BlobWithMetadata>,
-    ) -> Self {
-        Self { origin, orders, blobs }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct MergeableOrderWithOrigin {
-    /// Address of the builder that submitted this order.
-    pub origin: Address,
-    /// Mergeable order.
-    #[serde(flatten)]
-    pub order: MergeableOrder,
-}
-
-impl MergeableOrderWithOrigin {
-    pub fn new(origin: Address, order: MergeableOrder) -> Self {
-        Self { origin, order }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

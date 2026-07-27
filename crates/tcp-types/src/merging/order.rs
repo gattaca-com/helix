@@ -9,6 +9,19 @@ pub const MAX_BUNDLE_TXS: usize = 32;
 pub const MAX_ORDERS_PER_BLOCK: usize = 1024;
 pub const MAX_BLOCK_TXS: usize = u16::MAX as usize;
 
+/// Length of a tx-hash reference in `MergeableBlockV1::execution_payload`'s
+/// transaction list — `keccak256(rlp)` of a tx already sent once on this
+/// connection. Unambiguous against a real tx: the shortest legal signed tx
+/// (list prefix + nonce/gas/value/`to`/empty data + v/r/s) is well over 32
+/// bytes, so any entry of exactly this length is a reference, never a tx.
+pub const TX_HASH_REF_LEN: usize = 32;
+
+/// True if `raw_tx` is a tx-hash reference rather than a raw transaction. See
+/// [`TX_HASH_REF_LEN`].
+pub fn is_tx_hash_ref(raw_tx: &[u8]) -> bool {
+    raw_tx.len() == TX_HASH_REF_LEN
+}
+
 /// Identity of a mergeable order, derived by both sides from a forwarded
 /// `MergeableBlockV1`; traceable to the contributing builder and the block
 /// the order came from. Not itself a wire type — the canonical id spec.

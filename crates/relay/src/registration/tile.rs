@@ -7,8 +7,22 @@ use flux::{
 use flux_profiler::timed;
 use helix_common::{chain_info::ChainInfo, utils::utcnow_ns};
 use helix_types::SignedValidatorRegistration;
+use tracing::info;
 
 use crate::{HelixSpine, api::proposer::ProposerApiError, registration::handle::RegWorkerJob};
+
+/// Registrations aren't slot-scoped (they arrive on their own schedule, not
+/// tied to `bid_slot`), so this reports on the same wall-clock cadence as the
+/// rest of `Telemetry` rather than on a slot boundary.
+/// `registrations_seen == valid + invalid`; `batches_seen == completed +
+/// aborted`.
+#[derive(Default)]
+struct RegStats {
+    valid: u32,
+    invalid: u32,
+    completed: u32,
+    aborted: u32,
+}
 
 struct Telemetry {
     work: Duration,
@@ -16,6 +30,7 @@ struct Telemetry {
     next_record: Instant,
     loop_start: Instant,
     loop_worked: Duration,
+    stats: RegStats,
 }
 
 impl Telemetry {
@@ -48,6 +63,18 @@ impl Telemetry {
 
             WORKER_UTIL.with_label_values(&[id]).observe(util);
             WORKER_QUEUE_LEN.with_label_values(&[queue_type]).observe(rx.len() as f64);
+
+            let stats = std::mem::take(&mut self.stats);
+            info!(
+                id,
+                registrations_seen = stats.valid + stats.invalid,
+                valid = stats.valid,
+                invalid = stats.invalid,
+                batches_seen = stats.completed + stats.aborted,
+                completed = stats.completed,
+                aborted = stats.aborted,
+                "registration tile stats"
+            );
         }
     }
 }
@@ -62,6 +89,7 @@ impl Default for Telemetry {
                 Duration::from_millis(utcnow_ns() % 10 * 5),
             loop_start: Instant::now(),
             loop_worked: Default::default(),
+            stats: RegStats::default(),
         }
     }
 }
@@ -90,6 +118,11 @@ impl RegistrationTile {
         let start_task = Instant::now();
         let completed = self.process_reg_task(task);
         let tag = if completed { "RegistrationBatch" } else { "RegistrationBatch_Aborted" };
+        if completed {
+            self.tel.stats.completed += 1;
+        } else {
+            self.tel.stats.aborted += 1;
+        }
 
         let dur = start_task.elapsed();
         self.tel.loop_worked += dur;
@@ -100,7 +133,7 @@ impl RegistrationTile {
 
     /// Returns whether the task completed (false = caller dropped the result channel).
     #[timed]
-    fn process_reg_task(&self, RegWorkerJob { regs, range, res_tx }: RegWorkerJob) -> bool {
+    fn process_reg_task(&mut self, RegWorkerJob { regs, range, res_tx }: RegWorkerJob) -> bool {
         use helix_common::metrics::{WORKER_TASK_COUNT, WORKER_TASK_LATENCY_US};
 
         let mut res = Vec::with_capacity(range.len());
@@ -112,6 +145,11 @@ impl RegistrationTile {
 
             let start = Instant::now();
             let valid = validate_registration(&self.chain_info, &regs[i]);
+            if valid.is_ok() {
+                self.tel.stats.valid += 1;
+            } else {
+                self.tel.stats.invalid += 1;
+            }
             res.push((i, valid.is_ok()));
 
             WORKER_TASK_COUNT.with_label_values(&["Registration", &self.id]).inc();

@@ -11,7 +11,7 @@ pub mod relay_to_builder;
 
 use bitflags::bitflags;
 
-pub const MERGING_PROTOCOL_VERSION: u16 = 1;
+pub const MERGING_PROTOCOL_VERSION: u16 = 2;
 pub const MERGING_HEADER_SIZE: usize = 2;
 
 /// Message-type IDs. `0x00-0x0f` control, `0x10-0x3f` relay->builder,

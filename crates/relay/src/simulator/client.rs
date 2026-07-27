@@ -11,9 +11,7 @@ use reqwest::{
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use ssz::Encode;
-use tracing::{debug, error};
-
-use crate::simulator::{BlockMergeResponse, MergeRequest};
+use tracing::error;
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct JsonRpcError {
@@ -154,39 +152,6 @@ impl SimulatorClient {
         res.json().await
     }
 
-    pub fn merge_request_builder(&self) -> RequestBuilder {
-        self.client.post(&self.config.url)
-    }
-
-    pub async fn do_merge_request(
-        request: &MergeRequest,
-        to_send: RequestBuilder,
-    ) -> Result<BlockMergeResponse, BlockSimError> {
-        let rpc_payload = json!({
-            "jsonrpc": "2.0",
-            "id": "1",
-            "method": "relay_mergeBlockV1",
-            "params": [request.request]
-        });
-
-        let to_send = to_send.json(&rpc_payload);
-
-        let res = match Self::rpc_request::<RpcResult<BlockMergeResponse>>(to_send).await {
-            Ok(res) => res,
-            Err(err) => {
-                error!(%err, "failed rpc simulation");
-                return Err(BlockSimError::RpcError);
-            }
-        };
-
-        debug!(?res, "received merge response");
-
-        match res {
-            RpcResult::Err { error } => Err(BlockSimError::BlockValidationFailed(error.message)),
-            RpcResult::Ok { result } => Ok(result),
-        }
-    }
-
     pub async fn is_synced(&self) -> Result<bool, reqwest::Error> {
         let payload = json!({
             "jsonrpc": "2.0",
@@ -220,7 +185,6 @@ mod test {
         let sim_client = super::SimulatorClient::new(reqwest::Client::new(), SimulatorConfig {
             url: "http://54.175.81.132:8545".into(),
             namespace: "relay".into(),
-            is_merging_simulator: false,
             max_concurrent_tasks: 1,
             ssz_url: None,
         });
