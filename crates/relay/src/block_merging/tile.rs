@@ -32,6 +32,7 @@ use crate::{
     block_merging::{
         append_frame, merged_block_to_response, order_ref_hash, order_to_ref,
         submission_blob_sidecars,
+        unbundling::{OrderTxs, find_unbundled_txs},
     },
     housekeeper::SlotUpdate,
     simulator::BlockMergeResponse,
@@ -100,6 +101,9 @@ struct SlotState {
     mergeable_ixs: Vec<usize>,
     /// base_block_hash -> best proposer_value across all builders.
     best_merged: FxHashMap<B256, U256>,
+    /// Orders actually sent to the merge builder this slot, for the
+    /// unbundling check on incoming merged blocks.
+    order_txs: Vec<OrderTxs>,
 }
 
 /// Per-slot counters, logged and reset on slot transition.
@@ -125,6 +129,8 @@ struct SlotStats {
     merged_regressed: usize,
     /// Merged blocks dropped because an appended blob's sidecar wasn't in our cache.
     merged_blob_missing: usize,
+    /// Merged blocks dropped because the builder broke an order's atomicity.
+    merged_unbundled: usize,
     /// TopBidUpdate messages received for the current bid slot.
     top_bid_updates: usize,
     /// ActivateBaseBlockV1 frames sent.
@@ -157,6 +163,9 @@ pub struct BlockMergingTile {
     /// versioned hash, so an appended blob tx can be re-attached regardless of which
     /// builder's submission it originated from. Cleared on slot transition.
     blob_sidecars: FxHashMap<B256, BlobWithMetadata>,
+    /// Memoizes keccak256(tx bytes), shared by the outgoing per-submission
+    /// hashing and the incoming merged-block check. Cleared on slot transition.
+    tx_hash_cache: FxHashMap<Bytes, B256>,
 
     redial: Repeater,
     ping: Repeater,
@@ -174,6 +183,9 @@ pub struct BlockMergingTile {
     pongs: Vec<(Token, u64)>,
     merged_ixs: Vec<usize>,
     encode_buf: Vec<u8>,
+    // Scratch space for `find_unbundled_txs`, reused across calls.
+    unbundled_scratch_bundled: Vec<bool>,
+    unbundled_scratch_covered: Vec<bool>,
 }
 
 impl Tile<HelixSpine> for BlockMergingTile {
@@ -264,6 +276,7 @@ impl BlockMergingTile {
             chain_info,
             hydration_cache: HydrationCache::new(),
             blob_sidecars: FxHashMap::default(),
+            tx_hash_cache: FxHashMap::default(),
             redial: Repeater::every(Duration::from_secs(REDIAL_INTERVAL_S)),
             ping: Repeater::every(Duration::from_secs(PING_INTERVAL_S)),
             ping_nonce: 0,
@@ -276,6 +289,8 @@ impl BlockMergingTile {
             pongs: Vec::new(),
             merged_ixs: Vec::new(),
             encode_buf: Vec::new(),
+            unbundled_scratch_bundled: Vec::new(),
+            unbundled_scratch_covered: Vec::new(),
         }
     }
 
@@ -343,6 +358,9 @@ impl BlockMergingTile {
             merged_ixs,
             merged_blocks,
             blob_sidecars,
+            tx_hash_cache,
+            unbundled_scratch_bundled,
+            unbundled_scratch_covered,
             ..
         } = self;
 
@@ -448,6 +466,31 @@ impl BlockMergingTile {
                             );
                             return;
                         };
+                        let final_txs: Vec<B256> = response
+                            .execution_payload
+                            .transactions
+                            .iter()
+                            .map(|tx| {
+                                *tx_hash_cache
+                                    .entry(tx.0.clone())
+                                    .or_insert_with(|| keccak256(tx.as_ref()))
+                            })
+                            .collect();
+                        let unbundled = find_unbundled_txs(
+                            &final_txs,
+                            &slot.order_txs,
+                            unbundled_scratch_bundled,
+                            unbundled_scratch_covered,
+                        );
+                        if !unbundled.is_empty() {
+                            stats.merged_unbundled += 1;
+                            warn!(
+                                ?token,
+                                count = unbundled.len(),
+                                "merge builder unbundled an order, dropping merged block"
+                            );
+                            return;
+                        }
                         stats.merged_blocks += 1;
                         let ix = merged_blocks.push(response);
                         merged_ixs.push(ix);
@@ -515,6 +558,7 @@ impl BlockMergingTile {
             self.conn.reset_slot();
             self.hydration_cache.clear();
             self.blob_sidecars.clear();
+            self.tx_hash_cache.clear();
             // sole producer; consumed indices are stale after the transition
             self.merged_blocks.clear();
         }
@@ -582,6 +626,7 @@ impl BlockMergingTile {
             merged_stale = stats.merged_stale,
             merged_regressed = stats.merged_regressed,
             merged_blob_missing = stats.merged_blob_missing,
+            merged_unbundled = stats.merged_unbundled,
             appendable_blocks = self.slot.appendable.len(),
             hydration_txs = self.hydration_cache.tx_count(),
             hydration_builders = self.hydration_cache.builder_count(),
@@ -696,7 +741,9 @@ impl BlockMergingTile {
             .payload_inner
             .transactions
             .iter()
-            .map(|tx| keccak256(tx.as_ref()))
+            .map(|tx| {
+                *self.tx_hash_cache.entry(tx.clone()).or_insert_with(|| keccak256(tx.as_ref()))
+            })
             .collect();
 
         // Dehydrate relative to this connection: a tx already sent whole
@@ -757,6 +804,9 @@ impl BlockMergingTile {
             return;
         }
         self.conn.orders_sent.extend(order_hashes);
+        self.slot
+            .order_txs
+            .extend(msg.merge_orders.iter().map(|o| OrderTxs::from_ref(o, &tx_hashes)));
         if msg.allow_appending {
             self.conn.forwarded.insert(block_hash);
         }
