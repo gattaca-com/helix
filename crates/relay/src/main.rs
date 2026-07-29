@@ -26,6 +26,7 @@ use helix_common::{
     task::{block_on, init_runtime},
     utils::{init_panic_hook, init_tracing_log},
 };
+use helix_operator::spawn_operator_connection;
 use helix_relay::{
     Api, Auctioneer, AuctioneerHandle, BidSorter, BidSubmissionTcpListener, BlockMergeResponse,
     BlockMergingTile, DataGatherer, DbHandle, DecoderTile, DefaultBidAdjustor,
@@ -175,6 +176,21 @@ async fn run(
         HelixSpine::new(None)
     };
 
+    let alert_manager = Arc::new(AlertManager::from_relay_config(&config));
+    let failsafe_triggered = Arc::new(AtomicBool::new(false));
+
+    let operator_api = config.operator_config.as_ref().map(|operator_config| {
+        spawn_operator_connection(
+            operator_config.clone(),
+            known_validators_loaded.clone(),
+            local_cache.clone(),
+            db_handle.clone(),
+            db.clone(),
+            failsafe_triggered.clone(),
+            alert_manager.clone(),
+        )
+    });
+
     spine.start(None, Some(termination_grace_period), |spine| {
         start_admin_service(local_cache.clone(), expect_env_var(ADMIN_TOKEN_ENV_VAR));
 
@@ -192,7 +208,6 @@ async fn run(
         let decoded = Arc::new(SharedVector::<SubmissionDataWithSpan>::with_capacity(
             MAX_SUBMISSIONS_PER_SLOT,
         ));
-        let alert_manager = Arc::new(AlertManager::from_relay_config(&config));
 
         let bid_producer =
             spine.spine.standalone_dcache_producer_for(TileName::from_str_truncate("Api"));
@@ -216,6 +231,7 @@ async fn run(
             http_submissions.clone(),
             web_socket_send,
             alert_manager.clone(),
+            operator_api.clone(),
         );
 
         if config.website.enabled {
@@ -300,7 +316,9 @@ async fn run(
                 sim_results.clone(),
                 decoded.clone(),
                 chain_info.as_ref().clone(),
+                failsafe_triggered,
             );
+
             let sim_core = config.cores.simulator;
             attach_tile(sim_tile, spine, TileConfig::new(sim_core, ThreadPriority::OSDefault));
 
@@ -344,6 +362,7 @@ async fn run(
                 slot_events,
                 merged_blocks,
                 alert_manager.clone(),
+                operator_api.clone(),
             );
             attach_tile(
                 auctioneer,

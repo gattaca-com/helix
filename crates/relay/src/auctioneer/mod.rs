@@ -30,6 +30,7 @@ use helix_common::{
     record_submission_step,
 };
 use helix_database::handle::DbHandle;
+use helix_operator::OperatorPubSub;
 use helix_types::Slot;
 use rustc_hash::FxHashMap;
 use tracing::{debug, error, info, trace, warn};
@@ -90,6 +91,7 @@ impl<B: BidAdjustor> Auctioneer<B> {
         slot_events: Arc<SharedVector<SlotUpdate>>,
         merged_blocks: Arc<SharedVector<BlockMergeResponse>>,
         alert_manager: Arc<AlertManager>,
+        operator_api: Option<Arc<OperatorPubSub>>,
     ) -> Self {
         let ctx = Context::new(
             chain_info,
@@ -105,6 +107,7 @@ impl<B: BidAdjustor> Auctioneer<B> {
             future_results,
             auctioneer_handle,
             alert_manager,
+            operator_api,
         );
         Self {
             ctx,
@@ -620,7 +623,7 @@ impl State {
                 State::Slot { .. } | State::Sorting(_) | State::Broadcasting { .. },
                 Event::BuilderDemotion { slot, builder_pubkey, block_hash, reason },
             ) => {
-                ctx.handle_builder_demotion(slot, builder_pubkey, block_hash, reason);
+                ctx.handle_builder_demotion(slot, builder_pubkey, block_hash, reason, false);
             }
         }
     }

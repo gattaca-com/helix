@@ -3,15 +3,16 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use alloy_primitives::B256;
+use alloy_primitives::{B256, U256};
 use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
 use dashmap::{DashMap, DashSet};
 use helix_types::{BlsPublicKeyBytes, CryptoError, MergedBlock, SignedValidatorRegistration};
+use libp2p::identity::PublicKey;
 use parking_lot::RwLock;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
     BuilderConfig, BuilderInfo, SignedValidatorRegistrationEntry,
@@ -90,6 +91,7 @@ pub struct LocalCache {
     // TODO: this should be an ArcSwap
     pub inclusion_list: Arc<RwLock<Option<InclusionListWithKey>>>,
     builder_info_cache: Arc<DashMap<BlsPublicKeyBytes, BuilderInfo>>,
+    operator_builder_collateral: Arc<DashMap<BlsPublicKeyBytes, FxHashMap<PublicKey, u128>>>,
     /// Api key -> builder pubkey
     pub api_key_cache: Arc<DashMap<String, Vec<BlsPublicKeyBytes>>>,
     primev_proposers: Arc<DashSet<BlsPublicKeyBytes>>,
@@ -108,6 +110,8 @@ impl LocalCache {
     pub fn new() -> Self {
         let builder_info_cache =
             Arc::new(DashMap::with_capacity(ESTIMATED_BUILDER_INFOS_UPPER_BOUND));
+        let operator_builder_collateral =
+            Arc::new(DashMap::with_capacity(ESTIMATED_BUILDER_INFOS_UPPER_BOUND));
         let api_key_cache = Arc::new(DashMap::with_capacity(ESTIMATED_BUILDER_INFOS_UPPER_BOUND));
         let primev_proposers = Arc::new(DashSet::with_capacity(MAX_PRIMEV_PROPOSERS));
         let kill_switch = Arc::new(AtomicBool::new(false));
@@ -125,6 +129,7 @@ impl LocalCache {
         Self {
             inclusion_list: Default::default(),
             builder_info_cache,
+            operator_builder_collateral,
             api_key_cache,
             primev_proposers,
             kill_switch,
@@ -151,7 +156,23 @@ impl Default for LocalCache {
 
 impl LocalCache {
     pub fn get_builder_info(&self, builder_pub_key: &BlsPublicKeyBytes) -> Option<BuilderInfo> {
+        let mut info = self.builder_info_cache.get(builder_pub_key)?.clone();
+        let operator_collateral = self.operator_collateral(builder_pub_key);
+        info.collateral += operator_collateral;
+        Some(info)
+    }
+
+    pub fn get_builder_info_local_collateral_only(
+        &self,
+        builder_pub_key: &BlsPublicKeyBytes,
+    ) -> Option<BuilderInfo> {
         Some(self.builder_info_cache.get(builder_pub_key)?.clone())
+    }
+
+    pub fn all_builder_infos_local_collateral_only(
+        &self,
+    ) -> impl Iterator<Item = (BlsPublicKeyBytes, BuilderInfo)> {
+        self.builder_info_cache.iter().map(|mref| (mref.key().clone(), mref.value().clone()))
     }
 
     pub fn contains_api_key(&self, api_key: &str) -> bool {
@@ -320,6 +341,33 @@ impl LocalCache {
     pub fn clear_merged_blocks(&self) {
         self.merged_blocks.clear();
         CACHE_SIZE.with_label_values(&["merged_blocks"]).set(0.0);
+    }
+
+    pub fn update_operator_collateral(
+        &self,
+        builder_pub_key: &BlsPublicKeyBytes,
+        operator: &PublicKey,
+        collateral: u128,
+    ) {
+        self.operator_builder_collateral
+            .entry(*builder_pub_key)
+            .and_modify(|operators| {
+                operators.insert(operator.clone(), collateral);
+            })
+            .or_insert_with(|| {
+                let mut operators = FxHashMap::default();
+                operators.insert(operator.clone(), collateral);
+                operators
+            });
+    }
+
+    fn operator_collateral(&self, builder_pub_key: &BlsPublicKeyBytes) -> U256 {
+        let mut operator_collateral = U256::ZERO;
+        if let Some(operators) = self.operator_builder_collateral.get(builder_pub_key) {
+            let collateral: u128 = operators.values().sum();
+            operator_collateral = U256::from(collateral);
+        }
+        operator_collateral
     }
 }
 

@@ -7,8 +7,11 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+alloy-primitives.workspace = true
 async-channel.workspace = true
 ethereum_ssz.workspace = true
+helix-common.workspace = true
+helix-database.workspace = true
 helix-types.workspace = true
 hex.workspace = true
 libp2p.workspace = true

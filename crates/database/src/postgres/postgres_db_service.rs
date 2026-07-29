@@ -27,7 +27,7 @@ use helix_common::{
     metrics::{CACHE_SIZE, DbMetricRecord},
     utils::{alert_discord, utcnow_ms},
 };
-use helix_types::{BlsPublicKeyBytes, MergedBlock, SignedBidSubmission, Slot};
+use helix_types::{BlsPublicKeyBytes, Demotion, MergedBlock, SignedBidSubmission, Slot};
 use rustc_hash::FxHashSet;
 use tokio_postgres::{NoTls, types::ToSql};
 use tracing::{error, info, instrument, warn};
@@ -37,7 +37,10 @@ use crate::{
     postgres::{
         postgres_db_filters::PgBidFilters,
         postgres_db_init::run_migrations_async,
-        postgres_db_row_parsing::{parse_bytes_to_pubkey_bytes, parse_row, parse_rows},
+        postgres_db_row_parsing::{
+            parse_bytes_to_hash, parse_bytes_to_pubkey_bytes, parse_i32_to_u64, parse_i64_to_u64,
+            parse_row, parse_rows,
+        },
         postgres_db_u256_parsing::PostgresNumeric,
     },
     types::{
@@ -1823,6 +1826,51 @@ impl PostgresDatabaseService {
 
         record.record_success();
         parse_rows(rows)
+    }
+
+    #[instrument(skip_all)]
+    pub async fn load_builder_demotions(&self) -> Result<Vec<Demotion>, DatabaseError> {
+        let mut record = DbMetricRecord::new("load_builder_demotions");
+
+        let rows = self
+            .high_priority_pool
+            .get()
+            .await?
+            .query(
+                "
+                    SELECT DISTINCT ON (demotions.public_key)
+                        demotions.public_key,
+                        demotions.block_hash,
+                        demotions.demotion_time,
+                        demotions.reason,
+                        demotions.slot_number
+                    FROM demotions
+                    INNER JOIN builder_info
+                    ON demotions.public_key = builder_info.public_key
+                    WHERE builder_info.is_optimistic = FALSE
+                    ORDER BY
+                        demotions.public_key,
+                        demotions.demotion_time DESC
+                ",
+                &[],
+            )
+            .await?;
+
+        let demotions = rows
+            .iter()
+            .map(|row| {
+                Ok(Demotion {
+                    ts_ms: parse_i64_to_u64(row.get::<_, i64>("demotion_time"))?,
+                    slot: parse_i32_to_u64(row.get::<_, i32>("slot_number"))?,
+                    builder_pubkey: parse_bytes_to_pubkey_bytes(row.get::<_, &[u8]>("public_key"))?,
+                    block_hash: parse_bytes_to_hash(row.get::<_, &[u8]>("block_hash"))?,
+                    reason_msg: row.get::<_, &str>("reason").as_bytes().to_vec(),
+                })
+            })
+            .collect::<Result<Vec<_>, DatabaseError>>()?;
+
+        record.record_success();
+        Ok(demotions)
     }
 
     #[instrument(skip_all)]

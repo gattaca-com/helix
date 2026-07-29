@@ -17,6 +17,7 @@ use helix_data_api::{
     BidsCache, BidsCacheV2, DataApi, DeliveredPayloadsCache, DeliveredPayloadsCacheV2,
     SelectiveExpiry,
 };
+use helix_operator::OperatorPubSub;
 use moka::sync::Cache;
 use tracing::{error, info};
 
@@ -53,6 +54,7 @@ pub fn start_api_service<A: Api>(
     http_submissions: Arc<SharedVector<Bytes>>,
     web_socket_connections: Sender<(RawWebSocket, TopBidPrecision)>,
     alert_manager: Arc<AlertManager>,
+    operator_api: Option<Arc<OperatorPubSub>>,
 ) {
     tokio::spawn(run_api_service::<A>(
         config.clone(),
@@ -74,6 +76,7 @@ pub fn start_api_service<A: Api>(
         http_submissions,
         web_socket_connections,
         alert_manager,
+        operator_api,
     ));
 }
 
@@ -97,6 +100,7 @@ pub async fn run_api_service<A: Api>(
     http_submissions: Arc<SharedVector<Bytes>>,
     web_socket_connections: Sender<(RawWebSocket, TopBidPrecision)>,
     alert_manager: Arc<AlertManager>,
+    operator_api: Option<Arc<OperatorPubSub>>,
 ) {
     let gossiper = Arc::new(
         GrpcGossiperClientManager::new(config.relays.iter().map(|cfg| cfg.url.clone()).collect())
@@ -120,6 +124,7 @@ pub async fn run_api_service<A: Api>(
         future_results,
         http_submissions,
         web_socket_connections,
+        operator_api,
     );
     let builder_api = Arc::new(builder_api);
 

@@ -8,7 +8,7 @@ use std::{
 use alloy_primitives::Address;
 use clap::Parser;
 use eyre::ensure;
-use helix_types::{BlsKeypair, BlsPublicKey, BlsPublicKeyBytes, BlsSecretKey};
+use helix_types::{BlsKeypair, BlsPublicKey, BlsPublicKeyBytes, BlsSecretKey, Operator};
 use reqwest::Url;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use teloxide::types::ChatId;
@@ -72,6 +72,8 @@ pub struct RelayConfig {
     pub clickhouse: Option<ClickhouseConfig>,
     #[serde(default)]
     pub enable_flux_profiler: bool,
+    #[serde(default)]
+    pub operator_config: Option<OperatorConfig>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -124,6 +126,7 @@ impl RelayConfig {
             snapshot_dir: None,
             clickhouse: None,
             enable_flux_profiler: false,
+            operator_config: None,
         }
     }
 }
@@ -670,6 +673,12 @@ pub struct S3Config {
 pub struct InclusionListConfig {
     pub node_url: Url,
     pub relay_address: Address,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct OperatorConfig {
+    pub quic_port: u16,
+    pub operators: Vec<Operator>,
 }
 
 #[cfg(test)]

@@ -13,14 +13,18 @@ use flux_profiler::timed;
 use flux_utils::SharedVector;
 use helix_common::{
     BuilderInfo, RelayConfig,
-    alerts::AlertManager,
+    alerts::{AlertManager, format_demotion_alert},
     chain_info::ChainInfo,
     local_cache::LocalCache,
     metrics::{CACHE_SIZE, SimulatorMetrics},
     spawn_tracked,
+    utils::utcnow_ms,
 };
 use helix_database::handle::DbHandle;
-use helix_types::{BlsPublicKeyBytes, HydrationCache, Slot, SubmissionVersion};
+use helix_operator::OperatorPubSub;
+use helix_types::{
+    BlsPublicKeyBytes, Demotion, HydrationCache, OperatorMessage, Slot, SubmissionVersion,
+};
 use rustc_hash::FxHashMap;
 use tracing::{debug, info, warn};
 
@@ -70,6 +74,7 @@ pub struct Context<B: BidAdjustor> {
     pub accept_optimistic: Arc<AtomicBool>,
     pub failsafe_triggered: Arc<AtomicBool>,
     pub alert_manager: Arc<AlertManager>,
+    pub operator_api: Option<Arc<OperatorPubSub>>,
 }
 
 const EXPECTED_PAYLOADS_PER_SLOT: usize = 5000;
@@ -92,6 +97,7 @@ impl<B: BidAdjustor> Context<B> {
         future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
         auctioneer_handle: AuctioneerHandle,
         alert_manager: Arc<AlertManager>,
+        operator_api: Option<Arc<OperatorPubSub>>,
     ) -> Self {
         let unknown_builder_info = BuilderInfo {
             collateral: U256::ZERO,
@@ -136,6 +142,7 @@ impl<B: BidAdjustor> Context<B> {
             accept_optimistic,
             failsafe_triggered,
             alert_manager,
+            operator_api,
         }
     }
 
@@ -179,28 +186,16 @@ impl<B: BidAdjustor> Context<B> {
                                 self.cache.adjustments_enabled.clone(),
                             );
                         }
-                    } else if self.cache.demote_builder(&builder) {
-                        warn!(%builder, %block_hash, %err, "Block simulation resulted in an error. Demoting builder...");
-
-                        SimulatorMetrics::demotion_count();
-
+                    } else {
                         let reason = err.to_string();
                         let bid_slot = bid.slot;
-                        let failsafe_triggered = self.failsafe_triggered.clone();
-
-                        self.db.db_demote_builder(
-                            bid_slot,
+                        self.handle_builder_demotion(
+                            bid_slot.into(),
                             builder,
                             block_hash,
                             reason,
-                            failsafe_triggered,
-                            &self.alert_manager,
-                            &self.config.website.network_name,
-                            &self.config.postgres.region_name,
-                            self.builder_info(&builder).builder_id(),
+                            true,
                         );
-                    } else {
-                        warn!(%err, %builder, %block_hash, "builder already demoted, skipping demotion");
                     }
                 }
             } else if is_adjusted {
@@ -317,9 +312,15 @@ impl<B: BidAdjustor> Context<B> {
         builder_pubkey: BlsPublicKeyBytes,
         block_hash: B256,
         reason: String,
+        from_simulation: bool,
     ) {
         if self.cache.demote_builder(&builder_pubkey) {
-            warn!(%builder_pubkey, %block_hash, "builder demoted due to block validation failure");
+            if from_simulation {
+                warn!(%builder_pubkey, %block_hash, reason, "Block simulation resulted in an error. Demoting builder...");
+                SimulatorMetrics::demotion_count();
+            } else {
+                warn!(%builder_pubkey, %block_hash, "builder demoted due to block validation failure");
+            }
 
             let db = self.db.clone();
             let failsafe = self.failsafe_triggered.clone();
@@ -333,19 +334,38 @@ impl<B: BidAdjustor> Context<B> {
                 .and_then(|i| i.builder_id)
                 .unwrap_or_default();
 
-            spawn_tracked!(async move {
-                db.db_demote_builder(
-                    slot_u64,
+            if let Some(operator_api) = self.operator_api.as_ref()
+                && let Err(e) = operator_api.try_send(OperatorMessage::Demotion(Demotion {
+                    ts_ms: utcnow_ms(),
+                    slot: slot_u64,
                     builder_pubkey,
                     block_hash,
-                    reason,
-                    failsafe,
-                    &alert_manager,
-                    &network,
-                    &region,
-                    &builder_id,
-                )
+                    reason_msg: reason.as_bytes().to_vec(),
+                })) {
+                    tracing::error!(
+                        ?e,
+                        "failed to send operator demotion message for {:?}",
+                        builder_pubkey
+                    );
+                }
+
+            let r = reason.clone();
+            spawn_tracked!(async move {
+                db.db_demote_builder(slot_u64, builder_pubkey, block_hash, r, failsafe)
             });
+
+            let token = self.alert_manager.generate_token(builder_pubkey);
+            let message = format_demotion_alert(
+                slot_u64,
+                &network,
+                &region,
+                &builder_pubkey,
+                &builder_id,
+                &block_hash,
+                &reason,
+            );
+            debug!(%message, "sending demotion alert");
+            alert_manager.send_demotion(&message, &token, &builder_id);
         } else {
             warn!(%reason, %builder_pubkey, %block_hash, "builder already demoted, skipping demotion");
         }

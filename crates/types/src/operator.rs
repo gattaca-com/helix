@@ -1,7 +1,9 @@
 use alloy_primitives::B256;
+use libp2p::{Multiaddr, identity::PublicKey};
+use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
 
-use crate::BlsPublicKeyBytes;
+use crate::{BlsPublicKeyBytes, utils};
 
 #[derive(Debug, Decode, Encode)]
 #[ssz(enum_behaviour = "union")]
@@ -50,4 +52,15 @@ pub struct BuilderCollateral {
     /// The TOTAL builder collateral held by the operator. Each operator
     /// will need to track amounts held at other operators and sum.
     pub collateral_wei: u128,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Operator {
+    pub name: String,
+    #[serde(
+        serialize_with = "utils::serialize_pubkey",
+        deserialize_with = "utils::deserialize_pubkey"
+    )]
+    pub pubkey: PublicKey,
+    pub multiaddr: Multiaddr,
 }

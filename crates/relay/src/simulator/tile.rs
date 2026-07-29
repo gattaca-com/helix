@@ -106,6 +106,7 @@ impl SimulatorTile {
         sim_results: Arc<SharedVector<SimResult>>,
         decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
         chain_info: ChainInfo,
+        failsafe_triggered: Arc<AtomicBool>,
     ) -> (Arc<AtomicBool>, Arc<AtomicBool>, Self) {
         let (task_tx, rx) = crossbeam_channel::bounded(512);
 
@@ -145,7 +146,6 @@ impl SimulatorTile {
         }
 
         let accept_optimistic = Arc::new(AtomicBool::new(true));
-        let failsafe_triggered = Arc::new(AtomicBool::new(false));
 
         let ssz_sim_indices: Vec<usize> = simulators
             .iter()
