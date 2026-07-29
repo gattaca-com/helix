@@ -16,7 +16,7 @@ use axum::{
     response::IntoResponse,
 };
 use helix_common::{
-    GET_HEADER_REQUEST_CUTOFF_MS, GetHeaderTrace, RequestTimings,
+    GET_HEADER_REQUEST_CUTOFF_MS, GetHeaderTrace, HeaderStreamConfig, RequestTimings,
     api::{HEADER_START_TIME_UNIX_MS, proposer_api::GetHeaderParams},
     api_provider::header_u64,
     utils::{extract_request_id, utcnow_ms, utcnow_ns},
@@ -32,7 +32,7 @@ use super::{
     error::ProposerApiError,
     get_header::{ValidatedHeaderRequest, resign_builder_bid},
 };
-use crate::api::{Api, router::Terminating};
+use crate::api::{Api, HEADER_API_KEY, HEADER_API_TOKEN, router::Terminating};
 
 /// Frame layout: `[kind: u8][fork: u8][ssz SignedBuilderBid]`.
 const FRAME_HEADER_LEN: usize = 2;
@@ -53,6 +53,10 @@ impl<A: Api> ProposerApi<A> {
     ) -> Result<impl IntoResponse, ProposerApiError> {
         trace!("starting call");
 
+        let config = &proposer_api.relay_config.header_stream;
+
+        check_api_key(config, &headers)?;
+
         let ValidatedHeaderRequest {
             ms_into_slot,
             validation_complete_ns,
@@ -72,8 +76,6 @@ impl<A: Api> ProposerApi<A> {
             return Err(ProposerApiError::InvalidGetHeader("missing or invalid x-timeout-ms"));
         };
 
-        let config = proposer_api.relay_config.header_stream;
-
         let handshake_ms = header_u64(&headers, HEADER_START_TIME_UNIX_MS)
             .map(|start_time_ms| utcnow_ms().saturating_sub(start_time_ms))
             .unwrap_or(0);
@@ -83,6 +85,7 @@ impl<A: Api> ProposerApi<A> {
         let now = Instant::now();
         let end = now + window;
         let start = now + window.saturating_sub(Duration::from_millis(config.stream_for_ms));
+        let interval = Duration::from_millis(config.interval_ms);
 
         let fork = proposer_api.chain_info.fork_at_slot(params.slot.into());
 
@@ -107,7 +110,7 @@ impl<A: Api> ProposerApi<A> {
             trace,
             start,
             end,
-            interval: Duration::from_millis(config.interval_ms),
+            interval,
         };
 
         Ok(ws
@@ -237,6 +240,27 @@ impl<A: Api> HeaderStream<A> {
     }
 }
 
+fn check_api_key(config: &HeaderStreamConfig, headers: &HeaderMap) -> Result<(), ProposerApiError> {
+    if config.api_keys.is_empty() {
+        return Ok(());
+    }
+
+    let Some(api_key) = headers
+        .get(HEADER_API_KEY)
+        .or_else(|| headers.get(HEADER_API_TOKEN))
+        .and_then(|key| key.to_str().ok())
+    else {
+        return Err(ProposerApiError::InvalidApiKey);
+    };
+
+    if !config.api_keys.contains(api_key) {
+        debug!("unknown api key");
+        return Err(ProposerApiError::InvalidApiKey);
+    }
+
+    Ok(())
+}
+
 fn stream_window(timeout_ms: u64, handshake_ms: u64, ms_into_slot: u64) -> Duration {
     Duration::from_millis(
         timeout_ms
@@ -271,6 +295,45 @@ mod tests {
     use super::*;
 
     const CUTOFF: u64 = GET_HEADER_REQUEST_CUTOFF_MS as u64;
+
+    fn config_with_key(key: &str) -> HeaderStreamConfig {
+        HeaderStreamConfig { api_keys: [key.to_string()].into(), ..Default::default() }
+    }
+
+    fn headers_with(name: &'static str, value: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(name, value.parse().unwrap());
+        headers
+    }
+
+    #[test]
+    fn api_key_accepted_from_either_header() {
+        let config = config_with_key("secret");
+
+        for name in [HEADER_API_KEY, HEADER_API_TOKEN] {
+            assert!(check_api_key(&config, &headers_with(name, "secret")).is_ok());
+        }
+    }
+
+    #[test]
+    fn api_key_rejected() {
+        let config = config_with_key("secret");
+
+        for headers in [
+            HeaderMap::new(),
+            headers_with(HEADER_API_KEY, "wrong"),
+            headers_with(HEADER_API_KEY, ""),
+            // case sensitive, unlike the header name itself
+            headers_with(HEADER_API_KEY, "SECRET"),
+            // a builder key is not a stream key
+            headers_with("x-some-other-header", "secret"),
+        ] {
+            assert!(matches!(
+                check_api_key(&config, &headers),
+                Err(ProposerApiError::InvalidApiKey)
+            ));
+        }
+    }
 
     #[test]
     fn test_stream_window() {

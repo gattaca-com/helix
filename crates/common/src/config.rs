@@ -708,7 +708,7 @@ pub struct OperatorConfig {
     pub operators: Vec<Operator>,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct HeaderStreamConfig {
     /// How long to stream for, ending at the client's `X-Timeout-Ms` deadline.
     #[serde(default = "default_u64::<300>")]
@@ -716,11 +716,14 @@ pub struct HeaderStreamConfig {
     /// Interval between bid updates.
     #[serde(default = "default_u64::<5>")]
     pub interval_ms: u64,
+    /// Keys allowed to open a stream. Empty allows every connection.
+    #[serde(default)]
+    pub api_keys: HashSet<String>,
 }
 
 impl Default for HeaderStreamConfig {
     fn default() -> Self {
-        Self { stream_for_ms: 300, interval_ms: 5 }
+        Self { stream_for_ms: 300, interval_ms: 5, api_keys: HashSet::new() }
     }
 }
 
