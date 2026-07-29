@@ -8,6 +8,7 @@ mod error;
 mod execution_payload;
 mod fields;
 mod hydration;
+mod operator;
 mod test_utils;
 mod utils;
 mod validator;
@@ -31,6 +32,7 @@ pub use lh_types::{
     Config as LhConfig, EthSpec, ForkVersionDecode, MainnetEthSpec, SignedRoot,
     fork_name::ForkName, payload::ExecPayload, test_utils::TestRandom,
 };
+pub use operator::*;
 use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
 pub use test_utils::*;
