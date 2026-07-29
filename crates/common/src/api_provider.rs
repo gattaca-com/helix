@@ -4,7 +4,15 @@ use axum::http::HeaderMap;
 use helix_types::SignedValidatorRegistration;
 use tracing::warn;
 
-use crate::{PreferencesHeader, ValidatorPreferences, api::proposer_api::GetHeaderParams};
+use crate::{
+    PreferencesHeader, ValidatorPreferences,
+    api::{HEADER_TIMEOUT_MS, proposer_api::GetHeaderParams},
+};
+
+pub fn header_u64(headers: &HeaderMap, name: &str) -> Option<u64> {
+    let value = headers.get(name)?.to_str().ok()?.parse().ok()?;
+    (value > 0).then_some(value)
+}
 
 pub trait ApiProvider: Send + Sync + Clone + 'static {
     fn get_timing(
@@ -43,11 +51,15 @@ impl ApiProvider for DefaultApiProvider {
     fn get_timing(
         &self,
         _params: &GetHeaderParams,
-        _headers: &HeaderMap,
+        headers: &HeaderMap,
         _preferences: &ValidatorPreferences,
         _ms_into_slot: u64,
     ) -> Result<TimingResult, &'static str> {
-        Ok(TimingResult { sleep_time: None, is_mev_boost: false, timeout_ms: None })
+        Ok(TimingResult {
+            sleep_time: None,
+            is_mev_boost: false,
+            timeout_ms: header_u64(headers, HEADER_TIMEOUT_MS),
+        })
     }
 
     fn get_preferences(

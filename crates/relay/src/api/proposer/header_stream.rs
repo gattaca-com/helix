@@ -17,8 +17,9 @@ use axum::{
 };
 use helix_common::{
     GET_HEADER_REQUEST_CUTOFF_MS, GetHeaderTrace, RequestTimings,
-    api::proposer_api::GetHeaderParams,
-    utils::{extract_request_id, utcnow_ns},
+    api::{HEADER_START_TIME_UNIX_MS, proposer_api::GetHeaderParams},
+    api_provider::header_u64,
+    utils::{extract_request_id, utcnow_ms, utcnow_ns},
 };
 use helix_types::{ForkName, SignedBuilderBid};
 use http::HeaderMap;
@@ -73,20 +74,24 @@ impl<A: Api> ProposerApi<A> {
 
         let config = proposer_api.relay_config.header_stream;
 
-        let window = Duration::from_millis(
-            timeout_ms.min((GET_HEADER_REQUEST_CUTOFF_MS as u64).saturating_sub(ms_into_slot)),
-        );
+        let handshake_ms = header_u64(&headers, HEADER_START_TIME_UNIX_MS)
+            .map(|start_time_ms| utcnow_ms().saturating_sub(start_time_ms))
+            .unwrap_or(0);
+
+        let window = stream_window(timeout_ms, handshake_ms, ms_into_slot);
 
         let now = Instant::now();
         let end = now + window;
         let start = now + window.saturating_sub(Duration::from_millis(config.stream_for_ms));
 
-        let fork = proposer_api.chain_info.current_fork_name();
+        let fork = proposer_api.chain_info.fork_at_slot(params.slot.into());
 
         info!(
             ms_into_slot,
             is_mev_boost,
             timeout_ms,
+            handshake_ms,
+            ?fork,
             start_in_ms = (start - now).as_millis(),
             window_ms = (end - start).as_millis(),
             "accepting header stream"
@@ -232,6 +237,14 @@ impl<A: Api> HeaderStream<A> {
     }
 }
 
+fn stream_window(timeout_ms: u64, handshake_ms: u64, ms_into_slot: u64) -> Duration {
+    Duration::from_millis(
+        timeout_ms
+            .saturating_sub(handshake_ms)
+            .min((GET_HEADER_REQUEST_CUTOFF_MS as u64).saturating_sub(ms_into_slot)),
+    )
+}
+
 fn build_frame(fork: ForkName, bid: &SignedBuilderBid) -> Vec<u8> {
     let mut frame = Vec::with_capacity(FRAME_HEADER_LEN + bid.ssz_bytes_len());
     frame.push(FRAME_KIND_BID);
@@ -250,5 +263,32 @@ fn fork_byte(fork: ForkName) -> u8 {
         ForkName::Electra => 5,
         ForkName::Fulu => 6,
         ForkName::Gloas => 7,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const CUTOFF: u64 = GET_HEADER_REQUEST_CUTOFF_MS as u64;
+
+    #[test]
+    fn test_stream_window() {
+        // Instant handshake: the client's full budget
+        assert_eq!(stream_window(950, 0, 0), Duration::from_millis(950));
+
+        // The handshake is charged to the budget, so we stop when the client does
+        assert_eq!(stream_window(950, 120, 0), Duration::from_millis(830));
+
+        // Our own cutoff wins when the request comes late in the slot
+        assert_eq!(stream_window(950, 0, CUTOFF - 200), Duration::from_millis(200));
+
+        // Handshake longer than the budget, or a clock skewed that way: no window,
+        // rather than an underflow
+        assert_eq!(stream_window(950, 950, 0), Duration::ZERO);
+        assert_eq!(stream_window(950, u64::MAX, 0), Duration::ZERO);
+
+        // Past the cutoff entirely
+        assert_eq!(stream_window(950, 0, CUTOFF + 1), Duration::ZERO);
     }
 }

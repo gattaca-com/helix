@@ -177,7 +177,7 @@ impl<A: Api> ProposerApi<A> {
             extra_data,
         );
 
-        let fork = proposer_api.chain_info.current_fork_name();
+        let fork = proposer_api.chain_info.fork_at_slot(params.slot.into());
         let payload_and_blobs = bid.payload_and_blobs();
         let bid_data = bid.bid_data_ref().to_owned();
         let bid = bid.into_builder_bid_slow();
