@@ -29,6 +29,7 @@ pub trait ApiProvider: Send + Sync + Clone + 'static {
 pub struct TimingResult {
     pub sleep_time: Option<Duration>,
     pub is_mev_boost: bool,
+    pub timeout_ms: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -46,7 +47,7 @@ impl ApiProvider for DefaultApiProvider {
         _preferences: &ValidatorPreferences,
         _ms_into_slot: u64,
     ) -> Result<TimingResult, &'static str> {
-        Ok(TimingResult { sleep_time: None, is_mev_boost: false })
+        Ok(TimingResult { sleep_time: None, is_mev_boost: false, timeout_ms: None })
     }
 
     fn get_preferences(

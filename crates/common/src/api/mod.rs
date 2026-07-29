@@ -18,6 +18,7 @@ pub const PATH_PROPOSER_API_V2: &str = "/eth/v2/builder";
 pub const PATH_STATUS: &str = "/status";
 pub const PATH_REGISTER_VALIDATORS: &str = "/validators";
 pub const PATH_GET_HEADER: &str = "/header/{slot}/{parent_hash}/{pubkey}";
+pub const PATH_HEADER_STREAM: &str = "/header_stream/{slot}/{parent_hash}/{pubkey}";
 pub const PATH_GET_PAYLOAD: &str = "/blinded_blocks";
 
 pub const PATH_DATA_API: &str = "/relay/v1/data";
