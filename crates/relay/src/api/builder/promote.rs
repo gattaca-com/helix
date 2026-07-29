@@ -48,21 +48,17 @@ impl<A: Api> BuilderApi<A> {
             builder_info.builder_id(),
         );
 
-        if let Some(operator_api) = api.operator_api.as_ref()
-            && let Err(e) = operator_api
+        if let Some(operator_api) = api.operator_api.as_ref() &&
+            let Err(e) = operator_api
                 .send(OperatorMessage::Promotion(Promotion {
                     ts_ms: utcnow_ms(),
                     slot: api.curr_slot_info.head_slot().as_u64(),
                     builder_pubkey,
                 }))
                 .await
-            {
-                tracing::error!(
-                    ?e,
-                    "failed to send operator promote message for {:?}",
-                    builder_pubkey
-                );
-            }
+        {
+            tracing::error!(?e, "failed to send operator promote message for {:?}", builder_pubkey);
+        }
 
         (StatusCode::OK, "builder promotion successful").into_response()
     }

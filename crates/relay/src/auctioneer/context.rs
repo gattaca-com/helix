@@ -334,20 +334,21 @@ impl<B: BidAdjustor> Context<B> {
                 .and_then(|i| i.builder_id)
                 .unwrap_or_default();
 
-            if let Some(operator_api) = self.operator_api.as_ref()
-                && let Err(e) = operator_api.try_send(OperatorMessage::Demotion(Demotion {
+            if let Some(operator_api) = self.operator_api.as_ref() &&
+                let Err(e) = operator_api.try_send(OperatorMessage::Demotion(Demotion {
                     ts_ms: utcnow_ms(),
                     slot: slot_u64,
                     builder_pubkey,
                     block_hash,
                     reason_msg: reason.as_bytes().to_vec(),
-                })) {
-                    tracing::error!(
-                        ?e,
-                        "failed to send operator demotion message for {:?}",
-                        builder_pubkey
-                    );
-                }
+                }))
+            {
+                tracing::error!(
+                    ?e,
+                    "failed to send operator demotion message for {:?}",
+                    builder_pubkey
+                );
+            }
 
             let r = reason.clone();
             spawn_tracked!(async move {
