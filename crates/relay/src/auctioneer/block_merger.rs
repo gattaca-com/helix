@@ -168,18 +168,28 @@ impl BlockMerger {
         let mut trace = response.trace;
         trace.finalize_time_ns = utcnow_ns();
 
+        let total_merged_value = response
+            .builder_inclusions
+            .values()
+            .fold(U256::ZERO, |acc, inclusion| acc + inclusion.contribution);
+
         self.local_cache.save_merged_block(MergedBlock {
             slot: bid_slot,
             block_number: response.execution_payload.block_number,
             original_block_hash: response.base_block_hash,
             block_hash,
             original_value,
-            merged_value: response.proposer_value,
+            proposer_value: response.proposer_value,
+            total_merged_value,
+            base_builder_revenue: response.base_builder_revenue,
+            relay_revenue: response.relay_revenue,
             original_tx_count: original_payload.execution_payload.transactions.len(),
             merged_tx_count: response.execution_payload.transactions.len(),
             original_blob_count: original_payload.blobs_bundle.blobs.len(),
             merged_blob_count: original_payload.blobs_bundle.blobs.len() +
                 response.appended_blobs.len(),
+            original_gas_used: original_payload.execution_payload.gas_used,
+            merged_gas_used: response.execution_payload.gas_used,
             builder_inclusions: response.builder_inclusions,
             trace,
         });

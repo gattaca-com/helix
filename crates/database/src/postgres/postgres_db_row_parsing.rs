@@ -289,11 +289,21 @@ impl FromRow for MergedBlockResponse {
             original_value: parse_numeric_to_u256(
                 row.get::<&str, PostgresNumeric>("original_value"),
             ),
-            merged_value: parse_numeric_to_u256(row.get::<&str, PostgresNumeric>("merged_value")),
+            // `merged_value` is the DB column name; the API/Rust-side name is `proposer_value`.
+            proposer_value: parse_numeric_to_u256(row.get::<&str, PostgresNumeric>("merged_value")),
+            total_merged_value: parse_numeric_to_u256(
+                row.get::<&str, PostgresNumeric>("total_merged_value"),
+            ),
+            base_builder_revenue: parse_numeric_to_u256(
+                row.get::<&str, PostgresNumeric>("base_builder_revenue"),
+            ),
+            relay_revenue: parse_numeric_to_u256(row.get::<&str, PostgresNumeric>("relay_revenue")),
             original_tx_count: parse_i32_to_u64(row.get::<&str, i32>("original_tx_count"))?,
             merged_tx_count: parse_i32_to_u64(row.get::<&str, i32>("merged_tx_count"))?,
             original_blob_count: parse_i32_to_u64(row.get::<&str, i32>("original_blob_count"))?,
             merged_blob_count: parse_i32_to_u64(row.get::<&str, i32>("merged_blob_count"))?,
+            original_gas_used: parse_i64_to_u64(row.get::<&str, i64>("original_gas_used"))?,
+            merged_gas_used: parse_i64_to_u64(row.get::<&str, i64>("merged_gas_used"))?,
             builder_inclusions,
         })
     }

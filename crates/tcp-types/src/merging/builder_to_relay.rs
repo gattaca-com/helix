@@ -27,6 +27,10 @@ pub struct MergedBlockV1 {
     pub appended_blobs: Vec<B256>,
     /// `original_value` + proposer share of merged revenue.
     pub proposer_value: U256,
+    /// Value paid to the base block builder for its share of the merge split.
+    pub base_builder_revenue: U256,
+    /// Value paid to the relay for its share of the merge split.
+    pub relay_revenue: U256,
     pub builder_inclusions: Vec<BuilderInclusion>,
     /// `OrderMeta::order_id()` of every merged order, traceable to the
     /// contributing builder and source block.
@@ -38,6 +42,10 @@ pub struct MergedBlockV1 {
 pub struct BuilderInclusion {
     pub builder_pubkey: BlsPublicKey,
     pub origin_coinbase: Address,
+    /// Value merged in from this builder's block.
+    pub contribution: U256,
+    /// What this builder earned for its contribution, net of payout-tx gas —
+    /// matches the on-chain split.
     pub revenue: U256,
     pub txs: Vec<B256>,
 }

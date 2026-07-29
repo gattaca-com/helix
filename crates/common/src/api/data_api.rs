@@ -206,16 +206,33 @@ pub struct ProposerHeaderDeliveredParams {
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct MergedBlockResponse {
+    /// Slot the merged block was delivered for.
     #[serde(with = "serde_utils::quoted_u64")]
     pub slot: u64,
     #[serde(with = "serde_utils::quoted_u64")]
     pub block_number: u64,
+    /// Hash of the original (unmerged) block the proposer would otherwise have received.
     pub original_block_hash: B256,
+    /// Hash of the final merged block delivered to the proposer.
     pub block_hash: B256,
+    /// Value of the original bid, before merging.
     #[serde(with = "serde_utils::quoted_u256")]
     pub original_value: U256,
+    /// Total value paid to the proposer for the merged block (`original_value` plus the
+    /// proposer's share of the merge uplift). Not the total value of the merged block —
+    /// see `total_merged_value` and `builder_inclusions` to break that down further.
     #[serde(with = "serde_utils::quoted_u256")]
-    pub merged_value: U256,
+    pub proposer_value: U256,
+    /// Total value added by the merged orders — sum of `contribution` across all
+    /// `builder_inclusions` entries.
+    #[serde(with = "serde_utils::quoted_u256", default)]
+    pub total_merged_value: U256,
+    /// Value paid to the base block builder for its share of the merge split.
+    #[serde(with = "serde_utils::quoted_u256", default)]
+    pub base_builder_revenue: U256,
+    /// Value paid to the relay for its share of the merge split.
+    #[serde(with = "serde_utils::quoted_u256", default)]
+    pub relay_revenue: U256,
     #[serde(with = "serde_utils::quoted_u64")]
     pub original_tx_count: u64,
     #[serde(with = "serde_utils::quoted_u64")]
@@ -224,6 +241,15 @@ pub struct MergedBlockResponse {
     pub original_blob_count: u64,
     #[serde(with = "serde_utils::quoted_u64")]
     pub merged_blob_count: u64,
+    /// Gas used by the original (unmerged) block.
+    #[serde(default)]
+    pub original_gas_used: u64,
+    /// Gas used by the final merged block.
+    #[serde(default)]
+    pub merged_gas_used: u64,
+    /// Per-builder breakdown of the merge: `contribution` is the value merged in from that
+    /// builder's block, `revenue` is what that builder actually earned for it (net of
+    /// payout-tx gas). `contribution` values sum to `total_merged_value`.
     pub builder_inclusions: HashMap<Address, BuilderInclusionResult>,
 }
 

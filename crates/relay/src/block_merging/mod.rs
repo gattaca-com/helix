@@ -89,7 +89,13 @@ fn merged_block_to_response(
     let builder_inclusions: HashMap<_, _> = m
         .builder_inclusions
         .into_iter()
-        .map(|i| (i.origin_coinbase, BuilderInclusionResult { revenue: i.revenue, txs: i.txs }))
+        .map(|i| {
+            (i.origin_coinbase, BuilderInclusionResult {
+                contribution: i.contribution,
+                revenue: i.revenue,
+                txs: i.txs,
+            })
+        })
         .collect();
     Some(BlockMergeResponse {
         base_block_hash: m.base_block_hash,
@@ -97,6 +103,8 @@ fn merged_block_to_response(
         execution_requests: requests_from_v4(m.execution_requests),
         appended_blobs,
         proposer_value: m.proposer_value,
+        base_builder_revenue: m.base_builder_revenue,
+        relay_revenue: m.relay_revenue,
         builder_inclusions,
         trace: MergedBlockTrace {
             request_time_ns: m.trace.base_block_recv_ns,

@@ -112,7 +112,12 @@ pub struct BlobWithMetadata {
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct BuilderInclusionResult {
-    #[serde(with = "serde_utils::quoted_u256")]
+    /// Value merged in from this builder's block.
+    #[serde(with = "serde_utils::quoted_u256", default)]
+    pub contribution: U256,
+    /// What this builder earned for its contribution, net of payout-tx gas —
+    /// matches the on-chain split.
+    #[serde(with = "serde_utils::quoted_u256", default)]
     pub revenue: U256,
     pub txs: Vec<B256>,
 }
@@ -124,11 +129,18 @@ pub struct MergedBlock {
     pub original_block_hash: B256,
     pub block_hash: B256,
     pub original_value: U256,
-    pub merged_value: U256,
+    pub proposer_value: U256,
+    /// Total value added by the merged orders — sum of `contribution` across
+    /// `builder_inclusions`.
+    pub total_merged_value: U256,
+    pub base_builder_revenue: U256,
+    pub relay_revenue: U256,
     pub original_tx_count: usize,
     pub merged_tx_count: usize,
     pub original_blob_count: usize,
     pub merged_blob_count: usize,
+    pub original_gas_used: u64,
+    pub merged_gas_used: u64,
     pub builder_inclusions: HashMap<Address, BuilderInclusionResult>,
     pub trace: MergedBlockTrace,
 }
@@ -162,7 +174,7 @@ impl MergedBlock {
             self.block_number,
             self.block_hash,
             self.original_value,
-            self.merged_value,
+            self.proposer_value,
             self.original_tx_count,
             self.merged_tx_count,
             self.original_blob_count,
