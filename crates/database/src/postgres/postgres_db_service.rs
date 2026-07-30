@@ -1848,6 +1848,7 @@ impl PostgresDatabaseService {
                     INNER JOIN builder_info
                     ON demotions.public_key = builder_info.public_key
                     WHERE builder_info.is_optimistic = FALSE
+                    AND builder_info.collateral > 0
                     ORDER BY
                         demotions.public_key,
                         demotions.demotion_time DESC
