@@ -1,11 +1,15 @@
 use std::sync::{Arc, atomic::AtomicBool};
 
-use helix_common::{RelayConfig, load_config, local_cache::LocalCache};
+use helix_common::{
+    RelayConfig, load_config, local_cache::LocalCache, utils::install_default_crypto_provider,
+};
 use helix_database::{DbRequest, PendingBlockSubmissionValue, start_db_service};
 use helix_website::WebsiteService;
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
+    install_default_crypto_provider();
+
     tracing_subscriber::fmt::init();
 
     let config: RelayConfig = load_config();

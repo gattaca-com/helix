@@ -71,7 +71,7 @@ impl IlFetchState {
             Poll::Pending => Poll::Pending,
             Poll::Ready(Ok(resp)) => {
                 let txs: Vec<Transaction> = resp.result.into_iter().map(Transaction).collect();
-                Poll::Ready(Some(InclusionList { txs: txs.into() }))
+                Poll::Ready(Some(InclusionList { txs: txs.try_into().expect("inclusion list exceeds spec limit") }))
             }
             Poll::Ready(Err(e)) => {
                 warn!(%e, "IL fetch failed, retrying");
@@ -103,6 +103,7 @@ mod tests {
     #[test]
     fn il_fetch_state_starts_on_valid_config() {
         use helix_common::http::client::HttpClient;
+        helix_common::utils::install_default_crypto_provider();
         let server = MockServer::start();
         let url = Url::parse(&server.url("/")).unwrap();
         let config = create_test_config(url.clone());

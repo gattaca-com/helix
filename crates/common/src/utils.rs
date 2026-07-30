@@ -120,6 +120,15 @@ fn get_crate_filter(crates_level: tracing::Level) -> EnvFilter {
 static APP_ID: OnceLock<String> = OnceLock::new();
 static DISCORD_WEBHOOK_URL: OnceLock<Url> = OnceLock::new();
 
+/// Explicitly selects the aws-lc-rs rustls crypto provider for this process.
+///
+/// Some dependencies (e.g. lighthouse's `eth2` crate) pull in rustls' `ring` backend alongside
+/// our own aws-lc-rs one, so rustls can no longer auto-detect a single provider. Safe to call
+/// more than once; later calls are no-ops.
+pub fn install_default_crypto_provider() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+}
+
 pub fn init_panic_hook(
     app_id: String,
     discord_web_hook: Option<Url>,

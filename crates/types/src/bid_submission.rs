@@ -221,11 +221,11 @@ pub fn payload_from_v3(v3: ExecutionPayloadV3) -> ExecutionPayload {
         extra_data: ExtraData(v1.extra_data),
         base_fee_per_gas: v1.base_fee_per_gas,
         block_hash: v1.block_hash,
-        transactions: lh_types::VariableList::new(
+        transactions: ssz_types::VariableList::new(
             v1.transactions.into_iter().map(Transaction).collect(),
         )
         .expect("transactions exceed spec limit"),
-        withdrawals: lh_types::VariableList::new(
+        withdrawals: ssz_types::VariableList::new(
             v2.withdrawals
                 .into_iter()
                 .map(|w| Withdrawal {
@@ -281,26 +281,26 @@ pub fn payload_to_v3(ep: &ExecutionPayload) -> ExecutionPayloadV3 {
 
 pub fn requests_from_v4(v4: ExecutionRequestsV4) -> ExecutionRequests {
     ExecutionRequests {
-        deposits: lh_types::VariableList::new(
+        deposits: ssz_types::VariableList::new(
             v4.deposits
                 .into_iter()
                 .map(|d| lh_types::DepositRequest {
-                    pubkey: lh_types::PublicKeyBytes::deserialize(&d.pubkey[..]).expect("len=48"),
+                    pubkey: lh_bls::PublicKeyBytes::deserialize(&d.pubkey[..]).expect("len=48"),
                     withdrawal_credentials: d.withdrawal_credentials,
                     amount: d.amount,
-                    signature: lh_types::SignatureBytes::deserialize(&d.signature[..])
+                    signature: lh_bls::SignatureBytes::deserialize(&d.signature[..])
                         .expect("len=96"),
                     index: d.index,
                 })
                 .collect(),
         )
         .expect("deposits exceed spec limit"),
-        withdrawals: lh_types::VariableList::new(
+        withdrawals: ssz_types::VariableList::new(
             v4.withdrawals
                 .into_iter()
                 .map(|w| lh_types::WithdrawalRequest {
                     source_address: w.source_address,
-                    validator_pubkey: lh_types::PublicKeyBytes::deserialize(
+                    validator_pubkey: lh_bls::PublicKeyBytes::deserialize(
                         &w.validator_pubkey[..],
                     )
                     .expect("len=48"),
@@ -309,14 +309,14 @@ pub fn requests_from_v4(v4: ExecutionRequestsV4) -> ExecutionRequests {
                 .collect(),
         )
         .expect("withdrawal requests exceed spec limit"),
-        consolidations: lh_types::VariableList::new(
+        consolidations: ssz_types::VariableList::new(
             v4.consolidations
                 .into_iter()
                 .map(|c| lh_types::ConsolidationRequest {
                     source_address: c.source_address,
-                    source_pubkey: lh_types::PublicKeyBytes::deserialize(&c.source_pubkey[..])
+                    source_pubkey: lh_bls::PublicKeyBytes::deserialize(&c.source_pubkey[..])
                         .expect("len=48"),
-                    target_pubkey: lh_types::PublicKeyBytes::deserialize(&c.target_pubkey[..])
+                    target_pubkey: lh_bls::PublicKeyBytes::deserialize(&c.target_pubkey[..])
                         .expect("len=48"),
                 })
                 .collect(),
@@ -381,7 +381,7 @@ impl From<SignedBidSubmissionV5> for SignedBidSubmission {
             },
             execution_payload: Arc::new(payload_from_v3(v.execution_payload)),
             blobs_bundle: Arc::new(BlobsBundle {
-                commitments: lh_types::VariableList::new(v.blobs_bundle.commitments)
+                commitments: ssz_types::VariableList::new(v.blobs_bundle.commitments)
                     .expect("commitments exceed spec limit"),
                 proofs: v.blobs_bundle.proofs,
                 blobs: v.blobs_bundle.blobs.into_iter().map(Arc::new).collect(),

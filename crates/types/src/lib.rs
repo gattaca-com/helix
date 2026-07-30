@@ -29,8 +29,8 @@ pub use hydration::*;
 pub use lh_kzg::{KzgCommitment, KzgProof};
 pub use lh_test_random::TestRandom;
 pub use lh_types::{
-    Config as LhConfig, EthSpec, ForkVersionDecode, MainnetEthSpec, SignedRoot,
-    fork_name::ForkName, payload::ExecPayload, test_utils::TestRandom,
+    Config as LhConfig, EthSpec, ExecPayload, ForkName, ForkVersionDecode, MainnetEthSpec,
+    SignedRoot, test_utils::TestRandom,
 };
 pub use operator::*;
 use serde::{Deserialize, Serialize};
@@ -44,12 +44,12 @@ pub type Domain = lh_types::Domain;
 pub type ChainSpec = lh_types::ChainSpec;
 
 // Signing
-pub type BlsPublicKey = lh_types::PublicKey;
+pub type BlsPublicKey = lh_bls::PublicKey;
 pub type BlsPublicKeyBytes = alloy_rpc_types::beacon::BlsPublicKey;
-pub type BlsSignature = lh_types::Signature;
+pub type BlsSignature = lh_bls::Signature;
 pub type BlsSignatureBytes = alloy_rpc_types::beacon::BlsSignature;
-pub type BlsSecretKey = lh_types::SecretKey;
-pub type BlsKeypair = lh_types::Keypair;
+pub type BlsSecretKey = lh_bls::SecretKey;
+pub type BlsKeypair = lh_bls::Keypair;
 
 // Blobs
 // pub type BlobsBundle = lh_eth2::types::BlobsBundle<MainnetEthSpec>;
@@ -57,30 +57,28 @@ pub type BlobsBundle = crate::blobs::BlobsBundle;
 
 // Publish block
 pub type VersionedSignedProposal = SignedBlockContents;
-pub type SignedBeaconBlock = lh_types::signed_beacon_block::SignedBeaconBlock<MainnetEthSpec>;
-pub type SignedBeaconBlockFulu =
-    lh_types::signed_beacon_block::SignedBeaconBlockFulu<MainnetEthSpec>;
+pub type SignedBeaconBlock = lh_types::SignedBeaconBlock<MainnetEthSpec>;
+pub type SignedBeaconBlockFulu = lh_types::SignedBeaconBlockFulu<MainnetEthSpec>;
 
 // Beacon block
-pub type BeaconBlockFulu = lh_types::beacon_block::BeaconBlockFulu<MainnetEthSpec>;
-pub type BeaconBlockBodyFulu = lh_types::beacon_block_body::BeaconBlockBodyFulu<MainnetEthSpec>;
+pub type BeaconBlockFulu = lh_types::BeaconBlockFulu<MainnetEthSpec>;
+pub type BeaconBlockBodyFulu = lh_types::BeaconBlockBodyFulu<MainnetEthSpec>;
 
 // Get header
 pub type SignedBuilderBid = crate::builder_bid::SignedBuilderBid;
 /// Response object of GET `/eth/v1/builder/header/{slot}/{parent_hash}/{pubkey}`
-pub type GetHeaderResponse = lh_types::ForkVersionedResponse<SignedBuilderBid>;
+pub type GetHeaderResponse = lh_eth2::ForkVersionedResponse<SignedBuilderBid>;
 
 // Get payload
 /// Request object of POST `/eth/v1/builder/blinded_blocks`
-pub type SignedBlindedBeaconBlock =
-    lh_types::signed_beacon_block::SignedBlindedBeaconBlock<MainnetEthSpec>; // TODO: maybe re implement this to avoid trait
+pub type SignedBlindedBeaconBlock = lh_types::SignedBlindedBeaconBlock<MainnetEthSpec>; // TODO: maybe re implement this to avoid trait
 pub type SignedBlindedBeaconBlockFulu =
-    lh_types::signed_beacon_block::SignedBeaconBlockFulu<MainnetEthSpec, BlindedPayload>;
-pub type BlindedPayload = lh_types::payload::BlindedPayload<MainnetEthSpec>;
-pub type BlindedPayloadRef<'a> = lh_types::payload::BlindedPayloadRef<'a, MainnetEthSpec>;
+    lh_types::SignedBeaconBlockFulu<MainnetEthSpec, BlindedPayload>;
+pub type BlindedPayload = lh_types::BlindedPayload<MainnetEthSpec>;
+pub type BlindedPayloadRef<'a> = lh_types::BlindedPayloadRef<'a, MainnetEthSpec>;
 
 /// Response object of POST `/eth/v1/builder/blinded_blocks`
-pub type GetPayloadResponse = lh_types::ForkVersionedResponse<PayloadAndBlobs>;
+pub type GetPayloadResponse = lh_eth2::ForkVersionedResponse<PayloadAndBlobs>;
 
 // Registration
 pub type ValidatorRegistration = validator::ValidatorRegistrationData;

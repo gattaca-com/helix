@@ -34,7 +34,6 @@ reth-ethereum.workspace = true
 reth-ethereum-engine-primitives.workspace = true
 reth-metrics.workspace = true
 reth-node-builder.workspace = true
-reth-primitives.workspace = true
 reth-tasks.workspace = true
 revm.workspace = true
 serde.workspace = true

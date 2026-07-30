@@ -47,7 +47,7 @@ impl TxSimSink {
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Vec<TxSimRow>>();
 
-        task_executor.spawn(Box::pin(async move {
+        task_executor.spawn_task(Box::pin(async move {
             while let Some(rows) = rx.recv().await {
                 match insert_rows(&client, rows).await {
                     Ok(n) => info!(n, "inserted tx sim rows to {TABLE}"),

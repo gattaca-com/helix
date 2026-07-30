@@ -3,7 +3,7 @@ use std::{fs::File, sync::Arc};
 use clap::Parser;
 use helix_common::{
     local_cache::LocalCache,
-    utils::{init_panic_hook, init_tracing_log},
+    utils::{init_panic_hook, init_tracing_log, install_default_crypto_provider},
 };
 use helix_data_api::{config::DataApiConfig, service::run_data_api};
 use helix_database::PostgresDatabaseService;
@@ -16,6 +16,8 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
+    install_default_crypto_provider();
+
     let args = Args::parse();
     let file = File::open(&args.config)
         .unwrap_or_else(|_| panic!("unable to find config file: '{}'", args.config));
