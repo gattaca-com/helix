@@ -2778,6 +2778,8 @@ impl PostgresDatabaseService {
             sim_end_time_ns: i64,
             finalize_time_ns: i64,
             header_served_time_ns: Option<i64>,
+            was_top_builder: Option<bool>,
+            top_bid: Option<PostgresNumeric>,
             inserted_at: SystemTime,
         }
 
@@ -2808,12 +2810,14 @@ impl PostgresDatabaseService {
                 sim_end_time_ns: block.trace.sim_end_time_ns as i64,
                 finalize_time_ns: block.trace.finalize_time_ns as i64,
                 header_served_time_ns: block.trace.header_served_time_ns.map(|v| v as i64),
+                was_top_builder: block.trace.was_top_builder,
+                top_bid: block.trace.top_bid.map(PostgresNumeric::from),
                 inserted_at: SystemTime::now(),
             });
         }
 
         // Flatten into SQL params
-        const FIELD_COUNT: usize = 22;
+        const FIELD_COUNT: usize = 24;
         let mut params: Vec<&(dyn ToSql + Sync)> =
             Vec::with_capacity(structured_blocks.len() * FIELD_COUNT);
         for block in &structured_blocks {
@@ -2838,6 +2842,8 @@ impl PostgresDatabaseService {
             params.push(&block.sim_end_time_ns);
             params.push(&block.finalize_time_ns);
             params.push(&block.header_served_time_ns);
+            params.push(&block.was_top_builder);
+            params.push(&block.top_bid);
             params.push(&block.inserted_at);
         }
 
@@ -2864,6 +2870,8 @@ impl PostgresDatabaseService {
                 sim_end_time_ns,
                 finalize_time_ns,
                 header_served_time_ns,
+                was_top_builder,
+                top_bid,
                 inserted_at
             ) VALUES ",
         );

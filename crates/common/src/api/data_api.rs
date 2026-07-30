@@ -204,6 +204,31 @@ pub struct ProposerHeaderDeliveredParams {
     pub order_by: Option<String>,
 }
 
+/// `Option`-aware variant of `serde_utils::quoted_u256`, for `MergedBlockResponse` fields that
+/// are `NULL` for merged blocks recorded before those columns existed.
+mod quoted_option {
+    pub mod u256 {
+        use alloy_primitives::U256;
+        use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+        pub fn serialize<S: Serializer>(
+            value: &Option<U256>,
+            serializer: S,
+        ) -> Result<S::Ok, S::Error> {
+            value.map(|v| v.to_string()).serialize(serializer)
+        }
+
+        pub fn deserialize<'de, D: Deserializer<'de>>(
+            deserializer: D,
+        ) -> Result<Option<U256>, D::Error> {
+            Option::<String>::deserialize(deserializer)?
+                .map(|s| U256::from_str_radix(&s, 10).map_err(serde::de::Error::custom))
+                .transpose()
+        }
+    }
+
+}
+
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct MergedBlockResponse {
     /// Slot the merged block was delivered for.
@@ -224,15 +249,17 @@ pub struct MergedBlockResponse {
     #[serde(with = "serde_utils::quoted_u256")]
     pub proposer_value: U256,
     /// Total value added by the merged orders — sum of `contribution` across all
-    /// `builder_inclusions` entries.
-    #[serde(with = "serde_utils::quoted_u256", default)]
-    pub total_merged_value: U256,
-    /// Value paid to the base block builder for its share of the merge split.
-    #[serde(with = "serde_utils::quoted_u256", default)]
-    pub base_builder_revenue: U256,
-    /// Value paid to the relay for its share of the merge split.
-    #[serde(with = "serde_utils::quoted_u256", default)]
-    pub relay_revenue: U256,
+    /// `builder_inclusions` entries. `None` for merged blocks recorded before this field existed.
+    #[serde(with = "quoted_option::u256", default)]
+    pub total_merged_value: Option<U256>,
+    /// Value paid to the base block builder for its share of the merge split. `None` for merged
+    /// blocks recorded before this field existed.
+    #[serde(with = "quoted_option::u256", default)]
+    pub base_builder_revenue: Option<U256>,
+    /// Value paid to the relay for its share of the merge split. `None` for merged blocks
+    /// recorded before this field existed.
+    #[serde(with = "quoted_option::u256", default)]
+    pub relay_revenue: Option<U256>,
     #[serde(with = "serde_utils::quoted_u64")]
     pub original_tx_count: u64,
     #[serde(with = "serde_utils::quoted_u64")]
@@ -241,12 +268,14 @@ pub struct MergedBlockResponse {
     pub original_blob_count: u64,
     #[serde(with = "serde_utils::quoted_u64")]
     pub merged_blob_count: u64,
-    /// Gas used by the original (unmerged) block.
+    /// Gas used by the original (unmerged) block. `None` for merged blocks recorded before this
+    /// field existed.
     #[serde(default)]
-    pub original_gas_used: u64,
-    /// Gas used by the final merged block.
+    pub original_gas_used: Option<u64>,
+    /// Gas used by the final merged block. `None` for merged blocks recorded before this field
+    /// existed.
     #[serde(default)]
-    pub merged_gas_used: u64,
+    pub merged_gas_used: Option<u64>,
     /// Per-builder breakdown of the merge: `contribution` is the value merged in from that
     /// builder's block, `revenue` is what that builder actually earned for it (net of
     /// payout-tx gas). `contribution` values sum to `total_merged_value`.

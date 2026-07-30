@@ -191,6 +191,13 @@ pub struct MergedBlockTrace {
     pub sim_end_time_ns: u64,
     pub finalize_time_ns: u64,
     pub header_served_time_ns: Option<u64>,
+    /// Whether this block was the highest-value merged block across all builders at the time
+    /// its header was served. `None` until a header is served for it — most merged blocks in
+    /// the table are never served, so this is left unset for them.
+    pub was_top_builder: Option<bool>,
+    /// Value of the bid that beat this one, set when a mev-boost `get_header` call found this
+    /// merged bid was not higher than the original (unmerged) bid it was competing with.
+    pub top_bid: Option<U256>,
 }
 
 #[cfg(test)]

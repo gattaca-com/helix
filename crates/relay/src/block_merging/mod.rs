@@ -113,6 +113,8 @@ fn merged_block_to_response(
             finalize_time_ns: m.trace.finalize_ns,
             header_served_time_ns: None, /* filled in by the auctioneer when it sends the header
                                           * to the proposer */
+            was_top_builder: None,
+            top_bid: None,
         },
     })
 }
