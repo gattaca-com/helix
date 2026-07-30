@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
 use axum::{Extension, extract::Query, response::IntoResponse};
+use helix_common::utils::utcnow_ms;
+use helix_types::{OperatorMessage, Promotion};
 use http::StatusCode;
 use serde::Deserialize;
 use tracing::warn;
@@ -45,6 +47,18 @@ impl<A: Api> BuilderApi<A> {
             &format!("✅ *Optimistic promotion successful*\n*Builder:* `{builder_pubkey}`"),
             builder_info.builder_id(),
         );
+
+        if let Some(operator_api) = api.operator_api.as_ref() &&
+            let Err(e) = operator_api
+                .send(OperatorMessage::Promotion(Promotion {
+                    ts_ms: utcnow_ms(),
+                    slot: api.curr_slot_info.head_slot().as_u64(),
+                    builder_pubkey,
+                }))
+                .await
+        {
+            tracing::error!(?e, "failed to send operator promote message for {:?}", builder_pubkey);
+        }
 
         (StatusCode::OK, "builder promotion successful").into_response()
     }

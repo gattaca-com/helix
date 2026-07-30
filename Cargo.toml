@@ -57,6 +57,7 @@ futures-util = { version = "0.3", features = ["compat"] }
 helix-common = { path = "crates/common" }
 helix-data-api = { path = "crates/data-api" }
 helix-database = { path = "crates/database" }
+helix-operator = { path = "crates/operator" }
 helix-tcp-types = { path = "./crates/tcp-types" }
 helix-types = { path = "./crates/types" }
 helix-website = { path = "crates/website" }

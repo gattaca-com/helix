@@ -29,6 +29,7 @@ futures.workspace = true
 helix-types.workspace = true
 http.workspace = true
 lazy_static.workspace = true
+libp2p.workspace = true
 num_cpus.workspace = true
 opentelemetry.workspace = true
 opentelemetry-otlp.workspace = true

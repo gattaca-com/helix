@@ -189,7 +189,9 @@ pub fn build_primev_builder_configs(
 ) -> Vec<BuilderConfig> {
     let mut configs = Vec::new();
     for builder_pubkey in primev_builders {
-        match local_cache.get_builder_info(&builder_pubkey) {
+        // the builder info gets rewritten to the cache, so do not inflate collateral with
+        // operator values.
+        match local_cache.get_builder_info_local_collateral_only(&builder_pubkey) {
             Some(builder_info) => {
                 if builder_info.builder_id.as_deref() == Some(PRIMEV_BUILDER_ID) ||
                     builder_info

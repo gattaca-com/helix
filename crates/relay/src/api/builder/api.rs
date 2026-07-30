@@ -10,6 +10,7 @@ use helix_common::{
     local_cache::LocalCache,
 };
 use helix_database::handle::DbHandle;
+use helix_operator::OperatorPubSub;
 
 use crate::{
     api::{Api, FutureBidSubmissionResult, extract::raw_web_socket::RawWebSocket},
@@ -29,6 +30,7 @@ pub struct BuilderApi<A: Api> {
     pub future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
     pub submission_payloads: Arc<SharedVector<Bytes>>,
     pub web_socket_connections: Sender<(RawWebSocket, TopBidPrecision)>,
+    pub operator_api: Option<Arc<OperatorPubSub>>,
 }
 
 impl<A: Api> BuilderApi<A> {
@@ -44,6 +46,7 @@ impl<A: Api> BuilderApi<A> {
         future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
         submission_payloads: Arc<SharedVector<Bytes>>,
         web_socket_connections: Sender<(RawWebSocket, TopBidPrecision)>,
+        operator_api: Option<Arc<OperatorPubSub>>,
     ) -> Self {
         Self {
             local_cache,
@@ -57,6 +60,7 @@ impl<A: Api> BuilderApi<A> {
             future_results,
             submission_payloads,
             web_socket_connections,
+            operator_api,
         }
     }
 

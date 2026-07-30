@@ -1,13 +1,20 @@
 use std::{collections::HashMap, time::Duration};
 
 use async_channel::{Receiver, Sender};
-use helix_types::OperatorMessage;
+use helix_types::{BlsPublicKeyBytes, BuilderCollateral, OperatorMessage};
 use libp2p::{
-    PeerId, SwarmBuilder, allow_block_list::{self, AllowedPeers}, floodsub::{self, Event, FloodsubMessage}, futures::StreamExt, identity::Keypair, ping, swarm::{NetworkBehaviour, SwarmEvent},
+    PeerId, SwarmBuilder,
+    allow_block_list::{self, AllowedPeers},
+    floodsub::{self, Event, FloodsubMessage},
+    futures::StreamExt,
+    identity::Keypair,
+    ping,
+    swarm::{NetworkBehaviour, SwarmEvent},
 };
 use ssz::{Decode, Encode};
 
 use super::{Operator, OperatorError};
+use crate::utils::{PromotionState, PromotionStates};
 
 #[derive(NetworkBehaviour)]
 struct NetBehaviour {
@@ -21,7 +28,7 @@ pub(super) async fn run_operator_connection(
     keypair: Keypair,
     operators: Vec<Operator>,
     outgoing: Receiver<OperatorMessage>,
-    incoming: Sender<OperatorMessage>,
+    incoming: Sender<(Operator, OperatorMessage)>,
 ) -> Result<(), OperatorError> {
     let floodsub_topic = floodsub::Topic::new("operator");
     let local_peer_id = PeerId::from_public_key(&keypair.public());
@@ -64,10 +71,10 @@ pub(super) async fn run_operator_connection(
         }
     }
 
-    // Local demotions keyed by builder pubkey. Sent when a new operator subscribes.
-    let mut demotions = HashMap::new();
+    // Demotions keyed by builder pubkey. Sent when a new operator subscribes.
+    let mut demotions = PromotionStates::default();
     // Local collateral keyed by builder pubkey. Sent when a new operator subscribes.
-    let mut builder_collateral = HashMap::new();
+    let mut builder_collateral = HashMap::<BlsPublicKeyBytes, BuilderCollateral>::new();
     // Number of connected peers
     let mut connected_peers = 0u32;
 
@@ -75,18 +82,24 @@ pub(super) async fn run_operator_connection(
         tokio::select! {
             to_send = outgoing.recv() => match to_send {
                 Ok(msg) => {
-                    match &msg {
+                    let transmit = match &msg {
                         OperatorMessage::Demotion(demotion) => {
-                            demotions.insert(demotion.builder_pubkey, demotion.clone());
+                            demotions.demoted(demotion.clone())
                         }
                         OperatorMessage::Promotion(promotion) => {
-                            demotions.remove(&promotion.builder_pubkey);
+                            demotions.promoted(promotion.clone())
                         }
                         OperatorMessage::Collateral(collateral) => {
-                            builder_collateral.insert(collateral.builder_pubkey, collateral.clone());
+                            let existing = builder_collateral.get(&collateral.builder_pubkey).map(|bc| bc.collateral_wei).unwrap_or_default();
+                            if existing != collateral.collateral_wei {
+                                builder_collateral.insert(collateral.builder_pubkey, collateral.clone());
+                                true
+                            } else {
+                                false
+                            }
                         }
-                    }
-                    if connected_peers > 0 {
+                    };
+                    if transmit && connected_peers > 0 {
                         swarm.behaviour_mut().floodsub.publish(floodsub_topic.clone(), msg.as_ssz_bytes());
                     }
                 }
@@ -107,8 +120,21 @@ pub(super) async fn run_operator_connection(
                                             continue;
                                         }
                                     };
+
+                                    let forward = match &operator_msg {
+                                        OperatorMessage::Demotion(demotion) => {
+                                            demotions.demoted(demotion.clone())
+                                        }
+                                        OperatorMessage::Promotion(promotion) => {
+                                            demotions.promoted(promotion.clone())
+                                        },
+                                        _ => true,
+                                    };
+
                                     tracing::info!(?operator_msg, operator=operator.name, "new operator message");
-                                    let _ = incoming.send(operator_msg).await;
+                                    if forward {
+                                        let _ = incoming.send((operator.clone(), operator_msg)).await;
+                                    }
                                 }
                                 None => {
                                     tracing::warn!(?source, "received operator message from unknown peer");
@@ -119,8 +145,16 @@ pub(super) async fn run_operator_connection(
                         Event::Subscribed { peer_id, topic } => {
                             if peers.contains_key(&peer_id) && topic == floodsub_topic {
                                 // Send current demotion and collateral state.
-                                for (_, demotion) in &demotions {
-                                    swarm.behaviour_mut().floodsub.publish(floodsub_topic.clone(), OperatorMessage::Demotion(demotion.clone()).as_ssz_bytes());
+                                for state in demotions.iter() {
+                                    let msg = match state {
+                                        PromotionState::Demoted(demotion) => {
+                                            OperatorMessage::Demotion(demotion.clone()).as_ssz_bytes()
+                                        }
+                                        PromotionState::Promoted(promotion) => {
+                                            OperatorMessage::Promotion(promotion.clone()).as_ssz_bytes()
+                                        }
+                                    };
+                                    swarm.behaviour_mut().floodsub.publish(floodsub_topic.clone(), msg);
                                 }
                                 for (_, collateral) in &builder_collateral {
                                     swarm.behaviour_mut().floodsub.publish(floodsub_topic.clone(), OperatorMessage::Collateral(collateral.clone()).as_ssz_bytes());
