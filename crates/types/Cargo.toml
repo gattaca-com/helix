@@ -20,7 +20,7 @@ ethereum_ssz_derive.workspace = true
 flux-profiler.workspace = true
 hex.workspace = true
 lh-bls.workspace = true
-lh-eth2.workspace = true
+lh-eth2 = { workspace = true, features = ["events"] }
 lh-kzg.workspace = true
 lh-slot-clock.workspace = true
 lh-test-random.workspace = true

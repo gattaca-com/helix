@@ -23,7 +23,7 @@ macro_rules! ssz_bytes_wrapper {
         // SSZ TreeHash for VariableList<Elem, Max>
         impl ::tree_hash::TreeHash for $Name
         where
-            $Max: ::lh_types::Unsigned,
+            $Max: ::ssz_types::typenum::Unsigned,
         {
             #[inline]
             fn tree_hash_type() -> ::tree_hash::TreeHashType {
@@ -42,7 +42,7 @@ macro_rules! ssz_bytes_wrapper {
 
             #[inline]
             fn tree_hash_root(&self) -> ::tree_hash::Hash256 {
-                let root = ::tree_hash::merkle_root(self.0.as_ref(), <$Max as ::lh_types::Unsigned>::to_usize().div_ceil(::tree_hash::HASHSIZE));
+                let root = ::tree_hash::merkle_root(self.0.as_ref(), <$Max as ::ssz_types::typenum::Unsigned>::to_usize().div_ceil(::tree_hash::HASHSIZE));
                 ::tree_hash::mix_in_length(&root, self.0.len())
             }
         }

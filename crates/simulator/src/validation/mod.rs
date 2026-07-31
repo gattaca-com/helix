@@ -22,23 +22,23 @@ use helix_common::api::builder_api::InclusionListWithMetadata;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc, types::ErrorObject};
 use reth_ethereum::{
     Block, EthPrimitives, Receipt, TransactionSigned,
+    chainspec::EthereumHardforks,
     consensus::{ConsensusError, FullConsensus, validation::MAX_RLP_BLOCK_SIZE},
     evm::{
-        primitives::{Evm, block::StateChangeSource, execute::Executor},
+        primitives::{Evm, execute::Executor},
         revm::{cached::CachedReads, database::StateProviderDatabase},
     },
     node::{EthereumEngineValidator, core::rpc::result::internal_rpc_err},
     primitives::{
-        GotExpected, RecoveredBlock, SealedBlock, SealedHeaderFor,
+        GotExpected, Recovered, RecoveredBlock, SealedBlock, SealedHeaderFor,
         constants::GAS_LIMIT_BOUND_DIVISOR,
     },
     provider::{BlockExecutionOutput, ChainSpecProvider},
     rpc::eth::utils::recover_raw_transaction,
-    storage::{BlockReaderIdExt, HeaderProvider, StateProviderFactory},
+    storage::{BlockReaderIdExt, HeaderProvider, StateProviderBox, StateProviderFactory},
 };
 use reth_metrics::{Metrics, metrics::Gauge};
-use reth_node_builder::{BlockBody, ConfigureEvm, PayloadValidator};
-use reth_primitives::EthereumHardforks;
+use reth_node_builder::{BlockBody, ConfigureEvm};
 use reth_tasks::TaskExecutor;
 use revm::{Database, database::State};
 use serde::{Deserialize, Serialize};
@@ -51,7 +51,7 @@ use tokio::{
 use tracing::{info, warn};
 
 use crate::{
-    common::{RethConsensus, RethPayloadValidator, RethProvider},
+    common::{RethConsensus, RethEvmConfig, RethPayloadValidator, RethProvider},
     tx_sink::{TxSimRow, TxSimSink},
     validation::error::{GetParentError, ValidationApiError},
 };
@@ -75,7 +75,7 @@ impl ValidationApi {
     pub fn new(
         provider: RethProvider,
         consensus: Arc<RethConsensus>,
-        evm_config: reth_ethereum::evm::EthEvmConfig,
+        evm_config: RethEvmConfig,
         config: ValidationApiConfig,
         task_spawner: Box<TaskExecutor>,
         payload_validator: Arc<EthereumEngineValidator>,
@@ -186,66 +186,20 @@ impl ValidationApi {
 
         self.consensus.validate_header_against_parent(block.sealed_header(), &parent_header)?;
         let parent_header_hash = parent_header.hash();
-        let state_provider = self.provider.state_by_block_hash(parent_header_hash)?;
 
-        let mut request_cache = self.cached_reads(parent_header_hash).await;
+        let request_cache = self.cached_reads(parent_header_hash).await;
 
-        let cached_db = request_cache.as_db_mut(StateProviderDatabase::new(&state_provider));
-
-        let mut executor = self.evm_config.batch_executor(cached_db);
-
-        let mut accessed_blacklisted = None;
-
-        let (result, per_tx_coinbase, mut prev_cb) = if self.tx_sink.is_some() {
-            let coinbase = block.beneficiary();
-            let initial_cb = StateProviderDatabase::new(&state_provider)
-                .basic(coinbase)
-                .ok()
-                .flatten()
-                .map(|a| a.balance)
-                .unwrap_or_default();
-            let (cb_tx, cb_rx) = std::sync::mpsc::channel::<Option<U256>>();
-            let result = executor.execute_one_with_state_hook(
-                &block,
-                move |source, state: &revm::state::EvmState| {
-                    if let StateChangeSource::Transaction(_) = source {
-                        let _ = cb_tx.send(state.get(&coinbase).map(|a| a.info.balance));
-                    }
-                },
-            )?;
-            let per_tx: Vec<Option<U256>> = cb_rx.try_iter().collect();
-            (result, per_tx, initial_cb)
-        } else {
-            (executor.execute_one(&block)?, Vec::new(), U256::ZERO)
-        };
-
-        let state = executor.into_state();
-
-        if !self.disallow.is_empty() && apply_blacklist {
-            // Check whether the submission interacted with any blacklisted account by scanning
-            // the `State`'s cache that records everything read form database during execution.
-            for account in state.cache.accounts.keys() {
-                if self.disallow.contains(account) {
-                    accessed_blacklisted = Some(*account);
-                }
-            }
-        }
-
-        if let Some(account) = accessed_blacklisted {
-            return Err(ValidationApiError::Blacklist(account));
-        }
-
-        let output = BlockExecutionOutput { state: state.bundle_state.clone(), result };
-
-        // Validate inclusion list constraint if provided
-        if let Some(inclusion_list) = inclusion_list {
-            self.validate_inclusion_list_constraint(&block, state, &inclusion_list)?;
-        }
+        // Runs EVM execution and inclusion-list validation synchronously (no `.await` inside),
+        // since the state types involved borrow from a `!Sync` state provider and must not be
+        // held across an await point for this function's future to remain `Send`.
+        let ExecutedBlock { output, request_cache, state_provider, per_tx_coinbase, initial_cb } =
+            self.execute_block(&block, apply_blacklist, inclusion_list.as_ref(), request_cache)?;
+        let mut prev_cb = initial_cb;
 
         // update the cached reads
         self.update_cached_reads(parent_header_hash, request_cache).await;
 
-        self.consensus.validate_block_post_execution(&block, &output)?;
+        self.consensus.validate_block_post_execution(&block, &output, None, None)?;
 
         self.ensure_payment(&block, &output, &message)?;
 
@@ -292,17 +246,85 @@ impl ValidationApi {
         Ok(())
     }
 
+    /// Executes the block against the parent state and validates the inclusion list constraint,
+    /// entirely synchronously. Kept free of `.await` because the state types involved borrow
+    /// from a `!Sync` state provider and a `!Sync` cached-reads database.
+    fn execute_block(
+        &self,
+        block: &RecoveredBlock<Block>,
+        apply_blacklist: bool,
+        inclusion_list: Option<&InclusionListWithMetadata>,
+        mut request_cache: CachedReads,
+    ) -> Result<ExecutedBlock, ValidationApiError> {
+        let state_provider = self.provider.state_by_block_hash(block.parent_hash())?;
+
+        let cached_db = request_cache.as_db_mut(StateProviderDatabase::new(&state_provider));
+        let mut executor = self.evm_config.batch_executor(cached_db);
+
+        let mut accessed_blacklisted = None;
+
+        let (result, per_tx_coinbase, initial_cb) = if self.tx_sink.is_some() {
+            let coinbase = block.beneficiary();
+            let initial_cb = StateProviderDatabase::new(&state_provider)
+                .basic(coinbase)
+                .ok()
+                .flatten()
+                .map(|a| a.balance)
+                .unwrap_or_default();
+            let (cb_tx, cb_rx) = std::sync::mpsc::channel::<Option<U256>>();
+            let result = executor.execute_one_with_state_hook(block, move |state: revm::state::EvmState| {
+                let _ = cb_tx.send(state.get(&coinbase).map(|a| a.info.balance));
+            })?;
+            // Pre-execution system calls (e.g. beacon root, blockhashes) also commit state and
+            // fire this hook before any transaction executes; post-execution never commits here.
+            // Keep only the last-per-transaction entries so indices line up with the block's txs.
+            let mut per_tx: Vec<Option<U256>> = cb_rx.try_iter().collect();
+            let num_txs = block.body().transactions().count();
+            if per_tx.len() > num_txs {
+                per_tx.drain(..per_tx.len() - num_txs);
+            }
+            (result, per_tx, initial_cb)
+        } else {
+            (executor.execute_one(block)?, Vec::new(), U256::ZERO)
+        };
+
+        let state = executor.into_state();
+
+        if !self.disallow.is_empty() && apply_blacklist {
+            // Check whether the submission interacted with any blacklisted account by scanning
+            // the `State`'s cache that records everything read form database during execution.
+            for account in state.cache.accounts.keys() {
+                if self.disallow.contains(account) {
+                    accessed_blacklisted = Some(*account);
+                }
+            }
+        }
+
+        if let Some(account) = accessed_blacklisted {
+            return Err(ValidationApiError::Blacklist(account));
+        }
+
+        let output = BlockExecutionOutput { state: state.bundle_state.clone(), result };
+
+        self.validate_inclusion_list_constraint(block, state, inclusion_list)?;
+
+        Ok(ExecutedBlock { output, request_cache, state_provider, per_tx_coinbase, initial_cb })
+    }
+
     fn validate_inclusion_list_constraint<DB>(
         &self,
         block: &RecoveredBlock<Block>,
         post_state: State<DB>,
-        inclusion_list: &InclusionListWithMetadata,
+        inclusion_list: Option<&InclusionListWithMetadata>,
     ) -> Result<(), ValidationApiError>
     where
         DB: Database + Debug,
         <DB as revm::Database>::Error: Send + Sync + 'static,
     {
         // nothing to do if no inclusion‐list entries
+        let Some(inclusion_list) = inclusion_list else {
+            return Ok(());
+        };
         if inclusion_list.txs.is_empty() {
             return Ok(());
         }
@@ -335,7 +357,7 @@ impl ValidationApi {
 
             // RLP-decode the raw bytes
             let bytes_slice = req.bytes.as_ref();
-            let transaction: reth_primitives::Recovered<TransactionSigned> =
+            let transaction: Recovered<TransactionSigned> =
                 recover_raw_transaction(bytes_slice)
                     .map_err(|_| ValidationApiError::InclusionList)?;
 
@@ -662,7 +684,7 @@ impl BlockSubmissionValidationApiServer for ValidationApi {
         let this = self.clone();
         let (tx, rx) = oneshot::channel();
 
-        self.task_spawner.spawn_blocking(Box::pin(async move {
+        self.task_spawner.spawn_blocking_task(Box::pin(async move {
             let result = Self::_validate_builder_submission_v4(&this, request)
                 .await
                 .map_err(ErrorObject::from);
@@ -680,7 +702,7 @@ impl BlockSubmissionValidationApiServer for ValidationApi {
         let this = self.clone();
         let (tx, rx) = oneshot::channel();
 
-        self.task_spawner.spawn_blocking(Box::pin(async move {
+        self.task_spawner.spawn_blocking_task(Box::pin(async move {
             let result = Self::_validate_builder_submission_v5(&this, request)
                 .await
                 .map_err(ErrorObject::from);
@@ -691,6 +713,15 @@ impl BlockSubmissionValidationApiServer for ValidationApi {
     }
 }
 
+/// Result of [`ValidationApi::execute_block`].
+struct ExecutedBlock {
+    output: BlockExecutionOutput<Receipt>,
+    request_cache: CachedReads,
+    state_provider: StateProviderBox,
+    per_tx_coinbase: Vec<Option<U256>>,
+    initial_cb: U256,
+}
+
 pub struct ValidationApiInner {
     /// The provider that can interact with the chain.
     pub(crate) provider: RethProvider,
@@ -699,7 +730,7 @@ pub struct ValidationApiInner {
     /// Execution payload validator.
     pub(crate) payload_validator: Arc<RethPayloadValidator>,
     /// Block executor factory.
-    pub(crate) evm_config: reth_ethereum::evm::EthEvmConfig,
+    pub(crate) evm_config: RethEvmConfig,
     /// Set of disallowed addresses
     disallow: Arc<DashSet<Address>>,
     /// The maximum block distance - parent to latest - allowed for validation

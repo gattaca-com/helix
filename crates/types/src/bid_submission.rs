@@ -10,6 +10,7 @@ use lh_types::{ForkName, SignedRoot, Slot, test_utils::TestRandom};
 use serde::{Deserialize, Serialize};
 use ssz::{Decode, DecodeError};
 use ssz_derive::{Decode, Encode};
+use tracing::error;
 use tree_hash::TreeHash;
 use tree_hash_derive::TreeHash;
 
@@ -203,11 +204,33 @@ impl TestRandom for SignedBidSubmission {
 
 /// `ExecutionPayload`/`ExecutionRequests` ⇄ alloy engine V3 / requests V4.
 /// Shared by the V5 submission conversion and the block-merging TCP protocol.
-pub fn payload_from_v3(v3: ExecutionPayloadV3) -> ExecutionPayload {
+/// Returns `None` if `v3` carries more transactions or withdrawals than the spec allows —
+/// e.g. a builder- or merge-peer-supplied payload that doesn't respect the spec limit.
+pub fn payload_from_v3(v3: ExecutionPayloadV3) -> Option<ExecutionPayload> {
     use crate::fields::{Transaction, Withdrawal};
     let v2 = v3.payload_inner;
     let v1 = v2.payload_inner;
-    ExecutionPayload {
+    let num_transactions = v1.transactions.len();
+    let transactions = ssz_types::VariableList::new(
+        v1.transactions.into_iter().map(Transaction).collect(),
+    )
+    .map_err(|_| error!(num_transactions, "transactions exceed spec limit"))
+    .ok()?;
+    let num_withdrawals = v2.withdrawals.len();
+    let withdrawals = ssz_types::VariableList::new(
+        v2.withdrawals
+            .into_iter()
+            .map(|w| Withdrawal {
+                index: w.index,
+                validator_index: w.validator_index,
+                address: w.address,
+                amount: w.amount,
+            })
+            .collect(),
+    )
+    .map_err(|_| error!(num_withdrawals, "withdrawals exceed spec limit"))
+    .ok()?;
+    Some(ExecutionPayload {
         parent_hash: v1.parent_hash,
         fee_recipient: v1.fee_recipient,
         state_root: v1.state_root,
@@ -221,25 +244,11 @@ pub fn payload_from_v3(v3: ExecutionPayloadV3) -> ExecutionPayload {
         extra_data: ExtraData(v1.extra_data),
         base_fee_per_gas: v1.base_fee_per_gas,
         block_hash: v1.block_hash,
-        transactions: lh_types::VariableList::new(
-            v1.transactions.into_iter().map(Transaction).collect(),
-        )
-        .expect("transactions exceed spec limit"),
-        withdrawals: lh_types::VariableList::new(
-            v2.withdrawals
-                .into_iter()
-                .map(|w| Withdrawal {
-                    index: w.index,
-                    validator_index: w.validator_index,
-                    address: w.address,
-                    amount: w.amount,
-                })
-                .collect(),
-        )
-        .expect("withdrawals exceed spec limit"),
+        transactions,
+        withdrawals,
         blob_gas_used: v3.blob_gas_used,
         excess_blob_gas: v3.excess_blob_gas,
-    }
+    })
 }
 
 pub fn payload_to_v3(ep: &ExecutionPayload) -> ExecutionPayloadV3 {
@@ -279,50 +288,55 @@ pub fn payload_to_v3(ep: &ExecutionPayload) -> ExecutionPayloadV3 {
     }
 }
 
-pub fn requests_from_v4(v4: ExecutionRequestsV4) -> ExecutionRequests {
-    ExecutionRequests {
-        deposits: lh_types::VariableList::new(
-            v4.deposits
-                .into_iter()
-                .map(|d| lh_types::DepositRequest {
-                    pubkey: lh_types::PublicKeyBytes::deserialize(&d.pubkey[..]).expect("len=48"),
-                    withdrawal_credentials: d.withdrawal_credentials,
-                    amount: d.amount,
-                    signature: lh_types::SignatureBytes::deserialize(&d.signature[..])
-                        .expect("len=96"),
-                    index: d.index,
-                })
-                .collect(),
-        )
-        .expect("deposits exceed spec limit"),
-        withdrawals: lh_types::VariableList::new(
-            v4.withdrawals
-                .into_iter()
-                .map(|w| lh_types::WithdrawalRequest {
-                    source_address: w.source_address,
-                    validator_pubkey: lh_types::PublicKeyBytes::deserialize(
-                        &w.validator_pubkey[..],
-                    )
+/// Returns `None` if `v4` carries more deposits, withdrawal requests, or consolidations than
+/// the spec allows — e.g. a builder- or merge-peer-supplied payload that doesn't respect the
+/// spec limit.
+pub fn requests_from_v4(v4: ExecutionRequestsV4) -> Option<ExecutionRequests> {
+    let num_deposits = v4.deposits.len();
+    let deposits = ssz_types::VariableList::new(
+        v4.deposits
+            .into_iter()
+            .map(|d| lh_types::DepositRequest {
+                pubkey: lh_bls::PublicKeyBytes::deserialize(&d.pubkey[..]).expect("len=48"),
+                withdrawal_credentials: d.withdrawal_credentials,
+                amount: d.amount,
+                signature: lh_bls::SignatureBytes::deserialize(&d.signature[..]).expect("len=96"),
+                index: d.index,
+            })
+            .collect(),
+    )
+    .map_err(|_| error!(num_deposits, "deposits exceed spec limit"))
+    .ok()?;
+    let num_withdrawals = v4.withdrawals.len();
+    let withdrawals = ssz_types::VariableList::new(
+        v4.withdrawals
+            .into_iter()
+            .map(|w| lh_types::WithdrawalRequest {
+                source_address: w.source_address,
+                validator_pubkey: lh_bls::PublicKeyBytes::deserialize(&w.validator_pubkey[..])
                     .expect("len=48"),
-                    amount: w.amount,
-                })
-                .collect(),
-        )
-        .expect("withdrawal requests exceed spec limit"),
-        consolidations: lh_types::VariableList::new(
-            v4.consolidations
-                .into_iter()
-                .map(|c| lh_types::ConsolidationRequest {
-                    source_address: c.source_address,
-                    source_pubkey: lh_types::PublicKeyBytes::deserialize(&c.source_pubkey[..])
-                        .expect("len=48"),
-                    target_pubkey: lh_types::PublicKeyBytes::deserialize(&c.target_pubkey[..])
-                        .expect("len=48"),
-                })
-                .collect(),
-        )
-        .expect("consolidations exceed spec limit"),
-    }
+                amount: w.amount,
+            })
+            .collect(),
+    )
+    .map_err(|_| error!(num_withdrawals, "withdrawal requests exceed spec limit"))
+    .ok()?;
+    let num_consolidations = v4.consolidations.len();
+    let consolidations = ssz_types::VariableList::new(
+        v4.consolidations
+            .into_iter()
+            .map(|c| lh_types::ConsolidationRequest {
+                source_address: c.source_address,
+                source_pubkey: lh_bls::PublicKeyBytes::deserialize(&c.source_pubkey[..])
+                    .expect("len=48"),
+                target_pubkey: lh_bls::PublicKeyBytes::deserialize(&c.target_pubkey[..])
+                    .expect("len=48"),
+            })
+            .collect(),
+    )
+    .map_err(|_| error!(num_consolidations, "consolidations exceed spec limit"))
+    .ok()?;
+    Some(ExecutionRequests { deposits, withdrawals, consolidations })
 }
 
 pub fn requests_to_v4(er: &ExecutionRequests) -> ExecutionRequestsV4 {
@@ -364,10 +378,16 @@ pub fn requests_to_v4(er: &ExecutionRequests) -> ExecutionRequestsV4 {
     }
 }
 
-impl From<SignedBidSubmissionV5> for SignedBidSubmission {
-    fn from(v: SignedBidSubmissionV5) -> SignedBidSubmission {
+impl TryFrom<SignedBidSubmissionV5> for SignedBidSubmission {
+    /// Set (and logged) when `v` carries more of some list than the spec allows.
+    type Error = ();
+
+    fn try_from(v: SignedBidSubmissionV5) -> Result<SignedBidSubmission, Self::Error> {
         let m = v.message;
-        SignedBidSubmission {
+        let num_commitments = v.blobs_bundle.commitments.len();
+        let commitments = ssz_types::VariableList::new(v.blobs_bundle.commitments)
+            .map_err(|_| error!(num_commitments, "commitments exceed spec limit"))?;
+        Ok(SignedBidSubmission {
             message: BidTrace {
                 slot: m.slot,
                 parent_hash: m.parent_hash,
@@ -379,16 +399,15 @@ impl From<SignedBidSubmissionV5> for SignedBidSubmission {
                 gas_used: m.gas_used,
                 value: m.value,
             },
-            execution_payload: Arc::new(payload_from_v3(v.execution_payload)),
+            execution_payload: Arc::new(payload_from_v3(v.execution_payload).ok_or(())?),
             blobs_bundle: Arc::new(BlobsBundle {
-                commitments: lh_types::VariableList::new(v.blobs_bundle.commitments)
-                    .expect("commitments exceed spec limit"),
+                commitments,
                 proofs: v.blobs_bundle.proofs,
                 blobs: v.blobs_bundle.blobs.into_iter().map(Arc::new).collect(),
             }),
-            execution_requests: Arc::new(requests_from_v4(v.execution_requests)),
+            execution_requests: Arc::new(requests_from_v4(v.execution_requests).ok_or(())?),
             signature: v.signature,
-        }
+        })
     }
 }
 

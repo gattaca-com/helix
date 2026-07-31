@@ -1,6 +1,6 @@
 use std::hint::black_box;
 
-use alloy_rpc_types::beacon::relay::SignedBidSubmissionV4 as AlloySignedBidSubmission;
+use alloy_rpc_types::beacon::relay::SignedBidSubmissionV5 as AlloySignedBidSubmission;
 use criterion::{Criterion, criterion_group, criterion_main};
 use helix_types::SignedBidSubmission;
 use ssz::{Decode, Encode};

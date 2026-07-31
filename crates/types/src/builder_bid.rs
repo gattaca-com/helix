@@ -55,7 +55,7 @@ mod tests {
     }
 
     fn test_execution_payload_header_variant(fork_name: ForkName) {
-        type LhBuilderBid = lh_types::builder_bid::BuilderBid<MainnetEthSpec>;
+        type LhBuilderBid = lh_types::BuilderBid<MainnetEthSpec>;
 
         let our_payload = BuilderBid::test_random();
         let ssz_bytes = our_payload.as_ssz_bytes();

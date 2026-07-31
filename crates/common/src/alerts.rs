@@ -116,16 +116,21 @@ impl AlertManager {
             let url = url.clone();
 
             crate::spawn_tracked!(async move {
-                let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::url(
-                    "🔁 Repromote",
-                    url.parse().expect("valid url"),
-                )]]);
-                if let Err(e) = bot
-                    .send_message(chat_id, msg)
-                    .parse_mode(ParseMode::MarkdownV2)
-                    .reply_markup(keyboard)
-                    .await
-                {
+                let keyboard = match url.parse() {
+                    Ok(parsed_url) => Some(InlineKeyboardMarkup::new(vec![vec![
+                        InlineKeyboardButton::url("🔁 Repromote", parsed_url),
+                    ]])),
+                    Err(e) => {
+                        error!("invalid repromote url {url:?}: {e}");
+                        None
+                    }
+                };
+
+                let mut request = bot.send_message(chat_id, msg).parse_mode(ParseMode::MarkdownV2);
+                if let Some(keyboard) = keyboard {
+                    request = request.reply_markup(keyboard);
+                }
+                if let Err(e) = request.await {
                     error!("demotion alert send error: {e}");
                 }
             });

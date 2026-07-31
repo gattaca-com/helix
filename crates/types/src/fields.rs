@@ -1,12 +1,13 @@
 use alloy_primitives::FixedBytes;
-use lh_types::{EthSpec, FixedVector, MainnetEthSpec, VariableList, test_utils::TestRandom};
+use lh_types::{EthSpec, MainnetEthSpec, test_utils::TestRandom};
 use rand::Rng;
+use ssz_types::{FixedVector, VariableList};
 
 use crate::{SszError, ssz_bytes_wrapper};
 
-pub type Withdrawal = lh_types::withdrawal::Withdrawal;
-pub type Withdrawals = lh_types::execution_payload::Withdrawals<MainnetEthSpec>;
-pub type ExecutionRequests = lh_types::execution_requests::ExecutionRequests<MainnetEthSpec>;
+pub type Withdrawal = lh_types::Withdrawal;
+pub type Withdrawals = lh_types::Withdrawals<MainnetEthSpec>;
+pub type ExecutionRequests = lh_types::ExecutionRequests<MainnetEthSpec>;
 pub type KzgCommitment = alloy_consensus::Bytes48;
 pub type KzgCommitments =
     VariableList<KzgCommitment, <MainnetEthSpec as EthSpec>::MaxBlobCommitmentsPerBlock>;
@@ -32,7 +33,7 @@ pub type Bloom = FixedBytes<LOGS_BLOOM_SIZE>; // FixedVector<u8, E::BytesPerLogs
 pub fn convert_bloom_to_lighthouse(
     bloom: &Bloom,
 ) -> FixedVector<u8, <MainnetEthSpec as EthSpec>::BytesPerLogsBloom> {
-    FixedVector::from(bloom.to_vec())
+    FixedVector::new(bloom.to_vec()).expect("Bloom is always BytesPerLogsBloom bytes")
 }
 
 ssz_bytes_wrapper! {

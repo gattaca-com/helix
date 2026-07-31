@@ -24,7 +24,7 @@ use helix_common::{
     metrics::start_metrics_server,
     signing::RelaySigningContext,
     task::{block_on, init_runtime},
-    utils::{init_panic_hook, init_tracing_log},
+    utils::{init_panic_hook, init_tracing_log, install_default_crypto_provider},
 };
 use helix_operator::spawn_operator_connection;
 use helix_relay::{
@@ -71,6 +71,8 @@ impl AsRef<RelayConfig> for RelayConfigExt {
 }
 
 fn main() {
+    install_default_crypto_provider();
+
     let config: RelayConfigExt = load_config();
     let RelayConfigExt { config, spine_config } = config;
 

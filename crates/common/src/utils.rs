@@ -120,6 +120,15 @@ fn get_crate_filter(crates_level: tracing::Level) -> EnvFilter {
 static APP_ID: OnceLock<String> = OnceLock::new();
 static DISCORD_WEBHOOK_URL: OnceLock<Url> = OnceLock::new();
 
+/// Explicitly selects the aws-lc-rs rustls crypto provider for this process.
+///
+/// Some dependencies (e.g. lighthouse's `eth2` crate) pull in rustls' `ring` backend alongside
+/// our own aws-lc-rs one, so rustls can no longer auto-detect a single provider. Safe to call
+/// more than once; later calls are no-ops.
+pub fn install_default_crypto_provider() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+}
+
 pub fn init_panic_hook(
     app_id: String,
     discord_web_hook: Option<Url>,
@@ -168,17 +177,27 @@ pub fn alert_discord(message: &str) {
     }
 }
 
+/// Called from the panic hook, so any failure here is only logged, never `.expect()`-ed —
+/// panicking again while already unwinding a panic would abort the process outright.
 pub fn save_to_file(path: PathBuf, json: String) {
-    // Create the directory if it doesn't exist
-    if let Some(parent_dir) = Path::new(&path).parent() {
-        fs::create_dir_all(parent_dir).expect("Failed to create directory");
+    if let Some(parent_dir) = Path::new(&path).parent()
+        && let Err(err) = fs::create_dir_all(parent_dir)
+    {
+        eprintln!("failed to create crash log directory {parent_dir:?}: {err}");
+        return;
     }
 
-    // Open the file, truncating it if it already exists
-    let mut file = File::create(&path).expect("Failed to create file");
+    let mut file = match File::create(&path) {
+        Ok(file) => file,
+        Err(err) => {
+            eprintln!("failed to create crash log file {path:?}: {err}");
+            return;
+        }
+    };
 
-    // Write the JSON string to the file
-    file.write_all(json.as_bytes()).expect("Failed to write JSON to file");
+    if let Err(err) = file.write_all(json.as_bytes()) {
+        eprintln!("failed to write crash log to {path:?}: {err}");
+    }
 }
 
 // Returns request id from header if exists otherwise returns a random one

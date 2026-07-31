@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use alloy_consensus::TxEnvelope;
 use alloy_rlp::Decodable;
 use helix_common::api::builder_api::InclusionList;
-use helix_types::BlsPublicKeyBytes;
+use helix_types::{BlsPublicKeyBytes, Transactions};
+use tracing::error;
 use tree_hash::TreeHash;
 
 pub(crate) const INCLUSION_LIST_MAX_BYTES: usize = 8 * 1024;
@@ -44,7 +45,7 @@ pub(crate) fn compute_shared_inclusion_list(
 
     // Create an inclusion list by selecting at each step the best transaction that fits.
     let mut bytes_available = INCLUSION_LIST_MAX_BYTES;
-    let txs: Vec<_> = tx_frequency_ordered
+    let mut txs: Vec<_> = tx_frequency_ordered
         .into_iter()
         .map(|(_, (tx, _))| tx)
         .filter(|tx| {
@@ -57,7 +58,12 @@ pub(crate) fn compute_shared_inclusion_list(
         })
         .collect();
 
-    InclusionList { txs: txs.into() }
+    if txs.len() > Transactions::max_len() {
+        error!(len = txs.len(), max = Transactions::max_len(), "shared inclusion list exceeds spec limit, truncating");
+        txs.truncate(Transactions::max_len());
+    }
+
+    InclusionList { txs: txs.try_into().expect("txs truncated to max length above") }
 }
 
 /// Compute the final inclusion list by selecting the most frequent inclusion list by our peers.
@@ -134,7 +140,7 @@ mod tests {
                 }
             })
             .collect();
-        InclusionList { txs: txs.into() }
+        InclusionList { txs: txs.try_into().expect("inclusion list exceeds spec limit") }
     }
 
     #[test]
@@ -198,8 +204,8 @@ mod tests {
             .collect();
 
         let vote_map = HashMap::from([
-            ([1_u8; 48].into(), (slot, InclusionList { txs: txs_1.into() })),
-            ([2_u8; 48].into(), (slot, InclusionList { txs: txs_2.into() })),
+            ([1_u8; 48].into(), (slot, InclusionList { txs: txs_1.try_into().expect("inclusion list exceeds spec limit") })),
+            ([2_u8; 48].into(), (slot, InclusionList { txs: txs_2.try_into().expect("inclusion list exceeds spec limit") })),
         ]);
         let shared_il = compute_shared_inclusion_list(&vote_map, slot, inclusion_list.clone());
 

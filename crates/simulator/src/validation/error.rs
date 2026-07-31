@@ -5,10 +5,10 @@ use reth_ethereum::{
     consensus::ConsensusError,
     evm::primitives::block::BlockExecutionError,
     node::core::rpc::result::{internal_rpc_err, invalid_params_rpc_err},
+    primitives::GotExpected,
     provider::ProviderError,
 };
 use reth_node_builder::NewPayloadError;
-use reth_primitives::GotExpected;
 
 /// Errors thrown by the validation API.
 #[derive(Debug, thiserror::Error)]

@@ -171,6 +171,7 @@ fn client_test() -> Result<(), Box<dyn std::error::Error>> {
     use std::{pin::Pin, task::Context};
 
     use crate::http::pending_response::noop_waker;
+    crate::utils::install_default_crypto_provider();
     let client = HttpClient::new()?;
     let url = Url::parse("https://ifconfig.me/")?;
     let mut pending = client.get(&url)?;

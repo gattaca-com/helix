@@ -18,6 +18,7 @@ use tokio_tungstenite::tungstenite::{
     handshake::derive_accept_key,
     protocol::{self, WebSocketConfig},
 };
+use tracing::error;
 
 pub type RawWebSocket = tokio_tungstenite::tungstenite::WebSocket<TcpStream>;
 
@@ -90,17 +91,28 @@ impl RawWebSocketUpgrade {
 
             // axum::serve uses auto::Builder which wraps the IO in Rewind<TokioIo<TcpStream>>.
             // Use the auto upgrade downcast helper which unwraps the Rewind layer.
-            let parts = hyper_util::server::conn::auto::upgrade::downcast::<
+            let parts = match hyper_util::server::conn::auto::upgrade::downcast::<
                 TokioIo<tokio::net::TcpStream>,
             >(upgraded)
-            .expect("upgraded connection must be TokioIo<TcpStream>");
+            {
+                Ok(parts) => parts,
+                Err(_) => {
+                    error!("upgraded websocket connection was not TokioIo<TcpStream>, dropping");
+                    return;
+                }
+            };
             debug_assert!(
                 parts.read_buf.is_empty(),
                 "unexpected pre-buffered bytes after WebSocket upgrade"
             );
 
-            let std_tcp =
-                parts.io.into_inner().into_std().expect("failed to convert tokio TcpStream to std");
+            let std_tcp = match parts.io.into_inner().into_std() {
+                Ok(std_tcp) => std_tcp,
+                Err(e) => {
+                    error!("failed to convert tokio TcpStream to std: {e}");
+                    return;
+                }
+            };
 
             let ws =
                 protocol::WebSocket::from_raw_socket(std_tcp, protocol::Role::Server, Some(config));

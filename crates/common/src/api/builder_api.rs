@@ -136,10 +136,13 @@ pub struct InclusionList {
     pub txs: Transactions,
 }
 
-impl From<&InclusionListWithMetadata> for InclusionList {
-    fn from(value: &InclusionListWithMetadata) -> Self {
+impl TryFrom<&InclusionListWithMetadata> for InclusionList {
+    type Error = String;
+
+    fn try_from(value: &InclusionListWithMetadata) -> Result<Self, Self::Error> {
         let txs: Vec<_> = value.txs.iter().map(|tx| tx.bytes.clone()).collect();
-        InclusionList { txs: txs.into() }
+        let txs = txs.try_into().map_err(|_| "inclusion list exceeds spec limit".to_string())?;
+        Ok(InclusionList { txs })
     }
 }
 
@@ -157,7 +160,7 @@ mod tests {
                 Transaction("0x02f87582426801850221646a70850221646a7082520894acabf6c2d38973a5f2ebab6b5e85623db1005a4e880ddf2f839aa3d97080c080a0088ae2635655e314949dae343ac296c3fb6ac56802e1024639f9603c61e253669f2bf33fe18ce70520abc6a662794c1ef5bb310248b7b7c4acc6be93e7885d62".parse::<Bytes>().unwrap()),
                 Transaction("0x02f8b5824268820130850239465d16850239465d1682728a9494373a4919b3240d86ea41593d5eba789fef384880b844095ea7b30000000000000000000000005fbe74a283f7954f10aa04c2edf55578811aeb03000000000000000000000000000000000000000000000000000009184e72a000c080a0a6d0c20df1f0582c0dbf62a125fc1874868106d845c3916d666441973fb29ff0a04f4ce8879bd85510c82246de9a58a5a705dc672b6d89cc8183544f2db8649ea9".parse::<Bytes>().unwrap()),
                 Transaction("0x02f8b48242688193850232306c41850232306c4182739294685ce6742351ae9b618f383883d6d1e0c5a31b4b80b844095ea7b30000000000000000000000005fbe74a283f7954f10aa04c2edf55578811aeb030000000000000000000000000000000000000000000000000de0b6b3a7640000c001a0bda9b5171b2e0d3ceceebfa4de504485bd6a8fd5041251fcd2d4aed24a65ab4ca0369e2d4bcc7ef790e64195578005c8a6c3313dd0b0bc105856d0202a4e230de9".parse::<Bytes>().unwrap()),
-            ].into() };
+            ].try_into().unwrap() };
         let il_len = il.txs.len();
         let il_w_md = InclusionListWithMetadata::try_from(il).unwrap();
 

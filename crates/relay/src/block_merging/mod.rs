@@ -99,8 +99,8 @@ fn merged_block_to_response(
         .collect();
     Some(BlockMergeResponse {
         base_block_hash: m.base_block_hash,
-        execution_payload: payload_from_v3(m.execution_payload),
-        execution_requests: requests_from_v4(m.execution_requests),
+        execution_payload: payload_from_v3(m.execution_payload)?,
+        execution_requests: requests_from_v4(m.execution_requests)?,
         appended_blobs,
         proposer_value: m.proposer_value,
         base_builder_revenue: m.base_builder_revenue,

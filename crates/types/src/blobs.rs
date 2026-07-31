@@ -231,7 +231,7 @@ mod tests {
 
         for b in &our_bundle.blobs {
             let blob_bytes: Vec<u8> = b.as_ref().to_vec();
-            lh_bundle.blobs.push(blob_bytes.into()).unwrap();
+            lh_bundle.blobs.push(blob_bytes.try_into().unwrap()).unwrap();
         }
 
         assert_eq!(our_bundle.as_ssz_bytes(), lh_bundle.as_ssz_bytes());

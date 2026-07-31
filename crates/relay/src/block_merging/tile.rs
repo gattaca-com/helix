@@ -444,7 +444,8 @@ impl BlockMergingTile {
                             stats.merged_blob_missing += 1;
                             warn!(
                                 ?token,
-                                "could not resolve appended blob sidecar, dropping merged block"
+                                "could not build merge response (missing blob sidecar or invalid \
+                                 payload), dropping merged block"
                             );
                             return;
                         };

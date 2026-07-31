@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use alloy_primitives::Bytes;
 use clap::Parser;
-use helix_common::config::ClickhouseConfig;
+use helix_common::{config::ClickhouseConfig, utils::install_default_crypto_provider};
 use reth_chain_state::CanonStateSubscriptions;
 use reth_ethereum::{
     cli::{chainspec::EthereumChainSpecParser, interface::Cli},
@@ -30,6 +30,8 @@ use crate::{
 };
 
 fn main() {
+    install_default_crypto_provider();
+
     Cli::<EthereumChainSpecParser, CliExt>::parse()
         .run(|builder, args| async move {
             let handle = builder
