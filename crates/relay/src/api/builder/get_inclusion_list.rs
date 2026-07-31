@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::{Extension, extract::Path, response::IntoResponse};
 use helix_common::api::builder_api::InclusionList;
 use hyper::StatusCode;
-use tracing::debug;
+use tracing::{debug, error};
 
 use super::{InclusionListPathParams, api::BuilderApi, error::BuilderApiError};
 use crate::Api;
@@ -36,7 +36,10 @@ impl<A: Api> BuilderApi<A> {
         let (current_list, key) = list_with_key.into();
 
         if key == &(slot, pub_key, parent_hash) {
-            let response_payload = InclusionList::from(current_list);
+            let response_payload = InclusionList::try_from(current_list).map_err(|err| {
+                error!(%err, "failed to convert cached inclusion list to response");
+                BuilderApiError::InternalError
+            })?;
             Ok((StatusCode::OK, axum::Json(response_payload)).into_response())
         } else {
             debug!(

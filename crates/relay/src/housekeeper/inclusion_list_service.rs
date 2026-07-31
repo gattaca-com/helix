@@ -9,7 +9,7 @@ use helix_common::{
     api::builder_api::InclusionList,
     http::client::{HttpClient, PendingResponse},
 };
-use helix_types::Transaction;
+use helix_types::{Transaction, Transactions};
 use serde::Deserialize;
 use tracing::warn;
 use url::Url;
@@ -70,8 +70,18 @@ impl IlFetchState {
         match self.req.poll_json::<IlJsonRpcResponse>() {
             Poll::Pending => Poll::Pending,
             Poll::Ready(Ok(resp)) => {
-                let txs: Vec<Transaction> = resp.result.into_iter().map(Transaction).collect();
-                Poll::Ready(Some(InclusionList { txs: txs.try_into().expect("inclusion list exceeds spec limit") }))
+                let mut txs: Vec<Transaction> = resp.result.into_iter().map(Transaction).collect();
+                if txs.len() > Transactions::max_len() {
+                    warn!(
+                        len = txs.len(),
+                        max = Transactions::max_len(),
+                        "inclusion list node returned more transactions than the spec limit, truncating"
+                    );
+                    txs.truncate(Transactions::max_len());
+                }
+                Poll::Ready(Some(InclusionList {
+                    txs: txs.try_into().expect("txs truncated to max length above"),
+                }))
             }
             Poll::Ready(Err(e)) => {
                 warn!(%e, "IL fetch failed, retrying");

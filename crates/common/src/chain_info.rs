@@ -35,8 +35,7 @@ impl ChainInfo {
     }
 
     pub fn current_fork_name(&self) -> ForkName {
-        let current_slot = self.clock.now().unwrap();
-        self.fork_at_slot(current_slot)
+        self.fork_at_slot(self.current_slot())
     }
 
     pub fn seconds_per_slot(&self) -> u64 {
@@ -57,10 +56,11 @@ impl ChainInfo {
         duration_into_slot(&self.clock, slot)
     }
 
-    /// Current slot based on current clock time
+    /// Current slot based on current clock time. Falls back to genesis slot (0) if we're
+    /// running before the configured genesis time (e.g. a testnet whose genesis hasn't
+    /// started yet) rather than panicking on every request.
     pub fn current_slot(&self) -> Slot {
-        // safe since we're past genesis slot and UNIX_EPOCH
-        self.clock.now().unwrap()
+        self.clock.now().unwrap_or(Slot::new(0))
     }
 
     pub fn max_blobs_per_block(&self) -> usize {

@@ -136,10 +136,13 @@ pub struct InclusionList {
     pub txs: Transactions,
 }
 
-impl From<&InclusionListWithMetadata> for InclusionList {
-    fn from(value: &InclusionListWithMetadata) -> Self {
+impl TryFrom<&InclusionListWithMetadata> for InclusionList {
+    type Error = String;
+
+    fn try_from(value: &InclusionListWithMetadata) -> Result<Self, Self::Error> {
         let txs: Vec<_> = value.txs.iter().map(|tx| tx.bytes.clone()).collect();
-        InclusionList { txs: txs.try_into().expect("inclusion list exceeds spec limit") }
+        let txs = txs.try_into().map_err(|_| "inclusion list exceeds spec limit".to_string())?;
+        Ok(InclusionList { txs })
     }
 }
 

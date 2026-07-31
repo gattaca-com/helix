@@ -36,13 +36,18 @@ where
         Some(runtime) => runtime.spawn(
             async move {
                 // TODO perf: preload metrics for labels.
-                let metric = crate::metrics::TASK_COUNT
-                    .get_metric_with_label_values(&[label.as_str()])
-                    .expect("Failed to get metric!");
-                metric.inc();
-                let result = future.await;
-                metric.dec();
-                result
+                match crate::metrics::TASK_COUNT.get_metric_with_label_values(&[label.as_str()]) {
+                    Ok(metric) => {
+                        metric.inc();
+                        let result = future.await;
+                        metric.dec();
+                        result
+                    }
+                    Err(err) => {
+                        tracing::error!(%err, label, "failed to get TASK_COUNT metric, running task without tracking");
+                        future.await
+                    }
+                }
             }
             .in_current_span(),
         ),

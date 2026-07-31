@@ -177,17 +177,27 @@ pub fn alert_discord(message: &str) {
     }
 }
 
+/// Called from the panic hook, so any failure here is only logged, never `.expect()`-ed —
+/// panicking again while already unwinding a panic would abort the process outright.
 pub fn save_to_file(path: PathBuf, json: String) {
-    // Create the directory if it doesn't exist
-    if let Some(parent_dir) = Path::new(&path).parent() {
-        fs::create_dir_all(parent_dir).expect("Failed to create directory");
+    if let Some(parent_dir) = Path::new(&path).parent()
+        && let Err(err) = fs::create_dir_all(parent_dir)
+    {
+        eprintln!("failed to create crash log directory {parent_dir:?}: {err}");
+        return;
     }
 
-    // Open the file, truncating it if it already exists
-    let mut file = File::create(&path).expect("Failed to create file");
+    let mut file = match File::create(&path) {
+        Ok(file) => file,
+        Err(err) => {
+            eprintln!("failed to create crash log file {path:?}: {err}");
+            return;
+        }
+    };
 
-    // Write the JSON string to the file
-    file.write_all(json.as_bytes()).expect("Failed to write JSON to file");
+    if let Err(err) = file.write_all(json.as_bytes()) {
+        eprintln!("failed to write crash log to {path:?}: {err}");
+    }
 }
 
 // Returns request id from header if exists otherwise returns a random one
