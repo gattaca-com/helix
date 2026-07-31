@@ -275,9 +275,21 @@ impl LocalCache {
         CACHE_SIZE.with_label_values(&["merged_blocks"]).set(self.merged_blocks.len() as f64);
     }
 
-    pub fn set_merged_block_header_served(&self, block_hash: &B256, time_ns: u64) {
+    pub fn set_merged_block_header_served(
+        &self,
+        block_hash: &B256,
+        time_ns: u64,
+        was_top_builder: bool,
+    ) {
         if let Some(mut b) = self.merged_blocks.get_mut(block_hash) {
             b.trace.header_served_time_ns = Some(time_ns);
+            b.trace.was_top_builder = Some(was_top_builder);
+        }
+    }
+
+    pub fn set_merged_block_top_bid(&self, block_hash: &B256, top_bid: U256) {
+        if let Some(mut b) = self.merged_blocks.get_mut(block_hash) {
+            b.trace.top_bid = Some(top_bid);
         }
     }
 

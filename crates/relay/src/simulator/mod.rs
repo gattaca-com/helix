@@ -41,6 +41,8 @@ pub struct BlockMergeResponse {
     pub appended_blobs: Vec<BlobWithMetadata>,
     /// Total value for the proposer
     pub proposer_value: U256,
+    pub base_builder_revenue: U256,
+    pub relay_revenue: U256,
     pub builder_inclusions: HashMap<Address, BuilderInclusionResult>,
     pub trace: MergedBlockTrace,
 }

@@ -2810,17 +2810,25 @@ impl PostgresDatabaseService {
             original_block_hash: &'a [u8],
             block_hash: &'a [u8],
             original_value: PostgresNumeric,
+            // DB column is `merged_value`; the Rust/API-side name is `proposer_value`.
             merged_value: PostgresNumeric,
+            total_merged_value: PostgresNumeric,
+            base_builder_revenue: PostgresNumeric,
+            relay_revenue: PostgresNumeric,
             original_tx_count: i32,
             merged_tx_count: i32,
             original_blob_count: i32,
             merged_blob_count: i32,
+            original_gas_used: i64,
+            merged_gas_used: i64,
             builder_inclusions: String,
             request_time_ns: i64,
             sim_start_time_ns: i64,
             sim_end_time_ns: i64,
             finalize_time_ns: i64,
             header_served_time_ns: Option<i64>,
+            was_top_builder: Option<bool>,
+            top_bid: Option<PostgresNumeric>,
             inserted_at: SystemTime,
         }
 
@@ -2835,23 +2843,30 @@ impl PostgresDatabaseService {
                 original_block_hash: block.original_block_hash.as_slice(),
                 block_hash: block.block_hash.as_slice(),
                 original_value: PostgresNumeric::from(block.original_value),
-                merged_value: PostgresNumeric::from(block.merged_value),
+                merged_value: PostgresNumeric::from(block.proposer_value),
+                total_merged_value: PostgresNumeric::from(block.total_merged_value),
+                base_builder_revenue: PostgresNumeric::from(block.base_builder_revenue),
+                relay_revenue: PostgresNumeric::from(block.relay_revenue),
                 original_tx_count: block.original_tx_count as i32,
                 merged_tx_count: block.merged_tx_count as i32,
                 original_blob_count: block.original_blob_count as i32,
                 merged_blob_count: block.merged_blob_count as i32,
+                original_gas_used: block.original_gas_used as i64,
+                merged_gas_used: block.merged_gas_used as i64,
                 builder_inclusions: builder_inclusions_json,
                 request_time_ns: block.trace.request_time_ns as i64,
                 sim_start_time_ns: block.trace.sim_start_time_ns as i64,
                 sim_end_time_ns: block.trace.sim_end_time_ns as i64,
                 finalize_time_ns: block.trace.finalize_time_ns as i64,
                 header_served_time_ns: block.trace.header_served_time_ns.map(|v| v as i64),
+                was_top_builder: block.trace.was_top_builder,
+                top_bid: block.trace.top_bid.map(PostgresNumeric::from),
                 inserted_at: SystemTime::now(),
             });
         }
 
         // Flatten into SQL params
-        const FIELD_COUNT: usize = 17;
+        const FIELD_COUNT: usize = 24;
         let mut params: Vec<&(dyn ToSql + Sync)> =
             Vec::with_capacity(structured_blocks.len() * FIELD_COUNT);
         for block in &structured_blocks {
@@ -2861,16 +2876,23 @@ impl PostgresDatabaseService {
             params.push(&block.block_hash);
             params.push(&block.original_value);
             params.push(&block.merged_value);
+            params.push(&block.total_merged_value);
+            params.push(&block.base_builder_revenue);
+            params.push(&block.relay_revenue);
             params.push(&block.original_tx_count);
             params.push(&block.merged_tx_count);
             params.push(&block.original_blob_count);
             params.push(&block.merged_blob_count);
+            params.push(&block.original_gas_used);
+            params.push(&block.merged_gas_used);
             params.push(&block.builder_inclusions);
             params.push(&block.request_time_ns);
             params.push(&block.sim_start_time_ns);
             params.push(&block.sim_end_time_ns);
             params.push(&block.finalize_time_ns);
             params.push(&block.header_served_time_ns);
+            params.push(&block.was_top_builder);
+            params.push(&block.top_bid);
             params.push(&block.inserted_at);
         }
 
@@ -2882,16 +2904,23 @@ impl PostgresDatabaseService {
                 block_hash,
                 original_value,
                 merged_value,
+                total_merged_value,
+                base_builder_revenue,
+                relay_revenue,
                 original_tx_count,
                 merged_tx_count,
                 original_blob_count,
                 merged_blob_count,
+                original_gas_used,
+                merged_gas_used,
                 builder_inclusions,
                 request_time_ns,
                 sim_start_time_ns,
                 sim_end_time_ns,
                 finalize_time_ns,
                 header_served_time_ns,
+                was_top_builder,
+                top_bid,
                 inserted_at
             ) VALUES ",
         );
@@ -2932,10 +2961,15 @@ impl PostgresDatabaseService {
                     block_hash,
                     original_value,
                     merged_value,
+                    total_merged_value,
+                    base_builder_revenue,
+                    relay_revenue,
                     original_tx_count,
                     merged_tx_count,
                     original_blob_count,
                     merged_blob_count,
+                    original_gas_used,
+                    merged_gas_used,
                     builder_inclusions,
                     inserted_at
                 FROM merged_blocks

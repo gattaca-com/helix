@@ -88,6 +88,11 @@ impl BlockMerger {
         let coinbase = original_bid.execution_payload().fee_recipient;
         let entry = self.best_merged_blocks.get(&coinbase)?;
 
+        if is_mev_boost {
+            self.local_cache
+                .set_merged_block_top_bid(entry.bid.block_hash(), *original_bid.value());
+        }
+
         if !merged_bid_higher(
             &entry.bid,
             original_bid,
@@ -117,7 +122,26 @@ impl BlockMerger {
         trace!("fetched merged header");
 
         if is_mev_boost {
-            self.local_cache.set_merged_block_header_served(entry.bid.block_hash(), utcnow_ns());
+            let now_ns = utcnow_ns();
+
+            // Also look up the overall best merged block across all builders, so we can track
+            // how often the best available merge is passed up because it doesn't match the
+            // requesting builder's coinbase. No need to re-run the value/staleness/parent checks
+            // above for this one — we just need its block hash.
+            let overall_best_hash = self.overall_best_merged_block_hash();
+            let is_top_builder = overall_best_hash == Some(*entry.bid.block_hash());
+
+            self.local_cache.set_merged_block_header_served(
+                entry.bid.block_hash(),
+                now_ns,
+                is_top_builder,
+            );
+
+            if let Some(overall_best_hash) = overall_best_hash &&
+                overall_best_hash != *entry.bid.block_hash()
+            {
+                self.local_cache.set_merged_block_header_served(&overall_best_hash, now_ns, true);
+            }
         }
 
         if self.config.block_merging_config.is_dry_run {
@@ -168,18 +192,28 @@ impl BlockMerger {
         let mut trace = response.trace;
         trace.finalize_time_ns = utcnow_ns();
 
+        let total_merged_value = response
+            .builder_inclusions
+            .values()
+            .fold(U256::ZERO, |acc, inclusion| acc + inclusion.contribution);
+
         self.local_cache.save_merged_block(MergedBlock {
             slot: bid_slot,
             block_number: response.execution_payload.block_number,
             original_block_hash: response.base_block_hash,
             block_hash,
             original_value,
-            merged_value: response.proposer_value,
+            proposer_value: response.proposer_value,
+            total_merged_value,
+            base_builder_revenue: response.base_builder_revenue,
+            relay_revenue: response.relay_revenue,
             original_tx_count: original_payload.execution_payload.transactions.len(),
             merged_tx_count: response.execution_payload.transactions.len(),
             original_blob_count: original_payload.blobs_bundle.blobs.len(),
             merged_blob_count: original_payload.blobs_bundle.blobs.len() +
                 response.appended_blobs.len(),
+            original_gas_used: original_payload.execution_payload.gas_used,
+            merged_gas_used: response.execution_payload.gas_used,
             builder_inclusions: response.builder_inclusions,
             trace,
         });
@@ -223,6 +257,16 @@ impl BlockMerger {
 
         // Return the payload entry to be stored for get payload calls
         Ok(new_bid)
+    }
+
+    /// Block hash of the highest-value merged block across all builders, regardless of
+    /// coinbase. `best_merged_blocks` only holds one entry per coinbase (the latest merge
+    /// submitted for it, not necessarily the best-ever), so the overall best can change as
+    /// entries are overwritten — it has to be computed fresh rather than tracked
+    /// incrementally. The map is bounded by the number of distinct builders merging in a
+    /// slot, so scanning it here is cheap.
+    fn overall_best_merged_block_hash(&self) -> Option<B256> {
+        self.best_merged_blocks.values().max_by_key(|b| *b.bid.value()).map(|b| *b.bid.block_hash())
     }
 }
 
