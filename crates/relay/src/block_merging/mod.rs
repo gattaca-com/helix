@@ -4,6 +4,7 @@
 //! into the auction.
 
 mod tile;
+mod unbundling;
 
 use std::collections::HashMap;
 
@@ -21,6 +22,9 @@ use helix_types::{
 use rustc_hash::FxHashMap;
 use ssz::Encode;
 pub use tile::BlockMergingTile;
+// Bench-only visibility, see benches/unbundling.rs.
+#[cfg(feature = "bench-internals")]
+pub use unbundling::{OrderTxs, find_unbundled_txs};
 
 use crate::simulator::BlockMergeResponse;
 

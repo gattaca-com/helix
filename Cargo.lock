@@ -5974,6 +5974,7 @@ dependencies = [
  "bytes",
  "chrono",
  "clickhouse",
+ "criterion",
  "crossbeam-channel",
  "dashmap 5.5.3",
  "deadpool-postgres",

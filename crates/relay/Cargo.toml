@@ -6,6 +6,10 @@ repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
+[features]
+# Exposes block-merging internals for benches/unbundling.rs.
+bench-internals = []
+
 [dependencies]
 alloy-consensus.workspace = true
 alloy-eips.workspace = true
@@ -81,6 +85,12 @@ zstd.workspace = true
 
 [dev-dependencies]
 tracing-subscriber.workspace = true
+criterion.workspace = true
 
 [build-dependencies]
 tonic-build.workspace = true
+
+[[bench]]
+harness = false
+name = "unbundling"
+required-features = ["bench-internals"]
