@@ -96,6 +96,10 @@ pub struct LocalCache {
     pub api_key_cache: Arc<DashMap<String, Vec<BlsPublicKeyBytes>>>,
     primev_proposers: Arc<DashSet<BlsPublicKeyBytes>>,
     kill_switch: Arc<AtomicBool>,
+    /// Production safety valve: whether `get_header` serves merged blocks to the proposer.
+    /// Seeded at startup from `BlockMergingConfig::serve_merged_headers`, but can also be
+    /// toggled live via the admin API, same as `kill_switch`.
+    serve_merged_headers: Arc<AtomicBool>,
     proposer_duties: Arc<RwLock<Vec<BuilderGetValidatorsResponseEntry>>>,
     merged_blocks: Arc<DashMap<B256, MergedBlock>>,
     pub validator_registration_cache:
@@ -115,6 +119,7 @@ impl LocalCache {
         let api_key_cache = Arc::new(DashMap::with_capacity(ESTIMATED_BUILDER_INFOS_UPPER_BOUND));
         let primev_proposers = Arc::new(DashSet::with_capacity(MAX_PRIMEV_PROPOSERS));
         let kill_switch = Arc::new(AtomicBool::new(false));
+        let serve_merged_headers = Arc::new(AtomicBool::new(true));
         let proposer_duties = Arc::new(RwLock::new(Vec::with_capacity(1000)));
         let merged_blocks = Arc::new(DashMap::with_capacity(1000));
         let validator_registration_cache = Arc::new(DashMap::with_capacity(1_800_000));
@@ -133,6 +138,7 @@ impl LocalCache {
             api_key_cache,
             primev_proposers,
             kill_switch,
+            serve_merged_headers,
             proposer_duties,
             merged_blocks,
             validator_registration_cache,
@@ -251,6 +257,18 @@ impl LocalCache {
 
     pub fn disable_kill_switch(&self) {
         self.kill_switch.store(false, Ordering::Relaxed);
+    }
+
+    pub fn merged_headers_enabled(&self) -> bool {
+        self.serve_merged_headers.load(Ordering::Relaxed)
+    }
+
+    pub fn enable_merged_headers(&self) {
+        self.serve_merged_headers.store(true, Ordering::Relaxed);
+    }
+
+    pub fn disable_merged_headers(&self) {
+        self.serve_merged_headers.store(false, Ordering::Relaxed);
     }
 
     pub fn update_current_inclusion_list(
@@ -441,5 +459,23 @@ mod tests {
 
         let result = cache.kill_switch_enabled();
         assert!(!result, "Kill switch should be disabled");
+    }
+
+    #[tokio::test]
+    pub async fn test_serve_merged_headers() {
+        let cache = LocalCache::new();
+
+        let result = cache.merged_headers_enabled();
+        assert!(result, "Merged headers should be served by default");
+
+        cache.disable_merged_headers();
+
+        let result = cache.merged_headers_enabled();
+        assert!(!result, "Merged headers should not be served");
+
+        cache.enable_merged_headers();
+
+        let result = cache.merged_headers_enabled();
+        assert!(result, "Merged headers should be served");
     }
 }

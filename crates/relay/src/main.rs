@@ -126,6 +126,9 @@ async fn run(
 
     let known_validators_loaded = Arc::new(AtomicBool::default());
     let local_cache = Arc::new(LocalCache::new());
+    if !config.block_merging_config.serve_merged_headers {
+        local_cache.disable_merged_headers();
+    }
 
     let (db_request_sender, db_request_receiver) = crossbeam_channel::bounded(10_000);
     let (db_batch_request_sender, db_batch_request_receiver) = crossbeam_channel::bounded(10_000);

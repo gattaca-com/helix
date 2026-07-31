@@ -254,9 +254,16 @@ pub struct BlockMergingConfig {
     /// Maximum age of a merged bid before it is considered stale and discarded.
     #[serde(default = "default_u64::<250>")]
     pub max_merged_bid_age_ms: u64,
-    /// Flag to allow dry run mode.
+    /// Testing-only: marks every decoded submission as mergeable, without builders having to
+    /// submit real merge data themselves.
     #[serde(default = "default_bool::<false>")]
-    pub is_dry_run: bool,
+    pub mark_all_txs_mergeable: bool,
+    /// Whether `get_header` serves merged blocks to the proposer. Only sets the startup value
+    /// of `LocalCache`'s live toggle (see `enable_merged_headers`/`disable_merged_headers`) —
+    /// a production safety valve that can be flipped via the admin API if merging misbehaves,
+    /// without affecting builder submissions or the merging process itself.
+    #[serde(default = "default_bool::<true>")]
+    pub serve_merged_headers: bool,
     /// Builder-side merging over TCP. Tile is only spawned if set.
     #[serde(default)]
     pub tcp: Option<BlockMergingTcpConfig>,

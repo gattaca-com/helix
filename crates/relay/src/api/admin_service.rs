@@ -8,6 +8,10 @@ use tracing::{error, info};
 pub async fn run_admin_service(auctioneer: Arc<LocalCache>, admin_token: String) {
     let router = Router::new()
         .route("/admin/v1/killswitch", post(enable_kill_switch).delete(disable_kill_switch))
+        .route(
+            "/admin/v1/merged-headers",
+            post(enable_merged_headers).delete(disable_merged_headers),
+        )
         .layer(Extension(auctioneer))
         .layer(ValidateRequestHeaderLayer::bearer(&admin_token));
 
@@ -31,6 +35,22 @@ async fn disable_kill_switch(
 ) -> Result<impl IntoResponse, StatusCode> {
     auctioneer.disable_kill_switch();
     info!("Kill switch disabled");
+    Ok((StatusCode::NO_CONTENT, ()))
+}
+
+async fn enable_merged_headers(
+    Extension(auctioneer): Extension<Arc<LocalCache>>,
+) -> Result<impl IntoResponse, StatusCode> {
+    auctioneer.enable_merged_headers();
+    info!("Merged header serving enabled");
+    Ok((StatusCode::NO_CONTENT, ()))
+}
+
+async fn disable_merged_headers(
+    Extension(auctioneer): Extension<Arc<LocalCache>>,
+) -> Result<impl IntoResponse, StatusCode> {
+    auctioneer.disable_merged_headers();
+    info!("Merged header serving disabled");
     Ok((StatusCode::NO_CONTENT, ()))
 }
 
@@ -71,6 +91,36 @@ mod test {
             .unwrap();
         assert_eq!(response.status(), 204);
         assert!(!auctioneer.kill_switch_enabled());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_admin_service_merged_headers() {
+        let auctioneer = Arc::new(LocalCache::new());
+        assert!(auctioneer.merged_headers_enabled(), "should be enabled by default");
+
+        let admin_token = "test_token".into();
+        tokio::spawn(run_admin_service(auctioneer.clone(), admin_token));
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await; // wait for server to start
+        let client = reqwest::Client::new();
+
+        let response = client
+            .delete("http://localhost:4050/admin/v1/merged-headers")
+            .bearer_auth("test_token")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 204);
+        assert!(!auctioneer.merged_headers_enabled());
+
+        let response = client
+            .post("http://localhost:4050/admin/v1/merged-headers")
+            .bearer_auth("test_token")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 204);
+        assert!(auctioneer.merged_headers_enabled());
     }
 
     #[tokio::test]
