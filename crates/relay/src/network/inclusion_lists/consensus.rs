@@ -59,7 +59,11 @@ pub(crate) fn compute_shared_inclusion_list(
         .collect();
 
     if txs.len() > Transactions::max_len() {
-        error!(len = txs.len(), max = Transactions::max_len(), "shared inclusion list exceeds spec limit, truncating");
+        error!(
+            len = txs.len(),
+            max = Transactions::max_len(),
+            "shared inclusion list exceeds spec limit, truncating"
+        );
         txs.truncate(Transactions::max_len());
     }
 
@@ -204,8 +208,18 @@ mod tests {
             .collect();
 
         let vote_map = HashMap::from([
-            ([1_u8; 48].into(), (slot, InclusionList { txs: txs_1.try_into().expect("inclusion list exceeds spec limit") })),
-            ([2_u8; 48].into(), (slot, InclusionList { txs: txs_2.try_into().expect("inclusion list exceeds spec limit") })),
+            (
+                [1_u8; 48].into(),
+                (slot, InclusionList {
+                    txs: txs_1.try_into().expect("inclusion list exceeds spec limit"),
+                }),
+            ),
+            (
+                [2_u8; 48].into(),
+                (slot, InclusionList {
+                    txs: txs_2.try_into().expect("inclusion list exceeds spec limit"),
+                }),
+            ),
         ]);
         let shared_il = compute_shared_inclusion_list(&vote_map, slot, inclusion_list.clone());
 

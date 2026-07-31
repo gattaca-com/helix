@@ -211,11 +211,10 @@ pub fn payload_from_v3(v3: ExecutionPayloadV3) -> Option<ExecutionPayload> {
     let v2 = v3.payload_inner;
     let v1 = v2.payload_inner;
     let num_transactions = v1.transactions.len();
-    let transactions = ssz_types::VariableList::new(
-        v1.transactions.into_iter().map(Transaction).collect(),
-    )
-    .map_err(|_| error!(num_transactions, "transactions exceed spec limit"))
-    .ok()?;
+    let transactions =
+        ssz_types::VariableList::new(v1.transactions.into_iter().map(Transaction).collect())
+            .map_err(|_| error!(num_transactions, "transactions exceed spec limit"))
+            .ok()?;
     let num_withdrawals = v2.withdrawals.len();
     let withdrawals = ssz_types::VariableList::new(
         v2.withdrawals

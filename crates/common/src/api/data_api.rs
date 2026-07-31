@@ -226,7 +226,6 @@ mod quoted_option {
                 .transpose()
         }
     }
-
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]

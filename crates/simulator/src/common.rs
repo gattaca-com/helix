@@ -11,5 +11,7 @@ pub type RethProvider = BlockchainProvider<NodeTypesWithDBAdapter<EthereumNode, 
 // can we get more concrete?
 pub type RethConsensus = dyn FullConsensus<EthPrimitives>;
 pub type RethPayloadValidator = dyn PayloadValidator<EthPayloadTypes, Block = Block>;
-pub type RethEvmConfig =
-    reth_ethereum::evm::EthEvmConfig<reth_ethereum::chainspec::ChainSpec, reth_ethereum::evm::factory::RethEvmFactory>;
+pub type RethEvmConfig = reth_ethereum::evm::EthEvmConfig<
+    reth_ethereum::chainspec::ChainSpec,
+    reth_ethereum::evm::factory::RethEvmFactory,
+>;

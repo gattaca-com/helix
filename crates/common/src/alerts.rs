@@ -117,9 +117,12 @@ impl AlertManager {
 
             crate::spawn_tracked!(async move {
                 let keyboard = match url.parse() {
-                    Ok(parsed_url) => Some(InlineKeyboardMarkup::new(vec![vec![
-                        InlineKeyboardButton::url("🔁 Repromote", parsed_url),
-                    ]])),
+                    Ok(parsed_url) => {
+                        Some(InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::url(
+                            "🔁 Repromote",
+                            parsed_url,
+                        )]]))
+                    }
                     Err(e) => {
                         error!("invalid repromote url {url:?}: {e}");
                         None

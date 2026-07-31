@@ -272,9 +272,12 @@ impl ValidationApi {
                 .map(|a| a.balance)
                 .unwrap_or_default();
             let (cb_tx, cb_rx) = std::sync::mpsc::channel::<Option<U256>>();
-            let result = executor.execute_one_with_state_hook(block, move |state: revm::state::EvmState| {
-                let _ = cb_tx.send(state.get(&coinbase).map(|a| a.info.balance));
-            })?;
+            let result = executor.execute_one_with_state_hook(
+                block,
+                move |state: revm::state::EvmState| {
+                    let _ = cb_tx.send(state.get(&coinbase).map(|a| a.info.balance));
+                },
+            )?;
             // Pre-execution system calls (e.g. beacon root, blockhashes) also commit state and
             // fire this hook before any transaction executes; post-execution never commits here.
             // Keep only the last-per-transaction entries so indices line up with the block's txs.
@@ -357,9 +360,8 @@ impl ValidationApi {
 
             // RLP-decode the raw bytes
             let bytes_slice = req.bytes.as_ref();
-            let transaction: Recovered<TransactionSigned> =
-                recover_raw_transaction(bytes_slice)
-                    .map_err(|_| ValidationApiError::InclusionList)?;
+            let transaction: Recovered<TransactionSigned> = recover_raw_transaction(bytes_slice)
+                .map_err(|_| ValidationApiError::InclusionList)?;
 
             // execute the tx
             let outcome = evm.transact(transaction);

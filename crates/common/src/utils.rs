@@ -180,8 +180,8 @@ pub fn alert_discord(message: &str) {
 /// Called from the panic hook, so any failure here is only logged, never `.expect()`-ed —
 /// panicking again while already unwinding a panic would abort the process outright.
 pub fn save_to_file(path: PathBuf, json: String) {
-    if let Some(parent_dir) = Path::new(&path).parent()
-        && let Err(err) = fs::create_dir_all(parent_dir)
+    if let Some(parent_dir) = Path::new(&path).parent() &&
+        let Err(err) = fs::create_dir_all(parent_dir)
     {
         eprintln!("failed to create crash log directory {parent_dir:?}: {err}");
         return;
