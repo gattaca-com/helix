@@ -344,7 +344,7 @@ impl DecoderTile {
             merge_type: header.merge_type,
             with_mergeable_data,
             with_adjustments,
-            block_merging_dry_run: config.block_merging_config.is_dry_run,
+            mark_all_txs_mergeable: config.block_merging_config.mark_all_txs_mergeable,
             fork_name: chain_info.current_fork_name(),
         };
 

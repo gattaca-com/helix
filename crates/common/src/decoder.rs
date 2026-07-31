@@ -166,7 +166,7 @@ pub struct SubmissionDecoderParams {
     pub is_dehydrated: bool,
     pub with_mergeable_data: bool,
     pub with_adjustments: bool,
-    pub block_merging_dry_run: bool,
+    pub mark_all_txs_mergeable: bool,
     pub fork_name: ForkName,
 }
 
@@ -178,7 +178,7 @@ pub struct SubmissionDecoder {
     is_dehydrated: bool,
     with_mergeable_data: bool,
     with_adjustments: bool,
-    block_merging_dry_run: bool,
+    mark_all_txs_mergeable: bool,
     fork_name: ForkName,
 
     bytes_before_decompress: usize,
@@ -198,7 +198,7 @@ impl SubmissionDecoder {
             is_dehydrated: params.is_dehydrated,
             with_mergeable_data: params.with_mergeable_data,
             with_adjustments: params.with_adjustments,
-            block_merging_dry_run: params.block_merging_dry_run,
+            mark_all_txs_mergeable: params.mark_all_txs_mergeable,
             fork_name: params.fork_name,
             bytes_before_decompress: 0,
             bytes_after_decompress: 0,
@@ -305,7 +305,7 @@ impl SubmissionDecoder {
                 Some(BlockMergingData::append_only(submission.fee_recipient()))
             }
             MergeType::None => {
-                if self.block_merging_dry_run {
+                if self.mark_all_txs_mergeable {
                     Some(BlockMergingData::allow_all(
                         submission.fee_recipient(),
                         submission.num_txs(),
@@ -369,7 +369,7 @@ impl SubmissionDecoder {
                 Some(BlockMergingData::append_only(submission.fee_recipient()))
             }
             MergeType::None => {
-                if self.block_merging_dry_run {
+                if self.mark_all_txs_mergeable {
                     Some(BlockMergingData::allow_all(
                         submission.fee_recipient(),
                         submission.num_txs(),
@@ -554,7 +554,7 @@ mod tests {
             is_dehydrated: true,
             with_mergeable_data: false,
             with_adjustments: false,
-            block_merging_dry_run: false,
+            mark_all_txs_mergeable: false,
             fork_name: ForkName::Fulu,
         };
         let mut decoder = SubmissionDecoder::new(&params);

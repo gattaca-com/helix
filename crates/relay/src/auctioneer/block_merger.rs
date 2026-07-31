@@ -144,8 +144,8 @@ impl BlockMerger {
             }
         }
 
-        if self.config.block_merging_config.is_dry_run {
-            info!("dry run mode enabled, not returning merged header");
+        if !self.local_cache.merged_headers_enabled() {
+            info!("merged header serving disabled, not returning merged header");
             return None;
         }
         Some(entry.bid.clone())
