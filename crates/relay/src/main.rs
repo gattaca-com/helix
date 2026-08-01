@@ -124,6 +124,8 @@ async fn run(
         "starting relay"
     );
 
+    config.block_merging_config.validate()?;
+
     let known_validators_loaded = Arc::new(AtomicBool::default());
     let local_cache = Arc::new(LocalCache::new());
     if !config.block_merging_config.serve_merged_headers {

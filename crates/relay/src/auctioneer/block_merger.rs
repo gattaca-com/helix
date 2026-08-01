@@ -140,7 +140,7 @@ impl BlockMerger {
             if let Some(overall_best_hash) = overall_best_hash &&
                 overall_best_hash != *entry.bid.block_hash()
             {
-                self.local_cache.set_merged_block_header_served(&overall_best_hash, now_ns, true);
+                self.local_cache.set_merged_block_header_served(&overall_best_hash, now_ns, false);
             }
         }
 

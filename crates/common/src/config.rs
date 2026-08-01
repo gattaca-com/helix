@@ -269,6 +269,18 @@ pub struct BlockMergingConfig {
     pub tcp: Option<BlockMergingTcpConfig>,
 }
 
+impl BlockMergingConfig {
+    /// `mark_all_txs_mergeable` is a testing-only override that fabricates merge eligibility,
+    /// so it must never be combined with actually serving merged headers to proposers.
+    pub fn validate(&self) -> eyre::Result<()> {
+        ensure!(
+            !self.mark_all_txs_mergeable || !self.serve_merged_headers,
+            "serve_merged_headers must be false when mark_all_txs_mergeable is enabled"
+        );
+        Ok(())
+    }
+}
+
 /// Mirrors `RelayConfigV1` fields; kept local so helix-common does not depend
 /// on helix-tcp-types.
 #[derive(Serialize, Deserialize, Clone)]
