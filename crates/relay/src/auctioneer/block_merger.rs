@@ -17,7 +17,7 @@ use helix_types::{
     BlobWithMetadata, BlobsBundle, BlsPublicKeyBytes, MergedBlock, PayloadAndBlobs, Transactions,
 };
 use rustc_hash::{FxBuildHasher, FxHashSet};
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::auctioneer::{BlockMergeResponse, PayloadBidData, types::PayloadEntry};
 
@@ -146,8 +146,25 @@ impl BlockMerger {
 
         if !self.local_cache.merged_headers_enabled() {
             info!("merged header serving disabled, not returning merged header");
+
+            let state_root = entry.bid.execution_payload().state_root;
+            if state_root == B256::ZERO {
+                warn!(
+                    %state_root,
+                    "merged header has zero state root, this is likely a bug in the merge builder"
+                );
+            }
             return None;
         }
+
+        let state_root = entry.bid.execution_payload().state_root;
+        if state_root == B256::ZERO {
+            error!(
+                %state_root,
+                "merged header has zero state root, this is an invalid payload and should not be returned to the proposer. This is likely a bug in the merge builder."
+            );
+        }
+
         Some(entry.bid.clone())
     }
 
