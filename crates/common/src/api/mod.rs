@@ -12,8 +12,13 @@ pub const PATH_GET_INCLUSION_LIST: &str = "/inclusion_list/{slot}/{parent_hash}/
 pub const PATH_DATA_ADJUSTMENTS: &str = "/adjustments";
 pub const PATH_MERGED_BLOCKS: &str = "/merged_blocks";
 
+/// Auth token, a uuid. Registered by the proposer, then required to open a
+/// header stream for it.
+pub const HEADER_API_KEY: &str = "x-api-key";
 /// How long the client gives us to answer, from `HEADER_START_TIME_UNIX_MS`
 pub const HEADER_TIMEOUT_MS: &str = "x-timeout-ms";
+/// Proxy chain, the last hop is the client as seen by our load balancer
+pub const HEADER_FORWARDED_FOR: &str = "x-forwarded-for";
 /// When the client started the request, unix millis
 pub const HEADER_START_TIME_UNIX_MS: &str = "date-milliseconds";
 

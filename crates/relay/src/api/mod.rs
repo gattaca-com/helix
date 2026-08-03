@@ -30,7 +30,8 @@ pub trait Api: Clone + Send + Sync + 'static {
     type ApiProvider: ApiProvider;
 }
 
-pub const HEADER_API_KEY: &str = "x-api-key";
+pub use helix_common::api::HEADER_API_KEY;
+
 pub const HEADER_API_TOKEN: &str = "x-api-token";
 pub const HEADER_SEQUENCE: &str = "x-sequence";
 pub const HEADER_HYDRATE: &str = "x-hydrate";

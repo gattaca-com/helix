@@ -22,6 +22,7 @@ use helix_types::{BuilderBid, ForkName, GetHeaderResponse, SignedBuilderBid};
 use http::{HeaderValue, header::CONTENT_TYPE};
 use ssz::Encode;
 use tracing::{Instrument, debug, error, info, trace, warn};
+use uuid::Uuid;
 
 use super::ProposerApi;
 use crate::api::{
@@ -37,6 +38,7 @@ pub(super) struct ValidatedHeaderRequest {
     pub is_mev_boost: bool,
     pub sleep_time: Option<Duration>,
     pub timeout_ms: Option<u64>,
+    pub registered_api_key: Option<Uuid>,
 }
 
 impl<A: Api> ProposerApi<A> {
@@ -83,6 +85,7 @@ impl<A: Api> ProposerApi<A> {
             is_mev_boost,
             sleep_time,
             timeout_ms,
+            registered_api_key: duty.entry.preferences.api_key,
         })
     }
 

@@ -16,9 +16,9 @@ use axum::{
     response::IntoResponse,
 };
 use helix_common::{
-    GET_HEADER_REQUEST_CUTOFF_MS, GetHeaderTrace, HeaderStreamConfig, RequestTimings,
+    GET_HEADER_REQUEST_CUTOFF_MS, GetHeaderTrace, RequestTimings,
     api::{HEADER_START_TIME_UNIX_MS, proposer_api::GetHeaderParams},
-    api_provider::header_u64,
+    api_provider::{header_u64, header_uuid},
     utils::{extract_request_id, utcnow_ms, utcnow_ns},
 };
 use helix_types::{ForkName, SignedBuilderBid};
@@ -26,13 +26,14 @@ use http::HeaderMap;
 use ssz::Encode;
 use tokio::time::{Instant, MissedTickBehavior};
 use tracing::{Instrument, debug, error, info, trace, warn};
+use uuid::Uuid;
 
 use super::{
     ProposerApi,
     error::ProposerApiError,
     get_header::{ValidatedHeaderRequest, resign_builder_bid},
 };
-use crate::api::{Api, HEADER_API_KEY, HEADER_API_TOKEN, router::Terminating};
+use crate::api::{Api, HEADER_API_KEY, router::Terminating};
 
 /// Frame layout: `[kind: u8][fork: u8][ssz SignedBuilderBid]`.
 const FRAME_HEADER_LEN: usize = 2;
@@ -52,16 +53,17 @@ impl<A: Api> ProposerApi<A> {
 
         let config = &proposer_api.relay_config.header_stream;
 
-        check_api_key(config, &headers)?;
-
         let ValidatedHeaderRequest {
             ms_into_slot,
             validation_complete_ns,
             user_agent,
             is_mev_boost,
             timeout_ms,
+            registered_api_key,
             ..
         } = proposer_api.validate_header_request(&params, &headers, &terminating)?;
+
+        check_api_key(registered_api_key, &params, &headers)?;
 
         let trace = GetHeaderTrace {
             receive: timings.on_receive_ns,
@@ -237,22 +239,36 @@ impl<A: Api> HeaderStream<A> {
     }
 }
 
-fn check_api_key(config: &HeaderStreamConfig, headers: &HeaderMap) -> Result<(), ProposerApiError> {
-    if config.api_keys.is_empty() {
-        return Ok(());
-    }
-
-    let Some(api_key) = headers
-        .get(HEADER_API_KEY)
-        .or_else(|| headers.get(HEADER_API_TOKEN))
-        .and_then(|key| key.to_str().ok())
-    else {
-        return Err(ProposerApiError::InvalidApiKey);
+fn check_api_key(
+    registered: Option<Uuid>,
+    params: &GetHeaderParams,
+    headers: &HeaderMap,
+) -> Result<(), ProposerApiError> {
+    let Some(registered) = registered else {
+        warn!(
+            slot = params.slot,
+            proposer = %params.pubkey,
+            "no api key registered for this proposer, refusing header stream"
+        );
+        return Err(ProposerApiError::ApiKeyNotRegistered);
     };
 
-    if !config.api_keys.contains(api_key) {
-        debug!("unknown api key");
-        return Err(ProposerApiError::InvalidApiKey);
+    let Some(presented) = header_uuid(headers, HEADER_API_KEY) else {
+        warn!(
+            slot = params.slot,
+            proposer = %params.pubkey,
+            "header stream request carries no usable api key"
+        );
+        return Err(ProposerApiError::ApiKeyMissing);
+    };
+
+    if presented != registered {
+        warn!(
+            slot = params.slot,
+            proposer = %params.pubkey,
+            "api key does not match the one this proposer registered"
+        );
+        return Err(ProposerApiError::ApiKeyMismatch);
     }
 
     Ok(())
@@ -293,14 +309,65 @@ mod tests {
 
     const CUTOFF: u64 = GET_HEADER_REQUEST_CUTOFF_MS as u64;
 
-    fn config_with_key(key: &str) -> HeaderStreamConfig {
-        HeaderStreamConfig { api_keys: [key.to_string()].into(), ..Default::default() }
+    const REGISTERED: Uuid = Uuid::from_u128(0x9f8b3c2e5d414a7eb0c92e6f1a8d4b73);
+    const OTHER: Uuid = Uuid::from_u128(1);
+
+    fn params() -> GetHeaderParams {
+        GetHeaderParams { slot: 1, parent_hash: B256::ZERO, pubkey: Default::default() }
     }
 
     fn headers_with(name: &'static str, value: &str) -> HeaderMap {
         let mut headers = HeaderMap::new();
         headers.insert(name, value.parse().unwrap());
         headers
+    }
+
+    #[test]
+    fn api_key_accepted() {
+        let headers = headers_with(HEADER_API_KEY, &REGISTERED.to_string());
+        assert!(check_api_key(Some(REGISTERED), &params(), &headers).is_ok());
+
+        // uuids are case insensitive in their hex, unlike a string compare
+        let headers = headers_with(HEADER_API_KEY, &REGISTERED.to_string().to_uppercase());
+        assert!(check_api_key(Some(REGISTERED), &params(), &headers).is_ok());
+    }
+
+    #[test]
+    fn api_key_rejected() {
+        let registered = headers_with(HEADER_API_KEY, &REGISTERED.to_string());
+
+        // No token on the registration: closed by default, whatever is presented
+        assert!(matches!(
+            check_api_key(None, &params(), &registered),
+            Err(ProposerApiError::ApiKeyNotRegistered)
+        ));
+        assert!(matches!(
+            check_api_key(None, &params(), &HeaderMap::new()),
+            Err(ProposerApiError::ApiKeyNotRegistered)
+        ));
+
+        // Nothing usable presented, as distinct from presenting the wrong one
+        for headers in [
+            HeaderMap::new(),
+            headers_with(HEADER_API_KEY, ""),
+            headers_with(HEADER_API_KEY, "not-a-uuid"),
+            // the builder key header is not a stream key
+            headers_with(crate::api::HEADER_API_TOKEN, &REGISTERED.to_string()),
+        ] {
+            assert!(matches!(
+                check_api_key(Some(REGISTERED), &params(), &headers),
+                Err(ProposerApiError::ApiKeyMissing)
+            ));
+        }
+
+        assert!(matches!(
+            check_api_key(
+                Some(REGISTERED),
+                &params(),
+                &headers_with(HEADER_API_KEY, &OTHER.to_string())
+            ),
+            Err(ProposerApiError::ApiKeyMismatch)
+        ));
     }
 
     #[test]

@@ -10,7 +10,6 @@ use clap::Parser;
 use eyre::ensure;
 use helix_types::{BlsKeypair, BlsPublicKey, BlsPublicKeyBytes, BlsSecretKey, Operator};
 use reqwest::Url;
-use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use teloxide::types::ChatId;
 use tracing::error;
@@ -717,14 +716,11 @@ pub struct HeaderStreamConfig {
     /// Interval between bid updates.
     #[serde(default = "default_u64::<5>")]
     pub interval_ms: u64,
-    /// Keys allowed to open a stream. Empty allows every connection.
-    #[serde(default)]
-    pub api_keys: FxHashSet<String>,
 }
 
 impl Default for HeaderStreamConfig {
     fn default() -> Self {
-        Self { stream_for_ms: 300, interval_ms: 5, api_keys: FxHashSet::default() }
+        Self { stream_for_ms: 300, interval_ms: 5 }
     }
 }
 
