@@ -163,6 +163,7 @@ impl BlockMerger {
                 %state_root,
                 "merged header has zero state root, this is an invalid payload and should not be returned to the proposer. This is likely a bug in the merge builder."
             );
+            return None;
         }
 
         Some(entry.bid.clone())
