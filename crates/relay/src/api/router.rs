@@ -69,6 +69,7 @@ pub fn build_router<A: Api>(
             Route::Status => get(proposer::status),
             Route::RegisterValidators => post(ProposerApi::<A>::register_validators),
             Route::GetHeader => get(ProposerApi::<A>::get_header),
+            Route::HeaderStream => get(ProposerApi::<A>::header_stream),
             Route::GetPayload => post(ProposerApi::<A>::get_payload),
             Route::GetPayloadV2 => post(ProposerApi::<A>::get_payload_v2),
             Route::ProposerPayloadDelivered => get(DataApi::proposer_payload_delivered),

@@ -1,6 +1,9 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
+use std::{
+    net::IpAddr,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use alloy_primitives::{B256, U256};
@@ -13,6 +16,7 @@ use helix_types::{BlsPublicKeyBytes, CryptoError, MergedBlock, SignedValidatorRe
 use libp2p::identity::PublicKey;
 use parking_lot::RwLock;
 use rustc_hash::{FxHashMap, FxHashSet};
+use uuid::Uuid;
 
 use crate::{
     BuilderConfig, BuilderInfo, SignedValidatorRegistrationEntry,
@@ -25,6 +29,13 @@ use crate::{
     },
     metrics::CACHE_SIZE,
 };
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum RegistrationUpdate {
+    Required,
+    Unchanged,
+    IpMismatch,
+}
 
 const ESTIMATED_BUILDER_INFOS_UPPER_BOUND: usize = 1000;
 const MAX_PRIMEV_PROPOSERS: usize = 64;
@@ -315,25 +326,43 @@ impl LocalCache {
         self.merged_blocks.get(block_hash).map(|b| b.value().clone())
     }
 
-    pub fn is_registration_update_required(
+    pub fn registration_update(
         &self,
         registration: &SignedValidatorRegistration,
-    ) -> bool {
-        if let Some(existing_entry) =
-            self.validator_registration_cache.get(&registration.message.pubkey) &&
-            existing_entry.registration_info.registration.message.timestamp >=
-                registration
-                    .message
-                    .timestamp
-                    .saturating_sub(VALIDATOR_REGISTRATION_UPDATE_INTERVAL) &&
-            existing_entry.registration_info.registration.message.fee_recipient ==
-                registration.message.fee_recipient &&
-            existing_entry.registration_info.registration.message.gas_limit ==
-                registration.message.gas_limit
-        {
-            return false;
+        api_key: Option<Uuid>,
+        ip_addr: Option<IpAddr>,
+    ) -> RegistrationUpdate {
+        let Some(existing_entry) =
+            self.validator_registration_cache.get(&registration.message.pubkey)
+        else {
+            return RegistrationUpdate::Required;
+        };
+
+        let existing = &existing_entry.registration_info.registration.message;
+        let new = &registration.message;
+
+        let fee_recipient_changed = existing.fee_recipient != new.fee_recipient;
+        let gas_limit_changed = existing.gas_limit != new.gas_limit;
+
+        let resigned =
+            (fee_recipient_changed || gas_limit_changed || existing.timestamp != new.timestamp) &&
+                new.timestamp >= existing.timestamp;
+
+        // Registrations guard the api key update, so a payload anyone could have replayed needs the
+        // ip of the last valid registration.
+        if !resigned && existing_entry.ip_addr.is_some_and(|last| Some(last) != ip_addr) {
+            return RegistrationUpdate::IpMismatch;
         }
-        true
+
+        if existing.timestamp < new.timestamp.saturating_sub(VALIDATOR_REGISTRATION_UPDATE_INTERVAL) ||
+            fee_recipient_changed ||
+            gas_limit_changed ||
+            existing_entry.registration_info.preferences.api_key != api_key
+        {
+            RegistrationUpdate::Required
+        } else {
+            RegistrationUpdate::Unchanged
+        }
     }
 
     /// Assume the entries are already validated
@@ -341,12 +370,13 @@ impl LocalCache {
         &self,
         entries: impl Iterator<Item = ValidatorRegistrationInfo>,
         user_agent: Option<String>,
+        ip_addr: Option<IpAddr>,
     ) {
         for entry in entries {
             self.pending_validator_registrations.insert(entry.registration.message.pubkey);
             self.validator_registration_cache.insert(
                 entry.registration.message.pubkey,
-                SignedValidatorRegistrationEntry::new(entry.clone(), user_agent.clone()),
+                SignedValidatorRegistrationEntry::new(entry.clone(), user_agent.clone(), ip_addr),
             );
         }
     }

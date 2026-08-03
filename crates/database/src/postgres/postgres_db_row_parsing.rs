@@ -1,3 +1,5 @@
+use std::net::IpAddr;
+
 use alloy_primitives::{Address, B256, U256};
 use chrono::{DateTime, Utc};
 use helix_common::{
@@ -12,6 +14,7 @@ use helix_types::{
     BidTrace, BlsPublicKeyBytes, BlsSignatureBytes, SignedValidatorRegistration,
     ValidatorRegistration,
 };
+use uuid::Uuid;
 
 use crate::{
     error::DatabaseError,
@@ -121,6 +124,7 @@ impl FromRow for BuilderGetValidatorsResponseEntry {
                         .and_then(|v| parse_i64_to_u64(v).ok()),
                     disable_inclusion_lists: row.get::<&str, bool>("disable_inclusion_lists"),
                     disable_optimistic: row.get::<&str, bool>("disable_optimistic"),
+                    api_key: parse_optional_uuid(row, "api_key"),
                 },
             },
         })
@@ -141,6 +145,7 @@ impl FromRow for ValidatorPreferences {
                 .and_then(|v| parse_i64_to_u64(v).ok()),
             disable_inclusion_lists: row.get::<&str, bool>("disable_inclusion_lists"),
             disable_optimistic: row.get::<&str, bool>("disable_optimistic"),
+            api_key: parse_optional_uuid(row, "api_key"),
         })
     }
 }
@@ -219,6 +224,7 @@ impl FromRow for SignedValidatorRegistrationEntry {
                         .and_then(|v| parse_i64_to_u64(v).ok()),
                     disable_inclusion_lists: row.get::<&str, bool>("disable_inclusion_lists"),
                     disable_optimistic: row.get::<&str, bool>("disable_optimistic"),
+                    api_key: parse_optional_uuid(row, "api_key"),
                 },
             },
             inserted_at: parse_timestamptz_to_u64(
@@ -226,6 +232,7 @@ impl FromRow for SignedValidatorRegistrationEntry {
             )?,
             pool_name: None,
             user_agent: None,
+            ip_addr: parse_optional_ip_addr(row, "ip_addr"),
         })
     }
 }
@@ -315,6 +322,16 @@ impl FromRow for MergedBlockResponse {
             builder_inclusions,
         })
     }
+}
+
+fn parse_optional_uuid(row: &tokio_postgres::Row, column: &str) -> Option<Uuid> {
+    let raw: Option<&str> = row.try_get(column).ok().flatten();
+    raw.and_then(|raw| Uuid::parse_str(raw).ok())
+}
+
+fn parse_optional_ip_addr(row: &tokio_postgres::Row, column: &str) -> Option<IpAddr> {
+    let raw: Option<&str> = row.try_get(column).ok().flatten();
+    raw.and_then(|raw| raw.parse().ok())
 }
 
 pub fn parse_timestamptz_to_u64(timestamp: std::time::SystemTime) -> Result<u64, DatabaseError> {

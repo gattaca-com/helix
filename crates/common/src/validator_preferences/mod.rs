@@ -1,3 +1,5 @@
+use uuid::Uuid;
+
 use crate::default_bool;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -22,6 +24,9 @@ pub struct ValidatorPreferences {
 
     #[serde(default)]
     pub disable_optimistic: bool,
+
+    #[serde(skip)]
+    pub api_key: Option<Uuid>,
 }
 
 impl Default for ValidatorPreferences {
@@ -33,6 +38,7 @@ impl Default for ValidatorPreferences {
             delay_ms: None,
             disable_inclusion_lists: false,
             disable_optimistic: false,
+            api_key: None,
         }
     }
 }
@@ -97,6 +103,7 @@ fn test_validator_preferences_serde() {
         delay_ms: Some(1000),
         disable_inclusion_lists: true,
         disable_optimistic: true,
+        api_key: Some(Uuid::from_u128(1)),
     };
 
     let json = serde_json::to_string(&preferences).unwrap();

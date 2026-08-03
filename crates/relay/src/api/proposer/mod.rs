@@ -1,6 +1,7 @@
 mod error;
 mod get_header;
 pub(crate) mod get_payload;
+mod header_stream;
 mod register;
 
 use std::sync::{Arc, atomic::Ordering};

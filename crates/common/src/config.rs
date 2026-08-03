@@ -48,6 +48,9 @@ pub struct RelayConfig {
     /// Configuration for block merging parameters.
     #[serde(default)]
     pub block_merging_config: BlockMergingConfig,
+    /// Configuration for the websocket header stream.
+    #[serde(default)]
+    pub header_stream: HeaderStreamConfig,
     pub primev_config: Option<PrimevConfig>,
     pub discord_webhook_url: Option<Url>,
     pub alerts_config: Option<AlertsConfig>,
@@ -99,6 +102,7 @@ impl RelayConfig {
             router_config: Default::default(),
             target_get_payload_propagation_duration_ms: Default::default(),
             block_merging_config: Default::default(),
+            header_stream: Default::default(),
             primev_config: Default::default(),
             discord_webhook_url: Default::default(),
             alerts_config: Default::default(),
@@ -514,6 +518,7 @@ impl RouterConfig {
             Route::Status,
             Route::RegisterValidators,
             Route::GetHeader,
+            Route::HeaderStream,
             Route::GetPayload,
             Route::GetPayloadV2,
         ]);
@@ -563,8 +568,9 @@ impl RouterConfig {
             return Ok(true);
         }
 
-        let is_get_header_instance =
-            routes.contains(&Route::ProposerApi) || routes.contains(&Route::GetHeader);
+        let is_get_header_instance = routes.contains(&Route::ProposerApi) ||
+            routes.contains(&Route::GetHeader) ||
+            routes.contains(&Route::HeaderStream);
         let is_submission_instance =
             routes.contains(&Route::BuilderApi) || routes.contains(&Route::SubmitBlock);
 
@@ -624,6 +630,7 @@ pub enum Route {
     Status,
     RegisterValidators,
     GetHeader,
+    HeaderStream,
     GetPayload,
     GetPayloadV2,
     ProposerPayloadDelivered,
@@ -651,6 +658,7 @@ impl Route {
             Route::Status => format!("{PATH_PROPOSER_API}{PATH_STATUS}"),
             Route::RegisterValidators => format!("{PATH_PROPOSER_API}{PATH_REGISTER_VALIDATORS}"),
             Route::GetHeader => format!("{PATH_PROPOSER_API}{PATH_GET_HEADER}"),
+            Route::HeaderStream => format!("{PATH_PROPOSER_API}{PATH_HEADER_STREAM}"),
             Route::GetPayload => format!("{PATH_PROPOSER_API}{PATH_GET_PAYLOAD}"),
             Route::GetPayloadV2 => format!("{PATH_PROPOSER_API_V2}{PATH_GET_PAYLOAD}"),
             Route::ProposerPayloadDelivered => {
@@ -698,6 +706,22 @@ pub struct InclusionListConfig {
 pub struct OperatorConfig {
     pub quic_port: u16,
     pub operators: Vec<Operator>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct HeaderStreamConfig {
+    /// How long to stream for, ending at the client's `X-Timeout-Ms` deadline.
+    #[serde(default = "default_u64::<300>")]
+    pub stream_for_ms: u64,
+    /// Interval between bid updates.
+    #[serde(default = "default_u64::<5>")]
+    pub interval_ms: u64,
+}
+
+impl Default for HeaderStreamConfig {
+    fn default() -> Self {
+        Self { stream_for_ms: 300, interval_ms: 5 }
+    }
 }
 
 #[cfg(test)]

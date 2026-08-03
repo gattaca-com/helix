@@ -1,10 +1,30 @@
-use std::{sync::Arc, time::Duration};
+use std::{net::IpAddr, sync::Arc, time::Duration};
 
 use axum::http::HeaderMap;
 use helix_types::SignedValidatorRegistration;
 use tracing::warn;
+use uuid::Uuid;
 
-use crate::{PreferencesHeader, ValidatorPreferences, api::proposer_api::GetHeaderParams};
+use crate::{
+    PreferencesHeader, ValidatorPreferences,
+    api::{HEADER_API_KEY, HEADER_FORWARDED_FOR, HEADER_TIMEOUT_MS, proposer_api::GetHeaderParams},
+};
+
+pub fn header_u64(headers: &HeaderMap, name: &str) -> Option<u64> {
+    let value = headers.get(name)?.to_str().ok()?.parse().ok()?;
+    (value > 0).then_some(value)
+}
+
+pub fn header_uuid(headers: &HeaderMap, name: &str) -> Option<Uuid> {
+    Uuid::parse_str(headers.get(name)?.to_str().ok()?).ok()
+}
+
+/// Client ip as seen by our load balancer. Proxies append, so only the last hop is trusted, any
+/// earlier ones are client controlled.
+pub fn header_ip_addr(headers: &HeaderMap) -> Option<IpAddr> {
+    let forwarded = headers.get(HEADER_FORWARDED_FOR)?.to_str().ok()?;
+    forwarded.rsplit(',').next()?.trim().parse().ok()
+}
 
 pub trait ApiProvider: Send + Sync + Clone + 'static {
     fn get_timing(
@@ -29,6 +49,7 @@ pub trait ApiProvider: Send + Sync + Clone + 'static {
 pub struct TimingResult {
     pub sleep_time: Option<Duration>,
     pub is_mev_boost: bool,
+    pub timeout_ms: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -42,11 +63,15 @@ impl ApiProvider for DefaultApiProvider {
     fn get_timing(
         &self,
         _params: &GetHeaderParams,
-        _headers: &HeaderMap,
+        headers: &HeaderMap,
         _preferences: &ValidatorPreferences,
         _ms_into_slot: u64,
     ) -> Result<TimingResult, &'static str> {
-        Ok(TimingResult { sleep_time: None, is_mev_boost: false })
+        Ok(TimingResult {
+            sleep_time: None,
+            is_mev_boost: false,
+            timeout_ms: header_u64(headers, HEADER_TIMEOUT_MS),
+        })
     }
 
     fn get_preferences(
@@ -64,6 +89,7 @@ impl ApiProvider for DefaultApiProvider {
             delay_ms: fallback.delay_ms,
             disable_inclusion_lists: fallback.disable_inclusion_lists,
             disable_optimistic: fallback.disable_optimistic,
+            api_key: header_uuid(headers, HEADER_API_KEY),
         };
 
         let preferences_header = headers.get("x-preferences");
