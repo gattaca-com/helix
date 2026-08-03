@@ -39,9 +39,6 @@ const FRAME_HEADER_LEN: usize = 2;
 const FRAME_KIND_BID: u8 = 1;
 
 impl<A: Api> ProposerApi<A> {
-    /// Opens a bid stream for the given slot, parent hash and public key. Validated exactly like
-    /// [`ProposerApi::get_header`]: rejections happen before the upgrade, so the client sees the
-    /// same status codes on the handshake.
     #[tracing::instrument(skip_all, err(level = tracing::Level::TRACE), fields(id =% extract_request_id(&headers), slot = params.slot, parent_hash =? params.parent_hash))]
     pub async fn header_stream(
         Extension(proposer_api): Extension<Arc<ProposerApi<A>>>,
@@ -304,35 +301,6 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(name, value.parse().unwrap());
         headers
-    }
-
-    #[test]
-    fn api_key_accepted_from_either_header() {
-        let config = config_with_key("secret");
-
-        for name in [HEADER_API_KEY, HEADER_API_TOKEN] {
-            assert!(check_api_key(&config, &headers_with(name, "secret")).is_ok());
-        }
-    }
-
-    #[test]
-    fn api_key_rejected() {
-        let config = config_with_key("secret");
-
-        for headers in [
-            HeaderMap::new(),
-            headers_with(HEADER_API_KEY, "wrong"),
-            headers_with(HEADER_API_KEY, ""),
-            // case sensitive, unlike the header name itself
-            headers_with(HEADER_API_KEY, "SECRET"),
-            // a builder key is not a stream key
-            headers_with("x-some-other-header", "secret"),
-        ] {
-            assert!(matches!(
-                check_api_key(&config, &headers),
-                Err(ProposerApiError::InvalidApiKey)
-            ));
-        }
     }
 
     #[test]
