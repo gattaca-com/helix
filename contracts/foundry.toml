@@ -1,0 +1,17 @@
+[profile.default]
+src = "src"
+out = "out"
+test = "test"
+script = "script"
+libs = ["lib"]
+solc_version = "0.8.30"
+evm_version = "prague"
+optimizer = true
+optimizer_runs = 1000000
+# Strip metadata so the runtime bytecode is reproducible byte-for-byte and the
+# CREATE2 address is stable.
+bytecode_hash = "none"
+cbor_metadata = false
+
+[profile.default.fuzz]
+runs = 1024
