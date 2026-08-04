@@ -34,18 +34,11 @@ SELFDESTRUCT          // send balance to recipient
 JUMPDEST PUSH0 PUSH0 REVERT
 ```
 
-`SELFDESTRUCT` sends the whole balance without executing the recipient. Since
-EIP-6780 it no longer deletes the account, so one deployment serves every
-payment. Three consequences worth knowing:
-
-- Gas is static, and independent of the recipient's code: 29,022 for a
-  transaction paying an existing account, plus the usual 25,000 when the
-  recipient account does not exist yet. Measured gas is also the minimum viable
-  gas limit, since nothing is held in flight.
-- The recipient is paid without its code running, so a recipient that would
-  reject or account for a transfer in `receive()` still receives the value.
-- The balance is forwarded in full, so anything sent to the contract by mistake
-  leaves with the next payment. There is nothing to rescue and no owner.
+Since EIP-6780 `SELFDESTRUCT` just sends the balance to the recipient. Gas is
+static at 29,022, or 54,022 when the recipient account does not exist yet, and
+the measured gas is also the minimum viable gas limit. The recipient is not
+executed, so nothing can be left in the contract and a recipient that would
+reject a transfer is still paid.
 
 Calldata is not forwarded and there is no length check: a payment that omits the
 recipient sends the balance to the zero address, so callers must encode all 24

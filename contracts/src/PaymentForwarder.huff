@@ -4,10 +4,7 @@
 ///
 /// calldata: [uint32 timestamp][20-byte recipient]
 ///
-/// SELFDESTRUCT sends the whole balance without executing the recipient, so the
-/// gas cost does not depend on the recipient's code and value cannot be left
-/// behind. Since EIP-6780 it no longer deletes the account, so one deployment
-/// serves every payment.
+/// Since EIP-6780 SELFDESTRUCT just sends the balance to the recipient.
 #define macro MAIN() = takes(0) returns(0) {
     push0 calldataload  // load calldata word
     dup1 0xe0 shr       // extract timestamp
