@@ -1,0 +1,19 @@
+/// Forwards the contract's balance to a recipient, but only in the block the
+/// caller signed for. A payment exposed by a reorg or a missed slot cannot be
+/// replayed in a later slot.
+///
+/// calldata: [uint32 timestamp][20-byte recipient]
+///
+/// SELFDESTRUCT sends the whole balance without executing the recipient, so the
+/// gas cost does not depend on the recipient's code and value cannot be left
+/// behind. Since EIP-6780 it no longer deletes the account, so one deployment
+/// serves every payment.
+#define macro MAIN() = takes(0) returns(0) {
+    push0 calldataload  // load calldata word
+    dup1 0xe0 shr       // extract timestamp
+    timestamp xor       // zero if timestamp matches
+    0x0f jumpi          // revert on mismatch
+    0x40 shr            // extract recipient
+    selfdestruct        // send balance to recipient
+    push0 push0 revert  // invalid timestamp
+}

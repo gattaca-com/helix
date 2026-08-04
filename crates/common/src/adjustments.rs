@@ -7,11 +7,11 @@ use serde::{Deserialize, Serialize};
 /// only valid in the block it was signed for.
 pub const PAYMENT_FORWARDER: Address = address!("0xFEEEEEECC8AdE925fA6099f017712A04b5546A32");
 
-/// Recipient encoded in the leading bytes of a [`PAYMENT_FORWARDER`] call, or
-/// `None` if the calldata is too short to be one.
+/// Recipient in a [`PAYMENT_FORWARDER`] call, whose calldata is a 4 byte
+/// timestamp followed by the 20 byte recipient.
 #[inline(always)]
 pub fn payment_forwarder_recipient(input: &[u8]) -> Option<Address> {
-    (input.len() > 20).then(|| Address::from_slice(&input[..20]))
+    (input.len() >= 24).then(|| Address::from_slice(&input[4..24]))
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

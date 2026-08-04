@@ -1,7 +1,7 @@
 # PaymentForwarder
 
 ```
-0xFEEEEEECC8AdE925fA6099f017712A04b5546A32
+0xFEEEEEE44046c3f61a8CC081E0918eF0de0a7ffC
 ```
 
 Same address on every chain: deployed with the canonical deterministic-deployment
@@ -15,8 +15,41 @@ public, the signed transfer can be replayed in a later slot and the payer pays
 the previous slot's fee recipient a second time.
 
 Paying through this contract binds the payment to one slot. The recipient and the
-expected `block.timestamp` travel in the calldata, and the call reverts if the
-timestamp does not match, so a replay in any later slot fails.
+expected timestamp travel in the calldata, and the call reverts unless
+`block.timestamp` matches.
+
+## The contract
+
+20 bytes of runtime, in full:
+
+```
+5f358060e01c4218600f5760401cff5b5f5ffd00
+
+PUSH0 CALLDATALOAD    // calldata word: [uint32 timestamp][20-byte recipient]
+DUP1 PUSH1 0xe0 SHR   // timestamp
+TIMESTAMP XOR         // zero if it matches
+PUSH1 0x0f JUMPI      // otherwise revert
+PUSH1 0x40 SHR        // recipient
+SELFDESTRUCT          // send balance to recipient
+JUMPDEST PUSH0 PUSH0 REVERT
+```
+
+`SELFDESTRUCT` sends the whole balance without executing the recipient. Since
+EIP-6780 it no longer deletes the account, so one deployment serves every
+payment. Three consequences worth knowing:
+
+- Gas is static, and independent of the recipient's code: 29,022 for a
+  transaction paying an existing account, plus the usual 25,000 when the
+  recipient account does not exist yet. Measured gas is also the minimum viable
+  gas limit, since nothing is held in flight.
+- The recipient is paid without its code running, so a recipient that would
+  reject or account for a transfer in `receive()` still receives the value.
+- The balance is forwarded in full, so anything sent to the contract by mistake
+  leaves with the next payment. There is nothing to rescue and no owner.
+
+Calldata is not forwarded and there is no length check: a payment that omits the
+recipient sends the balance to the zero address, so callers must encode all 24
+bytes.
 
 ## Payment verification
 
@@ -33,15 +66,15 @@ either shape:
 - `to` is `PAYMENT_FORWARDER` and the recipient in its calldata is the fee
   recipient
 
-with the value equal to the bid in both cases. The contract forwards the full
-value with all remaining gas and reverts if that call fails, so a successful
-receipt for either shape means the fee recipient was paid in full.
+with the value equal to the bid in both cases. A successful receipt for the
+second shape means the balance reached the recipient, since the contract has no
+other path to success.
 
 ## Bid adjustments
 
-An adjustment rewrites the payment from the relay's own fee payer. Because the
-contract does not authenticate the sender, it can keep every field of the
-original payment except the nonce and the value.
+An adjustment rewrites the payment from the relay's own fee payer. The contract
+does not authenticate the sender, so it can keep every field of the original
+payment except the nonce and the value.
 
 Keeping `to` and the calldata is what an implementation must do: the substituted
 transaction then costs exactly the gas the builder reported, so the header
@@ -52,18 +85,10 @@ payment with a direct transfer changes its gas and invalidates the block.
 ## Development
 
 Foundry project, not wired into the Rust build. Requires
-[forge](https://getfoundry.sh).
+[forge](https://getfoundry.sh). The tests run against the committed runtime, so
+no Huff compiler is needed to verify behaviour.
 
 ```bash
-forge test        # includes fuzz and gas-invariance properties
-forge snapshot    # refresh .gas-snapshot after changing the source
+forge test
+forge snapshot    # refresh .gas-snapshot
 ```
-
-`foundry.toml` pins the compiler and strips metadata so the build is
-reproducible, and `test_runtimeBytecodeMatchesCommitted` checks the compiled
-runtime against the deployed bytecode. Any change to the source or the compiler
-settings changes that bytecode and the address, and is a new deployment.
-
-`withdraw()` sends the balance to a single address fixed in the runtime. A
-payment never leaves value in the contract, so it is unreachable in normal
-operation and exists only to recover funds sent to the address by mistake.
