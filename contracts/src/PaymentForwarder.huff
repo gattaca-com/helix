@@ -5,10 +5,6 @@
 /// calldata: [uint32 timestamp][20-byte recipient]
 ///
 /// Since EIP-6780 SELFDESTRUCT just sends the balance to the recipient.
-///
-/// The jump target is written as an offset rather than a label so this compiles
-/// to the runtime deployed at the address in README.md, which the tests pin. A
-/// label would emit a two byte push and change it.
 #define macro MAIN() = takes(0) returns(0) {
     push0 calldataload  // load calldata word
     dup1 0xe0 shr       // extract timestamp
