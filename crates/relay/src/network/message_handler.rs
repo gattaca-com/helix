@@ -79,7 +79,10 @@ impl RelayNetworkManager {
             HelloMessage::new(&self.signing_context)
                 .with_supported_message_types(vec![NetworkMessageType::InclusionList]),
         );
-        socket.send(hello_message.to_ws_message()).await.map_err(WsConnectionError::SendError)?;
+        socket
+            .send(hello_message.to_ws_message())
+            .await
+            .map_err(|e| WsConnectionError::SendError(Box::new(e)))?;
         loop {
             tokio::select! {
                 res = broadcast_rx.recv() => {
@@ -89,7 +92,7 @@ impl RelayNetworkManager {
                     };
                     if peer_supports_message_type(&peer_info, &msg) {
                         let serialized = RawNetworkMessage::Other(msg).to_ws_message();
-                        socket.send(serialized).await.map_err(WsConnectionError::SendError)?;
+                        socket.send(serialized).await.map_err(|e| WsConnectionError::SendError(Box::new(e)))?;
                     }
                 },
                 res = socket.next() => {
@@ -97,7 +100,7 @@ impl RelayNetworkManager {
                         // Socket was closed
                         return Ok(());
                     };
-                    let msg = res.map_err(WsConnectionError::RecvError)?;
+                    let msg = res.map_err(|e| WsConnectionError::RecvError(Box::new(e)))?;
                     let message = RawNetworkMessage::from_ws_message(&msg)?;
                     self.handle_raw_message(message, &mut peer_info).await?;
                 }
@@ -174,9 +177,9 @@ fn peer_supports_message_type(opt_peer_info: &Option<PeerInfo>, message: &Networ
 #[derive(Debug, thiserror::Error)]
 enum WsConnectionError {
     #[error("failed to send message")]
-    SendError(crate::network::socket::Error),
+    SendError(Box<crate::network::socket::Error>),
     #[error("failed to receive message")]
-    RecvError(crate::network::socket::Error),
+    RecvError(Box<crate::network::socket::Error>),
     #[error("failed to decode message")]
     DecodingError(#[from] EncodingError),
     #[error("first message from peer was not a Hello")]

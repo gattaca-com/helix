@@ -18,7 +18,10 @@ use alloy_rpc_types::{
 };
 use async_trait::async_trait;
 use dashmap::DashSet;
-use helix_common::api::builder_api::InclusionListWithMetadata;
+use helix_common::{
+    PAYMENT_FORWARDER, PAYMENT_FORWARDER_CODE_HASH, api::builder_api::InclusionListWithMetadata,
+    payment_forwarder_recipient,
+};
 use jsonrpsee::{core::RpcResult, proc_macros::rpc, types::ErrorObject};
 use reth_ethereum::{
     Block, EthPrimitives, Receipt, TransactionSigned,
@@ -440,7 +443,8 @@ impl ValidationApi {
     /// Ensures that the proposer has received [`BidTrace::value`] for this block.
     ///
     /// Firstly attempts to verify the payment by checking the state changes, otherwise falls back
-    /// to checking the latest block transaction.
+    /// to checking the latest block transaction, which may pay the recipient directly or through
+    /// the [`PAYMENT_FORWARDER`].
     fn ensure_payment(
         &self,
         block: &SealedBlock<Block>,
@@ -486,15 +490,22 @@ impl ValidationApi {
             return Err(ValidationApiError::ProposerPayment);
         }
 
-        if tx.to() != Some(message.proposer_fee_recipient) {
+        // Either a direct transfer, or one routed through the PaymentForwarder,
+        // which sends the full value on to the recipient in its calldata. The
+        // forwarder is only trusted where its runtime is actually deployed,
+        // since a value call to a codeless address succeeds and keeps the value.
+        let paid_directly =
+            tx.to() == Some(message.proposer_fee_recipient) && tx.input().is_empty();
+        let paid_via_forwarder = tx.to() == Some(PAYMENT_FORWARDER) &&
+            payment_forwarder_recipient(tx.input()) == Some(message.proposer_fee_recipient) &&
+            output.state.state.get(&PAYMENT_FORWARDER).is_some_and(|acc| {
+                acc.info.as_ref().is_some_and(|i| i.code_hash == PAYMENT_FORWARDER_CODE_HASH)
+            });
+        if !paid_directly && !paid_via_forwarder {
             return Err(ValidationApiError::ProposerPayment);
         }
 
         if tx.value() != message.value {
-            return Err(ValidationApiError::ProposerPayment);
-        }
-
-        if !tx.input().is_empty() {
             return Err(ValidationApiError::ProposerPayment);
         }
 
