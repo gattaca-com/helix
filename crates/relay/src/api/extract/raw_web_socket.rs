@@ -114,12 +114,6 @@ impl RawWebSocketUpgrade {
                 }
             };
 
-            // Without TCP_NODELAY, Nagle + the subscriber's delayed ACKs
-            // batch the small frames into ~40ms bursts.
-            if let Err(e) = std_tcp.set_nodelay(true) {
-                error!("failed to set TCP_NODELAY on upgraded websocket: {e}");
-            }
-
             let ws =
                 protocol::WebSocket::from_raw_socket(std_tcp, protocol::Role::Server, Some(config));
             callback(ws);
