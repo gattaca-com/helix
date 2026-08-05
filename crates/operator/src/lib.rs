@@ -10,10 +10,7 @@ use std::{
 use alloy_primitives::U256;
 use async_channel::{Receiver, RecvError, SendError, Sender, TryRecvError, TrySendError, bounded};
 use helix_common::{
-    OperatorConfig,
-    alerts::{AlertManager, format_demotion_alert},
-    local_cache::LocalCache,
-    utils::utcnow_ms,
+    OperatorConfig, OperatorP2pMode, alerts::{AlertManager, format_demotion_alert}, local_cache::LocalCache, utils::utcnow_ms,
 };
 use helix_database::{PostgresDatabaseService, handle::DbHandle};
 use helix_types::{BuilderCollateral, Operator, OperatorMessage};
@@ -60,7 +57,7 @@ impl Drop for OperatorPubSub {
 }
 
 impl OperatorPubSub {
-    pub fn new(quic_port: u16, local_keypair: Keypair, operators: Vec<Operator>) -> Self {
+    pub fn new(quic_port: u16, local_keypair: Keypair, operators: Vec<Operator>, mode: OperatorP2pMode) -> Self {
         let (outgoing_msgs, out_recv) = bounded(128);
         let (in_send, incoming_msgs) = bounded(128);
 
@@ -71,6 +68,7 @@ impl OperatorPubSub {
             operators,
             out_recv,
             in_send,
+            mode,
         ));
 
         Self { outgoing_msgs, incoming_msgs, task_handle: handle.abort_handle() }
@@ -109,7 +107,7 @@ pub fn spawn_operator_connection(
     // if there is `OperatorConfig`, then operator key is expected.
     let operator_keypair = load_operator_keypair();
     let operator_pubsub =
-        Arc::new(OperatorPubSub::new(config.quic_port, operator_keypair, config.operators));
+        Arc::new(OperatorPubSub::new(config.quic_port, operator_keypair, config.operators, config.mode));
 
     // spawn a task to load initial db state
     tokio::spawn({
