@@ -4,6 +4,7 @@ use std::{
     time::Duration,
 };
 
+use axum::serve::ListenerExt;
 use bytes::Bytes;
 use crossbeam_channel::Sender;
 use flux::spine::StandaloneDCacheProducer;
@@ -183,8 +184,14 @@ pub async fn run_api_service<A: Api>(
         terminating,
     );
 
-    let listener =
-        tokio::net::TcpListener::bind(format!("0.0.0.0:{}", config.api_port)).await.unwrap();
+    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", config.api_port))
+        .await
+        .unwrap()
+        .tap_io(|tcp_stream| {
+            if let Err(e) = tcp_stream.set_nodelay(true) {
+                error!("failed to set TCP_NODELAY on incoming connection: {e}");
+            }
+        });
     match axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>()).await {
         Ok(_) => info!("Server exited successfully"),
         Err(e) => error!("Server exited with error: {e}"),
