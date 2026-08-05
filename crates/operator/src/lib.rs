@@ -254,8 +254,8 @@ mod tests {
             multiaddr: Multiaddr::from_str("/ip4/127.0.0.1/udp/32023/quic-v1").unwrap(),
         };
 
-        let op_a = OperatorPubSub::new(23032, keypair_a, vec![operator_b]);
-        let op_b = OperatorPubSub::new(32023, keypair_b, vec![operator_a]);
+        let op_a = OperatorPubSub::new(23032, keypair_a, vec![operator_b], helix_common::OperatorP2pMode::On);
+        let op_b = OperatorPubSub::new(32023, keypair_b, vec![operator_a], helix_common::OperatorP2pMode::On);
 
         let builder_pubkey = BlsPublicKeyBytes::random();
         let demotion = Demotion {
