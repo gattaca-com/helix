@@ -1,6 +1,7 @@
 use std::{collections::HashMap, time::Duration};
 
 use async_channel::{Receiver, Sender};
+use helix_common::OperatorP2pMode;
 use helix_types::{BlsPublicKeyBytes, BuilderCollateral, OperatorMessage};
 use libp2p::{
     PeerId, SwarmBuilder,
@@ -29,6 +30,7 @@ pub(super) async fn run_operator_connection(
     operators: Vec<Operator>,
     outgoing: Receiver<OperatorMessage>,
     incoming: Sender<(Operator, OperatorMessage)>,
+    mode: OperatorP2pMode,
 ) -> Result<(), OperatorError> {
     let floodsub_topic = floodsub::Topic::new("operator");
     let local_peer_id = PeerId::from_public_key(&keypair.public());
@@ -132,7 +134,7 @@ pub(super) async fn run_operator_connection(
                                     };
 
                                     tracing::info!(?operator_msg, operator=operator.name, "new operator message");
-                                    if forward {
+                                    if forward && matches!(mode, OperatorP2pMode::On) {
                                         let _ = incoming.send((operator.clone(), operator_msg)).await;
                                     }
                                 }

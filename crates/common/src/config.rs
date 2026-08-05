@@ -702,10 +702,19 @@ pub struct InclusionListConfig {
     pub relay_address: Address,
 }
 
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub enum OperatorP2pMode {
+    #[default]
+    On,
+    Off,
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct OperatorConfig {
     pub quic_port: u16,
     pub operators: Vec<Operator>,
+    #[serde(default)]
+    pub mode: OperatorP2pMode,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
