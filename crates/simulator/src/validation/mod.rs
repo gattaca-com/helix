@@ -134,8 +134,8 @@ impl ValidationApi {
     fn parse_disallow_list(list: Vec<String>) -> Vec<Address> {
         let mut addrs = Vec::new();
         for hex in list {
-            if let Ok(b) = hex.strip_prefix("0x").unwrap_or(&hex).parse::<B256>() {
-                addrs.push(Address::from_slice(b.as_slice()));
+            if let Ok(addr) = hex.strip_prefix("0x").unwrap_or(&hex).parse::<Address>() {
+                addrs.push(addr);
             }
         }
         addrs
