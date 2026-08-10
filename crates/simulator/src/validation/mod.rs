@@ -113,14 +113,10 @@ impl ValidationApi {
                 match client.get(&ep).send().await {
                     Ok(resp) if resp.status().is_success() => {
                         if let Ok(list) = resp.json::<Vec<String>>().await {
-                            // build new set then swap
+                            let parsed = ValidationApi::parse_disallow_list(list);
                             dash.clear();
-                            for hex in list {
-                                if let Ok(b) =
-                                    hex.strip_prefix("0x").unwrap_or(&hex).parse::<B256>()
-                                {
-                                    dash.insert(Address::from_slice(b.as_slice()));
-                                }
+                            for addr in parsed {
+                                dash.insert(addr);
                             }
                             gauge.set(dash.len() as f64);
                         }
@@ -132,6 +128,17 @@ impl ValidationApi {
         });
 
         Self { inner }
+    }
+
+    /// Parses a blacklist payload into the addresses to disallow.
+    fn parse_disallow_list(list: Vec<String>) -> Vec<Address> {
+        let mut addrs = Vec::new();
+        for hex in list {
+            if let Ok(b) = hex.strip_prefix("0x").unwrap_or(&hex).parse::<B256>() {
+                addrs.push(Address::from_slice(b.as_slice()));
+            }
+        }
+        addrs
     }
 
     /// Returns the cached reads for the given head hash.
@@ -857,4 +864,23 @@ pub trait BlockSubmissionValidationApi {
         &self,
         request: ExtendedValidationRequestV5,
     ) -> jsonrpsee::core::RpcResult<()>;
+}
+
+#[cfg(test)]
+mod blacklist_tests {
+    use alloy_primitives::address;
+
+    use super::*;
+
+    #[test]
+    fn loads_an_address_list() {
+        let parsed = ValidationApi::parse_disallow_list(vec![
+            "0x8589427373D6D84E98730D7795D8f6f8731FDA16".into(),
+            "722122dF12D4e14e13Ac3b6895a86e84145b6967".into(),
+            "0xdd4c48c0b24039969fc16d1cdf626eab821d3384".into(),
+        ]);
+
+        assert_eq!(parsed.len(), 3, "every entry must load");
+        assert!(parsed.contains(&address!("0x8589427373D6D84E98730D7795D8f6f8731FDA16")));
+    }
 }
