@@ -6074,6 +6074,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with 1.14.0",
+ "sha2 0.10.9",
  "thiserror 1.0.69",
  "tokio",
  "tracing",

@@ -40,12 +40,16 @@ use reth_ethereum::{
     rpc::eth::utils::recover_raw_transaction,
     storage::{BlockReaderIdExt, HeaderProvider, StateProviderBox, StateProviderFactory},
 };
-use reth_metrics::{Metrics, metrics::Gauge};
+use reth_metrics::{
+    Metrics,
+    metrics::{Gauge, gauge},
+};
 use reth_node_builder::{BlockBody, ConfigureEvm};
 use reth_tasks::TaskExecutor;
 use revm::{Database, database::State};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
+use sha2::{Digest, Sha256};
 use tokio::{
     spawn,
     sync::{RwLock, oneshot},
@@ -108,6 +112,9 @@ impl ValidationApi {
         let gauge = inner.metrics.disallow_size.clone();
         spawn(async move {
             let mut interval = time::interval(Duration::from_secs(300));
+            // Stays `None` until the first successful fetch, so a restart doesn't publish the
+            // hash of the empty list we start out with.
+            let mut current_hash: Option<String> = None;
             loop {
                 interval.tick().await;
                 match client.get(&ep).send().await {
@@ -119,6 +126,20 @@ impl ValidationApi {
                                 dash.insert(addr);
                             }
                             gauge.set(dash.len() as f64);
+
+                            if let Some(new_hash) =
+                                changed_disallow_hash(&dash, current_hash.as_deref())
+                            {
+                                // Setting the value for old hash to zero and the new hash to one.
+                                if let Some(prev) = current_hash.take() {
+                                    gauge!("builder_validation_disallow_hash", "hash" => prev)
+                                        .set(0.0);
+                                }
+                                gauge!("builder_validation_disallow_hash", "hash" => new_hash.clone())
+                                    .set(1.0);
+                                info!(hash = %new_hash, size = dash.len(), "disallow list updated");
+                                current_hash = Some(new_hash);
+                            }
                         }
                     }
                     Ok(r) => warn!("Blacklist fetch failed: HTTP {}", r.status()),
@@ -503,9 +524,9 @@ impl ValidationApi {
         // since a value call to a codeless address succeeds and keeps the value.
         let paid_directly =
             tx.to() == Some(message.proposer_fee_recipient) && tx.input().is_empty();
-        let paid_via_forwarder = tx.to() == Some(PAYMENT_FORWARDER) &&
-            payment_forwarder_recipient(tx.input()) == Some(message.proposer_fee_recipient) &&
-            output.state.state.get(&PAYMENT_FORWARDER).is_some_and(|acc| {
+        let paid_via_forwarder = tx.to() == Some(PAYMENT_FORWARDER)
+            && payment_forwarder_recipient(tx.input()) == Some(message.proposer_fee_recipient)
+            && output.state.state.get(&PAYMENT_FORWARDER).is_some_and(|acc| {
                 acc.info.as_ref().is_some_and(|i| i.code_hash == PAYMENT_FORWARDER_CODE_HASH)
             });
         if !paid_directly && !paid_via_forwarder {
@@ -530,8 +551,8 @@ impl ValidationApi {
         &self,
         mut blobs_bundle: BlobsBundleV1,
     ) -> Result<Vec<B256>, ValidationApiError> {
-        if blobs_bundle.commitments.len() != blobs_bundle.proofs.len() ||
-            blobs_bundle.commitments.len() != blobs_bundle.blobs.len()
+        if blobs_bundle.commitments.len() != blobs_bundle.proofs.len()
+            || blobs_bundle.commitments.len() != blobs_bundle.blobs.len()
         {
             return Err(ValidationApiError::InvalidBlobsBundle);
         }
@@ -623,8 +644,8 @@ impl ValidationApi {
 
         // Check block size as per EIP-7934 (only applies when Osaka hardfork is active)
         let chain_spec = self.provider.chain_spec();
-        if chain_spec.is_osaka_active_at_timestamp(block.timestamp()) &&
-            block.rlp_length() > MAX_RLP_BLOCK_SIZE
+        if chain_spec.is_osaka_active_at_timestamp(block.timestamp())
+            && block.rlp_length() > MAX_RLP_BLOCK_SIZE
         {
             return Err(ValidationApiError::Consensus(ConsensusError::BlockTooLarge {
                 rlp_length: block.rlp_length(),
@@ -658,8 +679,8 @@ impl ValidationApi {
                 .sealed_header_by_hash(parent_hash)?
                 .ok_or_else(|| GetParentError::MissingParentBlock)?;
 
-            if latest_header.number().saturating_sub(parent_header.number()) >
-                self.validation_window
+            if latest_header.number().saturating_sub(parent_header.number())
+                > self.validation_window
             {
                 return Err(GetParentError::BlockTooOld);
             }
@@ -803,6 +824,28 @@ pub(crate) struct ValidationMetrics {
     pub(crate) disallow_size: Gauge,
 }
 
+/// Fingerprints the disallow list so operators can confirm every node enforces the same one.
+///
+/// Entries are sorted first because `DashSet` iteration order is not stable. Mirrors reth's
+/// `hash_disallow_list` so the digests are comparable against reth-based builders.
+fn hash_disallow_list(disallow: &DashSet<Address>) -> String {
+    let mut sorted: Vec<Address> = disallow.iter().map(|addr| *addr).collect();
+    sorted.sort_unstable();
+
+    let mut hasher = Sha256::new();
+    for addr in &sorted {
+        hasher.update(addr.as_slice());
+    }
+
+    format!("{:x}", hasher.finalize())
+}
+
+/// Returns the disallow list's digest, or `None` when it still matches `previous`.
+fn changed_disallow_hash(disallow: &DashSet<Address>, previous: Option<&str>) -> Option<String> {
+    let hash = hash_disallow_list(disallow);
+    (previous != Some(hash.as_str())).then_some(hash)
+}
+
 #[serde_as]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtendedValidationRequestV4 {
@@ -882,5 +925,39 @@ mod blacklist_tests {
 
         assert_eq!(parsed.len(), 3, "every entry must load");
         assert!(parsed.contains(&address!("0x8589427373D6D84E98730D7795D8f6f8731FDA16")));
+    }
+
+    const ADDR_A: Address = address!("0x722122dF12D4e14e13Ac3b6895a86e84145b6967");
+    const ADDR_B: Address = address!("0x8589427373D6D84E98730D7795D8f6f8731FDA16");
+
+    fn disallow_set(addrs: &[Address]) -> DashSet<Address> {
+        let set = DashSet::new();
+        for addr in addrs {
+            set.insert(*addr);
+        }
+        set
+    }
+
+    #[test]
+    fn an_unchanged_list_reports_no_change() {
+        let previous = disallow_set(&[ADDR_A, ADDR_B]);
+        let current = disallow_set(&[ADDR_B, ADDR_A]);
+
+        let hash = changed_disallow_hash(&previous, None).expect("a first list is always new");
+
+        assert_eq!(changed_disallow_hash(&current, Some(&hash)), None);
+    }
+
+    #[test]
+    fn an_amended_list_reports_a_new_hash() {
+        let previous = disallow_set(&[ADDR_A]);
+        let current = disallow_set(&[ADDR_A, ADDR_B]);
+
+        let superseded =
+            changed_disallow_hash(&previous, None).expect("a first list is always new");
+
+        let in_force =
+            changed_disallow_hash(&current, Some(&superseded)).expect("the digest must change");
+        assert_ne!(in_force, superseded);
     }
 }
