@@ -8,7 +8,7 @@ use std::{
 
 use alloy_primitives::{B256, U256};
 use axum::{
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
 use dashmap::{DashMap, DashSet};
@@ -27,6 +27,7 @@ use crate::{
         },
         proposer_api::ValidatorRegistrationInfo,
     },
+    api_provider::ApiProvider,
     metrics::CACHE_SIZE,
 };
 
@@ -34,7 +35,7 @@ use crate::{
 pub enum RegistrationUpdate {
     Required,
     Unchanged,
-    IpMismatch,
+    Rejected,
 }
 
 const ESTIMATED_BUILDER_INFOS_UPPER_BOUND: usize = 1000;
@@ -330,7 +331,8 @@ impl LocalCache {
         &self,
         registration: &SignedValidatorRegistration,
         api_key: Option<Uuid>,
-        ip_addr: Option<IpAddr>,
+        headers: &HeaderMap,
+        api_provider: &impl ApiProvider,
     ) -> RegistrationUpdate {
         let Some(existing_entry) =
             self.validator_registration_cache.get(&registration.message.pubkey)
@@ -348,10 +350,8 @@ impl LocalCache {
             (fee_recipient_changed || gas_limit_changed || existing.timestamp != new.timestamp) &&
                 new.timestamp >= existing.timestamp;
 
-        // Registrations guard the api key update, so a payload anyone could have replayed needs the
-        // ip of the last valid registration.
-        if !resigned && existing_entry.ip_addr.is_some_and(|last| Some(last) != ip_addr) {
-            return RegistrationUpdate::IpMismatch;
+        if !api_provider.admit_registration(resigned, existing_entry.value(), headers) {
+            return RegistrationUpdate::Rejected;
         }
 
         if existing.timestamp < new.timestamp.saturating_sub(VALIDATOR_REGISTRATION_UPDATE_INTERVAL) ||

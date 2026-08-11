@@ -3,11 +3,11 @@ use std::{net::IpAddr, sync::Arc, time::Duration};
 use axum::http::HeaderMap;
 use helix_types::SignedValidatorRegistration;
 use tracing::warn;
-use uuid::Uuid;
+pub use uuid::Uuid;
 
 use crate::{
-    PreferencesHeader, ValidatorPreferences,
-    api::{HEADER_API_KEY, HEADER_FORWARDED_FOR, HEADER_TIMEOUT_MS, proposer_api::GetHeaderParams},
+    PreferencesHeader, SignedValidatorRegistrationEntry, ValidatorPreferences,
+    api::{HEADER_FORWARDED_FOR, HEADER_TIMEOUT_MS, proposer_api::GetHeaderParams},
 };
 
 pub fn header_u64(headers: &HeaderMap, name: &str) -> Option<u64> {
@@ -44,6 +44,24 @@ pub trait ApiProvider: Send + Sync + Clone + 'static {
         fallback: Arc<ValidatorPreferences>,
         _registrations: &[SignedValidatorRegistration],
     ) -> ValidatorPreferences;
+
+    fn admit_registration(
+        &self,
+        _resigned: bool,
+        _existing: &SignedValidatorRegistrationEntry,
+        _headers: &HeaderMap,
+    ) -> bool {
+        true
+    }
+
+    fn admit_header_stream(
+        &self,
+        _params: &GetHeaderParams,
+        _headers: &HeaderMap,
+        _registered: &ValidatorPreferences,
+    ) -> Result<(), &'static str> {
+        Err("header stream not available")
+    }
 }
 
 pub struct TimingResult {
@@ -89,7 +107,7 @@ impl ApiProvider for DefaultApiProvider {
             delay_ms: fallback.delay_ms,
             disable_inclusion_lists: fallback.disable_inclusion_lists,
             disable_optimistic: fallback.disable_optimistic,
-            api_key: header_uuid(headers, HEADER_API_KEY),
+            api_key: None,
         };
 
         let preferences_header = headers.get("x-preferences");

@@ -38,14 +38,8 @@ pub enum ProposerApiError {
     #[error("invalid api key")]
     InvalidApiKey,
 
-    #[error("proposer has no api key registered")]
-    ApiKeyNotRegistered,
-
-    #[error("missing or malformed api key")]
-    ApiKeyMissing,
-
-    #[error("api key does not match the proposer's registration")]
-    ApiKeyMismatch,
+    #[error("header stream not admitted")]
+    StreamNotAdmitted,
 
     #[error("proposer not registered")]
     ProposerNotRegistered,
@@ -175,10 +169,9 @@ impl IntoResponse for ProposerApiError {
                 ProposerApiError::RequestForPastSlot { .. } => StatusCode::BAD_REQUEST,
 
                 // All authentication failures, kept indistinguishable by status
-                ProposerApiError::InvalidApiKey |
-                ProposerApiError::ApiKeyNotRegistered |
-                ProposerApiError::ApiKeyMissing |
-                ProposerApiError::ApiKeyMismatch => StatusCode::UNAUTHORIZED,
+                ProposerApiError::InvalidApiKey | ProposerApiError::StreamNotAdmitted => {
+                    StatusCode::UNAUTHORIZED
+                }
 
                 ProposerApiError::InternalServerError |
                 ProposerApiError::NoExecutionPayloadFound => StatusCode::INTERNAL_SERVER_ERROR,

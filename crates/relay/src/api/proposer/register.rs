@@ -68,7 +68,7 @@ impl<A: Api> ProposerApi<A> {
 
         let mut unknown_registrations = 0;
         let mut skipped_registrations = 0;
-        let mut ip_mismatch_registrations = 0;
+        let mut rejected_registrations = 0;
 
         let registrations_to_check: Vec<_> = {
             let known_validators_guard = proposer_api.local_cache.known_validators_cache.read();
@@ -86,15 +86,16 @@ impl<A: Api> ProposerApi<A> {
                     match proposer_api.local_cache.registration_update(
                         reg,
                         validator_preferences.api_key,
-                        ip_addr,
+                        &headers,
+                        proposer_api.api_provider.as_ref(),
                     ) {
                         RegistrationUpdate::Required => true,
                         RegistrationUpdate::Unchanged => {
                             skipped_registrations += 1;
                             false
                         }
-                        RegistrationUpdate::IpMismatch => {
-                            ip_mismatch_registrations += 1;
+                        RegistrationUpdate::Rejected => {
+                            rejected_registrations += 1;
                             false
                         }
                     }
@@ -105,11 +106,8 @@ impl<A: Api> ProposerApi<A> {
         REGISTRATIONS_UNKNOWN.inc_by(unknown_registrations);
         REGISTRATIONS_SKIPPED.inc_by(skipped_registrations);
 
-        if ip_mismatch_registrations > 0 {
-            warn!(
-                ?ip_addr,
-                ip_mismatch_registrations, "skipped registrations replayed from another ip"
-            );
+        if rejected_registrations > 0 {
+            warn!(?ip_addr, rejected_registrations, "registrations refused by the api provider");
         }
 
         if registrations_to_check.is_empty() {
@@ -188,7 +186,7 @@ impl<A: Api> ProposerApi<A> {
             successful_registrations,
             unknown_registrations,
             skipped_registrations,
-            ip_mismatch_registrations,
+            rejected_registrations,
             invalid_registrations,
             "processed registrations"
         );
