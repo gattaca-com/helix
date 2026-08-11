@@ -10,7 +10,10 @@ use std::{
 use alloy_primitives::U256;
 use async_channel::{Receiver, RecvError, SendError, Sender, TryRecvError, TrySendError, bounded};
 use helix_common::{
-    OperatorConfig, OperatorP2pMode, alerts::{AlertManager, format_demotion_alert}, local_cache::LocalCache, utils::utcnow_ms,
+    OperatorConfig, OperatorP2pMode,
+    alerts::{AlertManager, format_demotion_alert},
+    local_cache::LocalCache,
+    utils::utcnow_ms,
 };
 use helix_database::{PostgresDatabaseService, handle::DbHandle};
 use helix_types::{BuilderCollateral, Operator, OperatorMessage};
@@ -57,7 +60,12 @@ impl Drop for OperatorPubSub {
 }
 
 impl OperatorPubSub {
-    pub fn new(quic_port: u16, local_keypair: Keypair, operators: Vec<Operator>, mode: OperatorP2pMode) -> Self {
+    pub fn new(
+        quic_port: u16,
+        local_keypair: Keypair,
+        operators: Vec<Operator>,
+        mode: OperatorP2pMode,
+    ) -> Self {
         let (outgoing_msgs, out_recv) = bounded(128);
         let (in_send, incoming_msgs) = bounded(128);
 
@@ -106,13 +114,19 @@ pub fn spawn_operator_connection(
 ) -> Arc<OperatorPubSub> {
     // if there is `OperatorConfig`, then operator key is expected.
     let operator_keypair = load_operator_keypair();
-    let operator_pubsub =
-        Arc::new(OperatorPubSub::new(config.quic_port, operator_keypair, config.operators, config.mode));
+    let operator_group = config.operator_group.map(|s| s.as_bytes().to_vec());
+    let operator_pubsub = Arc::new(OperatorPubSub::new(
+        config.quic_port,
+        operator_keypair,
+        config.operators,
+        config.mode,
+    ));
 
     // spawn a task to load initial db state
     tokio::spawn({
         let pubsub = operator_pubsub.clone();
         let cache = local_cache.clone();
+        let group = operator_group.clone();
         async move {
             // wait for database load to complete.
             while !loaded.load(Ordering::Relaxed) {
@@ -127,6 +141,7 @@ pub fn spawn_operator_connection(
                             slot: 0,
                             builder_pubkey,
                             collateral_wei: builder_info.collateral.to(),
+                            operator_group: group.clone(),
                         }))
                         .await;
                 }
@@ -204,10 +219,16 @@ pub fn spawn_operator_connection(
                                 }
                             }
                             OperatorMessage::Collateral(builder_collateral) => {
+                                if operator.operator_group.as_ref().map(|s| s.as_bytes()) != builder_collateral.operator_group.as_ref().map(|v| v.as_slice()) {
+                                    tracing::error!(config_operator_group=?operator.operator_group, msg_operator_group=?builder_collateral.operator_group, "operator group mismatch");
+                                    continue;
+                                }
+
                                 local_cache.update_operator_collateral(
                                     &builder_collateral.builder_pubkey,
                                     &operator.pubkey,
                                     builder_collateral.collateral_wei,
+                                    builder_collateral.operator_group,
                                 );
                             }
                         }
@@ -215,7 +236,7 @@ pub fn spawn_operator_connection(
                     _ = tokio::time::sleep_until(collateral_resync) => {
                         let ts_ms = utcnow_ms();
                         for (pubkey, info) in local_cache.all_builder_infos_local_collateral_only() {
-                            let _ = pubsub.send(OperatorMessage::Collateral(BuilderCollateral { ts_ms, slot: 0, builder_pubkey: pubkey, collateral_wei: info.collateral.to() })).await;
+                            let _ = pubsub.send(OperatorMessage::Collateral(BuilderCollateral { ts_ms, slot: 0, builder_pubkey: pubkey, collateral_wei: info.collateral.to(), operator_group: operator_group.clone() })).await;
                         }
                         collateral_resync = tokio::time::Instant::now() + Duration::from_secs(30);
                     }
@@ -246,16 +267,28 @@ mod tests {
             name: "operator A".into(),
             pubkey: keypair_a.public(),
             multiaddr: Multiaddr::from_str("/ip4/127.0.0.1/udp/23032/quic-v1").unwrap(),
+            operator_group: None,
         };
 
         let operator_b = Operator {
             name: "operator B".into(),
             pubkey: keypair_b.public(),
             multiaddr: Multiaddr::from_str("/ip4/127.0.0.1/udp/32023/quic-v1").unwrap(),
+            operator_group: None,
         };
 
-        let op_a = OperatorPubSub::new(23032, keypair_a, vec![operator_b], helix_common::OperatorP2pMode::On);
-        let op_b = OperatorPubSub::new(32023, keypair_b, vec![operator_a], helix_common::OperatorP2pMode::On);
+        let op_a = OperatorPubSub::new(
+            23032,
+            keypair_a,
+            vec![operator_b],
+            helix_common::OperatorP2pMode::On,
+        );
+        let op_b = OperatorPubSub::new(
+            32023,
+            keypair_b,
+            vec![operator_a],
+            helix_common::OperatorP2pMode::On,
+        );
 
         let builder_pubkey = BlsPublicKeyBytes::random();
         let demotion = Demotion {
