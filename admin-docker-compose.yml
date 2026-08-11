@@ -1,0 +1,13 @@
+services:
+  admin:
+    image: helix-admin:local
+    restart: unless-stopped
+    ports:
+      - "4060:4060"
+    environment:
+      ADMIN_TOKEN: ${ADMIN_TOKEN}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # Only needed if the relay's admin API uses a different token than ADMIN_TOKEN.
+      # RELAY_ADMIN_TOKEN: ${RELAY_ADMIN_TOKEN}
+    volumes:
+      - ./admin-config.yml:/app/admin-config.yml:ro
