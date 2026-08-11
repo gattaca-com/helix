@@ -8,6 +8,7 @@ use std::{
 use alloy_primitives::Address;
 use clap::Parser;
 use eyre::ensure;
+use flux_utils::ArrayStr;
 use helix_types::{BlsKeypair, BlsPublicKey, BlsPublicKeyBytes, BlsSecretKey, Operator};
 use reqwest::Url;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -717,7 +718,7 @@ pub struct OperatorConfig {
     pub mode: OperatorP2pMode,
     /// Operator group or company.
     #[serde(default)]
-    pub operator_group: Option<String>,
+    pub operator_group: Option<ArrayStr<32>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
