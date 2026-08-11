@@ -38,7 +38,9 @@ use reth_ethereum::{
     },
     provider::{BlockExecutionOutput, ChainSpecProvider},
     rpc::eth::utils::recover_raw_transaction,
-    storage::{BlockReaderIdExt, HeaderProvider, StateProviderBox, StateProviderFactory},
+    storage::{
+        AccountReader, BlockReaderIdExt, HeaderProvider, StateProviderBox, StateProviderFactory,
+    },
 };
 use reth_metrics::{
     Metrics,
@@ -526,9 +528,15 @@ impl ValidationApi {
             tx.to() == Some(message.proposer_fee_recipient) && tx.input().is_empty();
         let paid_via_forwarder = tx.to() == Some(PAYMENT_FORWARDER)
             && payment_forwarder_recipient(tx.input()) == Some(message.proposer_fee_recipient)
-            && output.state.state.get(&PAYMENT_FORWARDER).is_some_and(|acc| {
-                acc.info.as_ref().is_some_and(|i| i.code_hash == PAYMENT_FORWARDER_CODE_HASH)
-            });
+            && self
+                .provider
+                .latest()
+                .and_then(|state| state.basic_account(&PAYMENT_FORWARDER))
+                .is_ok_and(|account| {
+                    account.is_some_and(|account| {
+                        account.bytecode_hash == Some(PAYMENT_FORWARDER_CODE_HASH)
+                    })
+                });
         if !paid_directly && !paid_via_forwarder {
             return Err(ValidationApiError::ProposerPayment);
         }
