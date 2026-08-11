@@ -715,6 +715,9 @@ pub struct OperatorConfig {
     pub operators: Vec<Operator>,
     #[serde(default)]
     pub mode: OperatorP2pMode,
+    /// Operator group or company.
+    #[serde(default)]
+    pub operator_group: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

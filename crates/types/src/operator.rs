@@ -52,6 +52,11 @@ pub struct BuilderCollateral {
     /// The TOTAL builder collateral held by the operator. Each operator
     /// will need to track amounts held at other operators and sum.
     pub collateral_wei: u128,
+    /// Operator group name as utf-8 bytes.
+    /// If this value is set it MUST be used to deduplicate these collateral messages.
+    /// Operator instances in the same group will send the same collateral amounts,
+    /// which MUST NOT be summed.
+    pub operator_group: Option<Vec<u8>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -63,4 +68,6 @@ pub struct Operator {
     )]
     pub pubkey: PublicKey,
     pub multiaddr: Multiaddr,
+    #[serde(default)]
+    pub operator_group: Option<String>,
 }

@@ -102,7 +102,7 @@ pub struct LocalCache {
     // TODO: this should be an ArcSwap
     pub inclusion_list: Arc<RwLock<Option<InclusionListWithKey>>>,
     builder_info_cache: Arc<DashMap<BlsPublicKeyBytes, BuilderInfo>>,
-    operator_builder_collateral: Arc<DashMap<BlsPublicKeyBytes, FxHashMap<PublicKey, u128>>>,
+    operator_builder_collateral: Arc<DashMap<BlsPublicKeyBytes, FxHashMap<Vec<u8>, u128>>>,
     /// Api key -> builder pubkey
     pub api_key_cache: Arc<DashMap<String, Vec<BlsPublicKeyBytes>>>,
     primev_proposers: Arc<DashSet<BlsPublicKeyBytes>>,
@@ -408,15 +408,17 @@ impl LocalCache {
         builder_pub_key: &BlsPublicKeyBytes,
         operator: &PublicKey,
         collateral: u128,
+        operator_group: Option<Vec<u8>>,
     ) {
+        let operator_key = operator_group.unwrap_or_else(|| operator.encode_protobuf());
         self.operator_builder_collateral
             .entry(*builder_pub_key)
             .and_modify(|operators| {
-                operators.insert(operator.clone(), collateral);
+                operators.insert(operator_key.clone(), collateral);
             })
             .or_insert_with(|| {
                 let mut operators = FxHashMap::default();
-                operators.insert(operator.clone(), collateral);
+                operators.insert(operator_key, collateral);
                 operators
             });
     }
