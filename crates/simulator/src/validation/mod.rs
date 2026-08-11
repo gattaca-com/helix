@@ -910,6 +910,93 @@ pub trait BlockSubmissionValidationApi {
 }
 
 #[cfg(test)]
+mod forwarder_tests {
+    use alloy_primitives::keccak256;
+    use revm::{
+        Context, ExecuteCommitEvm, MainBuilder, MainContext,
+        bytecode::Bytecode,
+        context::TxEnv,
+        database::{CacheDB, EmptyDB, states::bundle_state::BundleRetention},
+        primitives::TxKind,
+        state::AccountInfo,
+    };
+
+    use super::*;
+
+    const FORWARDER_RUNTIME: [u8; 20] =
+        alloy_primitives::hex!("5f358060e01c4218600f5760401cff5b5f5ffd00");
+
+    /// Executes the real forwarder runtime through revm at the current spec. Post EIP-6780 the
+    /// SELFDESTRUCT only moves the balance, so the account nets no state change and revm drops
+    /// it from the post-execution bundle entirely — `ensure_payment` reads that bundle, so its
+    /// code-hash clause can never pass on a payment that actually executed.
+    #[test]
+    fn an_executed_forwarder_payment_leaves_no_bundle_account() {
+        assert_eq!(keccak256(FORWARDER_RUNTIME), PAYMENT_FORWARDER_CODE_HASH);
+
+        let caller = Address::repeat_byte(1);
+        let recipient = Address::repeat_byte(7);
+        let timestamp: u32 = 1_786_450_919;
+        let value = U256::from(8_594_702_506_957_281u64);
+
+        let mut cache = CacheDB::<EmptyDB>::default();
+        cache.insert_account_info(
+            PAYMENT_FORWARDER,
+            AccountInfo {
+                nonce: 1,
+                code_hash: PAYMENT_FORWARDER_CODE_HASH,
+                code: Some(Bytecode::new_raw(FORWARDER_RUNTIME.to_vec().into())),
+                ..Default::default()
+            },
+        );
+        cache.insert_account_info(
+            caller,
+            AccountInfo { balance: U256::from(10).pow(U256::from(18)), ..Default::default() },
+        );
+
+        let mut state = State::builder().with_database(cache).with_bundle_update().build();
+        let mut evm = Context::mainnet()
+            .with_db(&mut state)
+            .modify_block_chained(|block| block.timestamp = U256::from(timestamp))
+            .build_mainnet();
+
+        let mut calldata = timestamp.to_be_bytes().to_vec();
+        calldata.extend_from_slice(recipient.as_slice());
+
+        let tx = TxEnv::builder()
+            .caller(caller)
+            .kind(TxKind::Call(PAYMENT_FORWARDER))
+            .value(value)
+            .data(calldata.into())
+            .gas_limit(100_000)
+            .gas_price(0)
+            .build()
+            .unwrap();
+
+        let result = evm.transact_commit(tx).unwrap();
+        assert!(result.is_success(), "the payment itself executes fine");
+
+        drop(evm);
+        state.merge_transitions(BundleRetention::Reverts);
+        let bundle = state.take_bundle();
+
+        assert_eq!(
+            bundle
+                .state
+                .get(&recipient)
+                .and_then(|account| account.info.as_ref())
+                .map(|info| info.balance),
+            Some(value),
+            "the recipient received the full payment"
+        );
+        assert!(
+            bundle.state.get(&PAYMENT_FORWARDER).is_none(),
+            "the net-unchanged forwarder is dropped from the bundle"
+        );
+    }
+}
+
+#[cfg(test)]
 mod blacklist_tests {
     use alloy_primitives::address;
 
