@@ -1,9 +1,6 @@
-use std::{
-    net::IpAddr,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
 };
 
 use alloy_primitives::{B256, U256};
@@ -370,13 +367,12 @@ impl LocalCache {
         &self,
         entries: impl Iterator<Item = ValidatorRegistrationInfo>,
         user_agent: Option<String>,
-        ip_addr: Option<IpAddr>,
     ) {
         for entry in entries {
             self.pending_validator_registrations.insert(entry.registration.message.pubkey);
             self.validator_registration_cache.insert(
                 entry.registration.message.pubkey,
-                SignedValidatorRegistrationEntry::new(entry.clone(), user_agent.clone(), ip_addr),
+                SignedValidatorRegistrationEntry::new(entry.clone(), user_agent.clone()),
             );
         }
     }

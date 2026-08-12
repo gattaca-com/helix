@@ -151,7 +151,6 @@ struct RegistrationParams<'a> {
     signature: Vec<u8>,
     inserted_at: SystemTime,
     user_agent: Option<String>,
-    ip_addr: Option<String>,
 }
 
 struct PreferenceParams {
@@ -755,7 +754,6 @@ impl PostgresDatabaseService {
                     signature: signature.clone(),
                     inserted_at,
                     user_agent: entry.user_agent.clone(),
-                    ip_addr: entry.ip_addr.map(|ip_addr| ip_addr.to_string()),
                 });
 
                 structured_params_for_pref.push(PreferenceParams {
@@ -791,16 +789,15 @@ impl PostgresDatabaseService {
                         &tuple.signature,
                         &tuple.inserted_at,
                         &tuple.user_agent,
-                        &tuple.ip_addr,
                     ]
                 })
                 .collect();
 
             // Construct the SQL statement with multiple VALUES clauses
             let mut sql = String::from(
-                "INSERT INTO validator_registrations (fee_recipient, gas_limit, timestamp, public_key, signature, inserted_at, user_agent, ip_addr) VALUES ",
+                "INSERT INTO validator_registrations (fee_recipient, gas_limit, timestamp, public_key, signature, inserted_at, user_agent) VALUES ",
             );
-            let num_params_per_row = 8;
+            let num_params_per_row = 7;
             let values_clauses: Vec<String> = (0..params.len() / num_params_per_row)
                 .map(|row| {
                     let placeholders: Vec<String> = (1..=num_params_per_row)
@@ -812,7 +809,7 @@ impl PostgresDatabaseService {
 
             // Join the values clauses and append them to the SQL statement
             sql.push_str(&values_clauses.join(", "));
-            sql.push_str(" ON CONFLICT (public_key) DO UPDATE SET fee_recipient = excluded.fee_recipient, gas_limit = excluded.gas_limit, timestamp = excluded.timestamp, signature = excluded.signature, inserted_at = excluded.inserted_at, user_agent = excluded.user_agent, ip_addr = excluded.ip_addr, active = true");
+            sql.push_str(" ON CONFLICT (public_key) DO UPDATE SET fee_recipient = excluded.fee_recipient, gas_limit = excluded.gas_limit, timestamp = excluded.timestamp, signature = excluded.signature, inserted_at = excluded.inserted_at, user_agent = excluded.user_agent, active = true");
 
             // Execute the query
             transaction.execute(&sql, &params[..]).await?;
@@ -1109,7 +1106,6 @@ impl PostgresDatabaseService {
                     validator_preferences.disable_optimistic,
                     validator_registrations.inserted_at,
                     validator_registrations.user_agent,
-                    validator_registrations.ip_addr,
                     validator_preferences.delay_ms,
                     validator_preferences.api_key
                 FROM validator_registrations

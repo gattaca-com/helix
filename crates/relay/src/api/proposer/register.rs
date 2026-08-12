@@ -8,7 +8,7 @@ use axum::{
 use helix_common::{
     PreferencesHeader,
     api::proposer_api::ValidatorRegistrationInfo,
-    api_provider::{ApiProvider, header_ip_addr},
+    api_provider::ApiProvider,
     local_cache::RegistrationUpdate,
     metrics::{
         REGISTRATIONS_INVALID, REGISTRATIONS_SKIPPED, REGISTRATIONS_TO_CHECK_COUNT,
@@ -60,7 +60,6 @@ impl<A: Api> ProposerApi<A> {
         );
 
         let user_agent = proposer_api.api_provider.get_metadata(&headers);
-        let ip_addr = header_ip_addr(&headers);
 
         let head_slot = proposer_api.curr_slot_info.head_slot();
         let num_registrations = registrations.len();
@@ -107,7 +106,7 @@ impl<A: Api> ProposerApi<A> {
         REGISTRATIONS_SKIPPED.inc_by(skipped_registrations);
 
         if rejected_registrations > 0 {
-            warn!(?ip_addr, rejected_registrations, "registrations refused by the api provider");
+            warn!(rejected_registrations, "registrations refused by the api provider");
         }
 
         if registrations_to_check.is_empty() {
@@ -174,11 +173,7 @@ impl<A: Api> ProposerApi<A> {
                 }
             });
 
-        proposer_api.local_cache.save_validator_registrations(
-            registrations_to_save,
-            user_agent,
-            ip_addr,
-        );
+        proposer_api.local_cache.save_validator_registrations(registrations_to_save, user_agent);
 
         info!(
             ?process_time,

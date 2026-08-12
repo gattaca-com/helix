@@ -1,5 +1,3 @@
-use std::net::IpAddr;
-
 use helix_types::{BlsPublicKeyBytes, Validator};
 use serde::{Deserialize, Serialize};
 
@@ -39,17 +37,11 @@ pub struct SignedValidatorRegistrationEntry {
     pub inserted_at: u64,
     pub pool_name: Option<String>,
     pub user_agent: Option<String>,
-    #[serde(default)]
-    pub ip_addr: Option<IpAddr>,
 }
 
 impl SignedValidatorRegistrationEntry {
-    pub fn new(
-        registration_info: ValidatorRegistrationInfo,
-        user_agent: Option<String>,
-        ip_addr: Option<IpAddr>,
-    ) -> Self {
-        Self { registration_info, inserted_at: utcnow_ms(), pool_name: None, user_agent, ip_addr }
+    pub fn new(registration_info: ValidatorRegistrationInfo, user_agent: Option<String>) -> Self {
+        Self { registration_info, inserted_at: utcnow_ms(), pool_name: None, user_agent }
     }
 
     pub fn public_key(&self) -> &BlsPublicKeyBytes {
