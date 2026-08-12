@@ -294,7 +294,19 @@ impl DecoderTile {
         // Carried through raw (index-based, unexpanded) for `BlockMergingTile`, which
         // resolves tx bytes and caches blob sidecars itself when forwarding to the merge
         // builder — no need to do that work here on the submission hot path.
-        let merging_data = if config.block_merging_config.is_enabled { merging_data } else { None };
+        let merging_data = if config.block_merging_config.is_enabled {
+            // A builder with a collateral entry has opted into merging and can be treated as an
+            // append-only base block even when its submission carries no merge
+            // annotation of its own.
+            merging_data.or_else(|| {
+                config
+                    .block_merging_config
+                    .is_builder_collateralized(submission.fee_recipient())
+                    .then(|| BlockMergingData::append_only(submission.fee_recipient()))
+            })
+        } else {
+            None
+        };
 
         let submission_data = SubmissionData {
             submission_ref: *submission_ref,

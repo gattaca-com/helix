@@ -284,6 +284,12 @@ impl BlockMergingConfig {
         );
         Ok(())
     }
+
+    pub fn is_builder_collateralized(&self, builder_coinbase: Address) -> bool {
+        self.tcp.as_ref().is_some_and(|tcp| {
+            tcp.builder_collaterals.iter().any(|c| c.builder_coinbase == builder_coinbase)
+        })
+    }
 }
 
 /// Mirrors `RelayConfigV1` fields; kept local so helix-common does not depend
@@ -841,5 +847,37 @@ mod tests {
         let result = config.validate_bid_sorter();
         assert!(result.is_ok());
         assert!(!result.unwrap());
+    }
+
+    #[test]
+    fn test_is_builder_collateralized() {
+        let coinbase = Address::repeat_byte(1);
+        let other = Address::repeat_byte(2);
+
+        let no_tcp_config = BlockMergingConfig::default();
+        assert!(!no_tcp_config.is_builder_collateralized(coinbase));
+
+        let config = BlockMergingConfig {
+            tcp: Some(BlockMergingTcpConfig {
+                builder: MergingBuilderEndpoint {
+                    addr: "127.0.0.1:1234".parse().unwrap(),
+                    api_key: String::new(),
+                },
+                relay_fee_recipient: Address::ZERO,
+                multisend_contract: Address::ZERO,
+                relay_bps: 0,
+                merged_builder_bps: 0,
+                winning_builder_bps: 0,
+                distribution_gas_limit: 140_000,
+                builder_collaterals: vec![MergingBuilderCollateral {
+                    builder_coinbase: coinbase,
+                    collateral_safe: Address::ZERO,
+                }],
+            }),
+            ..Default::default()
+        };
+
+        assert!(config.is_builder_collateralized(coinbase));
+        assert!(!config.is_builder_collateralized(other));
     }
 }
