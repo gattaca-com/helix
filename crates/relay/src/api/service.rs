@@ -20,6 +20,7 @@ use helix_data_api::{
 };
 use helix_operator::OperatorPubSub;
 use moka::sync::Cache;
+use tokio::sync::mpsc::{Receiver, Sender as MpscSender};
 use tracing::{error, info};
 
 use crate::{
@@ -28,7 +29,7 @@ use crate::{
         Api, FutureBidSubmissionResult, builder::api::BuilderApi,
         extract::raw_web_socket::RawWebSocket, proposer::ProposerApi, router::build_router,
     },
-    gossip::{GrpcGossiperClientManager, process_gossip_messages},
+    gossip::{GossipedMessage, GrpcGossiperClientManager, process_gossip_messages},
     network::api::RelayNetworkApi,
     spine::messages::NewBidSubmission,
 };
@@ -56,6 +57,8 @@ pub fn start_api_service<A: Api>(
     web_socket_connections: Sender<(RawWebSocket, TopBidPrecision)>,
     alert_manager: Arc<AlertManager>,
     operator_api: Option<Arc<OperatorPubSub>>,
+    gossip_sender: MpscSender<GossipedMessage>,
+    gossip_receiver: Receiver<GossipedMessage>,
 ) {
     tokio::spawn(run_api_service::<A>(
         config.clone(),
@@ -78,6 +81,8 @@ pub fn start_api_service<A: Api>(
         web_socket_connections,
         alert_manager,
         operator_api,
+        gossip_sender,
+        gossip_receiver,
     ));
 }
 
@@ -102,6 +107,8 @@ pub async fn run_api_service<A: Api>(
     web_socket_connections: Sender<(RawWebSocket, TopBidPrecision)>,
     alert_manager: Arc<AlertManager>,
     operator_api: Option<Arc<OperatorPubSub>>,
+    gossip_sender: MpscSender<GossipedMessage>,
+    gossip_receiver: Receiver<GossipedMessage>,
 ) {
     let gossiper = Arc::new(
         GrpcGossiperClientManager::new(config.relays.iter().map(|cfg| cfg.url.clone()).collect())
@@ -110,8 +117,6 @@ pub async fn run_api_service<A: Api>(
     );
 
     let validator_preferences = Arc::new(config.validator_preferences.clone());
-
-    let (gossip_sender, gossip_receiver) = tokio::sync::mpsc::channel(10_000);
 
     let builder_api = BuilderApi::<A>::new(
         local_cache.clone(),
@@ -125,7 +130,7 @@ pub async fn run_api_service<A: Api>(
         future_results,
         http_submissions,
         web_socket_connections,
-        operator_api,
+        operator_api.clone(),
     );
     let builder_api = Arc::new(builder_api);
 
@@ -145,6 +150,7 @@ pub async fn run_api_service<A: Api>(
         auctioneer_handle,
         registrations_handle,
         alert_manager,
+        operator_api,
     ));
 
     tokio::spawn(process_gossip_messages(

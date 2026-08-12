@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -194,9 +195,9 @@ impl<A: Api> ProposerApi<A> {
                         .gossip_payload(
                             params.slot.into(),
                             &params.pubkey,
-                            &payload_and_blobs,
+                            Cow::Owned(payload_and_blobs),
                             fork,
-                            &bid_data,
+                            Cow::Owned(bid_data),
                         )
                         .await;
                 }

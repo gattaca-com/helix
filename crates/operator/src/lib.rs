@@ -16,7 +16,7 @@ use helix_common::{
     utils::utcnow_ms,
 };
 use helix_database::{PostgresDatabaseService, handle::DbHandle};
-use helix_types::{BuilderCollateral, Operator, OperatorMessage};
+use helix_types::{BuilderCollateral, Operator, OperatorMessage, Payload};
 use libp2p::{BehaviourBuilderError, TransportError, identity::Keypair, multiaddr};
 use thiserror::Error;
 use tokio::task::AbortHandle;
@@ -103,7 +103,7 @@ impl OperatorPubSub {
     }
 }
 
-pub fn spawn_operator_connection(
+pub fn spawn_operator_connection<F>(
     config: OperatorConfig,
     loaded: Arc<AtomicBool>,
     local_cache: Arc<LocalCache>,
@@ -111,7 +111,11 @@ pub fn spawn_operator_connection(
     db_service: Arc<PostgresDatabaseService>,
     failsafe_triggered: Arc<AtomicBool>,
     alert_manager: Arc<AlertManager>,
-) -> Arc<OperatorPubSub> {
+    payload_handler: F,
+) -> Arc<OperatorPubSub>
+where
+    F: Fn(Payload) + Send + Sync + 'static,
+{
     // if there is `OperatorConfig`, then operator key is expected.
     let operator_keypair = load_operator_keypair();
     let operator_group = config.operator_group.map(|s| s.as_bytes().to_vec());
@@ -231,6 +235,9 @@ pub fn spawn_operator_connection(
                                     builder_collateral.operator_group,
                                 );
                             }
+                            OperatorMessage::Payload(payload) => {
+                                payload_handler(payload);
+                            },
                         }
                     },
                     _ = tokio::time::sleep_until(collateral_resync) => {

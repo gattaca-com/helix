@@ -14,12 +14,13 @@ use helix_common::{
     utils::{utcnow_ms, utcnow_ns},
 };
 use helix_types::{
-    BlobWithMetadata, BlobsBundle, BlsPublicKeyBytes, MergedBlock, PayloadAndBlobs, Transactions,
+    BlobWithMetadata, BlobsBundle, BlsPublicKeyBytes, MergedBlock, PayloadAndBlobs, PayloadBidData,
+    Transactions,
 };
 use rustc_hash::{FxBuildHasher, FxHashSet};
 use tracing::{debug, error, info, trace, warn};
 
-use crate::auctioneer::{BlockMergeResponse, PayloadBidData, types::PayloadEntry};
+use crate::auctioneer::{BlockMergeResponse, types::PayloadEntry};
 
 type BlockHash = B256;
 

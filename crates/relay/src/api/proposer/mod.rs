@@ -14,6 +14,7 @@ use helix_common::{
     signing::RelaySigningContext,
 };
 use helix_database::handle::DbHandle;
+use helix_operator::OperatorPubSub;
 use hyper::StatusCode;
 
 use crate::{
@@ -39,6 +40,7 @@ pub struct ProposerApi<A: Api> {
     pub alert_manager: Arc<AlertManager>,
     pub auctioneer_handle: AuctioneerHandle,
     pub reg_handle: RegWorkerHandle,
+    pub operator_api: Option<Arc<OperatorPubSub>>,
 }
 
 impl<A: Api> ProposerApi<A> {
@@ -56,6 +58,7 @@ impl<A: Api> ProposerApi<A> {
         auctioneer_handle: AuctioneerHandle,
         reg_handle: RegWorkerHandle,
         alert_manager: Arc<AlertManager>,
+        operator_api: Option<Arc<OperatorPubSub>>,
     ) -> Self {
         Self {
             local_cache,
@@ -71,6 +74,7 @@ impl<A: Api> ProposerApi<A> {
             alert_manager,
             auctioneer_handle,
             reg_handle,
+            operator_api,
         }
     }
 }
