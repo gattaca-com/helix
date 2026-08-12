@@ -5954,6 +5954,7 @@ dependencies = [
  "hex",
  "libp2p",
  "serde",
+ "serde_yaml",
  "thiserror 1.0.69",
  "tokio",
  "tracing",

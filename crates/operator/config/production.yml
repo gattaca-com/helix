@@ -14,6 +14,6 @@ operators:
     operator_group: titan
 
   - name: titan_tk
-    pubkey: "03abd8fa16312e6400e2c1afce0c069973d1a54f9fff4c2f965e0b2182c799e10aq"
+    pubkey: "03abd8fa16312e6400e2c1afce0c069973d1a54f9fff4c2f965e0b2182c799e10a"
     multiaddr: /ip4/54.92.59.3/udp/3000/quic-v1
     operator_group: titan

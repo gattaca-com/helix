@@ -78,7 +78,8 @@ impl PromotionState {
 
 #[cfg(test)]
 mod tests {
-    use libp2p::identity::Keypair;
+    use helix_common::OperatorConfig;
+use libp2p::identity::Keypair;
 
     #[test]
     fn keygen() {
@@ -88,5 +89,12 @@ mod tests {
         let public_key_bytes = s_pair.public().to_bytes();
         println!("private: {}", hex::encode(secret_key_bytes));
         println!("public: {}", hex::encode(public_key_bytes));
+    }
+
+    #[test]
+    fn load_config() {
+        let yaml = std::fs::read_to_string("config/production.yml").unwrap();
+        let config: OperatorConfig = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(3, config.operators.len());
     }
 }
