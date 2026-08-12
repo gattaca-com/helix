@@ -51,11 +51,9 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export interface Overview {
-  num_network_validators: number;
-  num_registered_validators: number;
-  num_delivered_payloads: number;
   adjustments_enabled: boolean;
   kill_switch_enabled: boolean | null;
+  builders_pending_promotion: number;
 }
 
 export interface Builder {
@@ -65,6 +63,7 @@ export interface Builder {
   is_optimistic_for_regional_filtering: boolean;
   builder_id: string | null;
   builder_ids: string[] | null;
+  api_key: string | null;
 }
 
 export interface Demotion {
@@ -118,6 +117,23 @@ export const api = {
     apiFetch<void>(`/api/v1/actions/builders/${pubkey}/promote`, { method: "POST" }),
   disableAdjustments: () =>
     apiFetch<void>("/api/v1/actions/adjustments/disable", { method: "POST" }),
+  createBuilder: (req: {
+    pub_key: string;
+    builder_id: string | null;
+    collateral: string;
+    is_optimistic: boolean;
+  }) =>
+    apiFetch<void>("/api/v1/builders", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+    }),
+  updateBuilderCollateral: (pubkey: string, collateral: string) =>
+    apiFetch<void>(`/api/v1/builders/${pubkey}/collateral`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ collateral }),
+    }),
 };
 
 const WEI_PER_ETH = 10n ** 18n;
@@ -133,6 +149,17 @@ export function formatEth(wei: string): string {
   const frac = value % WEI_PER_ETH;
   const fracStr = frac.toString().padStart(18, "0").slice(0, 6);
   return `${whole}.${fracStr}`;
+}
+
+/** Parses a decimal ETH string (e.g. "1.5") into a wei string. Throws on invalid input. */
+export function parseEth(eth: string): string {
+  const trimmed = eth.trim();
+  if (!/^\d+(\.\d+)?$/.test(trimmed)) {
+    throw new Error(`invalid ETH amount: ${eth}`);
+  }
+  const [whole, frac = ""] = trimmed.split(".");
+  const fracPadded = frac.padEnd(18, "0").slice(0, 18);
+  return (BigInt(whole) * WEI_PER_ETH + BigInt(fracPadded || "0")).toString();
 }
 
 export function shortHex(hex: string, chars = 8): string {

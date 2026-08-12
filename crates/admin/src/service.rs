@@ -3,7 +3,7 @@ use std::{net::SocketAddr, sync::Arc};
 use axum::{
     Extension, Router,
     http::StatusCode,
-    routing::{get, post},
+    routing::{get, patch, post},
 };
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use tower_http::validate_request::ValidateRequestHeaderLayer;
@@ -23,7 +23,8 @@ pub fn build_admin_router(
 ) -> Router {
     let api_v1 = Router::new()
         .route("/overview", get(handlers::overview))
-        .route("/builders", get(handlers::builders))
+        .route("/builders", get(handlers::builders).post(handlers::create_builder))
+        .route("/builders/{pubkey}/collateral", patch(handlers::update_builder_collateral))
         .route("/demotions", get(handlers::demotions))
         .route("/payloads", get(handlers::payloads))
         .route("/bids", get(handlers::bids))

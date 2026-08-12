@@ -1,5 +1,6 @@
 use std::{collections::HashSet, sync::Arc};
 
+use alloy_primitives::U256;
 use axum::{
     Json,
     extract::{Extension, Path, Query},
@@ -23,7 +24,7 @@ use tracing::{info, warn};
 use crate::{
     db::AdminDatabaseService,
     error::AdminApiError,
-    models::{BuilderResponse, OverviewResponse},
+    models::{BuilderResponse, CreateBuilderRequest, OverviewResponse, UpdateCollateralRequest},
     relay_client::RelayAdminClient,
 };
 
@@ -32,14 +33,15 @@ const DEFAULT_PAYLOADS_LIMIT: u64 = 50;
 const MAX_DEMOTIONS_LIMIT: i64 = 500;
 const DEFAULT_DEMOTIONS_LIMIT: i64 = 100;
 
+/// Minimum collateral (in wei) required for a builder to be eligible for optimistic processing.
+const MIN_OPTIMISTIC_COLLATERAL_WEI: u64 = 1_000_000_000_000_000_000;
+
 pub async fn overview(
     Extension(db): Extension<Arc<PostgresDatabaseService>>,
     Extension(relay): Extension<RelayAdminClient>,
 ) -> Result<impl IntoResponse, AdminApiError> {
-    let num_network_validators = db.get_num_network_validators().await?;
-    let num_registered_validators = db.get_num_registered_validators().await?;
-    let num_delivered_payloads = db.get_num_delivered_payloads().await?;
     let adjustments_enabled = db.check_adjustments_enabled().await?;
+    let builders_pending_promotion = db.count_builders_pending_promotion().await?;
 
     let kill_switch_enabled = match relay.status().await {
         Ok(status) => Some(status.kill_switch_enabled),
@@ -50,11 +52,9 @@ pub async fn overview(
     };
 
     Ok(Json(OverviewResponse {
-        num_network_validators,
-        num_registered_validators,
-        num_delivered_payloads,
         adjustments_enabled,
         kill_switch_enabled,
+        builders_pending_promotion,
     }))
 }
 
@@ -63,6 +63,28 @@ pub async fn builders(
 ) -> Result<impl IntoResponse, AdminApiError> {
     let builders = db.get_all_builder_infos().await?;
     Ok(Json(builders.into_iter().map(BuilderResponse::from).collect::<Vec<_>>()))
+}
+
+pub async fn create_builder(
+    Extension(db): Extension<Arc<PostgresDatabaseService>>,
+    Json(req): Json<CreateBuilderRequest>,
+) -> Result<impl IntoResponse, AdminApiError> {
+    if req.is_optimistic && req.collateral <= U256::from(MIN_OPTIMISTIC_COLLATERAL_WEI) {
+        return Err(AdminApiError::InsufficientCollateralForOptimistic);
+    }
+    db.create_builder_info(&req.pub_key, req.builder_id, req.collateral, req.is_optimistic).await?;
+    info!(pubkey = %req.pub_key, "builder pubkey added via admin website");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn update_builder_collateral(
+    Extension(db): Extension<Arc<PostgresDatabaseService>>,
+    Path(pubkey): Path<BlsPublicKeyBytes>,
+    Json(req): Json<UpdateCollateralRequest>,
+) -> Result<impl IntoResponse, AdminApiError> {
+    db.update_builder_collateral(&pubkey, req.collateral).await?;
+    info!(%pubkey, "builder collateral updated via admin website");
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Deserialize)]

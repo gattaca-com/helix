@@ -1,12 +1,22 @@
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "react-router";
 import { api, formatCount } from "../lib/api";
 
-function StatTile({ label, value }: { label: string; value: string }) {
+function PendingPromotionTile({ count }: { count: number }) {
   return (
-    <div className="rounded-xl border border-neutral-200 bg-white p-5 dark:border-neutral-800 dark:bg-neutral-900">
-      <div className="text-sm text-neutral-500 dark:text-neutral-400">{label}</div>
-      <div className="mt-1 text-3xl font-semibold">{value}</div>
-    </div>
+    <Link
+      to="/builders/pending"
+      className="rounded-xl border border-neutral-200 bg-white p-5 hover:bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-900 dark:hover:bg-neutral-800"
+    >
+      <div className="text-sm text-neutral-500 dark:text-neutral-400">
+        Builders pending promotion
+      </div>
+      <div
+        className={`mt-1 text-3xl font-semibold ${count > 0 ? "text-status-warning" : ""}`}
+      >
+        {formatCount(count)}
+      </div>
+    </Link>
   );
 }
 
@@ -59,12 +69,7 @@ export default function Overview() {
     <div>
       <h1 className="text-xl font-semibold">Overview</h1>
       <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <StatTile label="Network validators" value={formatCount(data.num_network_validators)} />
-        <StatTile
-          label="Registered validators"
-          value={formatCount(data.num_registered_validators)}
-        />
-        <StatTile label="Delivered payloads" value={formatCount(data.num_delivered_payloads)} />
+        <PendingPromotionTile count={data.builders_pending_promotion} />
         <StatusTile
           label="Kill switch"
           ok={data.kill_switch_enabled !== true}

@@ -1,10 +1,9 @@
 use alloy_primitives::U256;
 use helix_common::BuilderConfig;
 use helix_types::BlsPublicKeyBytes;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-/// Builder entry as exposed to the admin UI. Deliberately excludes the
-/// builder's `api_key`.
+/// Builder entry as exposed to the admin UI.
 #[derive(Serialize)]
 pub struct BuilderResponse {
     pub pub_key: BlsPublicKeyBytes,
@@ -14,6 +13,7 @@ pub struct BuilderResponse {
     pub is_optimistic_for_regional_filtering: bool,
     pub builder_id: Option<String>,
     pub builder_ids: Option<Vec<String>>,
+    pub api_key: Option<String>,
 }
 
 impl From<BuilderConfig> for BuilderResponse {
@@ -27,8 +27,24 @@ impl From<BuilderConfig> for BuilderResponse {
                 .is_optimistic_for_regional_filtering,
             builder_id: config.builder_info.builder_id,
             builder_ids: config.builder_info.builder_ids,
+            api_key: config.builder_info.api_key,
         }
     }
+}
+
+#[derive(Deserialize)]
+pub struct CreateBuilderRequest {
+    pub pub_key: BlsPublicKeyBytes,
+    pub builder_id: Option<String>,
+    #[serde(with = "serde_utils::quoted_u256")]
+    pub collateral: U256,
+    pub is_optimistic: bool,
+}
+
+#[derive(Deserialize)]
+pub struct UpdateCollateralRequest {
+    #[serde(with = "serde_utils::quoted_u256")]
+    pub collateral: U256,
 }
 
 #[derive(Serialize)]
@@ -42,10 +58,8 @@ pub struct DemotionResponse {
 
 #[derive(Serialize)]
 pub struct OverviewResponse {
-    pub num_network_validators: i64,
-    pub num_registered_validators: i64,
-    pub num_delivered_payloads: i64,
     pub adjustments_enabled: bool,
     /// `None` when the relay admin API is unreachable.
     pub kill_switch_enabled: Option<bool>,
+    pub builders_pending_promotion: i64,
 }

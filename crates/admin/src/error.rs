@@ -15,6 +15,8 @@ pub enum AdminApiError {
     MissingSlot,
     #[error("no registration found for validator {pubkey}")]
     ValidatorRegistrationNotFound { pubkey: BlsPublicKeyBytes },
+    #[error("optimistic requires more than 1 ETH collateral")]
+    InsufficientCollateralForOptimistic,
     #[error("database error")]
     Database(#[from] DatabaseError),
     #[error("relay admin API unreachable: {0}")]
@@ -28,8 +30,15 @@ impl IntoResponse for AdminApiError {
         let code = match &self {
             AdminApiError::LimitReached { .. } |
             AdminApiError::SlotAndCursor |
-            AdminApiError::MissingSlot => StatusCode::BAD_REQUEST,
+            AdminApiError::MissingSlot |
+            AdminApiError::InsufficientCollateralForOptimistic => StatusCode::BAD_REQUEST,
             AdminApiError::ValidatorRegistrationNotFound { .. } => StatusCode::NOT_FOUND,
+            AdminApiError::Database(DatabaseError::BuilderAlreadyExists { .. }) => {
+                StatusCode::CONFLICT
+            }
+            AdminApiError::Database(DatabaseError::BuilderInfoNotFound { .. }) => {
+                StatusCode::NOT_FOUND
+            }
             AdminApiError::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
             AdminApiError::RelayUnreachable(_) => StatusCode::BAD_GATEWAY,
             AdminApiError::RelayStatus(status) if status == &StatusCode::NOT_FOUND => {

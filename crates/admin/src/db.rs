@@ -17,9 +17,7 @@ pub trait AdminDatabaseService: Send + Sync {
         &self,
         limit: i64,
     ) -> Result<Vec<DemotionResponse>, DatabaseError>;
-    async fn get_num_network_validators(&self) -> Result<i64, DatabaseError>;
-    async fn get_num_registered_validators(&self) -> Result<i64, DatabaseError>;
-    async fn get_num_delivered_payloads(&self) -> Result<i64, DatabaseError>;
+    async fn count_builders_pending_promotion(&self) -> Result<i64, DatabaseError>;
 }
 
 impl FromRow for DemotionResponse {
@@ -51,21 +49,14 @@ impl AdminDatabaseService for PostgresDatabaseService {
         parse_rows(rows)
     }
 
-    async fn get_num_network_validators(&self) -> Result<i64, DatabaseError> {
+    async fn count_builders_pending_promotion(&self) -> Result<i64, DatabaseError> {
         let client = self.pool.get().await?;
-        let row = client.query_one("SELECT COUNT(*) FROM known_validators", &[]).await?;
-        Ok(row.get::<usize, i64>(0))
-    }
-
-    async fn get_num_registered_validators(&self) -> Result<i64, DatabaseError> {
-        let client = self.pool.get().await?;
-        let row = client.query_one("SELECT COUNT(*) FROM validator_registrations", &[]).await?;
-        Ok(row.get::<usize, i64>(0))
-    }
-
-    async fn get_num_delivered_payloads(&self) -> Result<i64, DatabaseError> {
-        let client = self.pool.get().await?;
-        let row = client.query_one("SELECT COUNT(*) FROM delivered_payload", &[]).await?;
+        let row = client
+            .query_one(
+                "SELECT COUNT(*) FROM builder_info WHERE is_optimistic = FALSE AND collateral > 0",
+                &[],
+            )
+            .await?;
         Ok(row.get::<usize, i64>(0))
     }
 }

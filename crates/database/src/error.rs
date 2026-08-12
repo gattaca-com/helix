@@ -1,5 +1,5 @@
 use deadpool_postgres::PoolError;
-use helix_types::{BlsPublicKey, CryptoError, SszError};
+use helix_types::{BlsPublicKey, BlsPublicKeyBytes, CryptoError, SszError};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -25,11 +25,14 @@ pub enum DatabaseError {
     #[error("Validator for public key {public_key:?} not found")]
     ValidatorNotFound { public_key: BlsPublicKey },
 
-    #[error("Could not find builder info for public key {public_key:?}")]
-    BuilderInfoNotFound { public_key: BlsPublicKey },
+    #[error("Could not find builder info for public key {public_key}")]
+    BuilderInfoNotFound { public_key: BlsPublicKeyBytes },
 
     #[error("Could not fetch all builder info")]
     AllBuilderInfoNotFound,
+
+    #[error("Builder info already exists for public key {public_key}")]
+    BuilderAlreadyExists { public_key: BlsPublicKeyBytes },
 
     #[error("serde_json error: {0}")]
     SerdeJsonError(#[from] serde_json::Error),
