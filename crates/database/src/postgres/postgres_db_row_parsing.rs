@@ -1,5 +1,3 @@
-use std::net::IpAddr;
-
 use alloy_primitives::{Address, B256, U256};
 use chrono::{DateTime, Utc};
 use helix_common::{
@@ -231,8 +229,7 @@ impl FromRow for SignedValidatorRegistrationEntry {
                 row.get::<&str, std::time::SystemTime>("inserted_at"),
             )?,
             pool_name: None,
-            user_agent: None,
-            ip_addr: parse_optional_ip_addr(row, "ip_addr"),
+            user_agent: row.try_get("user_agent").ok().flatten(),
         })
     }
 }
@@ -327,11 +324,6 @@ impl FromRow for MergedBlockResponse {
 fn parse_optional_uuid(row: &tokio_postgres::Row, column: &str) -> Option<Uuid> {
     let raw: Option<&str> = row.try_get(column).ok().flatten();
     raw.and_then(|raw| Uuid::parse_str(raw).ok())
-}
-
-fn parse_optional_ip_addr(row: &tokio_postgres::Row, column: &str) -> Option<IpAddr> {
-    let raw: Option<&str> = row.try_get(column).ok().flatten();
-    raw.and_then(|raw| raw.parse().ok())
 }
 
 pub fn parse_timestamptz_to_u64(timestamp: std::time::SystemTime) -> Result<u64, DatabaseError> {

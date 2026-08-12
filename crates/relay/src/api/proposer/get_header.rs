@@ -8,7 +8,7 @@ use std::{
 
 use axum::{Extension, extract::Path, http::HeaderMap, response::IntoResponse};
 use helix_common::{
-    GET_HEADER_REQUEST_CUTOFF_MS, GetHeaderTrace, RequestTimings,
+    GET_HEADER_REQUEST_CUTOFF_MS, GetHeaderTrace, RequestTimings, ValidatorPreferences,
     api::proposer_api::GetHeaderParams,
     api_provider::{ApiProvider, TimingResult},
     chain_info::ChainInfo,
@@ -22,7 +22,6 @@ use helix_types::{BuilderBid, ForkName, GetHeaderResponse, SignedBuilderBid};
 use http::{HeaderValue, header::CONTENT_TYPE};
 use ssz::Encode;
 use tracing::{Instrument, debug, error, info, trace, warn};
-use uuid::Uuid;
 
 use super::ProposerApi;
 use crate::api::{
@@ -38,7 +37,7 @@ pub(super) struct ValidatedHeaderRequest {
     pub is_mev_boost: bool,
     pub sleep_time: Option<Duration>,
     pub timeout_ms: Option<u64>,
-    pub registered_api_key: Option<Uuid>,
+    pub preferences: ValidatorPreferences,
 }
 
 impl<A: Api> ProposerApi<A> {
@@ -85,7 +84,7 @@ impl<A: Api> ProposerApi<A> {
             is_mev_boost,
             sleep_time,
             timeout_ms,
-            registered_api_key: duty.entry.preferences.api_key,
+            preferences: duty.entry.preferences,
         })
     }
 
