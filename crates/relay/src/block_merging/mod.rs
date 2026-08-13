@@ -48,6 +48,7 @@ fn order_to_ref(order: &Order) -> Option<MergeOrderRef> {
             txs: bundle.txs.iter().map(|&i| idx(i)).collect::<Option<_>>()?,
             reverting_txs: bundle.reverting_txs.iter().map(|&i| idx(i)).collect::<Option<_>>()?,
             dropping_txs: bundle.dropping_txs.iter().map(|&i| idx(i)).collect::<Option<_>>()?,
+            latest_only: bundle.latest_only,
         }),
     })
 }
@@ -110,6 +111,7 @@ fn merged_block_to_response(
         base_builder_revenue: m.base_builder_revenue,
         relay_revenue: m.relay_revenue,
         builder_inclusions,
+        included_order_ids: m.included_order_ids,
         trace: MergedBlockTrace {
             request_time_ns: m.trace.base_block_recv_ns,
             sim_start_time_ns: m.trace.sim_start_ns,
@@ -163,6 +165,7 @@ mod tests {
             txs: indices(&[1, 2]),
             reverting_txs: indices(&[0]),
             dropping_txs: indices(&[1]),
+            latest_only: true,
         });
         assert_eq!(
             order_to_ref(&bundle),
@@ -170,6 +173,7 @@ mod tests {
                 txs: vec![1, 2],
                 reverting_txs: vec![0],
                 dropping_txs: vec![1],
+                latest_only: true,
             }))
         );
 
@@ -197,6 +201,7 @@ mod tests {
             txs: vec![0, 2],
             reverting_txs: vec![],
             dropping_txs: vec![],
+            latest_only: false,
         });
         assert_eq!(
             order_ref_hash(&bundle, &tx_hashes),

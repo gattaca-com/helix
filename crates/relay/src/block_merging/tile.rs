@@ -19,9 +19,10 @@ use helix_tcp_types::merging::{
     control::{
         BuilderCollateral, MergerAckV1, MergerRegistrationV1, PingV1, PongV1, RelayConfigV1,
     },
-    relay_to_builder::{ActivateBaseBlockV1, MergeableBlockV1, SlotStartV1},
+    order::{MergeOrderRef, order_id},
+    relay_to_builder::{ActivateBaseBlockV1, MergeableBlockV1, RevokeOrderV1, SlotStartV1},
 };
-use helix_types::{BlobWithMetadata, HydrationCache, Submission, payload_to_v3};
+use helix_types::{BlobWithMetadata, BlsPublicKeyBytes, HydrationCache, Submission, payload_to_v3};
 use rustc_hash::{FxHashMap, FxHashSet};
 use ssz::Decode;
 use tracing::{debug, error, info, trace, warn};
@@ -35,8 +36,8 @@ use crate::{
         unbundling::{OrderTxs, find_unbundled_txs},
     },
     housekeeper::SlotUpdate,
-    simulator::BlockMergeResponse,
-    spine::messages::{DecodedSubmission, MergedBlockMsg, SlotMsg},
+    simulator::{BlockMergeResponse, OrderRevocation},
+    spine::messages::{DecodedSubmission, MergedBlockMsg, OrderRevokedMsg, SlotMsg},
 };
 
 const REDIAL_INTERVAL_S: u64 = 2;
@@ -97,13 +98,31 @@ struct SlotState {
     attrs: FxHashMap<B256, B256>,
     /// Appendable block hashes forwarded this slot.
     appendable: FxHashSet<B256>,
-    /// Decoded ixs forwarded this slot, replayed on re-handshake.
-    mergeable_ixs: Vec<usize>,
-    /// base_block_hash -> best proposer_value across all builders.
-    best_merged: FxHashMap<B256, U256>,
+    /// Events replayed on re-handshake.
+    replay_log: Vec<ReplayEvent>,
+    /// base_block_hash -> best proposer_value and the order_ids it was built from.
+    best_merged: FxHashMap<B256, BestMergedFloor>,
     /// Orders actually sent to the merge builder this slot, for the
     /// unbundling check on incoming merged blocks.
     order_txs: Vec<OrderTxs>,
+    /// Per-builder map of order_id -> order_hash for their latest_only bundles this
+    /// slot, diffed on each new submission to detect revocations.
+    latest_only_ids: FxHashMap<BlsPublicKeyBytes, FxHashMap<B256, B256>>,
+    /// order_ids revoked so far this slot, checked against new merged block arrivals.
+    revoked_order_ids: FxHashSet<B256>,
+}
+
+#[derive(Clone, Copy)]
+enum ReplayEvent {
+    Forward(usize),
+    Revoke { order_hash: B256, builder_pubkey: BlsPublicKeyBytes },
+}
+
+#[derive(Default)]
+struct BestMergedFloor {
+    value: U256,
+    /// order_ids of the merged block currently holding this floor.
+    order_ids: FxHashSet<B256>,
 }
 
 /// Per-slot counters, logged and reset on slot transition.
@@ -131,6 +150,8 @@ struct SlotStats {
     merged_blob_missing: usize,
     /// Merged blocks dropped because the builder broke an order's atomicity.
     merged_unbundled: usize,
+    /// Merged blocks dropped because they contained a revoked latest_only order.
+    merged_contains_revoked_order: usize,
     /// TopBidUpdate messages received for the current bid slot.
     top_bid_updates: usize,
     /// ActivateBaseBlockV1 frames sent.
@@ -174,6 +195,7 @@ pub struct BlockMergingTile {
     decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
     slot_events: Arc<SharedVector<SlotUpdate>>,
     merged_blocks: Arc<SharedVector<BlockMergeResponse>>,
+    revocations: Arc<SharedVector<OrderRevocation>>,
 
     // Buffered during `poll_with` (the connector is exclusively borrowed
     // there), drained right after.
@@ -182,6 +204,7 @@ pub struct BlockMergingTile {
     handshaken: Vec<Token>,
     pongs: Vec<(Token, u64)>,
     merged_ixs: Vec<usize>,
+    revoked_ixs: Vec<usize>,
     encode_buf: Vec<u8>,
     // Scratch space for `find_unbundled_txs`, reused across calls.
     unbundled_scratch_bundled: Vec<bool>,
@@ -194,6 +217,9 @@ impl Tile<HelixSpine> for BlockMergingTile {
 
         for ix in std::mem::take(&mut self.merged_ixs) {
             adapter.producers.produce(MergedBlockMsg { ix });
+        }
+        for ix in std::mem::take(&mut self.revoked_ixs) {
+            adapter.producers.produce(OrderRevokedMsg { ix });
         }
 
         if self.redial.fired() {
@@ -219,6 +245,30 @@ impl Tile<HelixSpine> for BlockMergingTile {
     }
 }
 
+/// order_id -> order_hash for every `latest_only` bundle in this submission.
+fn latest_only_ids(
+    builder_pubkey: BlsPublicKeyBytes,
+    merge_orders: &[MergeOrderRef],
+    order_hashes: &[B256],
+) -> FxHashMap<B256, B256> {
+    merge_orders
+        .iter()
+        .zip(order_hashes)
+        .filter(|(order_ref, _)| matches!(order_ref, MergeOrderRef::Bundle(b) if b.latest_only))
+        .map(|(_, &hash)| (order_id(hash, &builder_pubkey), hash))
+        .collect()
+}
+
+/// (order_id, order_hash) pairs present in `prev` but missing from `new` —
+/// i.e. flagged latest_only before, dropped from the newest submission.
+fn revoked_ids(
+    prev: Option<&FxHashMap<B256, B256>>,
+    new: &FxHashMap<B256, B256>,
+) -> Vec<(B256, B256)> {
+    let Some(prev) = prev else { return Vec::new() };
+    prev.iter().filter(|(id, _)| !new.contains_key(*id)).map(|(&id, &hash)| (id, hash)).collect()
+}
+
 impl BlockMergingTile {
     pub fn new(
         config: BlockMergingTcpConfig,
@@ -226,6 +276,7 @@ impl BlockMergingTile {
         decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
         slot_events: Arc<SharedVector<SlotUpdate>>,
         merged_blocks: Arc<SharedVector<BlockMergeResponse>>,
+        revocations: Arc<SharedVector<OrderRevocation>>,
         chain_info: ChainInfo,
     ) -> Self {
         let relay_config_msg = RelayConfigV1 {
@@ -283,11 +334,13 @@ impl BlockMergingTile {
             decoded,
             slot_events,
             merged_blocks,
+            revocations,
             to_disconnect: Vec::new(),
             to_register: Vec::new(),
             handshaken: Vec::new(),
             pongs: Vec::new(),
             merged_ixs: Vec::new(),
+            revoked_ixs: Vec::new(),
             encode_buf: Vec::new(),
             unbundled_scratch_bundled: Vec::new(),
             unbundled_scratch_covered: Vec::new(),
@@ -336,8 +389,16 @@ impl BlockMergingTile {
             self.connector.write_or_enqueue_with(SendBehavior::Single(token), |buf| {
                 append_frame(buf, MergingMsgId::SlotStartV1, msg);
             });
-            for ix in self.slot.mergeable_ixs.clone() {
-                self.forward_decoded(ix, Some(token));
+            for event in self.slot.replay_log.clone() {
+                match event {
+                    ReplayEvent::Forward(ix) => self.forward_decoded(ix, Some(token)),
+                    ReplayEvent::Revoke { order_hash, builder_pubkey } => {
+                        let msg = RevokeOrderV1 { slot: self.slot.bid_slot, order_hash, builder_pubkey };
+                        self.connector.write_or_enqueue_with(SendBehavior::Single(token), |buf| {
+                            append_frame(buf, MergingMsgId::RevokeOrderV1, &msg);
+                        });
+                    }
+                }
             }
         }
     }
@@ -448,16 +509,30 @@ impl BlockMergingTile {
                             );
                             return;
                         }
-                        // Builders only guarantee monotonicity within a
-                        // connection; filter so the stored merged bid never
-                        // regresses.
-                        let best =
-                            slot.best_merged.entry(merged.base_block_hash).or_insert(U256::ZERO);
-                        if merged.proposer_value <= *best {
+                        // Reject if built before the merge builder learned of a revocation.
+                        if merged
+                            .included_order_ids
+                            .iter()
+                            .any(|id| slot.revoked_order_ids.contains(id))
+                        {
+                            stats.merged_contains_revoked_order += 1;
+                            debug!(?token, "merged block contains a revoked latest_only order");
+                            return;
+                        }
+                        // Builders only guarantee monotonicity within a connection; filter
+                        // so the stored merged bid never regresses.
+                        if slot
+                            .best_merged
+                            .get(&merged.base_block_hash)
+                            .is_some_and(|floor| merged.proposer_value <= floor.value)
+                        {
                             stats.merged_regressed += 1;
                             return;
                         }
-                        *best = merged.proposer_value;
+                        slot.best_merged.insert(merged.base_block_hash, BestMergedFloor {
+                            value: merged.proposer_value,
+                            order_ids: merged.included_order_ids.iter().copied().collect(),
+                        });
                         let Some(response) = merged_block_to_response(merged, blob_sidecars) else {
                             stats.merged_blob_missing += 1;
                             warn!(
@@ -562,6 +637,7 @@ impl BlockMergingTile {
             self.tx_hash_cache.clear();
             // sole producer; consumed indices are stale after the transition
             self.merged_blocks.clear();
+            self.revocations.clear();
         }
 
         // housekeeper sends incremental updates for the same slot
@@ -628,6 +704,7 @@ impl BlockMergingTile {
             merged_regressed = stats.merged_regressed,
             merged_blob_missing = stats.merged_blob_missing,
             merged_unbundled = stats.merged_unbundled,
+            merged_contains_revoked_order = stats.merged_contains_revoked_order,
             appendable_blocks = self.slot.appendable.len(),
             hydration_txs = self.hydration_cache.tx_count(),
             hydration_builders = self.hydration_cache.builder_count(),
@@ -671,6 +748,10 @@ impl BlockMergingTile {
         }
         let Some(merging) = &sub.merging_data else {
             self.stats.skipped_no_merging_data += 1;
+            // No merging data revokes everything this builder previously flagged.
+            if !is_replay {
+                self.diff_latest_only(*sub.submission.builder_pubkey(), &[], &[]);
+            }
             self.feed_cache(&sub.submission);
             return;
         };
@@ -778,6 +859,10 @@ impl BlockMergingTile {
             .map(|order_ref| order_ref_hash(order_ref, &tx_hashes))
             .collect();
 
+        if !is_replay {
+            self.diff_latest_only(signed.message.builder_pubkey, &msg.merge_orders, &order_hashes);
+        }
+
         self.encode_buf.clear();
         append_frame(&mut self.encode_buf, MergingMsgId::MergeableBlockV1, &msg);
 
@@ -785,7 +870,7 @@ impl BlockMergingTile {
             if msg.allow_appending {
                 self.slot.appendable.insert(block_hash);
             }
-            self.slot.mergeable_ixs.push(ix);
+            self.slot.replay_log.push(ReplayEvent::Forward(ix));
         }
 
         let Some(token) = self.token else { return };
@@ -814,6 +899,43 @@ impl BlockMergingTile {
         self.connector.write_or_enqueue_with(SendBehavior::Single(token), |buf| {
             buf.extend_from_slice(frame);
         });
+    }
+
+    /// Diffs `builder_pubkey`'s latest_only bundles against their previous
+    /// submission this slot to detect revocations.
+    fn diff_latest_only(
+        &mut self,
+        builder_pubkey: BlsPublicKeyBytes,
+        merge_orders: &[MergeOrderRef],
+        order_hashes: &[B256],
+    ) {
+        let new_ids = latest_only_ids(builder_pubkey, merge_orders, order_hashes);
+        let prev_ids = self.slot.latest_only_ids.get(&builder_pubkey);
+        for (revoked_id, revoked_hash) in revoked_ids(prev_ids, &new_ids) {
+            self.revoke_order(revoked_id, revoked_hash, builder_pubkey);
+        }
+        self.slot.latest_only_ids.insert(builder_pubkey, new_ids);
+    }
+
+    /// Relaxes the floor for any base block that depended on `order_id`, notifies
+    /// the auctioneer to evict cached bids, and tells the merge builder to drop it.
+    fn revoke_order(&mut self, order_id: B256, order_hash: B256, builder_pubkey: BlsPublicKeyBytes) {
+        self.slot.best_merged.retain(|_, floor| !floor.order_ids.contains(&order_id));
+        self.slot.revoked_order_ids.insert(order_id);
+
+        let bid_slot = self.slot.bid_slot;
+        let ix = self.revocations.push(OrderRevocation { bid_slot, order_id, builder_pubkey });
+        self.revoked_ixs.push(ix);
+
+        self.slot.replay_log.push(ReplayEvent::Revoke { order_hash, builder_pubkey });
+        if let Some(token) = self.token &&
+            self.conn.active
+        {
+            let msg = RevokeOrderV1 { slot: bid_slot, order_hash, builder_pubkey };
+            self.connector.write_or_enqueue_with(SendBehavior::Single(token), |buf| {
+                append_frame(buf, MergingMsgId::RevokeOrderV1, &msg);
+            });
+        }
     }
 
     fn on_top_bid(&mut self, top_bid: TopBidUpdate) {
@@ -870,5 +992,78 @@ impl BlockMergingTile {
         self.connector.write_or_enqueue_with(SendBehavior::Single(token), |buf| {
             append_frame(buf, MergingMsgId::PingV1, &msg);
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use helix_tcp_types::merging::order::{BundleOrderRef, TxOrderRef};
+
+    use super::*;
+
+    fn bundle(latest_only: bool) -> MergeOrderRef {
+        MergeOrderRef::Bundle(BundleOrderRef {
+            txs: vec![0],
+            reverting_txs: vec![],
+            dropping_txs: vec![],
+            latest_only,
+        })
+    }
+
+    #[test]
+    fn latest_only_ids_ignores_non_flagged_and_tx_orders() {
+        let builder_pubkey = BlsPublicKeyBytes::default();
+        let orders =
+            [bundle(true), bundle(false), MergeOrderRef::Tx(TxOrderRef { index: 0, can_revert: false })];
+        let hashes = [B256::repeat_byte(1), B256::repeat_byte(2), B256::repeat_byte(3)];
+
+        let ids = latest_only_ids(builder_pubkey, &orders, &hashes);
+
+        assert_eq!(ids.len(), 1);
+        assert_eq!(*ids.values().next().unwrap(), hashes[0]);
+    }
+
+    #[test]
+    fn latest_only_ids_disambiguates_by_builder() {
+        let hash = [B256::repeat_byte(9)];
+        let orders = [bundle(true)];
+        let mut pubkey_b = [0u8; 48];
+        pubkey_b[0] = 1;
+
+        let ids_a = latest_only_ids(BlsPublicKeyBytes::default(), &orders, &hash);
+        let ids_b = latest_only_ids(BlsPublicKeyBytes::from(pubkey_b), &orders, &hash);
+
+        assert_ne!(ids_a.keys().next(), ids_b.keys().next());
+    }
+
+    #[test]
+    fn revoked_ids_detects_a_dropped_flag() {
+        let builder_pubkey = BlsPublicKeyBytes::default();
+        let hash = B256::repeat_byte(5);
+        let prev = latest_only_ids(builder_pubkey, &[bundle(true)], &[hash]);
+
+        // Resubmission without the bundle at all.
+        let new = latest_only_ids(builder_pubkey, &[], &[]);
+
+        let revoked = revoked_ids(Some(&prev), &new);
+        assert_eq!(revoked, vec![(*prev.keys().next().unwrap(), hash)]);
+    }
+
+    #[test]
+    fn revoked_ids_empty_when_still_present() {
+        let builder_pubkey = BlsPublicKeyBytes::default();
+        let hash = [B256::repeat_byte(6)];
+        let orders = [bundle(true)];
+
+        let prev = latest_only_ids(builder_pubkey, &orders, &hash);
+        let new = latest_only_ids(builder_pubkey, &orders, &hash);
+
+        assert!(revoked_ids(Some(&prev), &new).is_empty());
+    }
+
+    #[test]
+    fn revoked_ids_empty_on_first_submission() {
+        let new = latest_only_ids(BlsPublicKeyBytes::default(), &[bundle(true)], &[B256::repeat_byte(7)]);
+        assert!(revoked_ids(None, &new).is_empty());
     }
 }

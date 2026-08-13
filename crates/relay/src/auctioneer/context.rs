@@ -38,7 +38,7 @@ use crate::{
         block_merger::BlockMerger,
         types::{PayloadEntry, PendingPayload, SubmissionRef},
     },
-    simulator::{SimRequest, tile::ValidationResult},
+    simulator::{OrderRevocation, SimRequest, tile::ValidationResult},
     spine::{
         HelixSpineProducers,
         messages::{SubmissionResultWithRef, ToSimKind, ToSimMsg},
@@ -304,6 +304,14 @@ impl<B: BidAdjustor> Context<B> {
             return;
         };
         self.payloads.insert(block_hash, payload);
+    }
+
+    /// Evicts any cached merged bid depending on a revoked latest_only order.
+    pub fn handle_order_revocation(&mut self, revocation: OrderRevocation) {
+        if revocation.bid_slot != self.bid_slot.as_u64() {
+            return; // stale, slot already rotated
+        }
+        self.block_merger.evict_revoked(revocation.order_id);
     }
 
     pub fn handle_builder_demotion(

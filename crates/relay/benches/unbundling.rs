@@ -21,6 +21,7 @@ fn make_order(hashes: Vec<B256>) -> OrderTxs {
         txs: (0..hashes.len() as u16).collect(),
         reverting_txs: vec![],
         dropping_txs: vec![],
+        latest_only: false,
     });
     OrderTxs::from_ref(&order_ref, &hashes)
 }
@@ -108,6 +109,7 @@ fn bench_order_construction(c: &mut Criterion) {
         txs: (0..BUNDLE_SIZE as u16).collect(),
         reverting_txs: vec![],
         dropping_txs: vec![],
+        latest_only: false,
     });
     c.bench_function("order_txs_from_ref", |b| {
         b.iter(|| black_box(OrderTxs::from_ref(&order_ref, &tx_hashes)));

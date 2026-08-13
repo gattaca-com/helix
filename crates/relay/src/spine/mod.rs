@@ -28,6 +28,10 @@ pub struct HelixSpine {
     #[queue(size(2usize.pow(10)))]
     pub merged_block: SpineQueue<messages::MergedBlockMsg>,
 
+    /// BlockMergingTile → Auctioneer: latest_only order revocations.
+    #[queue(size(2usize.pow(10)))]
+    pub order_revoked: SpineQueue<messages::OrderRevokedMsg>,
+
     /// Auctioneer → TopBidTile.
     #[queue(size(2usize.pow(16)))]
     pub top_bid: SpineQueue<messages::TopBidUpdate>,

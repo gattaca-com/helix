@@ -44,7 +44,18 @@ pub struct BlockMergeResponse {
     pub base_builder_revenue: U256,
     pub relay_revenue: U256,
     pub builder_inclusions: HashMap<Address, BuilderInclusionResult>,
+    /// order_ids of every order merged into this block, used to evict it on revocation.
+    pub included_order_ids: Vec<B256>,
     pub trace: MergedBlockTrace,
+}
+
+/// `BlockMergingTile` -> auctioneer: a `latest_only` bundle order was revoked.
+#[derive(Debug, Clone, Copy)]
+pub struct OrderRevocation {
+    pub bid_slot: u64,
+    pub order_id: B256,
+    /// Telemetry only.
+    pub builder_pubkey: helix_types::BlsPublicKeyBytes,
 }
 
 /// Large payload stored in `SharedVector` for auctioneer → sim tile transfer.

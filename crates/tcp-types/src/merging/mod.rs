@@ -11,7 +11,7 @@ pub mod relay_to_builder;
 
 use bitflags::bitflags;
 
-pub const MERGING_PROTOCOL_VERSION: u16 = 3;
+pub const MERGING_PROTOCOL_VERSION: u16 = 4;
 pub const MERGING_HEADER_SIZE: usize = 2;
 
 /// Message-type IDs. `0x00-0x0f` control, `0x10-0x3f` relay->builder,
@@ -29,6 +29,7 @@ pub enum MergingMsgId {
     SlotStartV1 = 0x10,
     MergeableBlockV1 = 0x11,
     ActivateBaseBlockV1 = 0x12,
+    RevokeOrderV1 = 0x13,
     SlotEndV1 = 0x15,
     MergedBlockV1 = 0x40,
     RejectV1 = 0x70,
@@ -48,6 +49,7 @@ impl TryFrom<u8> for MergingMsgId {
             0x10 => Self::SlotStartV1,
             0x11 => Self::MergeableBlockV1,
             0x12 => Self::ActivateBaseBlockV1,
+            0x13 => Self::RevokeOrderV1,
             0x15 => Self::SlotEndV1,
             0x40 => Self::MergedBlockV1,
             0x70 => Self::RejectV1,

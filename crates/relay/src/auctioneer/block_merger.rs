@@ -31,6 +31,8 @@ pub enum PayloadMergingError {
     MergedPayloadNotValuable { original: U256, merged: U256 },
     #[error("reached maximum blob count for block")]
     MaxBlobCountReached,
+    #[error("merged payload contains a revoked latest_only order")]
+    ContainsRevokedOrder,
 }
 
 /// Stores merged blocks so they can be served via `get_header`/`get_payload`. Everything
@@ -49,6 +51,7 @@ pub struct BlockMerger {
     /// again in `prepare_merged_payload_for_storage` so we can log when the same original
     /// block gets reprocessed.
     flagged_payment_tx_only_blocks: FxHashSet<BlockHash>,
+    revoked_order_ids: FxHashSet<B256>,
 }
 
 impl BlockMerger {
@@ -65,6 +68,7 @@ impl BlockMerger {
             local_cache,
             best_merged_blocks: HashMap::with_capacity(16),
             flagged_payment_tx_only_blocks: FxHashSet::with_capacity_and_hasher(16, FxBuildHasher),
+            revoked_order_ids: FxHashSet::default(),
         }
     }
 }
@@ -75,6 +79,7 @@ impl BlockMerger {
         self.curr_bid_slot = bid_slot;
         self.best_merged_blocks.clear();
         self.flagged_payment_tx_only_blocks.clear();
+        self.revoked_order_ids.clear();
     }
 
     #[timed]
@@ -179,6 +184,16 @@ impl BlockMerger {
     ) -> Result<PayloadEntry, PayloadMergingError> {
         debug!(?response.builder_inclusions, %response.proposer_value, "preparing merged payload for storage");
         let start_time = Instant::now();
+        let included_order_ids_set: FxHashSet<B256> =
+            response.included_order_ids.iter().copied().collect();
+
+        if included_order_ids_set.iter().any(|id| self.revoked_order_ids.contains(id)) {
+            warn!(
+                block_hash = %response.execution_payload.block_hash,
+                "merged payload contains an order revoked since it was built, rejecting"
+            );
+            return Err(PayloadMergingError::ContainsRevokedOrder);
+        }
 
         if response.proposer_value <= original_value {
             warn!(
@@ -268,8 +283,11 @@ impl BlockMerger {
         // address of the base block the merge was built from, so that a merge for one
         // builder's block can never be served in place of another builder's original bid.
         let coinbase = original_payload.execution_payload.fee_recipient;
-        self.best_merged_blocks
-            .insert(coinbase, BestMergedBlock { base_block_time_ms, bid: new_bid.clone() });
+        self.best_merged_blocks.insert(coinbase, BestMergedBlock {
+            base_block_time_ms,
+            bid: new_bid.clone(),
+            included_order_ids: included_order_ids_set,
+        });
 
         record_step("prepare_merged_payload_for_storage", start_time.elapsed());
 
@@ -286,11 +304,26 @@ impl BlockMerger {
     fn overall_best_merged_block_hash(&self) -> Option<B256> {
         self.best_merged_blocks.values().max_by_key(|b| *b.bid.value()).map(|b| *b.bid.block_hash())
     }
+
+    /// Evicts any cached merged block containing `order_id` and marks it revoked
+    /// for the rest of the slot.
+    pub fn evict_revoked(&mut self, order_id: B256) {
+        self.revoked_order_ids.insert(order_id);
+        self.best_merged_blocks.retain(|coinbase, best| {
+            let hit = best.included_order_ids.contains(&order_id);
+            if hit {
+                info!(%coinbase, block_hash = %best.bid.block_hash(), %order_id, "evicting merged block: contains a revoked latest_only order");
+            }
+            !hit
+        });
+    }
 }
 
 struct BestMergedBlock {
     base_block_time_ms: u64,
     bid: PayloadEntry,
+    /// order_ids of every order merged into this block, used to evict it on revocation.
+    included_order_ids: FxHashSet<B256>,
 }
 
 /// Appends the merged blobs to the original blobs bundle.
@@ -391,4 +424,125 @@ fn merged_bid_higher(
 pub fn record_step(label: &str, duration: Duration) {
     let value = duration.as_nanos() as f64 / 1000.0;
     MERGE_TRACE_LATENCY.with_label_values(&[label]).observe(value);
+}
+
+#[cfg(test)]
+mod tests {
+    use helix_types::{ChainSpec, ExecutionPayload, ExecutionRequests, MergedBlockTrace, TestRandomSeed};
+
+    use super::*;
+
+    fn fixture_bid() -> PayloadEntry {
+        let payload_and_blobs = PayloadAndBlobs {
+            execution_payload: Arc::new(ExecutionPayload::test_random()),
+            blobs_bundle: Arc::new(BlobsBundle::test_random()),
+        };
+        let bid_data = PayloadBidData {
+            withdrawals_root: B256::default(),
+            tx_root: None,
+            execution_requests: Arc::new(ExecutionRequests::default()),
+            value: U256::from(1),
+            builder_pubkey: BlsPublicKeyBytes::default(),
+        };
+        PayloadEntry::new_gossip(payload_and_blobs, bid_data)
+    }
+
+    fn fixture_best_merged_block(order_ids: &[B256]) -> BestMergedBlock {
+        BestMergedBlock {
+            base_block_time_ms: 0,
+            bid: fixture_bid(),
+            included_order_ids: order_ids.iter().copied().collect(),
+        }
+    }
+
+    #[test]
+    fn evict_revoked_removes_only_matching_entries() {
+        let chain_info = ChainInfo::new(ChainSpec::mainnet(), B256::default(), 0);
+        let mut merger =
+            BlockMerger::new(0, chain_info, LocalCache::new(), RelayConfig::empty_for_test());
+
+        let revoked_id = B256::repeat_byte(0x01);
+        let unrelated_id = B256::repeat_byte(0x02);
+
+        let hit_coinbase = Address::repeat_byte(0xaa);
+        let miss_coinbase = Address::repeat_byte(0xbb);
+        merger.best_merged_blocks.insert(hit_coinbase, fixture_best_merged_block(&[revoked_id]));
+        merger.best_merged_blocks.insert(miss_coinbase, fixture_best_merged_block(&[unrelated_id]));
+
+        merger.evict_revoked(revoked_id);
+
+        assert!(!merger.best_merged_blocks.contains_key(&hit_coinbase));
+        assert!(merger.best_merged_blocks.contains_key(&miss_coinbase));
+    }
+
+    #[test]
+    fn evict_revoked_is_a_noop_when_nothing_matches() {
+        let chain_info = ChainInfo::new(ChainSpec::mainnet(), B256::default(), 0);
+        let mut merger =
+            BlockMerger::new(0, chain_info, LocalCache::new(), RelayConfig::empty_for_test());
+        let coinbase = Address::repeat_byte(0xcc);
+        merger
+            .best_merged_blocks
+            .insert(coinbase, fixture_best_merged_block(&[B256::repeat_byte(0x03)]));
+
+        merger.evict_revoked(B256::repeat_byte(0x99));
+
+        assert!(merger.best_merged_blocks.contains_key(&coinbase));
+    }
+
+    fn fixture_response(proposer_value: u64, included_order_ids: &[B256]) -> BlockMergeResponse {
+        BlockMergeResponse {
+            base_block_hash: B256::default(),
+            execution_payload: ExecutionPayload::test_random(),
+            execution_requests: ExecutionRequests::default(),
+            appended_blobs: Vec::new(),
+            proposer_value: U256::from(proposer_value),
+            base_builder_revenue: U256::ZERO,
+            relay_revenue: U256::ZERO,
+            builder_inclusions: HashMap::new(),
+            included_order_ids: included_order_ids.to_vec(),
+            trace: MergedBlockTrace::default(),
+        }
+    }
+
+    #[test]
+    fn prepare_merged_payload_rejects_a_block_already_revoked() {
+        let chain_info = ChainInfo::new(ChainSpec::mainnet(), B256::default(), 0);
+        let mut merger =
+            BlockMerger::new(0, chain_info, LocalCache::new(), RelayConfig::empty_for_test());
+        let revoked_id = B256::repeat_byte(0x07);
+        merger.evict_revoked(revoked_id);
+
+        let original = fixture_bid();
+        let response = fixture_response(u64::MAX, &[revoked_id]);
+
+        let result = merger.prepare_merged_payload_for_storage(
+            response,
+            original.payload_and_blobs(),
+            *original.value(),
+            BlsPublicKeyBytes::default(),
+        );
+
+        assert!(matches!(result, Err(PayloadMergingError::ContainsRevokedOrder)));
+    }
+
+    #[test]
+    fn prepare_merged_payload_accepts_a_block_with_no_revoked_orders() {
+        let chain_info = ChainInfo::new(ChainSpec::mainnet(), B256::default(), 0);
+        let mut merger =
+            BlockMerger::new(0, chain_info, LocalCache::new(), RelayConfig::empty_for_test());
+        merger.evict_revoked(B256::repeat_byte(0x08));
+
+        let original = fixture_bid();
+        let response = fixture_response(u64::MAX, &[B256::repeat_byte(0x09)]);
+
+        let result = merger.prepare_merged_payload_for_storage(
+            response,
+            original.payload_and_blobs(),
+            *original.value(),
+            BlsPublicKeyBytes::default(),
+        );
+
+        assert!(result.is_ok());
+    }
 }

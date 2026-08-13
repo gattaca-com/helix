@@ -29,6 +29,7 @@ use helix_common::{
 use helix_operator::spawn_operator_connection;
 use helix_relay::{
     Api, Auctioneer, AuctioneerHandle, BidSorter, BidSubmissionTcpListener, BlockMergeResponse,
+    OrderRevocation,
     BlockMergingTile, DataGatherer, DbHandle, DecoderTile, DefaultBidAdjustor,
     FutureBidSubmissionResult, HelixSpine, HelixSpineConfig, HousekeeperTile, NewBidSubmission,
     RegWorkerHandle, RegistrationTile, RelayNetworkManager, SimRequest, SimResult, SimulatorTile,
@@ -330,6 +331,7 @@ async fn run(
             attach_tile(sim_tile, spine, TileConfig::new(sim_core, ThreadPriority::OSDefault));
 
             let merged_blocks = Arc::new(SharedVector::<BlockMergeResponse>::with_capacity(1024));
+            let revocations = Arc::new(SharedVector::<OrderRevocation>::with_capacity(1024));
 
             if config.block_merging_config.is_enabled &&
                 let Some(merging_tcp) = config.block_merging_config.tcp.clone()
@@ -340,6 +342,7 @@ async fn run(
                     decoded.clone(),
                     slot_events.clone(),
                     merged_blocks.clone(),
+                    revocations.clone(),
                     chain_info.as_ref().clone(),
                 );
                 attach_tile(
@@ -368,6 +371,7 @@ async fn run(
                 failsafe_triggered,
                 slot_events,
                 merged_blocks,
+                revocations,
                 alert_manager.clone(),
                 operator_api.clone(),
             );

@@ -120,6 +120,13 @@ pub struct MergedBlockMsg {
     pub ix: usize,
 }
 
+/// BlockMergingTile → Auctioneer: index into `SharedVector<OrderRevocation>`.
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+pub struct OrderRevokedMsg {
+    pub ix: usize,
+}
+
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub enum BidEvent {

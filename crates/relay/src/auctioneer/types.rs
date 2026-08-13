@@ -37,7 +37,7 @@ use crate::{
     },
     auctioneer::MergeResult,
     gossip::BroadcastPayloadParams,
-    simulator::tile::ValidationResult,
+    simulator::{OrderRevocation, tile::ValidationResult},
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -494,6 +494,7 @@ pub enum Event {
         block_hash: B256,
         reason: String,
     },
+    OrderRevoked(OrderRevocation),
 }
 
 impl Event {
@@ -507,6 +508,7 @@ impl Event {
             Event::SimResult(_) => "SimResult",
             Event::MergeResult(_) => "MergeResult",
             Event::BuilderDemotion { .. } => "BuilderDemotion",
+            Event::OrderRevoked(_) => "OrderRevoked",
         }
     }
 }
