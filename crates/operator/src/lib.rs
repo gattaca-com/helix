@@ -223,6 +223,10 @@ where
                                 }
                             }
                             OperatorMessage::Collateral(builder_collateral) => {
+                                if operator_group == builder_collateral.operator_group {
+                                    // ignore collateral messages from our own group
+                                    continue;
+                                }
                                 if operator.operator_group.as_ref().map(|s| s.as_bytes()) != builder_collateral.operator_group.as_ref().map(|v| v.as_slice()) {
                                     tracing::error!(config_operator_group=?operator.operator_group, msg_operator_group=?builder_collateral.operator_group, "operator group mismatch");
                                     continue;

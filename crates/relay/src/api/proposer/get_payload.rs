@@ -546,8 +546,8 @@ impl<A: Api> ProposerApi<A> {
         );
         self.gossiper.broadcast_payload(params).await;
 
-        if let Some(operator_pubsub) = self.operator_api.as_ref()
-            && let Err(e) = operator_pubsub
+        if let Some(operator_pubsub) = self.operator_api.as_ref() &&
+            let Err(e) = operator_pubsub
                 .send(helix_types::OperatorMessage::Payload(Payload {
                     ts_ms: utcnow_ms(),
                     slot: bid_slot.as_u64(),
@@ -556,9 +556,9 @@ impl<A: Api> ProposerApi<A> {
                     bid_data: bid.into_owned(),
                 }))
                 .await
-            {
-                tracing::warn!(?e, "failed to send payload on operator api");
-            };
+        {
+            tracing::warn!(?e, "failed to send payload on operator api");
+        };
     }
 }
 
