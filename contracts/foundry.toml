@@ -5,13 +5,23 @@ test = "test"
 script = "script"
 libs = ["lib"]
 solc_version = "0.8.30"
-evm_version = "prague"
+evm_version = "osaka"
 optimizer = true
 optimizer_runs = 1000000
 # Strip metadata so the runtime bytecode is reproducible byte-for-byte and the
 # CREATE2 address is stable.
 bytecode_hash = "none"
 cbor_metadata = false
+# SlotLockedDisperser.huff needs both: HuffDeployer (foundry-huff) shells out to
+# huffc, and Halmos needs the AST in build artifacts (not included by default).
+ffi = true
+ast = true
+
+remappings = [
+    "forge-std/=lib/forge-std/src/",
+    "foundry-huff/=lib/foundry-huff/src/",
+    "halmos-cheatcodes/=lib/halmos-cheatcodes/src/",
+]
 
 [profile.default.fuzz]
 runs = 1024
