@@ -111,7 +111,6 @@ fn merged_block_to_response(
         base_builder_revenue: m.base_builder_revenue,
         relay_revenue: m.relay_revenue,
         builder_inclusions,
-        included_order_ids: m.included_order_ids,
         trace: MergedBlockTrace {
             request_time_ns: m.trace.base_block_recv_ns,
             sim_start_time_ns: m.trace.sim_start_ns,

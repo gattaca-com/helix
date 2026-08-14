@@ -44,8 +44,6 @@ pub struct BlockMergeResponse {
     pub base_builder_revenue: U256,
     pub relay_revenue: U256,
     pub builder_inclusions: HashMap<Address, BuilderInclusionResult>,
-    /// order_ids of every order merged into this block, used to evict it on revocation.
-    pub included_order_ids: Vec<B256>,
     pub trace: MergedBlockTrace,
 }
 
