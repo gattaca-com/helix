@@ -44,10 +44,10 @@ use crate::{
     api::{FutureBidSubmissionResult, builder::error::BuilderApiError, proposer::ProposerApiError},
     auctioneer::types::PendingPayload,
     housekeeper::SlotUpdate,
-    simulator::{OrderRevocation, SimRequest, SimResult},
+    simulator::{SimRequest, SimResult},
     spine::{
         HelixSpineProducers,
-        messages::{DecodedSubmission, FromSimMsg, MergedBlockMsg, OrderRevokedMsg, SlotMsg},
+        messages::{DecodedSubmission, FromSimMsg, MergedBlockMsg, SlotMsg},
     },
 };
 pub use crate::{
@@ -68,7 +68,6 @@ pub struct Auctioneer<B: BidAdjustor> {
     sim_results: Arc<SharedVector<SimResult>>,
     slot_events: Arc<SharedVector<SlotUpdate>>,
     merged_blocks: Arc<SharedVector<BlockMergeResponse>>,
-    revocations: Arc<SharedVector<OrderRevocation>>,
 }
 
 impl<B: BidAdjustor> Auctioneer<B> {
@@ -91,7 +90,6 @@ impl<B: BidAdjustor> Auctioneer<B> {
         failsafe_triggered: Arc<AtomicBool>,
         slot_events: Arc<SharedVector<SlotUpdate>>,
         merged_blocks: Arc<SharedVector<BlockMergeResponse>>,
-        revocations: Arc<SharedVector<OrderRevocation>>,
         alert_manager: Arc<AlertManager>,
         operator_api: Option<Arc<OperatorPubSub>>,
     ) -> Self {
@@ -119,7 +117,6 @@ impl<B: BidAdjustor> Auctioneer<B> {
             sim_results,
             slot_events,
             merged_blocks,
-            revocations,
         }
     }
 }
@@ -159,15 +156,6 @@ impl<B: BidAdjustor> Tile<HelixSpine> for Auctioneer<B> {
             };
             info!(%response.execution_payload.block_hash, "received merged block from tile");
             let event = Event::MergeResult((0, Ok(response.as_ref().clone())));
-            self.state.step(event, &mut self.ctx, &mut self.tel, producers);
-        });
-
-        adapter.consume(|msg: OrderRevokedMsg, producers| {
-            let Some(revocation) = self.revocations.get(msg.ix) else {
-                tracing::error!(?msg, "revoked order not found");
-                return;
-            };
-            let event = Event::OrderRevoked(*revocation);
             self.state.step(event, &mut self.ctx, &mut self.tel, producers);
         });
 
@@ -636,14 +624,6 @@ impl State {
                 Event::BuilderDemotion { slot, builder_pubkey, block_hash, reason },
             ) => {
                 ctx.handle_builder_demotion(slot, builder_pubkey, block_hash, reason, false);
-            }
-
-            // A latest_only order was revoked: evict any cached merged bid depending on it.
-            (
-                State::Slot { .. } | State::Sorting(_) | State::Broadcasting { .. },
-                Event::OrderRevoked(revocation),
-            ) => {
-                ctx.handle_order_revocation(revocation);
             }
         }
     }

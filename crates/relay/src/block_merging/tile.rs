@@ -36,7 +36,7 @@ use crate::{
         unbundling::{OrderTxs, find_unbundled_txs},
     },
     housekeeper::SlotUpdate,
-    simulator::{BlockMergeResponse, OrderRevocation},
+    simulator::BlockMergeResponse,
     spine::messages::{DecodedSubmission, MergedBlockMsg, OrderRevokedMsg, SlotMsg},
 };
 
@@ -195,7 +195,6 @@ pub struct BlockMergingTile {
     decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
     slot_events: Arc<SharedVector<SlotUpdate>>,
     merged_blocks: Arc<SharedVector<BlockMergeResponse>>,
-    revocations: Arc<SharedVector<OrderRevocation>>,
 
     // Buffered during `poll_with` (the connector is exclusively borrowed
     // there), drained right after.
@@ -276,7 +275,6 @@ impl BlockMergingTile {
         decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
         slot_events: Arc<SharedVector<SlotUpdate>>,
         merged_blocks: Arc<SharedVector<BlockMergeResponse>>,
-        revocations: Arc<SharedVector<OrderRevocation>>,
         chain_info: ChainInfo,
     ) -> Self {
         let relay_config_msg = RelayConfigV1 {
@@ -334,7 +332,6 @@ impl BlockMergingTile {
             decoded,
             slot_events,
             merged_blocks,
-            revocations,
             to_disconnect: Vec::new(),
             to_register: Vec::new(),
             handshaken: Vec::new(),
@@ -393,7 +390,8 @@ impl BlockMergingTile {
                 match event {
                     ReplayEvent::Forward(ix) => self.forward_decoded(ix, Some(token)),
                     ReplayEvent::Revoke { order_hash, builder_pubkey } => {
-                        let msg = RevokeOrderV1 { slot: self.slot.bid_slot, order_hash, builder_pubkey };
+                        let msg =
+                            RevokeOrderV1 { slot: self.slot.bid_slot, order_hash, builder_pubkey };
                         self.connector.write_or_enqueue_with(SendBehavior::Single(token), |buf| {
                             append_frame(buf, MergingMsgId::RevokeOrderV1, &msg);
                         });
@@ -637,7 +635,6 @@ impl BlockMergingTile {
             self.tx_hash_cache.clear();
             // sole producer; consumed indices are stale after the transition
             self.merged_blocks.clear();
-            self.revocations.clear();
         }
 
         // housekeeper sends incremental updates for the same slot
@@ -919,13 +916,16 @@ impl BlockMergingTile {
 
     /// Relaxes the floor for any base block that depended on `order_id`, notifies
     /// the auctioneer to evict cached bids, and tells the merge builder to drop it.
-    fn revoke_order(&mut self, order_id: B256, order_hash: B256, builder_pubkey: BlsPublicKeyBytes) {
+    fn revoke_order(
+        &mut self,
+        order_id: B256,
+        order_hash: B256,
+        builder_pubkey: BlsPublicKeyBytes,
+    ) {
         self.slot.best_merged.retain(|_, floor| !floor.order_ids.contains(&order_id));
         self.slot.revoked_order_ids.insert(order_id);
 
         let bid_slot = self.slot.bid_slot;
-        let ix = self.revocations.push(OrderRevocation { bid_slot, order_id, builder_pubkey });
-        self.revoked_ixs.push(ix);
 
         self.slot.replay_log.push(ReplayEvent::Revoke { order_hash, builder_pubkey });
         if let Some(token) = self.token &&
@@ -1013,8 +1013,11 @@ mod tests {
     #[test]
     fn latest_only_ids_ignores_non_flagged_and_tx_orders() {
         let builder_pubkey = BlsPublicKeyBytes::default();
-        let orders =
-            [bundle(true), bundle(false), MergeOrderRef::Tx(TxOrderRef { index: 0, can_revert: false })];
+        let orders = [
+            bundle(true),
+            bundle(false),
+            MergeOrderRef::Tx(TxOrderRef { index: 0, can_revert: false }),
+        ];
         let hashes = [B256::repeat_byte(1), B256::repeat_byte(2), B256::repeat_byte(3)];
 
         let ids = latest_only_ids(builder_pubkey, &orders, &hashes);
@@ -1063,7 +1066,8 @@ mod tests {
 
     #[test]
     fn revoked_ids_empty_on_first_submission() {
-        let new = latest_only_ids(BlsPublicKeyBytes::default(), &[bundle(true)], &[B256::repeat_byte(7)]);
+        let new =
+            latest_only_ids(BlsPublicKeyBytes::default(), &[bundle(true)], &[B256::repeat_byte(7)]);
         assert!(revoked_ids(None, &new).is_empty());
     }
 }
