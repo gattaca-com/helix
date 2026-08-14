@@ -37,7 +37,7 @@ use crate::{
     },
     housekeeper::SlotUpdate,
     simulator::BlockMergeResponse,
-    spine::messages::{DecodedSubmission, MergedBlockMsg, OrderRevokedMsg, SlotMsg},
+    spine::messages::{DecodedSubmission, MergedBlockMsg, SlotMsg},
 };
 
 const REDIAL_INTERVAL_S: u64 = 2;
@@ -203,7 +203,6 @@ pub struct BlockMergingTile {
     handshaken: Vec<Token>,
     pongs: Vec<(Token, u64)>,
     merged_ixs: Vec<usize>,
-    revoked_ixs: Vec<usize>,
     encode_buf: Vec<u8>,
     // Scratch space for `find_unbundled_txs`, reused across calls.
     unbundled_scratch_bundled: Vec<bool>,
@@ -216,9 +215,6 @@ impl Tile<HelixSpine> for BlockMergingTile {
 
         for ix in std::mem::take(&mut self.merged_ixs) {
             adapter.producers.produce(MergedBlockMsg { ix });
-        }
-        for ix in std::mem::take(&mut self.revoked_ixs) {
-            adapter.producers.produce(OrderRevokedMsg { ix });
         }
 
         if self.redial.fired() {
@@ -337,7 +333,6 @@ impl BlockMergingTile {
             handshaken: Vec::new(),
             pongs: Vec::new(),
             merged_ixs: Vec::new(),
-            revoked_ixs: Vec::new(),
             encode_buf: Vec::new(),
             unbundled_scratch_bundled: Vec::new(),
             unbundled_scratch_covered: Vec::new(),

@@ -49,15 +49,6 @@ pub struct BlockMergeResponse {
     pub trace: MergedBlockTrace,
 }
 
-/// `BlockMergingTile` -> auctioneer: a `latest_only` bundle order was revoked.
-#[derive(Debug, Clone, Copy)]
-pub struct OrderRevocation {
-    pub bid_slot: u64,
-    pub order_id: B256,
-    /// Telemetry only.
-    pub builder_pubkey: helix_types::BlsPublicKeyBytes,
-}
-
 /// Large payload stored in `SharedVector` for auctioneer → sim tile transfer.
 pub enum SimRequest {
     Validate { req: Box<ValidationRequest>, fast_track: bool },
