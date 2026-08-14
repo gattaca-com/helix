@@ -269,6 +269,11 @@ pub struct BlockMergingConfig {
     /// without affecting builder submissions or the merging process itself.
     #[serde(default = "default_bool::<true>")]
     pub serve_merged_headers: bool,
+    /// Builder pubkeys that get merged headers served in `get_header` even when
+    /// `serve_merged_headers` is disabled globally. Lets specific builders opt in to merged
+    /// headers ahead of a broader rollout, without flipping the safety valve for everyone.
+    #[serde(default)]
+    pub serve_merged_headers_allowlist: HashSet<BlsPublicKeyBytes>,
     /// Builder-side merging over TCP. Tile is only spawned if set.
     #[serde(default)]
     pub tcp: Option<BlockMergingTcpConfig>,
