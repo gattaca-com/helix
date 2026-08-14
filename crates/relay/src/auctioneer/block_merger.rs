@@ -145,8 +145,15 @@ impl BlockMerger {
             }
         }
 
-        if !self.local_cache.merged_headers_enabled() {
-            info!("merged header serving disabled, not returning merged header");
+        let builder_pubkey = entry.bid.bid_data_ref().builder_pubkey;
+        let allowlisted = self
+            .config
+            .block_merging_config
+            .serve_merged_headers_allowlist
+            .contains(builder_pubkey);
+
+        if !allowlisted && !self.local_cache.merged_headers_enabled() {
+            info!(%builder_pubkey, "merged header serving disabled, not returning merged header");
 
             let state_root = entry.bid.execution_payload().state_root;
             if state_root == B256::ZERO {
