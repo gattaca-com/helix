@@ -31,8 +31,6 @@ pub enum PayloadMergingError {
     MergedPayloadNotValuable { original: U256, merged: U256 },
     #[error("reached maximum blob count for block")]
     MaxBlobCountReached,
-    #[error("merged payload contains a revoked latest_only order")]
-    ContainsRevokedOrder,
 }
 
 /// Stores merged blocks so they can be served via `get_header`/`get_payload`. Everything
@@ -51,7 +49,6 @@ pub struct BlockMerger {
     /// again in `prepare_merged_payload_for_storage` so we can log when the same original
     /// block gets reprocessed.
     flagged_payment_tx_only_blocks: FxHashSet<BlockHash>,
-    revoked_order_ids: FxHashSet<B256>,
 }
 
 impl BlockMerger {
@@ -68,7 +65,6 @@ impl BlockMerger {
             local_cache,
             best_merged_blocks: HashMap::with_capacity(16),
             flagged_payment_tx_only_blocks: FxHashSet::with_capacity_and_hasher(16, FxBuildHasher),
-            revoked_order_ids: FxHashSet::default(),
         }
     }
 }
@@ -79,7 +75,6 @@ impl BlockMerger {
         self.curr_bid_slot = bid_slot;
         self.best_merged_blocks.clear();
         self.flagged_payment_tx_only_blocks.clear();
-        self.revoked_order_ids.clear();
     }
 
     #[timed]
@@ -184,16 +179,6 @@ impl BlockMerger {
     ) -> Result<PayloadEntry, PayloadMergingError> {
         debug!(?response.builder_inclusions, %response.proposer_value, "preparing merged payload for storage");
         let start_time = Instant::now();
-        let included_order_ids_set: FxHashSet<B256> =
-            response.included_order_ids.iter().copied().collect();
-
-        if included_order_ids_set.iter().any(|id| self.revoked_order_ids.contains(id)) {
-            warn!(
-                block_hash = %response.execution_payload.block_hash,
-                "merged payload contains an order revoked since it was built, rejecting"
-            );
-            return Err(PayloadMergingError::ContainsRevokedOrder);
-        }
 
         if response.proposer_value <= original_value {
             warn!(
