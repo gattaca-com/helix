@@ -49,7 +49,8 @@ pub struct BuilderCollateral {
     /// Timestamp of the message.
     pub ts_ms: u64,
     pub slot: u64,
-    pub builder_pubkey: BlsPublicKeyBytes,
+    /// All pubkeys associated with the collateral amount.
+    pub builder_pubkeys: Vec<BlsPublicKeyBytes>,
     /// The TOTAL builder collateral held by the operator. Each operator
     /// will need to track amounts held at other operators and sum.
     pub collateral_wei: u128,

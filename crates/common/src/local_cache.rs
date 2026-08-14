@@ -184,10 +184,22 @@ impl LocalCache {
         Some(self.builder_info_cache.get(builder_pub_key)?.clone())
     }
 
-    pub fn all_builder_infos_local_collateral_only(
+    /// Returns a mapping of builder id to pubkeys and collateral amount.
+    pub fn all_builder_local_collateral(
         &self,
-    ) -> impl Iterator<Item = (BlsPublicKeyBytes, BuilderInfo)> {
-        self.builder_info_cache.iter().map(|mref| (mref.key().clone(), mref.value().clone()))
+    ) -> FxHashMap<String, (Vec<BlsPublicKeyBytes>, U256)> {
+        let mut builders = FxHashMap::<String, (Vec<BlsPublicKeyBytes>, U256)>::default();
+        for mref in self.builder_info_cache.iter() {
+            if let Some(id) = mref.value().builder_id.as_ref() &&
+                mref.value().collateral > U256::ZERO
+            {
+                builders
+                    .entry(id.to_owned())
+                    .and_modify(|(keys, _)| keys.push(*mref.key()))
+                    .or_insert((vec![*mref.key()], mref.value().collateral));
+            }
+        }
+        builders
     }
 
     pub fn contains_api_key(&self, api_key: &str) -> bool {
@@ -401,22 +413,24 @@ impl LocalCache {
 
     pub fn update_operator_collateral(
         &self,
-        builder_pub_key: &BlsPublicKeyBytes,
+        builder_pub_keys: &[BlsPublicKeyBytes],
         operator: &PublicKey,
         collateral: u128,
         operator_group: Option<Vec<u8>>,
     ) {
         let operator_key = operator_group.unwrap_or_else(|| operator.encode_protobuf());
-        self.operator_builder_collateral
-            .entry(*builder_pub_key)
-            .and_modify(|operators| {
-                operators.insert(operator_key.clone(), collateral);
-            })
-            .or_insert_with(|| {
-                let mut operators = FxHashMap::default();
-                operators.insert(operator_key, collateral);
-                operators
-            });
+        for key in builder_pub_keys {
+            self.operator_builder_collateral
+                .entry(*key)
+                .and_modify(|operators| {
+                    operators.insert(operator_key.clone(), collateral);
+                })
+                .or_insert_with(|| {
+                    let mut operators = FxHashMap::default();
+                    operators.insert(operator_key.clone(), collateral);
+                    operators
+                });
+        }
     }
 
     fn operator_collateral(&self, builder_pub_key: &BlsPublicKeyBytes) -> U256 {
