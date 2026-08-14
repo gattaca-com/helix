@@ -1,8 +1,8 @@
 use alloy_primitives::B256;
 use helix_common::GetPayloadTrace;
 use helix_types::{
-    BeaconBlockBodyFulu, BeaconBlockFulu, GetPayloadResponse, PayloadAndBlobs, SignedBeaconBlock,
-    SignedBeaconBlockFulu, SignedBlindedBeaconBlock, VersionedSignedProposal,
+    BeaconBlockBodyFulu, BeaconBlockFulu, GetPayloadResponse, PayloadAndBlobs, PayloadBidData,
+    SignedBeaconBlock, SignedBeaconBlockFulu, SignedBlindedBeaconBlock, VersionedSignedProposal,
 };
 use tokio::sync::oneshot;
 use tracing::{info, warn};
@@ -10,7 +10,6 @@ use tracing::{info, warn};
 use crate::{
     api::proposer::ProposerApiError,
     auctioneer::{
-        PayloadBidData,
         bid_adjustor::BidAdjustor,
         context::Context,
         types::{GetPayloadResult, GetPayloadResultData, PayloadEntry, PendingPayload, SlotData},

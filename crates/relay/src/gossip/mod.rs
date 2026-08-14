@@ -13,15 +13,12 @@ pub use client::GrpcGossiperClientManager;
 use helix_common::{GetPayloadTrace, spawn_tracked, utils::utcnow_ns};
 use tokio::sync::mpsc;
 use tracing::{debug, error};
-pub use types::{BroadcastGetPayloadParams, BroadcastPayloadParams};
+pub use types::{BroadcastGetPayloadParams, BroadcastPayloadParams, GossipedMessage};
 
-use crate::{
-    api::{
-        Api,
-        builder::api::BuilderApi,
-        proposer::{ProposerApi, get_payload::ProposerApiVersion},
-    },
-    gossip::types::GossipedMessage,
+use crate::api::{
+    Api,
+    builder::api::BuilderApi,
+    proposer::{ProposerApi, get_payload::ProposerApiVersion},
 };
 
 pub async fn process_gossip_messages<A: Api>(

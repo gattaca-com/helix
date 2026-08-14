@@ -1,4 +1,5 @@
 mod bid_adjustment_data;
+mod bid_data;
 mod bid_submission;
 mod blobs;
 mod block_merging;
@@ -16,6 +17,7 @@ mod validator;
 pub use bid_adjustment_data::{
     BidAdjData, BidAdjDataV2, BidAdjustmentData, BidAdjustmentDataV1, BidAdjustmentDataV2,
 };
+pub use bid_data::*;
 pub use bid_submission::*;
 pub use blobs::*;
 pub use block_merging::*;

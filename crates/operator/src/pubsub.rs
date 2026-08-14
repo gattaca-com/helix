@@ -100,6 +100,7 @@ pub(super) async fn run_operator_connection(
                                 false
                             }
                         }
+                        _ => true,
                     };
                     if transmit && connected_peers > 0 {
                         swarm.behaviour_mut().floodsub.publish(floodsub_topic.clone(), msg.as_ssz_bytes());

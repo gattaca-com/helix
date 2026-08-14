@@ -35,8 +35,7 @@ use helix_types::Slot;
 use rustc_hash::FxHashMap;
 use tracing::{debug, error, info, trace, warn};
 pub use types::{
-    Event, GetPayloadResultData, PayloadBidData, PayloadEntry, SlotData, SubmissionData,
-    SubmissionPayload,
+    Event, GetPayloadResultData, PayloadEntry, SlotData, SubmissionData, SubmissionPayload,
 };
 
 use crate::{

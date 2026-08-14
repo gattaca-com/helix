@@ -29,11 +29,11 @@ use helix_common::{
 use helix_operator::spawn_operator_connection;
 use helix_relay::{
     Api, Auctioneer, AuctioneerHandle, BidSorter, BidSubmissionTcpListener, BlockMergeResponse,
-    BlockMergingTile, DataGatherer, DbHandle, DecoderTile, DefaultBidAdjustor,
-    FutureBidSubmissionResult, HelixSpine, HelixSpineConfig, HousekeeperTile, NewBidSubmission,
-    RegWorkerHandle, RegistrationTile, RelayNetworkManager, SimRequest, SimResult, SimulatorTile,
-    SlotUpdate, SubmissionDataWithSpan, TopBidTile, spawn_tokio_monitoring, start_admin_service,
-    start_api_service, start_db_service,
+    BlockMergingTile, BroadcastPayloadParams, DataGatherer, DbHandle, DecoderTile,
+    DefaultBidAdjustor, FutureBidSubmissionResult, GossipedMessage, HelixSpine, HelixSpineConfig,
+    HousekeeperTile, NewBidSubmission, RegWorkerHandle, RegistrationTile, RelayNetworkManager,
+    SimRequest, SimResult, SimulatorTile, SlotUpdate, SubmissionDataWithSpan, TopBidTile,
+    spawn_tokio_monitoring, start_admin_service, start_api_service, start_db_service,
 };
 use helix_types::BlsKeypair;
 use helix_website::WebsiteService;
@@ -185,8 +185,10 @@ async fn run(
 
     let alert_manager = Arc::new(AlertManager::from_relay_config(&config));
     let failsafe_triggered = Arc::new(AtomicBool::new(false));
+    let (gossip_sender, gossip_receiver) = tokio::sync::mpsc::channel(10_000);
 
     let operator_api = config.operator_config.as_ref().map(|operator_config| {
+        let gossip = gossip_sender.clone();
         spawn_operator_connection(
             operator_config.clone(),
             known_validators_loaded.clone(),
@@ -195,6 +197,19 @@ async fn run(
             db.clone(),
             failsafe_triggered.clone(),
             alert_manager.clone(),
+            move |payload| {
+                if let Err(e) = gossip.try_send(GossipedMessage::Payload(
+                    BroadcastPayloadParams {
+                        execution_payload: payload.execution_payload,
+                        slot: payload.slot,
+                        proposer_pub_key: payload.proposer_pub_key,
+                        bid_data: payload.bid_data,
+                    }
+                    .into(),
+                )) {
+                    tracing::warn!(?e, "failed to pass operator api payload to auctioneer");
+                }
+            },
         )
     });
 
@@ -218,6 +233,7 @@ async fn run(
 
         let bid_producer =
             spine.spine.standalone_dcache_producer_for(TileName::from_str_truncate("Api"));
+
         start_api_service::<ApiProd>(
             config.clone(),
             db.clone(),
@@ -239,6 +255,8 @@ async fn run(
             web_socket_send,
             alert_manager.clone(),
             operator_api.clone(),
+            gossip_sender,
+            gossip_receiver,
         );
 
         if config.website.enabled {

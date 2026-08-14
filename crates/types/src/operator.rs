@@ -3,7 +3,7 @@ use libp2p::{Multiaddr, identity::PublicKey};
 use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
 
-use crate::{BlsPublicKeyBytes, utils};
+use crate::{BlsPublicKeyBytes, PayloadAndBlobs, PayloadBidData, utils};
 
 #[derive(Debug, Decode, Encode)]
 #[ssz(enum_behaviour = "union")]
@@ -11,6 +11,7 @@ pub enum OperatorMessage {
     Demotion(Demotion),
     Promotion(Promotion),
     Collateral(BuilderCollateral),
+    Payload(Payload),
 }
 
 /// Message broadcast to operators:
@@ -57,6 +58,15 @@ pub struct BuilderCollateral {
     /// Operator instances in the same group will send the same collateral amounts,
     /// which MUST NOT be summed.
     pub operator_group: Option<Vec<u8>>,
+}
+
+#[derive(Clone, Debug, Decode, Encode)]
+pub struct Payload {
+    pub ts_ms: u64,
+    pub slot: u64,
+    pub execution_payload: PayloadAndBlobs,
+    pub proposer_pub_key: BlsPublicKeyBytes,
+    pub bid_data: PayloadBidData,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

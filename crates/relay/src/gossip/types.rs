@@ -1,11 +1,12 @@
 use helix_types::{
-    BlsPublicKeyBytes, ForkName, ForkVersionDecode, PayloadAndBlobs, SignedBlindedBeaconBlock,
+    BlsPublicKeyBytes, ForkName, ForkVersionDecode, PayloadAndBlobs, PayloadBidData,
+    SignedBlindedBeaconBlock,
 };
 use ssz::{Decode, Encode};
 use uuid::Uuid;
 
 use super::grpc::{self};
-use crate::{auctioneer::PayloadBidData, gossip::error::GossipError};
+use crate::gossip::error::GossipError;
 
 #[derive(Debug, Clone)]
 pub enum GossipedMessage {

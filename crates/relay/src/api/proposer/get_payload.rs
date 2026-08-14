@@ -1,4 +1,4 @@
-use std::{str::FromStr, sync::Arc, time::Duration};
+use std::{borrow::Cow, str::FromStr, sync::Arc, time::Duration};
 
 use alloy_primitives::{Address, B256};
 use axum::{Extension, http::HeaderMap, response::IntoResponse};
@@ -10,12 +10,12 @@ use helix_common::{
     decoder::{Encoding, HEADER_SSZ},
     metrics::BEACON_BLOCK_PUBLISH_FAILURES,
     spawn_tracked,
-    utils::{extract_request_id, utcnow_ns},
+    utils::{extract_request_id, utcnow_ms, utcnow_ns},
 };
 use helix_database::types::SavePayloadParams;
 use helix_types::{
-    BlsPublicKeyBytes, ExecPayload, ForkName, GetPayloadResponse, PayloadAndBlobs,
-    SignedBlindedBeaconBlock, SignedBlindedBeaconBlockFulu, Slot, SlotClockTrait,
+    BlsPublicKeyBytes, ExecPayload, ForkName, GetPayloadResponse, Payload, PayloadAndBlobs,
+    PayloadBidData, SignedBlindedBeaconBlock, SignedBlindedBeaconBlockFulu, Slot, SlotClockTrait,
 };
 use http::{HeaderValue, StatusCode, header::CONTENT_TYPE};
 use ssz::{Decode, Encode};
@@ -30,7 +30,7 @@ use crate::{
         Api,
         proposer::{CONSENSUS_VERSION_HEADER, error::ProposerApiError},
     },
-    auctioneer::{GetPayloadKind, GetPayloadResultData, PayloadBidData},
+    auctioneer::{GetPayloadKind, GetPayloadResultData},
     gossip::{BroadcastGetPayloadParams, BroadcastPayloadParams},
 };
 
@@ -364,9 +364,9 @@ impl<A: Api> ProposerApi<A> {
         self.gossip_payload(
             to_publish.signed_block.slot(),
             &proposer_public_key,
-            &to_proposer.data,
+            Cow::Borrowed(&to_proposer.data),
             fork,
-            &bid,
+            Cow::Borrowed(&bid),
         )
         .await;
 
@@ -533,18 +533,32 @@ impl<A: Api> ProposerApi<A> {
         &self,
         bid_slot: Slot,
         proposer_public_key: &BlsPublicKeyBytes,
-        execution_payload: &PayloadAndBlobs,
+        execution_payload: Cow<'_, PayloadAndBlobs>,
         fork_name: ForkName,
-        bid: &PayloadBidData,
+        bid: Cow<'_, PayloadBidData>,
     ) {
         let params = BroadcastPayloadParams::to_proto(
-            execution_payload,
+            &execution_payload,
             bid_slot.as_u64(),
             proposer_public_key,
             fork_name,
-            bid,
+            &bid,
         );
-        self.gossiper.broadcast_payload(params).await
+        self.gossiper.broadcast_payload(params).await;
+
+        if let Some(operator_pubsub) = self.operator_api.as_ref() &&
+            let Err(e) = operator_pubsub
+                .send(helix_types::OperatorMessage::Payload(Payload {
+                    ts_ms: utcnow_ms(),
+                    slot: bid_slot.as_u64(),
+                    execution_payload: execution_payload.into_owned(),
+                    proposer_pub_key: *proposer_public_key,
+                    bid_data: bid.into_owned(),
+                }))
+                .await
+        {
+            tracing::warn!(?e, "failed to send payload on operator api");
+        };
     }
 }
 

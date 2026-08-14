@@ -5,7 +5,7 @@ use lh_types::{ForkName, ForkVersionDecode, test_utils::TestRandom};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use ssz::DecodeError;
-use ssz_derive::Encode;
+use ssz_derive::{Decode, Encode};
 
 use crate::{
     BlobsError, BlockValidationError, ExecutionPayload, SignedBeaconBlock,
@@ -164,7 +164,7 @@ impl BlobsBundle {
 }
 
 /// Similar to lighthouse but using our BlobsBundleV1
-#[derive(Clone, PartialEq, Debug, Serialize, Deserialize, Encode)]
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize, Decode, Encode)]
 pub struct PayloadAndBlobs {
     pub execution_payload: Arc<ExecutionPayload>,
     pub blobs_bundle: Arc<BlobsBundle>,

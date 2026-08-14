@@ -37,6 +37,7 @@ pub use crate::{
     bid_decoder::{DecoderTile, SubmissionDataWithSpan},
     block_merging::BlockMergingTile,
     data_gatherer::DataGatherer,
+    gossip::{BroadcastPayloadParams, GossipedMessage},
     housekeeper::{HousekeeperTile, SlotUpdate},
     network::RelayNetworkManager,
     registration::{RegWorkerHandle, RegistrationTile},
