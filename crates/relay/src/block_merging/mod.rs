@@ -48,6 +48,12 @@ fn order_to_ref(order: &Order) -> Option<MergeOrderRef> {
             txs: bundle.txs.iter().map(|&i| idx(i)).collect::<Option<_>>()?,
             reverting_txs: bundle.reverting_txs.iter().map(|&i| idx(i)).collect::<Option<_>>()?,
             dropping_txs: bundle.dropping_txs.iter().map(|&i| idx(i)).collect::<Option<_>>()?,
+            latest_only: false,
+        }),
+        Order::BundleV2(bundle) => MergeOrderRef::Bundle(BundleOrderRef {
+            txs: bundle.txs.iter().map(|&i| idx(i)).collect::<Option<_>>()?,
+            reverting_txs: bundle.reverting_txs.iter().map(|&i| idx(i)).collect::<Option<_>>()?,
+            dropping_txs: bundle.dropping_txs.iter().map(|&i| idx(i)).collect::<Option<_>>()?,
             latest_only: bundle.latest_only,
         }),
     })
@@ -144,7 +150,7 @@ fn calculate_versioned_hash(commitment: Bytes48) -> B256 {
 
 #[cfg(test)]
 mod tests {
-    use helix_types::{BundleOrder, TransactionOrder, TxIndices};
+    use helix_types::{BundleOrder, BundleOrderV2, TransactionOrder, TxIndices};
 
     use super::*;
 
@@ -164,10 +170,25 @@ mod tests {
             txs: indices(&[1, 2]),
             reverting_txs: indices(&[0]),
             dropping_txs: indices(&[1]),
-            latest_only: true,
         });
         assert_eq!(
             order_to_ref(&bundle),
+            Some(MergeOrderRef::Bundle(BundleOrderRef {
+                txs: vec![1, 2],
+                reverting_txs: vec![0],
+                dropping_txs: vec![1],
+                latest_only: false,
+            }))
+        );
+
+        let bundle_v2 = Order::BundleV2(BundleOrderV2 {
+            txs: indices(&[1, 2]),
+            reverting_txs: indices(&[0]),
+            dropping_txs: indices(&[1]),
+            latest_only: true,
+        });
+        assert_eq!(
+            order_to_ref(&bundle_v2),
             Some(MergeOrderRef::Bundle(BundleOrderRef {
                 txs: vec![1, 2],
                 reverting_txs: vec![0],
