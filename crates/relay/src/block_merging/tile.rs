@@ -108,8 +108,6 @@ struct SlotState {
     /// Per-builder map of order_id -> order_hash for their latest_only bundles this
     /// slot, diffed on each new submission to detect revocations.
     latest_only_ids: FxHashMap<BlsPublicKeyBytes, FxHashMap<B256, B256>>,
-    /// order_ids revoked so far this slot, checked against new merged block arrivals.
-    revoked_order_ids: FxHashSet<B256>,
 }
 
 #[derive(Clone, Copy)]
@@ -150,8 +148,6 @@ struct SlotStats {
     merged_blob_missing: usize,
     /// Merged blocks dropped because the builder broke an order's atomicity.
     merged_unbundled: usize,
-    /// Merged blocks dropped because they contained a revoked latest_only order.
-    merged_contains_revoked_order: usize,
     /// TopBidUpdate messages received for the current bid slot.
     top_bid_updates: usize,
     /// ActivateBaseBlockV1 frames sent.
@@ -502,16 +498,6 @@ impl BlockMergingTile {
                             );
                             return;
                         }
-                        // Reject if built before the merge builder learned of a revocation.
-                        if merged
-                            .included_order_ids
-                            .iter()
-                            .any(|id| slot.revoked_order_ids.contains(id))
-                        {
-                            stats.merged_contains_revoked_order += 1;
-                            debug!(?token, "merged block contains a revoked latest_only order");
-                            return;
-                        }
                         // Builders only guarantee monotonicity within a connection; filter
                         // so the stored merged bid never regresses.
                         if slot
@@ -696,7 +682,6 @@ impl BlockMergingTile {
             merged_regressed = stats.merged_regressed,
             merged_blob_missing = stats.merged_blob_missing,
             merged_unbundled = stats.merged_unbundled,
-            merged_contains_revoked_order = stats.merged_contains_revoked_order,
             appendable_blocks = self.slot.appendable.len(),
             hydration_txs = self.hydration_cache.tx_count(),
             hydration_builders = self.hydration_cache.builder_count(),
@@ -918,7 +903,6 @@ impl BlockMergingTile {
         builder_pubkey: BlsPublicKeyBytes,
     ) {
         self.slot.best_merged.retain(|_, floor| !floor.order_ids.contains(&order_id));
-        self.slot.revoked_order_ids.insert(order_id);
 
         let bid_slot = self.slot.bid_slot;
 
