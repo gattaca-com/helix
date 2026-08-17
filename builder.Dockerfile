@@ -1,4 +1,4 @@
-FROM lukemathwalker/cargo-chef:latest-rust-1.91 AS chef
+FROM lukemathwalker/cargo-chef:latest-rust-1.96 AS chef
 WORKDIR /app
 
 # Install libclang and dependencies required by bindgen (rocksdb)
@@ -17,6 +17,11 @@ FROM chef AS builder
 
 # Copy back the build dependencies including libclang
 COPY --from=planner /app/recipe.json recipe.json
+# crates/vendored/ethrex-crypto is a [patch] path dependency, not a workspace
+# member (see its VENDORED.md) — cargo-chef's recipe only tracks workspace
+# members, so `cook` can't materialize a dummy for it. Its real source must
+# be present on disk before `cook` resolves the dependency graph.
+COPY crates/vendored ./crates/vendored
 RUN cargo chef cook --release --recipe-path recipe.json
 
 COPY . .
