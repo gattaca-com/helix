@@ -41,11 +41,17 @@ pub struct OrderMeta {
 impl OrderMeta {
     /// Canonical order id, computed identically on both sides.
     pub fn order_id(&self) -> B256 {
-        let mut buf = [0u8; 32 + 48];
-        buf[..32].copy_from_slice(self.order_hash.as_slice());
-        buf[32..].copy_from_slice(self.builder_pubkey.as_slice());
-        keccak256(buf)
+        order_id(self.order_hash, &self.builder_pubkey)
     }
+}
+
+/// `OrderMeta::order_id()`, computable from just the two fields that feed it —
+/// for callers identifying an order without building a full `OrderMeta`.
+pub fn order_id(order_hash: B256, builder_pubkey: &BlsPublicKey) -> B256 {
+    let mut buf = [0u8; 32 + 48];
+    buf[..32].copy_from_slice(order_hash.as_slice());
+    buf[32..].copy_from_slice(builder_pubkey.as_slice());
+    keccak256(buf)
 }
 
 pub fn bundle_order_hash(tx_hashes: &[B256]) -> B256 {
@@ -80,6 +86,9 @@ pub struct BundleOrderRef {
     pub reverting_txs: Vec<u16>,
     /// Indices into `txs` allowed to be omitted, but not revert.
     pub dropping_txs: Vec<u16>,
+    /// Only eligible for merging if present in the builder's most recent submission for this
+    /// block.
+    pub latest_only: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -120,6 +129,7 @@ mod tests {
             txs: vec![3, 5],
             reverting_txs: vec![0],
             dropping_txs: vec![1],
+            latest_only: true,
         });
         let bytes = order.as_ssz_bytes();
         assert_eq!(MergeOrderRef::from_ssz_bytes(&bytes).unwrap(), order);
@@ -137,7 +147,31 @@ mod tests {
             txs: vec![0],
             reverting_txs: vec![1],
             dropping_txs: vec![],
+            latest_only: false,
         });
         assert!(bundle.validate(4).is_err());
+    }
+
+    #[test]
+    fn order_id_helper_matches_order_meta() {
+        let order_hash = B256::repeat_byte(0x11);
+        let builder_pubkey = BlsPublicKey::default();
+        let meta = OrderMeta {
+            order_hash,
+            builder_pubkey,
+            origin_coinbase: Address::default(),
+            source_block_hash: B256::repeat_byte(0x22),
+        };
+        assert_eq!(order_id(order_hash, &builder_pubkey), meta.order_id());
+    }
+
+    #[test]
+    fn order_id_disambiguates_by_builder_pubkey() {
+        let order_hash = B256::repeat_byte(0x33);
+        let a = BlsPublicKey::default();
+        let mut b_bytes = [0u8; 48];
+        b_bytes[0] = 1;
+        let b = BlsPublicKey::from(b_bytes);
+        assert_ne!(order_id(order_hash, &a), order_id(order_hash, &b));
     }
 }

@@ -63,6 +63,10 @@ pub struct BundleOrder {
     /// Txs that are allowed to be omitted, but not revert.
     /// Indices are for the [txs](Self::txs) array.
     pub dropping_txs: TxIndices,
+    /// Only eligible for merging if present in the builder's most recent submission for this
+    /// block.
+    #[serde(default)]
+    pub latest_only: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -222,6 +226,7 @@ mod tests {
             txs: smallvec::smallvec![1, 2, 3],
             reverting_txs: smallvec::smallvec![0],
             dropping_txs: smallvec::smallvec![2],
+            latest_only: true,
         };
         let order = Order::Bundle(bundle_order);
 
@@ -237,6 +242,7 @@ mod tests {
             txs: smallvec::smallvec![0, 2, 4],
             reverting_txs: smallvec::smallvec![1],
             dropping_txs: smallvec::smallvec![2],
+            latest_only: false,
         });
 
         let data = BlockMergingData {
@@ -266,6 +272,7 @@ mod tests {
             txs: smallvec::smallvec![1, 2, 3],
             reverting_txs: smallvec::smallvec![0],
             dropping_txs: smallvec::smallvec![2],
+            latest_only: true,
         };
         let order = Order::Bundle(bundle_order);
 
@@ -281,6 +288,7 @@ mod tests {
             txs: smallvec::smallvec![0, 2, 4],
             reverting_txs: smallvec::smallvec![1],
             dropping_txs: smallvec::smallvec![2],
+            latest_only: false,
         });
 
         let data = BlockMergingData {

@@ -143,6 +143,7 @@ async fn main() -> std::io::Result<()> {
             txs: vec![1, 2],
             reverting_txs: vec![0],
             dropping_txs: vec![1],
+            latest_only: false,
         }),
     ];
     let base_block_hash = B256::random();

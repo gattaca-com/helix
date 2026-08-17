@@ -215,6 +215,7 @@ mod tests {
             txs: vec![3, 1, 2],
             reverting_txs: vec![],
             dropping_txs: vec![1],
+            latest_only: false,
         });
         let order = OrderTxs::from_ref(&order_ref, &tx_hashes);
         assert_eq!(order, OrderTxs::new(vec![hash(3), hash(1), hash(2)], [1]));
