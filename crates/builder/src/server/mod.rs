@@ -23,7 +23,7 @@ use helix_tcp_types::{
         MERGING_HEADER_SIZE, MergingFrameHeader, MergingHeaderError, MergingMsgId,
         builder_to_relay::{FatalV1, RejectCode, RejectSubject, RejectV1},
         control::{MergerAckV1, MergerRegistrationV1, PingV1, PongV1, RelayConfigV1},
-        relay_to_builder::{ActivateBaseBlockV1, SlotEndV1, SlotStartV1},
+        relay_to_builder::{ActivateBaseBlockV1, RevokeOrderV1, SlotEndV1, SlotStartV1},
     },
 };
 use rustc_hash::FxHashMap;
@@ -528,6 +528,14 @@ fn handle_active_message(
                 recv_ns: utcnow_ns(),
                 generation,
             });
+        }
+        MergingMsgId::RevokeOrderV1 => {
+            let Ok(msg) = RevokeOrderV1::from_ssz_bytes(body) else {
+                fatal(replies, to_disconnect, RejectCode::InvalidOrder, "undecodable revoke order");
+                return;
+            };
+            debug!(slot = msg.slot, order_hash = %msg.order_hash, "revoke order");
+            send_control(engine_tx, EngineEvent::RevokeOrder { msg, generation });
         }
         MergingMsgId::MergeableBlockV1 => {
             // Not decoded here: the engine does SSZ + tx decoding off the tile

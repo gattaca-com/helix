@@ -24,9 +24,9 @@ use helix_tcp_types::merging::{
     control::RelayConfigV1,
     order::{
         MAX_BLOCK_TXS, MAX_ORDERS_PER_BLOCK, MAX_TX_BYTES, MergeOrderRef, OrderMeta,
-        bundle_order_hash,
+        bundle_order_hash, is_tx_hash_ref, order_id,
     },
-    relay_to_builder::{MergeableBlockV1, SlotStartV1},
+    relay_to_builder::{MergeableBlockV1, RevokeOrderV1, SlotStartV1},
 };
 use ssz::Decode;
 use tokio::sync::watch;
@@ -37,7 +37,8 @@ use crate::{
         error::MergeError,
         session::{EmitOutcome, MergeSession},
         types::{
-            DecodedTx, EngineConfig, MAX_PARKED_SESSIONS, PreparedBlock, PreparedOrder, SlotState,
+            DecodedTx, EngineConfig, MAX_PARKED_SESSIONS, MAX_REPLAY_CHECKPOINTS, PreparedBlock,
+            PreparedOrder, SlotState,
         },
     },
     node::HeadInfo,
@@ -69,6 +70,14 @@ pub enum EngineEvent {
         slot: u64,
         block_hash: B256,
         recv_ns: u64,
+        generation: u64,
+    },
+    /// A previously-pooled `latest_only` order was dropped from the
+    /// originating builder's newest submission this slot; the relay tells us
+    /// rather than us inferring it, since only the relay sees every
+    /// submission.
+    RevokeOrder {
+        msg: RevokeOrderV1,
         generation: u64,
     },
 }
@@ -200,6 +209,13 @@ impl MergeEngine {
             for session in &state.parked {
                 session.log_stats(reason);
             }
+            info!(
+                reason,
+                slot = state.slot,
+                checkpoint_hits = state.checkpoint_hits,
+                checkpoint_misses = state.checkpoint_misses,
+                "merge slot ended"
+            );
         }
     }
 
@@ -291,6 +307,37 @@ impl MergeEngine {
                 state.pending_activation = Some((block_hash, recv_ns));
                 true
             }
+            EngineEvent::RevokeOrder { msg, generation } => {
+                if generation != self.generation {
+                    return false;
+                }
+                let Some(state) = self.slot.as_mut() else { return false };
+                if msg.slot != state.slot {
+                    return false;
+                }
+                let revoked_id = order_id(msg.order_hash, &msg.builder_pubkey);
+                if !state.remove_order(revoked_id, &msg.builder_pubkey) {
+                    return false;
+                }
+                // A parked session may carry the revoked order forward if
+                // it's later resumed; drop them all rather than tracking
+                // which one(s) actually applied it.
+                for parked in state.parked.drain(..) {
+                    parked.log_stats("revoked_parked_drop");
+                }
+                let Some(session) = state.session.as_ref() else { return false };
+                if !session.has_applied(&revoked_id) {
+                    return false;
+                }
+                warn!(
+                    order_hash = %msg.order_hash,
+                    "live session already applied a just-revoked order, rebuilding"
+                );
+                let base_block_hash = session.base_block_hash;
+                state.session = None;
+                state.pending_activation = Some((base_block_hash, crate::utils::utcnow_ns()));
+                true
+            }
         }
     }
 
@@ -355,29 +402,46 @@ impl MergeEngine {
                     } else {
                         // Head gating: the base must build on our synced head.
                         let head_hash = convert::b256(head.hash);
+                        let beneficiary_alloy = base.payload.payload_inner.payload_inner.fee_recipient;
                         let result = if !head.is_synced {
                             Err(MergeError::NotSynced)
                         } else if head_hash != state.parent_hash {
                             Err(MergeError::HeadMismatch)
                         } else {
+                            let checkpoint = state.replay_checkpoints.get(&beneficiary_alloy);
                             MergeSession::activate(
                                 state,
                                 base,
                                 &self.store,
                                 self.blockchain.clone(),
                                 &relay_config,
+                                checkpoint,
                             )
                         };
                         match result {
-                            Ok(session) => {
+                            Ok((session, new_checkpoint, checkpoint_hit)) => {
                                 info!(
                                     slot = state.slot,
                                     base_block_hash = %block_hash,
+                                    checkpoint_hit,
                                     activate_to_replay_us = crate::utils::utcnow_ns()
                                         .saturating_sub(activate_recv_ns) /
                                         1000,
                                     "merge session activated"
                                 );
+                                if checkpoint_hit {
+                                    state.checkpoint_hits += 1;
+                                } else {
+                                    state.checkpoint_misses += 1;
+                                }
+                                if state.replay_checkpoints.len() >= MAX_REPLAY_CHECKPOINTS &&
+                                    !state.replay_checkpoints.contains_key(&beneficiary_alloy) &&
+                                    let Some(evict) =
+                                        state.replay_checkpoints.keys().next().copied()
+                                {
+                                    state.replay_checkpoints.remove(&evict);
+                                }
+                                state.replay_checkpoints.insert(beneficiary_alloy, new_checkpoint);
                                 state.session = Some(session);
                             }
                             Err(err) => {
@@ -466,8 +530,9 @@ impl MergeEngine {
         }
 
         // Decode txs and recover senders in parallel, through the per-slot
-        // cache (incremental submissions share most txs).
-        let decoded = decode_block_txs(&msg, &mut state.recovery_cache)
+        // cache (incremental submissions share most txs); resolves any
+        // tx-hash references against txs already seen whole this slot.
+        let decoded = decode_block_txs(&msg, &mut state.recovery_cache, &mut state.tx_cache)
             .map_err(|err| fail(MergeError::InvalidOrder(err)))?;
         let txs = Arc::new(decoded);
 
@@ -515,10 +580,14 @@ impl MergeEngine {
 }
 
 /// Decodes every tx in the payload and recovers senders (cache-assisted, the
-/// misses in parallel).
+/// misses in parallel). Entries of `order::TX_HASH_REF_LEN` bytes are
+/// tx-hash references rather than raw txs (see `MergeableBlockV1`'s doc
+/// comment): resolved against `tx_cache`, which holds every tx already sent
+/// whole on this connection this slot.
 fn decode_block_txs(
     msg: &MergeableBlockV1,
     recovery_cache: &mut rustc_hash::FxHashMap<B256, ethrex_common::Address>,
+    tx_cache: &mut rustc_hash::FxHashMap<B256, Arc<DecodedTx>>,
 ) -> Result<Vec<Arc<DecodedTx>>, String> {
     use rayon::prelude::*;
 
@@ -530,19 +599,40 @@ fn decode_block_txs(
         cached_sender: Option<ethrex_common::Address>,
     }
 
-    let partials: Vec<Partial> = tx_bytes
+    enum Entry {
+        Cached(Arc<DecodedTx>),
+        New(Box<Partial>),
+    }
+
+    let entries: Vec<Entry> = tx_bytes
         .iter()
         .map(|bytes| {
+            if is_tx_hash_ref(bytes) {
+                let hash = B256::from_slice(bytes);
+                return tx_cache
+                    .get(&hash)
+                    .cloned()
+                    .map(Entry::Cached)
+                    .ok_or_else(|| format!("unresolved tx hash reference: {hash}"));
+            }
             let tx = ethrex_common::types::Transaction::decode_canonical(bytes)
                 .map_err(|e| format!("tx decode: {e}"))?;
             let hash = keccak256(bytes);
-            Ok(Partial { tx, hash, cached_sender: recovery_cache.get(&hash).copied() })
+            Ok(Entry::New(Box::new(Partial {
+                tx,
+                hash,
+                cached_sender: recovery_cache.get(&hash).copied(),
+            })))
         })
         .collect::<Result<_, String>>()?;
 
-    let decoded: Vec<Arc<DecodedTx>> = partials
+    let decoded: Vec<Arc<DecodedTx>> = entries
         .into_par_iter()
-        .map(|partial| {
+        .map(|entry| {
+            let partial = match entry {
+                Entry::Cached(tx) => return Ok(tx),
+                Entry::New(partial) => *partial,
+            };
             let sender = match partial.cached_sender {
                 Some(sender) => sender,
                 None => {
@@ -563,6 +653,7 @@ fn decode_block_txs(
 
     for tx in &decoded {
         recovery_cache.insert(tx.hash, tx.sender);
+        tx_cache.entry(tx.hash).or_insert_with(|| tx.clone());
     }
     Ok(decoded)
 }

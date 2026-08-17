@@ -18,7 +18,7 @@ use ethrex_storage::{EngineType, Store};
 use helix_tcp_types::merging::{
     control::{BuilderCollateral, RelayConfigV1},
     order::{MergeOrderRef, TxOrderRef},
-    relay_to_builder::{MergeableBlockV1, SlotStartV1},
+    relay_to_builder::{MergeableBlockV1, RevokeOrderV1, SlotStartV1},
 };
 use ssz::Encode;
 use tokio::sync::watch;
@@ -189,6 +189,14 @@ impl Fixture {
     /// Builds a valid base block ([user tx, proposer payment]) on genesis;
     /// vary `user_value` to get distinct block hashes.
     fn build_base(&self, user_value: U256) -> (MergeableBlockV1, B256) {
+        self.build_base_with_payment(user_value, self.block_value)
+    }
+
+    /// Like [`build_base`](Self::build_base), but with an independently
+    /// chosen payment value — lets a test hold the user tx fixed (so the
+    /// non-payment prefix is byte-identical) while only the trailing payment
+    /// tx changes, as in a real bid-ratchet resubmission.
+    fn build_base_with_payment(&self, user_value: U256, payment_value: U256) -> (MergeableBlockV1, B256) {
         let builder = &self.signers[0];
         let base_txs = vec![
             signed_transfer(
@@ -205,7 +213,7 @@ impl Fixture {
                 self.chain_id,
                 0,
                 self.proposer,
-                self.block_value,
+                payment_value,
                 100 * GWEI,
                 0,
             ),
@@ -234,7 +242,7 @@ impl Fixture {
         let msg = MergeableBlockV1 {
             slot: SLOT,
             builder_pubkey: Default::default(),
-            block_value: self.block_value,
+            block_value: payment_value,
             builder_address: builder.address(),
             proposer_fee_recipient: self.proposer,
             parent_beacon_block_root: B256::ZERO,
@@ -389,6 +397,144 @@ async fn merges_donor_order_into_activated_base_block() {
     let _ = aaddr(eaddr(fixture.proposer)); // keep converters exercised both ways
 }
 
+/// A resubmission from the same builder that keeps the same non-payment
+/// prefix and only changes the trailing payment tx (a bid ratchet — the
+/// common case: the relay's own comments call this "the common case, since
+/// builders resubmit near-identical blocks as their bid ratchets") hits the
+/// replay checkpoint instead of re-replaying the shared prefix from the
+/// parent, and the resulting session is still fully functional (base value
+/// correct, still able to merge a fresh order and emit).
+#[tokio::test(flavor = "multi_thread")]
+async fn checkpoint_hit_reuses_shared_prefix_on_resubmission() {
+    let fixture = Fixture::new().await;
+    let (base_a, hash_a) = fixture.build_base_with_payment(U256::from(ETH), fixture.block_value);
+    let (base_b, hash_b) = fixture
+        .build_base_with_payment(U256::from(ETH), fixture.block_value + U256::from(ETH / 100));
+    assert_ne!(hash_a, hash_b);
+    // Same non-payment prefix: the user tx is byte-identical.
+    assert_eq!(
+        base_a.execution_payload.payload_inner.payload_inner.transactions[0],
+        base_b.execution_payload.payload_inner.payload_inner.transactions[0],
+    );
+
+    let (mut engine, output_rx) = fixture.direct_engine(Duration::ZERO);
+    engine.handle_event(EngineEvent::RelayConfig(fixture.relay_config.clone()));
+    engine.handle_event(EngineEvent::SlotStart(fixture.slot_start()));
+    engine.handle_event(mergeable_event(&base_a, 1));
+    engine.handle_event(activate_event(hash_a));
+    engine.merge_pass();
+    {
+        let state = engine.slot.as_ref().unwrap();
+        assert_eq!(state.checkpoint_misses, 1, "first activation has no checkpoint to hit");
+        assert_eq!(state.checkpoint_hits, 0);
+    }
+
+    engine.handle_event(mergeable_event(&base_b, 2));
+    engine.handle_event(activate_event(hash_b));
+    engine.merge_pass();
+
+    {
+        let state = engine.slot.as_ref().unwrap();
+        assert_eq!(
+            state.checkpoint_hits, 1,
+            "resubmission sharing the prefix must hit the checkpoint from base_a"
+        );
+        assert_eq!(state.session.as_ref().unwrap().base_block_hash, hash_b);
+    }
+
+    // The checkpoint-hit session must still be fully functional: a fresh
+    // order applies and merges correctly on top of it.
+    let donor_msg = fixture.donor(&base_b, 3, U256::from(ETH / 5), 0xdd);
+    engine.handle_event(mergeable_event(&donor_msg, 3));
+    engine.merge_pass();
+
+    let merged =
+        expect_merged(output_rx.try_recv().expect("checkpoint-hit session must still emit"));
+    assert_eq!(merged.base_block_hash, hash_b);
+    assert!(
+        merged.proposer_value > fixture.block_value + U256::from(ETH / 100),
+        "proposer value {} must beat base_b's own value",
+        merged.proposer_value
+    );
+}
+
+fn revoke_event(order_hash: B256, builder_pubkey: alloy_rpc_types::beacon::BlsPublicKey) -> EngineEvent {
+    EngineEvent::RevokeOrder {
+        msg: RevokeOrderV1 { slot: SLOT, order_hash, builder_pubkey },
+        generation: 0,
+    }
+}
+
+/// Revoking an order that's pooled but never got applied just drops it from
+/// the pool — there's no session state to unwind.
+#[tokio::test(flavor = "multi_thread")]
+async fn revoke_removes_pooled_order_before_it_applies() {
+    let fixture = Fixture::new().await;
+    let (base_msg, base_block_hash) = fixture.build_base(U256::from(ETH));
+    let donor_msg = fixture.donor(&base_msg, 3, U256::from(ETH / 5), 0xdd);
+    let order_tx_bytes =
+        donor_msg.execution_payload.payload_inner.payload_inner.transactions[0].clone();
+    let order_hash = alloy_primitives::keccak256(order_tx_bytes.as_ref());
+
+    let (mut engine, output_rx) = fixture.direct_engine(Duration::ZERO);
+    engine.handle_event(EngineEvent::RelayConfig(fixture.relay_config.clone()));
+    engine.handle_event(EngineEvent::SlotStart(fixture.slot_start()));
+    engine.handle_event(mergeable_event(&base_msg, 1));
+    engine.handle_event(mergeable_event(&donor_msg, 2));
+
+    engine.handle_event(revoke_event(order_hash, Default::default()));
+    assert!(
+        engine.slot.as_ref().unwrap().orders.is_empty(),
+        "revoked order must leave the pool"
+    );
+
+    engine.handle_event(activate_event(base_block_hash));
+    engine.merge_pass();
+
+    assert!(
+        output_rx.try_recv().is_err(),
+        "base alone with its only order revoked before activation must not emit"
+    );
+}
+
+/// Revoking an order the live session already applied can't be reflected in
+/// place (no way to un-apply a committed tx), so it forces a full rebuild
+/// from the same base — which then excludes the revoked order since it's
+/// gone from the pool.
+#[tokio::test(flavor = "multi_thread")]
+async fn revoke_of_an_applied_order_rebuilds_the_session() {
+    let fixture = Fixture::new().await;
+    let (base_msg, base_block_hash) = fixture.build_base(U256::from(ETH));
+    let donor_msg = fixture.donor(&base_msg, 3, U256::from(ETH / 5), 0xdd);
+    let order_tx_bytes =
+        donor_msg.execution_payload.payload_inner.payload_inner.transactions[0].clone();
+    let order_hash = alloy_primitives::keccak256(order_tx_bytes.as_ref());
+
+    let (mut engine, output_rx) = fixture.direct_engine(Duration::ZERO);
+    engine.handle_event(EngineEvent::RelayConfig(fixture.relay_config.clone()));
+    engine.handle_event(EngineEvent::SlotStart(fixture.slot_start()));
+    engine.handle_event(mergeable_event(&base_msg, 1));
+    engine.handle_event(mergeable_event(&donor_msg, 2));
+    engine.handle_event(activate_event(base_block_hash));
+    engine.merge_pass();
+
+    let merged = expect_merged(output_rx.try_recv().expect("first emission"));
+    assert_eq!(merged.included_order_ids.len(), 1);
+
+    engine.handle_event(revoke_event(order_hash, Default::default()));
+    engine.merge_pass();
+
+    let state = engine.slot.as_ref().unwrap();
+    assert!(state.orders.is_empty(), "revoked order must leave the pool");
+    let session = state.session.as_ref().expect("session rebuilt from the same base");
+    assert_eq!(session.base_block_hash, base_block_hash);
+    assert_eq!(
+        session.included_order_count(),
+        0,
+        "rebuilt session must not carry the revoked order forward"
+    );
+}
+
 /// A→B→A activation flip resumes the parked session instead of re-replaying,
 /// preserving its emission bookkeeping; stats counters reflect the work.
 #[tokio::test(flavor = "multi_thread")]
@@ -448,6 +594,40 @@ async fn base_flip_back_resumes_parked_session() {
     }
     // Nothing new to emit for the resumed session: same orders, same value.
     assert!(output_rx.try_recv().is_err(), "resume must not re-emit a non-improving block");
+}
+
+/// A resubmission that dehydrates an already-seen order tx to a
+/// `order::TX_HASH_REF_LEN`-byte hash reference (the relay's connection-scoped
+/// dehydration, see `MergeableBlockV1`'s doc comment) must resolve against
+/// the tx sent whole earlier this slot, not be rejected as an undecodable tx.
+#[tokio::test(flavor = "multi_thread")]
+async fn resolves_dehydrated_tx_hash_reference() {
+    let fixture = Fixture::new().await;
+    let (base_msg, _base_block_hash) = fixture.build_base(U256::from(ETH));
+    let donor_full = fixture.donor(&base_msg, 3, U256::from(ETH / 5), 0xdd);
+
+    let order_tx_bytes =
+        donor_full.execution_payload.payload_inner.payload_inner.transactions[0].clone();
+    let order_tx_hash = alloy_primitives::keccak256(order_tx_bytes.as_ref());
+    let dehydrated_block_hash = B256::repeat_byte(0xee);
+    let mut donor_dehydrated = donor_full.clone();
+    donor_dehydrated.execution_payload.payload_inner.payload_inner.transactions =
+        vec![order_tx_hash.as_slice().to_vec().into()];
+    donor_dehydrated.execution_payload.payload_inner.payload_inner.block_hash =
+        dehydrated_block_hash;
+
+    let (mut engine, output_rx) = fixture.direct_engine(Duration::ZERO);
+    engine.handle_event(EngineEvent::RelayConfig(fixture.relay_config.clone()));
+    engine.handle_event(EngineEvent::SlotStart(fixture.slot_start()));
+    engine.handle_event(mergeable_event(&donor_full, 1));
+    engine.handle_event(mergeable_event(&donor_dehydrated, 2));
+
+    let state = engine.slot.as_ref().unwrap();
+    assert!(
+        state.blocks.contains_key(&dehydrated_block_hash),
+        "dehydrated resubmission with a resolvable tx-hash reference must be pooled, not rejected"
+    );
+    assert!(output_rx.try_recv().is_err(), "no reject should have been emitted");
 }
 
 /// An improvement blocked by the emission-spacing gate is retried by the

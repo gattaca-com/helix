@@ -82,6 +82,54 @@ impl MergeStats {
     }
 }
 
+/// Snapshot taken right before replaying a base's trailing payment tx, so a
+/// later resubmission from the same builder that extends this exact prefix
+/// (the common case: an unchanged prefix plus a ratcheted bid, or a few new
+/// txs appended before the payment) can resume from here instead of
+/// re-executing everything from the parent. Never reused across the payment
+/// tx itself: it's expected to change on every resubmission, so it's never
+/// part of the cached prefix.
+///
+/// Reuse requires an exact `gas_limit` match rather than a rebased one:
+/// within one slot, `parent_hash`/`timestamp`/`prev_randao` are
+/// consensus-fixed, and `base_fee_per_gas` is a deterministic function of
+/// `gas_limit` alone (given those), so an exact match guarantees every
+/// header field the cached EVM state was executed against is still correct
+/// for the new base — no rebasing arithmetic to get subtly wrong.
+pub(crate) struct ReplayCheckpoint {
+    beneficiary_alloy: Address,
+    proposer_fee_recipient: Address,
+    parent_hash: B256,
+    gas_limit: u64,
+    /// Hashes of `base.txs[..base.txs.len() - 1]` (every replayed tx except
+    /// the trailing payment), in order — the prefix a later resubmission's
+    /// own txs must match, index for index, to extend this checkpoint.
+    tx_hashes: Vec<B256>,
+    included_tx_hashes: FxHashSet<B256>,
+    ctx: PayloadBuildContext,
+}
+
+impl ReplayCheckpoint {
+    /// Whether `base` (from `beneficiary_alloy`/`proposer_fee_recipient`,
+    /// building on `parent_hash` with `gas_limit`) shares this checkpoint's
+    /// full prefix and has at least one more tx (the payment) beyond it.
+    fn extends_to(
+        &self,
+        base: &PreparedBlock,
+        beneficiary_alloy: Address,
+        proposer_fee_recipient: Address,
+        parent_hash: B256,
+        gas_limit: u64,
+    ) -> bool {
+        self.beneficiary_alloy == beneficiary_alloy &&
+            self.proposer_fee_recipient == proposer_fee_recipient &&
+            self.parent_hash == parent_hash &&
+            self.gas_limit == gas_limit &&
+            self.tx_hashes.len() < base.txs.len() &&
+            self.tx_hashes.iter().zip(base.txs.iter()).all(|(hash, tx)| *hash == tx.hash)
+    }
+}
+
 pub struct MergeSession {
     pub base_block_hash: B256,
     pub base_builder_pubkey: BlsPublicKey,
@@ -120,14 +168,18 @@ pub struct MergeSession {
 }
 
 impl MergeSession {
-    /// Validates the base block and replays it onto parent state.
+    /// Validates the base block and replays it onto parent state, reusing
+    /// `checkpoint` if it extends to this base (see `ReplayCheckpoint`).
+    /// Returns the session, a fresh checkpoint for the caller to store back,
+    /// and whether this activation was itself a checkpoint hit.
     pub fn activate(
         slot: &SlotState,
         base: &PreparedBlock,
         store: &Store,
         blockchain: Arc<Blockchain>,
         relay_config: &RelayConfigV1,
-    ) -> Result<Self, MergeError> {
+        checkpoint: Option<&ReplayCheckpoint>,
+    ) -> Result<(Self, ReplayCheckpoint, bool), MergeError> {
         let v1 = &base.payload.payload_inner.payload_inner;
         let beneficiary_alloy = v1.fee_recipient;
         let beneficiary = eaddr(beneficiary_alloy);
@@ -183,69 +235,110 @@ impl MergeSession {
             )));
         }
 
-        // Template block on the parent, pinned to the wire header fields.
-        let parent_header = store
-            .get_block_header_by_hash(h256(v1.parent_hash))
-            .map_err(|e| MergeError::Internal(e.to_string()))?
-            .ok_or(MergeError::NotSynced)?;
-        let args = BuildPayloadArgs {
-            parent: h256(v1.parent_hash),
-            timestamp: v1.timestamp,
-            fee_recipient: beneficiary,
-            random: h256(v1.prev_randao),
-            withdrawals: Some(
-                base.payload.payload_inner.withdrawals.iter().map(ewithdrawal).collect(),
-            ),
-            beacon_root: Some(h256(slot.parent_beacon_block_root)),
-            slot_number: None,
-            version: 3,
-            elasticity_multiplier: ELASTICITY_MULTIPLIER,
-            gas_ceil: v1.gas_limit,
+        let last_ix = base.txs.len() - 1;
+        let checkpoint_hit = checkpoint.is_some_and(|ck| {
+            ck.extends_to(base, beneficiary_alloy, slot.proposer_fee_recipient, v1.parent_hash, v1.gas_limit)
+        });
+
+        let (mut ctx, mut tx_hashes, replay_from) = if checkpoint_hit {
+            // Reused wholesale: within one slot every header field the
+            // checkpoint's state was executed against (parent, timestamp,
+            // prev_randao, gas_limit and hence base_fee) is guaranteed
+            // unchanged by `extends_to` — see `ReplayCheckpoint`'s doc
+            // comment — so nothing here needs re-deriving or re-validating.
+            let ck = checkpoint.expect("checked above");
+            let mut ctx = ck.ctx.clone();
+            ctx.payload.header.extra_data = v1.extra_data.clone().into();
+            (ctx, ck.included_tx_hashes.clone(), ck.tx_hashes.len())
+        } else {
+            // Template block on the parent, pinned to the wire header fields.
+            let parent_header = store
+                .get_block_header_by_hash(h256(v1.parent_hash))
+                .map_err(|e| MergeError::Internal(e.to_string()))?
+                .ok_or(MergeError::NotSynced)?;
+            let args = BuildPayloadArgs {
+                parent: h256(v1.parent_hash),
+                timestamp: v1.timestamp,
+                fee_recipient: beneficiary,
+                random: h256(v1.prev_randao),
+                withdrawals: Some(
+                    base.payload.payload_inner.withdrawals.iter().map(ewithdrawal).collect(),
+                ),
+                beacon_root: Some(h256(slot.parent_beacon_block_root)),
+                slot_number: None,
+                version: 3,
+                elasticity_multiplier: ELASTICITY_MULTIPLIER,
+                gas_ceil: v1.gas_limit,
+            };
+            let template = create_payload(&args, store, v1.extra_data.clone().into())
+                .map_err(|e| MergeError::Internal(format!("create_payload: {e}")))?;
+
+            // The derived header must reproduce the wire header exactly; otherwise
+            // the base block does not extend our view of the parent.
+            if template.header.number != v1.block_number {
+                return Err(MergeError::InvalidBaseBlock("block number mismatch".into()));
+            }
+            if template.header.gas_limit != v1.gas_limit {
+                return Err(MergeError::InvalidBaseBlock(format!(
+                    "gas limit {} out of bounds (derived {})",
+                    v1.gas_limit, template.header.gas_limit
+                )));
+            }
+            let expected_base_fee = calculate_base_fee_per_gas(
+                v1.gas_limit,
+                parent_header.gas_limit,
+                parent_header.gas_used,
+                parent_header.base_fee_per_gas.unwrap_or_default(),
+                ELASTICITY_MULTIPLIER,
+            );
+            if expected_base_fee != Some(v1.base_fee_per_gas.to::<u64>()) {
+                return Err(MergeError::InvalidBaseBlock("base fee mismatch".into()));
+            }
+            if template.header.excess_blob_gas.unwrap_or_default() != base.payload.excess_blob_gas {
+                return Err(MergeError::InvalidBaseBlock("excess blob gas mismatch".into()));
+            }
+
+            let mut ctx = PayloadBuildContext::new(template, store, &blockchain.options.r#type)
+                .map_err(|e| MergeError::Internal(format!("payload context: {e}")))?;
+            // Wire payloads carry no blob sidecars; blob gas is derived from the
+            // tx's versioned hashes (the EVM only needs the hashes).
+            ctx.explicit_build = true;
+
+            blockchain
+                .apply_system_operations(&mut ctx)
+                .map_err(|e| MergeError::Internal(format!("system operations: {e}")))?;
+
+            (ctx, FxHashSet::default(), 0)
         };
-        let template = create_payload(&args, store, v1.extra_data.clone().into())
-            .map_err(|e| MergeError::Internal(format!("create_payload: {e}")))?;
 
-        // The derived header must reproduce the wire header exactly; otherwise
-        // the base block does not extend our view of the parent.
-        if template.header.number != v1.block_number {
-            return Err(MergeError::InvalidBaseBlock("block number mismatch".into()));
-        }
-        if template.header.gas_limit != v1.gas_limit {
-            return Err(MergeError::InvalidBaseBlock(format!(
-                "gas limit {} out of bounds (derived {})",
-                v1.gas_limit, template.header.gas_limit
-            )));
-        }
-        let expected_base_fee = calculate_base_fee_per_gas(
-            v1.gas_limit,
-            parent_header.gas_limit,
-            parent_header.gas_used,
-            parent_header.base_fee_per_gas.unwrap_or_default(),
-            ELASTICITY_MULTIPLIER,
-        );
-        if expected_base_fee != Some(v1.base_fee_per_gas.to::<u64>()) {
-            return Err(MergeError::InvalidBaseBlock("base fee mismatch".into()));
-        }
-        if template.header.excess_blob_gas.unwrap_or_default() != base.payload.excess_blob_gas {
-            return Err(MergeError::InvalidBaseBlock("excess blob gas mismatch".into()));
-        }
-
-        let mut ctx = PayloadBuildContext::new(template, store, &blockchain.options.r#type)
-            .map_err(|e| MergeError::Internal(format!("payload context: {e}")))?;
-        // Wire payloads carry no blob sidecars; blob gas is derived from the
-        // tx's versioned hashes (the EVM only needs the hashes).
-        ctx.explicit_build = true;
-
-        blockchain
-            .apply_system_operations(&mut ctx)
-            .map_err(|e| MergeError::Internal(format!("system operations: {e}")))?;
-
-        // Replay every base tx, proposer payment included.
-        let mut tx_hashes = FxHashSet::default();
+        // Replay every base tx from `replay_from` onward, proposer payment
+        // included. The `to`/`value` check above only establishes intent; a
+        // payment tx can carry the right fields and still revert (e.g. a
+        // griefing receiver), so the proposer's balance delta across the
+        // last tx is checked below as the real, execution-backed payment
+        // proof. A checkpoint snapshot is taken at the same point, right
+        // before the payment tx, for a later resubmission to reuse.
+        let proposer = eaddr(slot.proposer_fee_recipient);
         let base_fee = ctx.payload.header.base_fee_per_gas;
-        for decoded in base.txs.iter() {
+        let mut proposer_balance_before_payment = None;
+        let mut new_checkpoint = None;
+        for (ix, decoded) in base.txs.iter().enumerate().skip(replay_from) {
             if decoded.tx.gas_limit() > ctx.remaining_gas {
                 return Err(MergeError::InvalidBaseBlock("base block exceeds gas limit".into()));
+            }
+            if ix == last_ix {
+                proposer_balance_before_payment = Some(
+                    balance_of(&mut ctx.vm, proposer).map_err(|e| MergeError::Internal(e.to_string()))?,
+                );
+                new_checkpoint = Some(ReplayCheckpoint {
+                    beneficiary_alloy,
+                    proposer_fee_recipient: slot.proposer_fee_recipient,
+                    parent_hash: v1.parent_hash,
+                    gas_limit: v1.gas_limit,
+                    tx_hashes: base.txs[..last_ix].iter().map(|tx| tx.hash).collect(),
+                    included_tx_hashes: tx_hashes.clone(),
+                    ctx: ctx.clone(),
+                });
             }
             let head = HeadTransaction {
                 tx: ethrex_common::types::MempoolTransaction::new(
@@ -259,9 +352,13 @@ impl MergeSession {
                 .map_err(|e| MergeError::InvalidBaseBlock(format!("base tx failed: {e}")))?;
             tx_hashes.insert(decoded.hash);
         }
+        let new_checkpoint =
+            new_checkpoint.expect("base.txs is non-empty (checked above), so last_ix is always visited");
         debug!(
             base_block_hash = %base.block_hash,
             txs = base.txs.len(),
+            replayed = base.txs.len() - replay_from,
+            checkpoint_hit,
             gas_used = ctx.gas_used(),
             "replayed base block"
         );
@@ -272,13 +369,22 @@ impl MergeSession {
                 ctx.gas_used()
             )));
         }
+        let proposer_balance_after_payment =
+            balance_of(&mut ctx.vm, proposer).map_err(|e| MergeError::Internal(e.to_string()))?;
+        let paid = au256(
+            proposer_balance_after_payment
+                .saturating_sub(proposer_balance_before_payment.expect("set on last iteration")),
+        );
+        if paid < base.block_value {
+            return Err(MergeError::InvalidPayment);
+        }
 
         // Merged revenue is measured as the beneficiary balance delta from
         // this point on (after the base replay, matching the simulator).
         let initial_beneficiary_balance = balance_of(&mut ctx.vm, beneficiary)
             .map_err(|e| MergeError::Internal(e.to_string()))?;
 
-        Ok(Self {
+        let session = Self {
             base_block_hash: base.block_hash,
             base_builder_pubkey: base.builder_pubkey,
             beneficiary,
@@ -304,7 +410,8 @@ impl MergeSession {
             pending_emission: false,
             stats: MergeStats::default(),
             trace: MergeTraceV1 { base_block_recv_ns: base.recv_ns, ..Default::default() },
-        })
+        };
+        Ok((session, new_checkpoint, checkpoint_hit))
     }
 
     /// Presimulates candidate orders in parallel, then greedily applies them
@@ -712,6 +819,18 @@ impl MergeSession {
 
     pub fn has_pending_revenue(&self) -> bool {
         !self.revenues.is_empty()
+    }
+
+    /// Whether this live session already applied `order_id` — if so, a
+    /// revocation of that order can't be reflected without rebuilding from
+    /// the base, since there's no way to un-apply a committed tx.
+    pub fn has_applied(&self, order_id: &B256) -> bool {
+        self.applied_orders.contains(order_id)
+    }
+
+    #[cfg(test)]
+    pub fn included_order_count(&self) -> usize {
+        self.included_order_ids.len()
     }
 
     #[cfg(test)]

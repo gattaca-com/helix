@@ -6,11 +6,16 @@ use alloy_signer_local::PrivateKeySigner;
 use helix_tcp_types::merging::control::RelayConfigV1;
 use rustc_hash::FxHashMap;
 
-use crate::engine::session::MergeSession;
+use crate::engine::session::{MergeSession, ReplayCheckpoint};
 
 /// Sessions kept alive after a base switch, resumed instantly when the
 /// relay's top bid flips back instead of re-replaying the base block.
 pub const MAX_PARKED_SESSIONS: usize = 4;
+
+/// Per-beneficiary replay checkpoints kept alive at once; a defensive cap —
+/// distinct beneficiaries this slot are bounded in practice by
+/// `builder_collaterals` (<= `MAX_BUILDER_COLLATERALS`).
+pub const MAX_REPLAY_CHECKPOINTS: usize = 32;
 
 /// Environment variable holding the relay-owned Safe signer key (same
 /// convention as the simulator's `load_signer`).
@@ -117,15 +122,46 @@ pub struct SlotState {
     pub orders_admitted: usize,
     /// Sender-recovery cache: incremental submissions share most txs.
     pub recovery_cache: FxHashMap<B256, ethrex_common::Address>,
+    /// Decoded txs already seen whole on this connection this slot, keyed by
+    /// hash; resolves `MergeableBlockV1` tx-hash references (see
+    /// `order::is_tx_hash_ref`). Scope matches the relay's own `sent_txs`
+    /// cache: per connection, cleared every slot.
+    pub tx_cache: FxHashMap<B256, Arc<DecodedTx>>,
     pub session: Option<MergeSession>,
     /// Sessions for previously activated bases, newest last; capped at
     /// [`MAX_PARKED_SESSIONS`].
     pub parked: Vec<MergeSession>,
     /// Activation that arrived before its block finished ingest.
     pub pending_activation: Option<(B256, u64)>,
+    /// Post-replay snapshot of the last base built per beneficiary, reused by
+    /// `MergeSession::activate` when a later resubmission extends it — see
+    /// `ReplayCheckpoint`. Capped at [`MAX_REPLAY_CHECKPOINTS`].
+    pub replay_checkpoints: FxHashMap<Address, ReplayCheckpoint>,
+    /// Activations that reused a checkpoint vs. replayed the base from
+    /// scratch, this slot.
+    pub checkpoint_hits: usize,
+    pub checkpoint_misses: usize,
 }
 
 impl SlotState {
+    /// Removes `order_id` from the pool if `builder_pubkey` still holds its
+    /// current attribution — a higher-value duplicate from another builder
+    /// may have since superseded it, in which case it's left untouched (see
+    /// `ingest_mergeable_block`'s dedup). Returns whether anything changed.
+    pub fn remove_order(&mut self, order_id: B256, builder_pubkey: &BlsPublicKey) -> bool {
+        let Some(&ix) = self.order_ids.get(&order_id) else { return false };
+        if &self.orders[ix].builder_pubkey != builder_pubkey {
+            return false;
+        }
+        self.order_ids.remove(&order_id);
+        self.orders.swap_remove(ix);
+        // The element `swap_remove` moved into `ix` needs its index updated.
+        if let Some(moved) = self.orders.get(ix) {
+            self.order_ids.insert(moved.order_id, ix);
+        }
+        true
+    }
+
     pub fn new(msg: &helix_tcp_types::merging::relay_to_builder::SlotStartV1) -> Self {
         Self {
             slot: msg.slot,
@@ -138,9 +174,13 @@ impl SlotState {
             order_ids: FxHashMap::default(),
             orders_admitted: 0,
             recovery_cache: FxHashMap::default(),
+            tx_cache: FxHashMap::default(),
             session: None,
             parked: Vec::new(),
             pending_activation: None,
+            replay_checkpoints: FxHashMap::default(),
+            checkpoint_hits: 0,
+            checkpoint_misses: 0,
         }
     }
 }

@@ -51,6 +51,16 @@ pub struct MergeableBlockV1 {
     pub execution_payload: ExecutionPayloadV3,
 }
 
+/// A previously-pooled `latest_only` order dropped from `builder_pubkey`'s
+/// newest submission this slot. Keyed on `order_hash` since `order_id` isn't
+/// reversible.
+#[derive(Debug, Clone, Copy, PartialEq, Encode, Decode)]
+pub struct RevokeOrderV1 {
+    pub slot: u64,
+    pub order_hash: B256,
+    pub builder_pubkey: BlsPublicKey,
+}
+
 /// Selects the merge base among forwarded appendable blocks: the relay's
 /// current top bid. Merged blocks are built on and returned for this block
 /// exclusively.
