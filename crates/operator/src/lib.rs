@@ -77,6 +77,8 @@ impl OperatorPubSub {
             out_recv,
             in_send,
             mode,
+            #[cfg(test)]
+            None,
         ));
 
         Self { outgoing_msgs, incoming_msgs, task_handle: handle.abort_handle() }
@@ -261,13 +263,14 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
+    use std::{collections::HashSet, net::UdpSocket, str::FromStr, time::Duration};
 
     use alloy_primitives::B256;
+    use async_channel::{Receiver, bounded};
     use helix_types::{BlsPublicKeyBytes, Demotion, OperatorMessage, Promotion};
-    use libp2p::{Multiaddr, identity::Keypair};
+    use libp2p::{Multiaddr, PeerId, identity::Keypair};
 
-    use crate::{Operator, OperatorPubSub};
+    use crate::{Operator, OperatorPubSub, pubsub::TestNetEvent};
 
     #[tokio::test]
     async fn operator_p2p() {
@@ -317,5 +320,222 @@ mod tests {
         op_b.send(OperatorMessage::Promotion(promotion)).await.unwrap();
         let (_, msg) = op_a.recv().await.unwrap();
         assert!(matches!(msg, OperatorMessage::Promotion(_)));
+    }
+
+    #[tokio::test]
+    async fn replacement_with_same_peer_id_receives_replay_from_incumbents() {
+        let mesh = overlapping_replacement_mesh().await;
+
+        assert_eq!(
+            receive_demotion_sources(&mesh.replacement, 2).await,
+            HashSet::from(["operator A".to_string(), "operator B".to_string()]),
+            "replacement should receive each incumbent's subscription-triggered replay",
+        );
+    }
+
+    #[tokio::test]
+    async fn replacement_with_same_peer_id_publishes_after_stale_connection_closes() {
+        let mut mesh = overlapping_replacement_mesh().await;
+        drop(mesh.original);
+        wait_for_connection_closed(&mesh.events_a, mesh.replacement_peer_id, 1).await;
+        wait_for_connection_closed(&mesh.events_b, mesh.replacement_peer_id, 1).await;
+
+        let builder_pubkey = BlsPublicKeyBytes::random();
+        mesh.replacement
+            .send(OperatorMessage::Promotion(Promotion { ts_ms: 3, slot: 3, builder_pubkey }))
+            .await
+            .unwrap();
+
+        receive_promotion_from(&mut mesh.incumbent_a, "operator C", builder_pubkey).await;
+        receive_promotion_from(&mut mesh.incumbent_b, "operator C", builder_pubkey).await;
+    }
+
+    struct ReplacementMesh {
+        incumbent_a: OperatorPubSub,
+        incumbent_b: OperatorPubSub,
+        original: OperatorPubSub,
+        replacement: OperatorPubSub,
+        events_a: Receiver<TestNetEvent>,
+        events_b: Receiver<TestNetEvent>,
+        replacement_peer_id: PeerId,
+    }
+
+    async fn overlapping_replacement_mesh() -> ReplacementMesh {
+        let [port_a, port_b, port_c, port_c_replacement] = unused_udp_ports();
+        let keypair_a = Keypair::generate_secp256k1();
+        let keypair_b = Keypair::generate_secp256k1();
+        let keypair_c = Keypair::generate_secp256k1();
+        let replacement_peer_id = PeerId::from_public_key(&keypair_c.public());
+
+        let operator_a = operator("operator A", &keypair_a, port_a);
+        let operator_b = operator("operator B", &keypair_b, port_b);
+        let operator_c = operator("operator C", &keypair_c, port_c);
+
+        // Start C first so A and B each establish exactly one initial connection to it.
+        let (original, _) =
+            test_pubsub(port_c, keypair_c.clone(), vec![operator_a.clone(), operator_b.clone()]);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let (incumbent_a, events_a) =
+            test_pubsub(port_a, keypair_a, vec![operator_c.clone()]);
+        let (incumbent_b, events_b) = test_pubsub(port_b, keypair_b, vec![operator_c]);
+        wait_for_connection_established(&events_a, replacement_peer_id, 1).await;
+        wait_for_connection_established(&events_b, replacement_peer_id, 1).await;
+
+        incumbent_a
+            .send(OperatorMessage::Demotion(Demotion {
+                ts_ms: 1,
+                slot: 1,
+                builder_pubkey: BlsPublicKeyBytes::random(),
+                block_hash: B256::random(),
+                reason_msg: b"operator A replay".to_vec(),
+            }))
+            .await
+            .unwrap();
+        incumbent_b
+            .send(OperatorMessage::Demotion(Demotion {
+                ts_ms: 2,
+                slot: 2,
+                builder_pubkey: BlsPublicKeyBytes::random(),
+                block_hash: B256::random(),
+                reason_msg: b"operator B replay".to_vec(),
+            }))
+            .await
+            .unwrap();
+        assert_eq!(
+            receive_demotion_sources(&original, 2).await,
+            HashSet::from(["operator A".to_string(), "operator B".to_string()]),
+        );
+
+        // A replacement process uses C's identity while C's old connections remain alive.
+        let (replacement, _) =
+            test_pubsub(port_c_replacement, keypair_c, vec![operator_a, operator_b]);
+        wait_for_connection_established(&events_a, replacement_peer_id, 2).await;
+        wait_for_connection_established(&events_b, replacement_peer_id, 2).await;
+
+        ReplacementMesh {
+            incumbent_a,
+            incumbent_b,
+            original,
+            replacement,
+            events_a,
+            events_b,
+            replacement_peer_id,
+        }
+    }
+
+    fn test_pubsub(
+        port: u16,
+        keypair: Keypair,
+        operators: Vec<Operator>,
+    ) -> (OperatorPubSub, Receiver<TestNetEvent>) {
+        let (outgoing_msgs, out_recv) = bounded(128);
+        let (in_send, incoming_msgs) = bounded(128);
+        let (event_send, event_recv) = bounded(128);
+        let handle = tokio::spawn(crate::pubsub::run_operator_connection(
+            port,
+            keypair,
+            operators,
+            out_recv,
+            in_send,
+            helix_common::OperatorP2pMode::On,
+            Some(event_send),
+        ));
+        (
+            OperatorPubSub { outgoing_msgs, incoming_msgs, task_handle: handle.abort_handle() },
+            event_recv,
+        )
+    }
+
+    fn operator(name: &str, keypair: &Keypair, port: u16) -> Operator {
+        Operator {
+            name: name.into(),
+            pubkey: keypair.public(),
+            multiaddr: Multiaddr::from_str(&format!("/ip4/127.0.0.1/udp/{port}/quic-v1")).unwrap(),
+            operator_group: None,
+        }
+    }
+
+    fn unused_udp_ports() -> [u16; 4] {
+        let sockets =
+            std::array::from_fn::<_, 4, _>(|_| UdpSocket::bind(("127.0.0.1", 0)).unwrap());
+        sockets.map(|socket| socket.local_addr().unwrap().port())
+    }
+
+    async fn wait_for_connection_established(
+        events: &Receiver<TestNetEvent>,
+        expected_peer: PeerId,
+        expected_count: u32,
+    ) {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if let TestNetEvent::ConnectionEstablished { peer_id, num_established } =
+                    events.recv().await.unwrap()
+                    && peer_id == expected_peer
+                    && num_established == expected_count
+                {
+                    return;
+                }
+            }
+        })
+        .await
+        .expect("expected peer connection was not established");
+    }
+
+    async fn wait_for_connection_closed(
+        events: &Receiver<TestNetEvent>,
+        expected_peer: PeerId,
+        expected_remaining: u32,
+    ) {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if let TestNetEvent::ConnectionClosed { peer_id, remaining_established } =
+                    events.recv().await.unwrap()
+                    && peer_id == expected_peer
+                    && remaining_established == expected_remaining
+                {
+                    return;
+                }
+            }
+        })
+        .await
+        .expect("stale peer connection was not closed");
+    }
+
+    async fn receive_demotion_sources(pubsub: &OperatorPubSub, expected: usize) -> HashSet<String> {
+        tokio::time::timeout(Duration::from_secs(3), async {
+            let mut sources = HashSet::new();
+            while sources.len() < expected {
+                let (operator, message) = pubsub.recv().await.unwrap();
+                if matches!(message, OperatorMessage::Demotion(_)) {
+                    sources.insert(operator.name);
+                }
+            }
+            sources
+        })
+        .await
+        .expect("timed out waiting for incumbent replay")
+    }
+
+    async fn receive_promotion_from(
+        pubsub: &mut OperatorPubSub,
+        expected_operator: &str,
+        expected_pubkey: BlsPublicKeyBytes,
+    ) {
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let (operator, message) = pubsub.recv().await.unwrap();
+                if operator.name == expected_operator
+                    && matches!(
+                        message,
+                        OperatorMessage::Promotion(Promotion { builder_pubkey, .. })
+                            if builder_pubkey == expected_pubkey
+                    )
+                {
+                    return;
+                }
+            }
+        })
+        .await
+        .expect("incumbent did not receive replacement's live publication");
     }
 }

@@ -24,6 +24,13 @@ struct NetBehaviour {
     ping: ping::Behaviour,
 }
 
+#[cfg(test)]
+#[derive(Debug)]
+pub(super) enum TestNetEvent {
+    ConnectionEstablished { peer_id: PeerId, num_established: u32 },
+    ConnectionClosed { peer_id: PeerId, remaining_established: u32 },
+}
+
 pub(super) async fn run_operator_connection(
     quic_port: u16,
     keypair: Keypair,
@@ -31,6 +38,7 @@ pub(super) async fn run_operator_connection(
     outgoing: Receiver<OperatorMessage>,
     incoming: Sender<(Operator, OperatorMessage)>,
     mode: OperatorP2pMode,
+    #[cfg(test)] test_events: Option<Sender<TestNetEvent>>,
 ) -> Result<(), OperatorError> {
     let floodsub_topic = floodsub::Topic::new("operator");
     let local_peer_id = PeerId::from_public_key(&keypair.public());
@@ -170,14 +178,28 @@ pub(super) async fn run_operator_connection(
                     }
                     NetBehaviourEvent::Ping(_) => {}
                 }
-                SwarmEvent::ConnectionEstablished { peer_id, .. } => {
+                SwarmEvent::ConnectionEstablished { peer_id, num_established, .. } => {
                     if peers.contains_key(&peer_id) {
                         connected_peers += 1;
+                        #[cfg(test)]
+                        if let Some(events) = &test_events {
+                            let _ = events.try_send(TestNetEvent::ConnectionEstablished {
+                                peer_id,
+                                num_established: num_established.get(),
+                            });
+                        }
                     }
                 }
-                SwarmEvent::ConnectionClosed { peer_id, .. } => {
+                SwarmEvent::ConnectionClosed { peer_id, num_established, .. } => {
                     if peers.contains_key(&peer_id) {
                         connected_peers = connected_peers.saturating_sub(1);
+                        #[cfg(test)]
+                        if let Some(events) = &test_events {
+                            let _ = events.try_send(TestNetEvent::ConnectionClosed {
+                                peer_id,
+                                remaining_established: num_established,
+                            });
+                        }
                     }
                 }
                 _ => {},
