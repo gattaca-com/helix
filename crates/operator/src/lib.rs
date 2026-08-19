@@ -7,7 +7,6 @@ use std::{
     time::Duration,
 };
 
-use alloy_primitives::U256;
 use async_channel::{Receiver, RecvError, SendError, Sender, TryRecvError, TrySendError, bounded};
 use helix_common::{
     OperatorConfig, OperatorP2pMode,
@@ -34,8 +33,8 @@ pub enum OperatorError {
     MultiaddrParseError(#[from] multiaddr::Error),
     SwarmNetworkError(#[from] TransportError<std::io::Error>),
     SwarmBuildError(#[from] BehaviourBuilderError),
-    MessageSendError(#[from] SendError<OperatorMessage>),
-    MessageTrySendError(#[from] TrySendError<OperatorMessage>),
+    MessageSendError(#[from] SendError<(Option<String>, OperatorMessage)>),
+    MessageTrySendError(#[from] TrySendError<(Option<String>, OperatorMessage)>),
     MessageRecvError(#[from] RecvError),
     MessageTryRecvError(#[from] TryRecvError),
 }
@@ -48,7 +47,7 @@ impl Display for OperatorError {
 
 /// Handle to operator pubsub.
 pub struct OperatorPubSub {
-    outgoing_msgs: Sender<OperatorMessage>,
+    outgoing_msgs: Sender<(Option<String>, OperatorMessage)>,
     incoming_msgs: Receiver<(Operator, OperatorMessage)>,
     task_handle: AbortHandle,
 }
@@ -82,12 +81,20 @@ impl OperatorPubSub {
         Self { outgoing_msgs, incoming_msgs, task_handle: handle.abort_handle() }
     }
 
-    pub async fn send(&self, msg: OperatorMessage) -> Result<(), OperatorError> {
-        Ok(self.outgoing_msgs.send(msg).await?)
+    pub async fn send(
+        &self,
+        builder_id: Option<String>,
+        msg: OperatorMessage,
+    ) -> Result<(), OperatorError> {
+        Ok(self.outgoing_msgs.send((builder_id, msg)).await?)
     }
 
-    pub fn try_send(&self, msg: OperatorMessage) -> Result<(), OperatorError> {
-        Ok(self.outgoing_msgs.try_send(msg)?)
+    pub fn try_send(
+        &self,
+        builder_id: Option<String>,
+        msg: OperatorMessage,
+    ) -> Result<(), OperatorError> {
+        Ok(self.outgoing_msgs.try_send((builder_id, msg))?)
     }
 
     pub async fn recv(&self) -> Result<(Operator, OperatorMessage), OperatorError> {
@@ -137,25 +144,27 @@ where
                 tokio::time::sleep(Duration::from_millis(1)).await;
             }
             let now = utcnow_ms();
-            for (builder_pubkey, builder_info) in cache.all_builder_infos_local_collateral_only() {
-                if builder_info.collateral > U256::ZERO {
-                    let _ = pubsub
-                        .send(OperatorMessage::Collateral(BuilderCollateral {
+            for (builder_id, (builder_pubkeys, collateral)) in cache.all_builder_local_collateral()
+            {
+                let _ = pubsub
+                    .send(
+                        Some(builder_id),
+                        OperatorMessage::Collateral(BuilderCollateral {
                             ts_ms: now,
                             slot: 0,
-                            builder_pubkey,
-                            collateral_wei: builder_info.collateral.to(),
+                            builder_pubkeys,
+                            collateral_wei: collateral.to(),
                             operator_group: group.clone(),
-                        }))
-                        .await;
-                }
+                        }),
+                    )
+                    .await;
             }
 
             // Load existing demotions
             match db_service.load_builder_demotions().await {
                 Ok(demotions) => {
                     for demotion in demotions {
-                        let _ = pubsub.send(OperatorMessage::Demotion(demotion)).await;
+                        let _ = pubsub.send(None, OperatorMessage::Demotion(demotion)).await;
                     }
                 }
                 Err(e) => {
@@ -233,7 +242,7 @@ where
                                 }
 
                                 local_cache.update_operator_collateral(
-                                    &builder_collateral.builder_pubkey,
+                                    &builder_collateral.builder_pubkeys,
                                     &operator.pubkey,
                                     builder_collateral.collateral_wei,
                                     builder_collateral.operator_group,
@@ -246,8 +255,8 @@ where
                     },
                     _ = tokio::time::sleep_until(collateral_resync) => {
                         let ts_ms = utcnow_ms();
-                        for (pubkey, info) in local_cache.all_builder_infos_local_collateral_only() {
-                            let _ = pubsub.send(OperatorMessage::Collateral(BuilderCollateral { ts_ms, slot: 0, builder_pubkey: pubkey, collateral_wei: info.collateral.to(), operator_group: operator_group.clone() })).await;
+                        for (builder_id, (pubkeys, collateral)) in local_cache.all_builder_local_collateral() {
+                            let _ = pubsub.send(Some(builder_id), OperatorMessage::Collateral(BuilderCollateral { ts_ms, slot: 0, builder_pubkeys: pubkeys, collateral_wei: collateral.to(), operator_group: operator_group.clone() })).await;
                         }
                         collateral_resync = tokio::time::Instant::now() + Duration::from_secs(30);
                     }
@@ -310,11 +319,11 @@ mod tests {
             reason_msg: "fail".as_bytes().to_vec(),
         };
         let promotion = Promotion { ts_ms: 2, slot: 2, builder_pubkey };
-        op_a.send(helix_types::OperatorMessage::Demotion(demotion)).await.unwrap();
+        op_a.send(None, helix_types::OperatorMessage::Demotion(demotion)).await.unwrap();
         let (_, msg) = op_b.recv().await.unwrap();
         assert!(matches!(msg, OperatorMessage::Demotion(_)));
 
-        op_b.send(OperatorMessage::Promotion(promotion)).await.unwrap();
+        op_b.send(None, OperatorMessage::Promotion(promotion)).await.unwrap();
         let (_, msg) = op_a.recv().await.unwrap();
         assert!(matches!(msg, OperatorMessage::Promotion(_)));
     }

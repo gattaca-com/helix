@@ -23,6 +23,7 @@ use helix_common::{
     record_submission_step,
     simulator::{BlockSimError, JsonValidationRequest, SszValidationRequest},
     spawn_tracked,
+    utils::avg_duration,
     validator_preferences::{Filtering, ValidatorPreferences},
 };
 use helix_types::{BlsPublicKeyBytes, SignedBidSubmission, SimHydrationCache, Submission};
@@ -48,6 +49,8 @@ pub struct SimulatorTile {
     priority_requests: PendingRequests,
     last_bid_slot: u64,
     local_telemetry: LocalTelemetry,
+    /// Per-simulator counters for the current slot, indexed like `simulators`.
+    sim_slot_stats: Vec<SimSlotStats>,
     /// Internal channel: async tasks notify the sim tile when work completes.
     task_tx: crossbeam_channel::Sender<SimTileInternalEvent>,
     rx: crossbeam_channel::Receiver<SimTileInternalEvent>,
@@ -69,8 +72,14 @@ impl Tile<HelixSpine> for SimulatorTile {
         let events: Vec<SimTileInternalEvent> = self.rx.try_iter().collect();
         for event in events {
             match event {
-                SimTileInternalEvent::TaskDone { id, paused_until, result_ix } => {
-                    self.handle_task_response(id, paused_until, result_ix, &mut adapter.producers);
+                SimTileInternalEvent::TaskDone { id, paused_until, result_ix, elapsed } => {
+                    self.handle_task_response(
+                        id,
+                        paused_until,
+                        result_ix,
+                        elapsed,
+                        &mut adapter.producers,
+                    );
                 }
                 SimTileInternalEvent::SyncStatus { id, is_synced } => {
                     self.handle_sync_status(id, is_synced);
@@ -154,6 +163,8 @@ impl SimulatorTile {
             .map(|(i, _)| i)
             .collect();
 
+        let sim_slot_stats = vec![SimSlotStats::default(); simulators.len()];
+
         let tile = Self {
             simulators,
             ssz_sim_indices,
@@ -161,6 +172,7 @@ impl SimulatorTile {
             priority_requests,
             last_bid_slot: 0,
             local_telemetry: LocalTelemetry::default(),
+            sim_slot_stats,
             task_tx,
             rx,
             sim_requests,
@@ -233,11 +245,18 @@ impl SimulatorTile {
         id: usize,
         paused_until: Option<Instant>,
         result_ix: usize,
+        elapsed: Option<Duration>,
         producers: &mut HelixSpineProducers,
     ) {
         let sim = &mut self.simulators[id];
         sim.pending = sim.pending.saturating_sub(1);
         sim.paused_until = sim.paused_until.max(paused_until); // keep highest pause
+
+        if let Some(elapsed) = elapsed {
+            let stats = &mut self.sim_slot_stats[id];
+            stats.count += 1;
+            stats.total_time += elapsed;
+        }
 
         producers.produce(FromSimMsg { ix: result_ix });
 
@@ -264,6 +283,7 @@ impl SimulatorTile {
                 id,
                 paused_until: None,
                 result_ix,
+                elapsed: None,
             });
             return;
         };
@@ -284,6 +304,7 @@ impl SimulatorTile {
                             id,
                             paused_until: None,
                             result_ix,
+                            elapsed: None,
                         });
                         return;
                     }
@@ -392,8 +413,12 @@ impl SimulatorTile {
             };
 
             let result_ix = sim_results.push(SimResult::Validate((id, Some(inner))));
-            let _ =
-                task_tx.try_send(SimTileInternalEvent::TaskDone { id, paused_until, result_ix });
+            let _ = task_tx.try_send(SimTileInternalEvent::TaskDone {
+                id,
+                paused_until,
+                result_ix,
+                elapsed: Some(Duration::from_secs_f64(time)),
+            });
         });
     }
 
@@ -458,6 +483,17 @@ impl SimulatorTile {
         SimulatorMetrics::sim_manager_gauge("max_pending", tel.max_pending);
         SimulatorMetrics::sim_manager_gauge("max_in_flight", tel.max_in_flight);
 
+        let sim_report: Vec<_> = self
+            .simulators
+            .iter()
+            .zip(self.sim_slot_stats.iter())
+            .map(|(sim, stats)| {
+                let avg = avg_duration(stats.total_time, stats.count);
+                format!("{}: count={}, avg={avg:?}", sim.client.endpoint(), stats.count)
+            })
+            .collect();
+        self.sim_slot_stats.fill(SimSlotStats::default());
+
         info!(
             bid_slot = self.last_bid_slot,
             sims_reqs = tel.sims_reqs,
@@ -469,6 +505,7 @@ impl SimulatorTile {
             stale_sim_reqs = tel.stale_sim_reqs,
             max_pending = tel.max_pending,
             max_in_flight = tel.max_in_flight,
+            ?sim_report,
             "simulator slot stats"
         )
     }
@@ -542,8 +579,24 @@ enum SimDispatch {
 
 /// Internal-only events: async task → sim tile (not tile-to-tile).
 pub(super) enum SimTileInternalEvent {
-    TaskDone { id: usize, paused_until: Option<Instant>, result_ix: usize },
-    SyncStatus { id: usize, is_synced: bool },
+    /// `elapsed` is `None` for infra errors where no request was actually sent
+    /// (e.g. decoded submission or hydration missing).
+    TaskDone {
+        id: usize,
+        paused_until: Option<Instant>,
+        result_ix: usize,
+        elapsed: Option<Duration>,
+    },
+    SyncStatus {
+        id: usize,
+        is_synced: bool,
+    },
+}
+
+#[derive(Default, Clone, Copy)]
+struct SimSlotStats {
+    count: u32,
+    total_time: Duration,
 }
 
 /// Jump consistent hash — maps a builder pubkey to a simulator index with

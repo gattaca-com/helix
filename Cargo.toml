@@ -1,6 +1,6 @@
 [workspace]
 default-members = ["crates/relay"]
-members = ["crates/builder", "crates/common", "crates/data-api", "crates/database", "crates/relay", "crates/simulator", "crates/tcp-types", "crates/types", "crates/test-harness", "crates/website", "crates/operator"]
+members = ["crates/admin", "crates/builder", "crates/common", "crates/data-api", "crates/database", "crates/relay", "crates/simulator", "crates/tcp-types", "crates/types", "crates/test-harness", "crates/website", "crates/operator"]
 resolver = "2"
 
 [workspace.package]
@@ -72,6 +72,7 @@ flux-utils = { package = "flux-utils", git = "https://github.com/gattaca-com/flu
 
 futures = "0.3"
 futures-util = { version = "0.3", features = ["compat"] }
+helix-admin = { path = "crates/admin" }
 helix-builder = { path = "crates/builder" }
 helix-common = { path = "crates/common" }
 helix-data-api = { path = "crates/data-api" }
@@ -97,6 +98,7 @@ lh-test-random = { package = "test_random_derive", git = "https://github.com/sig
 lh-types = { package = "types", git = "https://github.com/sigp/lighthouse", tag = "v8.1.3" }
 libp2p = { version = "0.56", features = ["macros", "ping", "quic", "floodsub", "secp256k1", "tokio"] }
 metrics = "0.24.0"
+mime_guess = "2"
 mockito = "1.1.1"
 moka = { version = "0.12.10", features = ["sync"] }
 num-format = "0.4.4"
@@ -121,6 +123,7 @@ reth-metrics = { git = "https://github.com/paradigmxyz/reth", tag = "v2.4.1" }
 reth-node-builder = { git = "https://github.com/paradigmxyz/reth", tag = "v2.4.1" }
 reth-tasks = { git = "https://github.com/paradigmxyz/reth", tag = "v2.4.1" }
 revm = { version = "41.0.0", default-features = false }
+rust-embed = { version = "8", features = ["interpolate-folder-path"] }
 rustc-hash = "2.1.1"
 # matches ethrex's pin; used to construct the embedded node's p2p signing key
 secp256k1 = "0.30"

@@ -2,7 +2,7 @@ use std::{collections::HashMap, time::Duration};
 
 use async_channel::{Receiver, Sender};
 use helix_common::OperatorP2pMode;
-use helix_types::{BlsPublicKeyBytes, BuilderCollateral, OperatorMessage};
+use helix_types::{BuilderCollateral, OperatorMessage};
 use libp2p::{
     PeerId, SwarmBuilder,
     allow_block_list::{self, AllowedPeers},
@@ -28,7 +28,7 @@ pub(super) async fn run_operator_connection(
     quic_port: u16,
     keypair: Keypair,
     operators: Vec<Operator>,
-    outgoing: Receiver<OperatorMessage>,
+    outgoing: Receiver<(Option<String>, OperatorMessage)>,
     incoming: Sender<(Operator, OperatorMessage)>,
     mode: OperatorP2pMode,
 ) -> Result<(), OperatorError> {
@@ -76,14 +76,14 @@ pub(super) async fn run_operator_connection(
     // Demotions keyed by builder pubkey. Sent when a new operator subscribes.
     let mut demotions = PromotionStates::default();
     // Local collateral keyed by builder pubkey. Sent when a new operator subscribes.
-    let mut builder_collateral = HashMap::<BlsPublicKeyBytes, BuilderCollateral>::new();
+    let mut builder_collateral = HashMap::<String, BuilderCollateral>::new();
     // Number of connected peers
     let mut connected_peers = 0u32;
 
     loop {
         tokio::select! {
             to_send = outgoing.recv() => match to_send {
-                Ok(msg) => {
+                Ok((builder_id, msg)) => {
                     let transmit = match &msg {
                         OperatorMessage::Demotion(demotion) => {
                             demotions.demoted(demotion.clone())
@@ -92,12 +92,18 @@ pub(super) async fn run_operator_connection(
                             demotions.promoted(promotion.clone())
                         }
                         OperatorMessage::Collateral(collateral) => {
-                            let existing = builder_collateral.get(&collateral.builder_pubkey).map(|bc| bc.collateral_wei).unwrap_or_default();
-                            if existing != collateral.collateral_wei {
-                                builder_collateral.insert(collateral.builder_pubkey, collateral.clone());
-                                true
-                            } else {
-                                false
+                            let Some(id) = builder_id else {
+                                continue;
+                            };
+
+                            match builder_collateral.get(&id) {
+                                Some(existing) if collateral.collateral_wei != existing.collateral_wei || existing.builder_pubkeys != collateral.builder_pubkeys => {
+                                    builder_collateral.insert(id, collateral.clone());
+                                    true
+                                }
+                                _ => {
+                                    false
+                                }
                             }
                         }
                         _ => true,

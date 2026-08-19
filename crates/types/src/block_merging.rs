@@ -25,14 +25,19 @@ pub struct SignedBidSubmissionWithMergingData {
 pub enum Order {
     Tx(TransactionOrder),
     Bundle(BundleOrder),
+    /// A bundle carrying the `latest_only` flag. Kept as a distinct variant rather than a new
+    /// field on [`BundleOrder`] so that old wire bytes for `Order::Bundle` — encoded before this
+    /// variant existed — keep decoding unchanged: an SSZ union's selector byte makes new
+    /// variants additive, whereas a new field changes the container's byte layout.
+    BundleV2(BundleOrderV2),
 }
 
 impl TestRandom for Order {
     fn random_for_test(rng: &mut impl rand::RngCore) -> Self {
-        if rng.random() {
-            Order::Tx(TransactionOrder::random_for_test(rng))
-        } else {
-            Order::Bundle(BundleOrder::random_for_test(rng))
+        match rng.random_range(0..3) {
+            0 => Order::Tx(TransactionOrder::random_for_test(rng)),
+            1 => Order::Bundle(BundleOrder::random_for_test(rng)),
+            _ => Order::BundleV2(BundleOrderV2::random_for_test(rng)),
         }
     }
 }
@@ -69,10 +74,40 @@ pub struct BundleOrder {
     pub latest_only: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, TestRandom, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+/// Same as [`BundleOrder`], with the addition of `latest_only`. See [`Order::BundleV2`] for why
+/// this is a separate type rather than a field on `BundleOrder`.
+pub struct BundleOrderV2 {
+    /// Signals txs that are part of the bundle and ordering of txs.
+    /// Indices are for the block body the transactions come from.
+    pub txs: TxIndices,
+    /// Txs that may revert.
+    /// Indices are for the [txs](Self::txs) array.
+    pub reverting_txs: TxIndices,
+    /// Txs that are allowed to be omitted, but not revert.
+    /// Indices are for the [txs](Self::txs) array.
+    pub dropping_txs: TxIndices,
+    /// Only eligible for merging if present in the builder's most recent submission for this
+    /// block.
+    pub latest_only: bool,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct InvalidTxIndex;
 
 impl BundleOrder {
+    pub fn validate(&self) -> Result<(), InvalidTxIndex> {
+        if self.reverting_txs.iter().any(|&i| i >= self.txs.len()) ||
+            self.dropping_txs.iter().any(|&i| i >= self.txs.len())
+        {
+            return Err(InvalidTxIndex);
+        }
+        Ok(())
+    }
+}
+
+impl BundleOrderV2 {
     pub fn validate(&self) -> Result<(), InvalidTxIndex> {
         if self.reverting_txs.iter().any(|&i| i >= self.txs.len()) ||
             self.dropping_txs.iter().any(|&i| i >= self.txs.len())
@@ -221,6 +256,34 @@ mod tests {
     }
 
     #[test]
+    fn bundle_order_ssz_round_trip() {
+        let bundle_order = BundleOrder {
+            txs: smallvec::smallvec![1, 2, 3],
+            reverting_txs: smallvec::smallvec![0],
+            dropping_txs: smallvec::smallvec![2],
+            latest_only: false,
+        };
+
+        let bytes = bundle_order.as_ssz_bytes();
+        let decoded = BundleOrder::from_ssz_bytes(&bytes).expect("SSZ decode should succeed");
+        assert_eq!(bundle_order, decoded);
+    }
+
+    #[test]
+    fn bundle_order_v2_ssz_round_trip() {
+        let bundle_order = BundleOrderV2 {
+            txs: smallvec::smallvec![1, 2, 3],
+            reverting_txs: smallvec::smallvec![0],
+            dropping_txs: smallvec::smallvec![2],
+            latest_only: true,
+        };
+
+        let bytes = bundle_order.as_ssz_bytes();
+        let decoded = BundleOrderV2::from_ssz_bytes(&bytes).expect("SSZ decode should succeed");
+        assert_eq!(bundle_order, decoded);
+    }
+
+    #[test]
     fn order_ssz_round_trip_bundle() {
         let bundle_order = BundleOrder {
             txs: smallvec::smallvec![1, 2, 3],
@@ -236,6 +299,47 @@ mod tests {
     }
 
     #[test]
+    fn order_ssz_round_trip_bundle_v2() {
+        let bundle_order = BundleOrderV2 {
+            txs: smallvec::smallvec![1, 2, 3],
+            reverting_txs: smallvec::smallvec![0],
+            dropping_txs: smallvec::smallvec![2],
+            latest_only: true,
+        };
+        let order = Order::BundleV2(bundle_order);
+
+        let bytes = order.as_ssz_bytes();
+        let decoded = Order::from_ssz_bytes(&bytes).expect("SSZ decode should succeed");
+        assert_eq!(order, decoded);
+    }
+
+    #[test]
+    fn order_ssz_bundle_and_bundle_v2_have_distinct_selectors() {
+        // The union selector byte is what makes adding `BundleV2` backward compatible: bytes
+        // already on the wire as `Order::Bundle` (selector 1) must never be mistaken for the
+        // new `Order::BundleV2` (selector 2), and vice versa.
+        let bundle = Order::Bundle(BundleOrder {
+            txs: smallvec::smallvec![1],
+            reverting_txs: smallvec::smallvec![],
+            dropping_txs: smallvec::smallvec![],
+            latest_only: false,
+        });
+        let bundle_v2 = Order::BundleV2(BundleOrderV2 {
+            txs: smallvec::smallvec![1],
+            reverting_txs: smallvec::smallvec![],
+            dropping_txs: smallvec::smallvec![],
+            latest_only: true,
+        });
+
+        assert_eq!(bundle.as_ssz_bytes()[0], 1);
+        assert_eq!(bundle_v2.as_ssz_bytes()[0], 2);
+
+        // Old bytes for `Order::Bundle` still decode to `Order::Bundle`, not `BundleV2`.
+        let decoded = Order::from_ssz_bytes(&bundle.as_ssz_bytes()).unwrap();
+        assert!(matches!(decoded, Order::Bundle(_)));
+    }
+
+    #[test]
     fn block_merging_data_ssz_round_trip_mixed_orders() {
         let tx_order = Order::Tx(TransactionOrder { index: 1, can_revert: false });
         let bundle_order = Order::Bundle(BundleOrder {
@@ -244,11 +348,17 @@ mod tests {
             dropping_txs: smallvec::smallvec![2],
             latest_only: false,
         });
+        let bundle_v2_order = Order::BundleV2(BundleOrderV2 {
+            txs: smallvec::smallvec![0, 2, 4],
+            reverting_txs: smallvec::smallvec![1],
+            dropping_txs: smallvec::smallvec![2],
+            latest_only: true,
+        });
 
         let data = BlockMergingData {
             allow_appending: true,
             builder_address: Address::repeat_byte(0x42),
-            merge_orders: vec![tx_order, bundle_order],
+            merge_orders: vec![tx_order, bundle_order, bundle_v2_order],
         };
 
         let bytes = data.as_ssz_bytes();
@@ -282,6 +392,45 @@ mod tests {
     }
 
     #[test]
+    fn order_json_round_trip_bundle_v2() {
+        let bundle_order = BundleOrderV2 {
+            txs: smallvec::smallvec![1, 2, 3],
+            reverting_txs: smallvec::smallvec![0],
+            dropping_txs: smallvec::smallvec![2],
+            latest_only: true,
+        };
+        let order = Order::BundleV2(bundle_order);
+
+        let json = serde_json::to_string(&order).expect("JSON encode should succeed");
+        let decoded: Order = serde_json::from_str(&json).expect("JSON decode should succeed");
+        assert_eq!(order, decoded);
+    }
+
+    #[test]
+    fn order_json_untagged_disambiguates_bundle_from_bundle_v2() {
+        // `Order` is `#[serde(untagged)]`, so `Bundle` and `BundleV2` must remain
+        // distinguishable by shape alone: `BundleV2` requires `latest_only`
+        // (no `#[serde(default)]`), so its presence/absence is the discriminator.
+        let without_flag = r#"{"txs": [1], "reverting_txs": [], "dropping_txs": []}"#;
+        let with_flag_true =
+            r#"{"txs": [1], "reverting_txs": [], "dropping_txs": [], "latest_only": true}"#;
+        // Presence of the key routes to `BundleV2` regardless of its value — `deny_unknown_fields`
+        // rejects `BundleOrder` here even though the flag is `false`, so it never falls back
+        // silently and loses the field.
+        let with_flag_false =
+            r#"{"txs": [1], "reverting_txs": [], "dropping_txs": [], "latest_only": false}"#;
+
+        let decoded: Order = serde_json::from_str(without_flag).unwrap();
+        assert!(matches!(decoded, Order::Bundle(_)));
+
+        let decoded: Order = serde_json::from_str(with_flag_true).unwrap();
+        assert!(matches!(decoded, Order::BundleV2(_)));
+
+        let decoded: Order = serde_json::from_str(with_flag_false).unwrap();
+        assert!(matches!(decoded, Order::BundleV2(_)));
+    }
+
+    #[test]
     fn block_merging_data_json_round_trip_mixed_orders() {
         let tx_order = Order::Tx(TransactionOrder { index: 1, can_revert: false });
         let bundle_order = Order::Bundle(BundleOrder {
@@ -290,11 +439,17 @@ mod tests {
             dropping_txs: smallvec::smallvec![2],
             latest_only: false,
         });
+        let bundle_v2_order = Order::BundleV2(BundleOrderV2 {
+            txs: smallvec::smallvec![0, 2, 4],
+            reverting_txs: smallvec::smallvec![1],
+            dropping_txs: smallvec::smallvec![2],
+            latest_only: true,
+        });
 
         let data = BlockMergingData {
             allow_appending: true,
             builder_address: Address::repeat_byte(0x42),
-            merge_orders: vec![tx_order, bundle_order],
+            merge_orders: vec![tx_order, bundle_order, bundle_v2_order],
         };
 
         let json = serde_json::to_string(&data).expect("JSON encode should succeed");

@@ -328,20 +328,20 @@ impl<B: BidAdjustor> Context<B> {
             let alert_manager = self.alert_manager.clone();
             let network = self.config.website.network_name.clone();
             let region = self.config.postgres.region_name.clone();
-            let builder_id = self
-                .cache
-                .get_builder_info(&builder_pubkey)
-                .and_then(|i| i.builder_id)
-                .unwrap_or_default();
+            let builder_id =
+                self.cache.get_builder_info(&builder_pubkey).and_then(|i| i.builder_id);
 
             if let Some(operator_api) = self.operator_api.as_ref() &&
-                let Err(e) = operator_api.try_send(OperatorMessage::Demotion(Demotion {
-                    ts_ms: utcnow_ms(),
-                    slot: slot_u64,
-                    builder_pubkey,
-                    block_hash,
-                    reason_msg: reason.as_bytes().to_vec(),
-                }))
+                let Err(e) = operator_api.try_send(
+                    builder_id.clone(),
+                    OperatorMessage::Demotion(Demotion {
+                        ts_ms: utcnow_ms(),
+                        slot: slot_u64,
+                        builder_pubkey,
+                        block_hash,
+                        reason_msg: reason.as_bytes().to_vec(),
+                    }),
+                )
             {
                 tracing::error!(
                     ?e,
@@ -355,6 +355,7 @@ impl<B: BidAdjustor> Context<B> {
                 db.db_demote_builder(slot_u64, builder_pubkey, block_hash, r, failsafe)
             });
 
+            let builder_id = builder_id.unwrap_or_default();
             let token = self.alert_manager.generate_token(builder_pubkey);
             let message = format_demotion_alert(
                 slot_u64,
