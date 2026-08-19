@@ -6045,6 +6045,7 @@ version = "0.0.1"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
+ "alloy-genesis",
  "alloy-primitives",
  "alloy-rlp",
  "alloy-rpc-types",
@@ -6066,6 +6067,7 @@ dependencies = [
  "metrics 0.24.6",
  "reqwest 0.13.4",
  "reth-chain-state",
+ "reth-db-common",
  "reth-ethereum",
  "reth-ethereum-engine-primitives",
  "reth-metrics",
@@ -6076,6 +6078,7 @@ dependencies = [
  "serde_json",
  "serde_with 1.14.0",
  "sha2 0.10.9",
+ "tempfile",
  "thiserror 1.0.69",
  "tokio",
  "tracing",

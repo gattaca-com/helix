@@ -1,4 +1,7 @@
 pub(crate) mod error;
+mod prefix_cache;
+#[cfg(test)]
+mod differential_tests;
 
 use std::{collections::HashSet, fmt::Debug, sync::Arc, time::Duration};
 
@@ -28,7 +31,7 @@ use reth_ethereum::{
     chainspec::EthereumHardforks,
     consensus::{ConsensusError, FullConsensus, validation::MAX_RLP_BLOCK_SIZE},
     evm::{
-        primitives::{Evm, execute::Executor},
+        primitives::{Evm, execute::{BlockExecutionError, BlockExecutor, Executor}},
         revm::{cached::CachedReads, database::StateProviderDatabase},
     },
     node::{EthereumEngineValidator, core::rpc::result::internal_rpc_err},
@@ -48,7 +51,10 @@ use reth_metrics::{
 };
 use reth_node_builder::{BlockBody, ConfigureEvm};
 use reth_tasks::TaskExecutor;
-use revm::{Database, database::State};
+use revm::{
+    Database,
+    database::{State, states::bundle_state::BundleRetention},
+};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use sha2::{Digest, Sha256};
@@ -62,7 +68,10 @@ use tracing::{info, warn};
 use crate::{
     common::{RethConsensus, RethEvmConfig, RethPayloadValidator, RethProvider},
     tx_sink::{TxSimRow, TxSimSink},
-    validation::error::{GetParentError, ValidationApiError},
+    validation::{
+        error::{GetParentError, ValidationApiError},
+        prefix_cache::{CachedEntry, Checkpoint, HeaderFingerprint, PrefixCache, PrefixCacheKey},
+    },
 };
 
 /// The type that implements the `validation` rpc namespace trait
@@ -89,7 +98,8 @@ impl ValidationApi {
         task_spawner: Box<TaskExecutor>,
         payload_validator: Arc<EthereumEngineValidator>,
     ) -> Self {
-        let ValidationApiConfig { blacklist_endpoint, validation_window } = config;
+        let ValidationApiConfig { blacklist_endpoint, validation_window, prefix_cache_enabled } =
+            config;
         let disallow = Arc::new(DashSet::new());
 
         let inner = Arc::new(ValidationApiInner {
@@ -103,6 +113,7 @@ impl ValidationApi {
             task_spawner,
             metrics: Default::default(),
             tx_sink: None,
+            prefix_cache: prefix_cache_enabled.then(|| Arc::new(PrefixCache::new())),
         });
 
         inner.metrics.disallow_size.set(inner.disallow.len() as f64);
@@ -291,40 +302,136 @@ impl ValidationApi {
     ) -> Result<ExecutedBlock, ValidationApiError> {
         let state_provider = self.provider.state_by_block_hash(block.parent_hash())?;
 
-        let cached_db = request_cache.as_db_mut(StateProviderDatabase::new(&state_provider));
-        let mut executor = self.evm_config.batch_executor(cached_db);
-
         let mut accessed_blacklisted = None;
 
-        let (result, per_tx_coinbase, initial_cb) = if self.tx_sink.is_some() {
-            let coinbase = block.beneficiary();
-            let initial_cb = StateProviderDatabase::new(&state_provider)
-                .basic(coinbase)
-                .ok()
-                .flatten()
-                .map(|a| a.balance)
-                .unwrap_or_default();
-            let (cb_tx, cb_rx) = std::sync::mpsc::channel::<Option<U256>>();
-            let result = executor.execute_one_with_state_hook(
-                block,
-                move |state: revm::state::EvmState| {
-                    let _ = cb_tx.send(state.get(&coinbase).map(|a| a.info.balance));
-                },
-            )?;
-            // Pre-execution system calls (e.g. beacon root, blockhashes) also commit state and
-            // fire this hook before any transaction executes; post-execution never commits here.
-            // Keep only the last-per-transaction entries so indices line up with the block's txs.
-            let mut per_tx: Vec<Option<U256>> = cb_rx.try_iter().collect();
-            let num_txs = block.body().transactions().count();
-            if per_tx.len() > num_txs {
-                per_tx.drain(..per_tx.len() - num_txs);
-            }
-            (result, per_tx, initial_cb)
-        } else {
-            (executor.execute_one(block)?, Vec::new(), U256::ZERO)
-        };
+        // The prefix cache resumes execution mid-block via raw `BlockExecutor` calls, which
+        // needs a distinct code path from the batch-executor-based ones below. It's skipped for
+        // tx_sink (which needs a coinbase-balance sample after every tx, including ones this
+        // path may skip re-executing) and for block-access-list blocks (out of scope for now).
+        let use_prefix_cache = self.tx_sink.is_none() &&
+            self.prefix_cache.is_some() &&
+            block.header().block_access_list_hash().is_none();
 
-        let state = executor.into_state();
+        let (result, per_tx_coinbase, initial_cb, state) = if use_prefix_cache {
+            let prefix_cache = self.prefix_cache.as_ref().expect("checked by use_prefix_cache");
+            prefix_cache.observe_parent(block.parent_hash());
+
+            let key: PrefixCacheKey = (block.parent_hash(), block.beneficiary());
+            let tx_hashes: Vec<B256> = block.body().transactions().map(|tx| *tx.tx_hash()).collect();
+            let fingerprint = HeaderFingerprint::from_header(block.header());
+
+            let checkpoint = prefix_cache.find_match(&key, &tx_hashes, apply_blacklist, &fingerprint);
+            let resume_from = checkpoint.as_ref().map(|cp| cp.tx_hashes.len()).unwrap_or(0);
+
+            let cached_db = request_cache.as_db_mut(StateProviderDatabase::new(&state_provider));
+            let mut state = State::builder().with_database(cached_db).with_bundle_update().build();
+
+            if let Some(cp) = &checkpoint {
+                state.cache = cp.cache.clone();
+                state.transition_state = cp.transition_state.clone();
+            }
+
+            let mut executor = self
+                .evm_config
+                .executor_for_block(&mut state, block)
+                .map_err(BlockExecutionError::other)?;
+
+            if let Some(cp) = &checkpoint {
+                executor.receipts = cp.receipts.clone();
+                executor.cumulative_tx_gas_used = cp.cumulative_tx_gas_used;
+                executor.block_regular_gas_used = cp.block_regular_gas_used;
+                executor.block_state_gas_used = cp.block_state_gas_used;
+                executor.blob_gas_used = cp.blob_gas_used;
+            } else {
+                executor.apply_pre_execution_changes()?;
+            }
+
+            let before_last_boundary = tx_hashes.len().saturating_sub(1);
+            let mut before_last_snapshot = None;
+
+            for (idx, tx) in block.transactions_recovered().enumerate().skip(resume_from) {
+                if idx == before_last_boundary {
+                    let db = executor.evm_mut().db_mut();
+                    before_last_snapshot = Some((
+                        tx_hashes[..idx].to_vec(),
+                        db.cache.clone(),
+                        db.transition_state.clone(),
+                        executor.receipts.clone(),
+                        executor.cumulative_tx_gas_used,
+                        executor.block_regular_gas_used,
+                        executor.block_state_gas_used,
+                        executor.blob_gas_used,
+                    ));
+                }
+                executor.execute_transaction(tx)?;
+            }
+
+            let full_snapshot = {
+                let db = executor.evm_mut().db_mut();
+                (
+                    tx_hashes.clone(),
+                    db.cache.clone(),
+                    db.transition_state.clone(),
+                    executor.receipts.clone(),
+                    executor.cumulative_tx_gas_used,
+                    executor.block_regular_gas_used,
+                    executor.block_state_gas_used,
+                    executor.blob_gas_used,
+                )
+            };
+            let before_last_snapshot = before_last_snapshot.unwrap_or_else(|| full_snapshot.clone());
+
+            let result = executor.apply_post_execution_changes()?;
+            state.merge_transitions(BundleRetention::Reverts);
+
+            prefix_cache.store(
+                key,
+                CachedEntry {
+                    full: Checkpoint::from_snapshot(full_snapshot, apply_blacklist, fingerprint.clone()),
+                    before_last: Checkpoint::from_snapshot(
+                        before_last_snapshot,
+                        apply_blacklist,
+                        fingerprint,
+                    ),
+                },
+            );
+
+            (result, Vec::new(), U256::ZERO, state)
+        } else {
+            let cached_db = request_cache.as_db_mut(StateProviderDatabase::new(&state_provider));
+            let mut executor = self.evm_config.batch_executor(cached_db);
+
+            let (result, per_tx_coinbase, initial_cb) = if self.tx_sink.is_some() {
+                let coinbase = block.beneficiary();
+                let initial_cb = StateProviderDatabase::new(&state_provider)
+                    .basic(coinbase)
+                    .ok()
+                    .flatten()
+                    .map(|a| a.balance)
+                    .unwrap_or_default();
+                let (cb_tx, cb_rx) = std::sync::mpsc::channel::<Option<U256>>();
+                let result = executor.execute_one_with_state_hook(
+                    block,
+                    move |state: revm::state::EvmState| {
+                        let _ = cb_tx.send(state.get(&coinbase).map(|a| a.info.balance));
+                    },
+                )?;
+                // Pre-execution system calls (e.g. beacon root, blockhashes) also commit state
+                // and fire this hook before any transaction executes; post-execution never
+                // commits here. Keep only the last-per-transaction entries so indices line up
+                // with the block's txs.
+                let mut per_tx: Vec<Option<U256>> = cb_rx.try_iter().collect();
+                let num_txs = block.body().transactions().count();
+                if per_tx.len() > num_txs {
+                    per_tx.drain(..per_tx.len() - num_txs);
+                }
+                (result, per_tx, initial_cb)
+            } else {
+                (executor.execute_one(block)?, Vec::new(), U256::ZERO)
+            };
+
+            (result, per_tx_coinbase, initial_cb, executor.into_state())
+        };
 
         if !self.disallow.is_empty() && apply_blacklist {
             // Check whether the submission interacted with any blacklisted account by scanning
@@ -794,6 +901,9 @@ pub struct ValidationApiInner {
     metrics: ValidationMetrics,
     /// Optional per-tx execution analytics sink.
     tx_sink: Option<Arc<TxSimSink>>,
+    /// Cache of EVM execution state after a builder's shared transaction prefix, keyed by
+    /// `(parent_hash, coinbase)`. `None` when the optimization is disabled.
+    prefix_cache: Option<Arc<PrefixCache>>,
 }
 
 /// Configuration for validation API.
@@ -803,6 +913,11 @@ pub struct ValidationApiConfig {
     pub blacklist_endpoint: String,
     /// The maximum block distance - parent to latest - allowed for validation
     pub validation_window: u64,
+    /// Whether to cache EVM execution state across a builder's shared transaction prefix, to
+    /// avoid re-executing transactions unchanged since that builder's previous submission for
+    /// the same parent block. Defaults to `false`; enable once validated in a given environment.
+    #[serde(default)]
+    pub prefix_cache_enabled: bool,
 }
 
 impl ValidationApiConfig {
@@ -810,7 +925,11 @@ impl ValidationApiConfig {
     pub const DEFAULT_VALIDATION_WINDOW: u64 = 3;
 
     pub fn new(blacklist_endpoint: String) -> Self {
-        Self { blacklist_endpoint, validation_window: Self::DEFAULT_VALIDATION_WINDOW }
+        Self {
+            blacklist_endpoint,
+            validation_window: Self::DEFAULT_VALIDATION_WINDOW,
+            prefix_cache_enabled: false,
+        }
     }
 }
 
@@ -819,6 +938,7 @@ impl Default for ValidationApiConfig {
         Self {
             blacklist_endpoint: Default::default(),
             validation_window: Self::DEFAULT_VALIDATION_WINDOW,
+            prefix_cache_enabled: false,
         }
     }
 }
