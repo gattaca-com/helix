@@ -31,6 +31,7 @@ use helix_types::{BlsPublicKeyBytes, Demotion, MergedBlock, SignedBidSubmission,
 use rustc_hash::FxHashSet;
 use tokio_postgres::{NoTls, types::ToSql};
 use tracing::{error, info, instrument, warn};
+use uuid::Uuid;
 
 use crate::{
     error::DatabaseError,
@@ -1823,7 +1824,7 @@ impl PostgresDatabaseService {
     }
 
     #[instrument(skip_all)]
-    async fn get_all_builder_infos(&self) -> Result<Vec<BuilderInfoDocument>, DatabaseError> {
+    pub async fn get_all_builder_infos(&self) -> Result<Vec<BuilderInfoDocument>, DatabaseError> {
         let mut record = DbMetricRecord::new("get_all_builder_infos");
 
         let rows =
@@ -1938,6 +1939,75 @@ impl PostgresDatabaseService {
                 &(builder_pub_key.as_slice()),
             ])
             .await?;
+
+        Ok(())
+    }
+
+    #[instrument(skip_all)]
+    pub async fn create_builder_info(
+        &self,
+        pubkey: &BlsPublicKeyBytes,
+        builder_id: Option<String>,
+        collateral: U256,
+        is_optimistic: bool,
+    ) -> Result<(), DatabaseError> {
+        let client = self.high_priority_pool.get().await?;
+
+        // A builder group (rows sharing a `builder_id`) shares one api_key: reuse the
+        // group's existing key when adding a pubkey to it, otherwise mint a fresh one.
+        let existing_key = if let Some(id) = &builder_id {
+            client
+                .query_opt("SELECT api_key FROM builder_info WHERE builder_id = $1 LIMIT 1", &[id])
+                .await?
+                .and_then(|row| row.get::<_, Option<String>>("api_key"))
+        } else {
+            None
+        };
+        let api_key = existing_key.unwrap_or_else(|| Uuid::new_v4().to_string());
+
+        let result = client
+            .execute(
+                "
+                    INSERT INTO builder_info (public_key, collateral, is_optimistic, builder_id, api_key)
+                    VALUES ($1, $2, $3, $4, $5)
+                ",
+                &[
+                    &(pubkey.as_slice()),
+                    &PostgresNumeric::from(collateral),
+                    &is_optimistic,
+                    &builder_id,
+                    &api_key,
+                ],
+            )
+            .await;
+
+        match result {
+            Ok(_) => Ok(()),
+            Err(err) if err.code() == Some(&tokio_postgres::error::SqlState::UNIQUE_VIOLATION) => {
+                Err(DatabaseError::BuilderAlreadyExists { public_key: *pubkey })
+            }
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    #[instrument(skip_all)]
+    pub async fn update_builder_collateral(
+        &self,
+        pubkey: &BlsPublicKeyBytes,
+        collateral: U256,
+    ) -> Result<(), DatabaseError> {
+        let client = self.high_priority_pool.get().await?;
+
+        let rows_affected = client
+            .execute("UPDATE builder_info SET collateral = $1 WHERE public_key = $2", &[
+                &PostgresNumeric::from(collateral),
+                &(pubkey.as_slice()),
+            ])
+            .await?;
+
+        if rows_affected == 0 {
+            return Err(DatabaseError::BuilderInfoNotFound { public_key: *pubkey });
+        }
 
         Ok(())
     }

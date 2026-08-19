@@ -6,6 +6,7 @@ use helix_common::{api_provider::ApiProvider, local_cache::LocalCache};
 pub use helix_data_api::{
     BidsCache, BidsCacheV2, DataApi, DeliveredPayloadsCache, DeliveredPayloadsCacheV2,
 };
+use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 pub use service::start_api_service;
 
 pub use crate::auctioneer::{BidAdjustor, DefaultBidAdjustor};
@@ -22,8 +23,12 @@ pub type FutureBidSubmissionResult = helix_common::api::builder_api::FutureBidSu
     crate::spine::messages::SubmissionResultWithRef,
 >;
 
-pub fn start_admin_service(auctioneer: Arc<LocalCache>, admin_token: String) {
-    tokio::spawn(admin_service::run_admin_service(auctioneer, admin_token));
+pub fn start_admin_service(
+    auctioneer: Arc<LocalCache>,
+    db: Arc<PostgresDatabaseService>,
+    admin_token: String,
+) {
+    tokio::spawn(admin_service::run_admin_service(auctioneer, db, admin_token));
 }
 
 pub trait Api: Clone + Send + Sync + 'static {
