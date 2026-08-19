@@ -15,9 +15,12 @@ use tree_hash::TreeHash;
 use tree_hash_derive::TreeHash;
 
 use crate::{
-    BlobsBundle, BlobsError, Bloom, BlsPublicKey, BlsPublicKeyBytes, BlsSignature,
-    BlsSignatureBytes, DehydratedBidSubmission, ExecutionPayload, ExtraData, PayloadAndBlobs,
-    SszError, bid_adjustment_data::BidAdjustmentData, error::SigError, fields::ExecutionRequests,
+    BlobsBundle, BlobsError, BlockMergingData, Bloom, BlsPublicKey, BlsPublicKeyBytes,
+    BlsSignature, BlsSignatureBytes, DehydratedBidSubmission, ExecutionPayload, ExtraData,
+    PayloadAndBlobs, SszError,
+    bid_adjustment_data::{BidAdjData, BidAdjustmentData, BidAdjustmentDataV1},
+    error::SigError,
+    fields::ExecutionRequests,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, TreeHash)]
@@ -733,6 +736,51 @@ impl SignedBidSubmissionWithAdjustments {
     }
 }
 
+/// Flat combination of [`SignedBidSubmissionWithAdjustments`] and merging data:
+/// core fields ++ bid_adjustment_data ++ merging_data.
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
+pub struct SignedBidSubmissionWithAdjustmentsAndMergingData {
+    pub message: BidTrace,
+    pub execution_payload: Arc<ExecutionPayload>,
+    pub blobs_bundle: Arc<BlobsBundle>,
+    pub execution_requests: Arc<ExecutionRequests>,
+    pub signature: BlsSignatureBytes,
+    pub bid_adjustment_data: BidAdjustmentData,
+    pub merging_data: BlockMergingData,
+}
+
+impl SignedBidSubmissionWithAdjustmentsAndMergingData {
+    pub fn split(self) -> (SignedBidSubmission, BidAdjustmentData, BlockMergingData) {
+        (
+            SignedBidSubmission {
+                message: self.message,
+                execution_payload: self.execution_payload,
+                blobs_bundle: self.blobs_bundle,
+                execution_requests: self.execution_requests,
+                signature: self.signature,
+            },
+            self.bid_adjustment_data,
+            self.merging_data,
+        )
+    }
+}
+
+impl TestRandom for SignedBidSubmissionWithAdjustmentsAndMergingData {
+    fn random_for_test(rng: &mut impl rand::RngCore) -> Self {
+        Self {
+            message: BidTrace::random_for_test(rng),
+            execution_payload: ExecutionPayload::random_for_test(rng).into(),
+            blobs_bundle: BlobsBundle::with_capacity(0).into(),
+            execution_requests: ExecutionRequests::random_for_test(rng).into(),
+            signature: BlsSignatureBytes::random(),
+            bid_adjustment_data: BidAdjustmentData::V1(BidAdjustmentDataV1::Original(
+                BidAdjData::default(),
+            )),
+            merging_data: BlockMergingData::random_for_test(rng),
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct SubmissionVersion {
     on_receive_ns: u64,
@@ -861,5 +909,28 @@ mod tests {
         let s = test_encode_decode_ssz::<SignedBidSubmission>(&data_ssz);
         assert_eq!(data_ssz, s.as_ssz_bytes().as_slice());
         assert_eq!(s.fork_name(), ForkName::Fulu);
+    }
+
+    #[test]
+    fn with_adjustments_and_merging_data_ssz_round_trip() {
+        let data_ssz =
+            SignedBidSubmissionWithAdjustmentsAndMergingData::random_for_test(&mut rand::rng())
+                .as_ssz_bytes();
+        let s =
+            test_encode_decode_ssz::<SignedBidSubmissionWithAdjustmentsAndMergingData>(&data_ssz);
+        assert_eq!(data_ssz, s.as_ssz_bytes().as_slice());
+    }
+
+    #[test]
+    // the combined type is a flat append: the variable-size heap ends with the
+    // bid_adjustment_data bytes followed by the merging_data bytes
+    fn with_adjustments_and_merging_data_flat_layout() {
+        let combined =
+            SignedBidSubmissionWithAdjustmentsAndMergingData::random_for_test(&mut rand::rng());
+        let bytes = combined.as_ssz_bytes();
+
+        let mut tail = combined.bid_adjustment_data.as_ssz_bytes();
+        tail.extend(combined.merging_data.as_ssz_bytes());
+        assert!(bytes.ends_with(&tail));
     }
 }

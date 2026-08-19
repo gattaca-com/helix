@@ -8,9 +8,12 @@ use flate2::read::GzDecoder;
 use flux_profiler::timed;
 use helix_types::{
     BidAdjustmentData, BlockMergingData, Compression, DehydratedBidSubmission,
-    DehydratedBidSubmissionFuluWithAdjustments, DehydratedBidSubmissionFuluWithMergingData,
-    ForkName, ForkVersionDecode, MergeType, SignedBidSubmission,
-    SignedBidSubmissionWithAdjustments, SignedBidSubmissionWithMergingData, Submission,
+    DehydratedBidSubmissionFuluWithAdjustments,
+    DehydratedBidSubmissionFuluWithAdjustmentsAndMergingData,
+    DehydratedBidSubmissionFuluWithMergingData, ForkName, ForkVersionDecode, MergeType,
+    SignedBidSubmission, SignedBidSubmissionWithAdjustments,
+    SignedBidSubmissionWithAdjustmentsAndMergingData, SignedBidSubmissionWithMergingData,
+    Submission,
 };
 use http::{
     HeaderMap, HeaderValue, StatusCode,
@@ -280,6 +283,18 @@ impl SubmissionDecoder {
     ) -> Result<(Submission, Option<BlockMergingData>, Option<BidAdjustmentData>), DecoderError>
     {
         if self.merge_type == MergeType::Mergeable {
+            if self.with_adjustments {
+                let sub: DehydratedBidSubmissionFuluWithAdjustmentsAndMergingData =
+                    self.decode_by_fork(body, self.fork_name)?;
+                let (submission, adjustment_data, merging_data) = sub.split();
+
+                return Ok((
+                    Submission::Dehydrated(submission),
+                    Some(merging_data),
+                    Some(adjustment_data),
+                ));
+            }
+
             let sub_with_merging: DehydratedBidSubmissionFuluWithMergingData =
                 self.decode_by_fork(body, self.fork_name)?;
             let (submission, merging_data) = sub_with_merging.split();
@@ -350,6 +365,13 @@ impl SubmissionDecoder {
         body: &[u8],
     ) -> Result<(Submission, Option<BlockMergingData>, Option<BidAdjustmentData>), DecoderError>
     {
+        if self.with_adjustments && self.merge_type == MergeType::Mergeable {
+            let sub: SignedBidSubmissionWithAdjustmentsAndMergingData = self._decode(body)?;
+            let (submission, adjustment_data, merging_data) = sub.split();
+
+            return Ok((Submission::Full(submission), Some(merging_data), Some(adjustment_data)));
+        }
+
         let (submission, bid_adjustment) = if self.with_adjustments {
             let sub_with_adjustment: SignedBidSubmissionWithAdjustments = self._decode(body)?;
             let (sub, adjustment_data) = sub_with_adjustment.split();
@@ -485,8 +507,10 @@ fn gzip_size_hint(buf: &[u8]) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use helix_types::{
-        BlobsBundle, DehydratedBidSubmission, DehydratedBidSubmissionFuluWithMergingData,
-        MergeType, TestRandom,
+        BlobsBundle, DehydratedBidSubmission,
+        DehydratedBidSubmissionFuluWithAdjustmentsAndMergingData,
+        DehydratedBidSubmissionFuluWithMergingData, MergeType,
+        SignedBidSubmissionWithAdjustmentsAndMergingData, TestRandom,
     };
     use ssz::Encode;
 
@@ -632,5 +656,76 @@ mod tests {
         assert!(matches!(decoded_submission, Submission::Dehydrated(_)));
         assert!(bid_adjustment_data.is_none());
         assert!(merging_data.is_none());
+    }
+
+    #[test]
+    fn decode_dehydrated_mergeable_with_adjustments_carries_both() {
+        let submission = DehydratedBidSubmissionFuluWithAdjustmentsAndMergingData::random_for_test(
+            &mut rand::rng(),
+        );
+        let body = submission.as_ssz_bytes();
+        let (_, expected_adjustment_data, expected_merging_data) = submission.split();
+
+        let params = SubmissionDecoderParams {
+            compression: Compression::None,
+            encoding: Encoding::Ssz,
+            merge_type: MergeType::Mergeable,
+            is_dehydrated: true,
+            with_mergeable_data: false,
+            with_adjustments: true,
+            mark_all_txs_mergeable: false,
+            fork_name: ForkName::Fulu,
+        };
+        let mut decoder = SubmissionDecoder::new(&params);
+        let mut buf = Vec::new();
+        let (decoded_submission, merging_data, bid_adjustment_data) =
+            decoder.decode(&body, &mut buf).expect("decode should succeed");
+
+        assert!(matches!(decoded_submission, Submission::Dehydrated(_)));
+        assert_eq!(
+            merging_data.expect("combined submission should carry merging data"),
+            expected_merging_data
+        );
+        assert_eq!(
+            bid_adjustment_data.expect("combined submission should carry adjustment data"),
+            expected_adjustment_data
+        );
+    }
+
+    #[test]
+    fn decode_default_mergeable_with_adjustments_carries_both() {
+        let submission =
+            SignedBidSubmissionWithAdjustmentsAndMergingData::random_for_test(&mut rand::rng());
+        let body = submission.as_ssz_bytes();
+        let expected_block_hash = submission.message.block_hash;
+        let (_, expected_adjustment_data, expected_merging_data) = submission.split();
+
+        let params = SubmissionDecoderParams {
+            compression: Compression::None,
+            encoding: Encoding::Ssz,
+            merge_type: MergeType::Mergeable,
+            is_dehydrated: false,
+            with_mergeable_data: false,
+            with_adjustments: true,
+            mark_all_txs_mergeable: false,
+            fork_name: ForkName::Fulu,
+        };
+        let mut decoder = SubmissionDecoder::new(&params);
+        let mut buf = Vec::new();
+        let (decoded_submission, merging_data, bid_adjustment_data) =
+            decoder.decode(&body, &mut buf).expect("decode should succeed");
+
+        match decoded_submission {
+            Submission::Full(s) => assert_eq!(s.message.block_hash, expected_block_hash),
+            Submission::Dehydrated(_) => panic!("expected full submission"),
+        }
+        assert_eq!(
+            merging_data.expect("combined submission should carry merging data"),
+            expected_merging_data
+        );
+        assert_eq!(
+            bid_adjustment_data.expect("combined submission should carry adjustment data"),
+            expected_adjustment_data
+        );
     }
 }
