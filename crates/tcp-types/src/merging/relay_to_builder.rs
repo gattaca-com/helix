@@ -52,7 +52,8 @@ pub struct MergeableBlockV1 {
 }
 
 /// A previously-pooled `latest_only` order dropped from `builder_pubkey`'s
-/// newest submission this slot. Keyed on `order_hash` since `order_id` isn't reversible.
+/// newest submission this slot. Keyed on `order_hash` since `order_id` isn't
+/// reversible.
 #[derive(Debug, Clone, Copy, PartialEq, Encode, Decode)]
 pub struct RevokeOrderV1 {
     pub slot: u64,

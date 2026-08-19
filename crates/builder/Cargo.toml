@@ -1,0 +1,54 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "helix-builder"
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+alloy-consensus.workspace = true
+alloy-eips.workspace = true
+alloy-primitives.workspace = true
+alloy-rpc-types.workspace = true
+alloy-signer.workspace = true
+alloy-signer-local.workspace = true
+alloy-sol-types.workspace = true
+bytes.workspace = true
+clap = { workspace = true, features = ["env"] }
+core_affinity.workspace = true
+crossbeam-channel.workspace = true
+ethereum_ssz.workspace = true
+ethrex-blockchain.workspace = true
+ethrex-common.workspace = true
+ethrex-config.workspace = true
+ethrex-crypto.workspace = true
+ethrex-metrics.workspace = true
+ethrex-p2p.workspace = true
+ethrex-rlp.workspace = true
+ethrex-rpc.workspace = true
+ethrex-storage.workspace = true
+ethrex-vm.workspace = true
+eyre.workspace = true
+flux.workspace = true
+hex.workspace = true
+flux-network.workspace = true
+flux-utils.workspace = true
+helix-tcp-types.workspace = true
+rand.workspace = true
+rayon.workspace = true
+rustc-hash.workspace = true
+secp256k1.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+thiserror.workspace = true
+tikv-jemallocator.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid = { workspace = true, features = ["serde"] }
+zstd.workspace = true
+
+[dev-dependencies]
