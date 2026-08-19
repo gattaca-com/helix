@@ -47,7 +47,7 @@ const fn default_filtering() -> Filtering {
     Filtering::Global
 }
 
-#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[repr(u8)]
 pub enum Filtering {
     #[default]

@@ -40,7 +40,7 @@ pub fn build_router<A: Api>(
     router_config: &mut RouterConfig,
     builder_api: Arc<BuilderApi<A>>,
     proposer_api: Arc<ProposerApi<A>>,
-    data_api: Arc<DataApi>,
+    data_api: Arc<DataApi<A::ApiProvider>>,
     relay_network_api: RelayNetworkApi,
     bids_cache: BidsCache,
     bids_cache_v2: BidsCacheV2,
@@ -72,15 +72,23 @@ pub fn build_router<A: Api>(
             Route::HeaderStream => get(ProposerApi::<A>::header_stream),
             Route::GetPayload => post(ProposerApi::<A>::get_payload),
             Route::GetPayloadV2 => post(ProposerApi::<A>::get_payload_v2),
-            Route::ProposerPayloadDelivered => get(DataApi::proposer_payload_delivered),
-            Route::ProposerPayloadDeliveredV2 => get(DataApi::proposer_payload_delivered_v2),
-            Route::ProposerHeaderDelivered => get(DataApi::proposer_header_delivered),
-            Route::BuilderBidsReceived => get(DataApi::builder_bids_received),
-            Route::BuilderBidsReceivedV2 => get(DataApi::builder_bids_received_v2),
-            Route::ValidatorRegistration => get(DataApi::validator_registration),
+            Route::ProposerPayloadDelivered => {
+                get(DataApi::<A::ApiProvider>::proposer_payload_delivered)
+            }
+            Route::ProposerPayloadDeliveredV2 => {
+                get(DataApi::<A::ApiProvider>::proposer_payload_delivered_v2)
+            }
+            Route::ProposerHeaderDelivered => {
+                get(DataApi::<A::ApiProvider>::proposer_header_delivered)
+            }
+            Route::BuilderBidsReceived => get(DataApi::<A::ApiProvider>::builder_bids_received),
+            Route::BuilderBidsReceivedV2 => {
+                get(DataApi::<A::ApiProvider>::builder_bids_received_v2)
+            }
+            Route::ValidatorRegistration => get(DataApi::<A::ApiProvider>::validator_registration),
             Route::GetInclusionList => get(BuilderApi::<A>::get_inclusion_list),
-            Route::DataAdjustments => get(DataApi::data_adjustments),
-            Route::MergedBlocks => get(DataApi::merged_blocks),
+            Route::DataAdjustments => get(DataApi::<A::ApiProvider>::data_adjustments),
+            Route::MergedBlocks => get(DataApi::<A::ApiProvider>::merged_blocks),
             Route::RelayNetwork => any(RelayNetworkApi::connect),
             Route::All | Route::BuilderApi | Route::ProposerApi | Route::DataApi => {
                 panic!(
