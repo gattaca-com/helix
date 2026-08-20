@@ -29,11 +29,13 @@ pub enum MergeType {
     None = 0,
     Mergeable = 1,
     AppendOnly = 2,
+    // Merging paused: decode as if no merge_data is present on the wire.
+    Pause = 3,
 }
 
 impl MergeType {
     pub fn is_some(&self) -> bool {
-        *self != Self::None
+        matches!(self, Self::Mergeable | Self::AppendOnly)
     }
 }
 
@@ -45,6 +47,7 @@ impl TryFrom<u8> for MergeType {
             0 => Ok(Self::None),
             1 => Ok(Self::Mergeable),
             2 => Ok(Self::AppendOnly),
+            3 => Ok(Self::Pause),
             _ => Err(()),
         }
     }

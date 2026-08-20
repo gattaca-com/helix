@@ -314,6 +314,7 @@ impl SubmissionDecoder {
                     None
                 }
             }
+            MergeType::Pause => None,
         };
 
         Ok((Submission::Dehydrated(submission), merging_data, bid_adjustment))
@@ -338,6 +339,7 @@ impl SubmissionDecoder {
                 merge_orders: vec![],
             }),
             MergeType::None => Some(sub_with_merging.merging_data),
+            MergeType::Pause => None,
         };
         Ok((Submission::Full(sub_with_merging.submission), merging_data, None))
     }
@@ -378,6 +380,7 @@ impl SubmissionDecoder {
                     None
                 }
             }
+            MergeType::Pause => None,
         };
         Ok((Submission::Full(submission), merging_data, bid_adjustment))
     }
@@ -481,7 +484,10 @@ fn gzip_size_hint(buf: &[u8]) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use helix_types::{DehydratedBidSubmissionFuluWithMergingData, MergeType, TestRandom};
+    use helix_types::{
+        BlobsBundle, DehydratedBidSubmission, DehydratedBidSubmissionFuluWithMergingData,
+        MergeType, TestRandom,
+    };
     use ssz::Encode;
 
     use super::*;
@@ -568,5 +574,63 @@ mod tests {
             merging_data.expect("mergeable submission should carry merging data"),
             expected_merging_data
         );
+    }
+
+    #[test]
+    fn decode_default_pause_never_carries_merge_data() {
+        let mut submission = SignedBidSubmission::random_for_test(&mut rand::rng());
+        // Random blobs bundles don't satisfy the Fulu cell-proof count on decode; irrelevant
+        // to what this test is proving, so keep it empty to avoid unrelated flakiness.
+        submission.blobs_bundle = BlobsBundle::default().into();
+        let body = submission.as_ssz_bytes();
+
+        let params = SubmissionDecoderParams {
+            compression: Compression::None,
+            encoding: Encoding::Ssz,
+            merge_type: MergeType::Pause,
+            is_dehydrated: false,
+            with_mergeable_data: false,
+            with_adjustments: false,
+            // Even with this testing override on, Pause must still suppress merge data.
+            mark_all_txs_mergeable: true,
+            fork_name: ForkName::Fulu,
+        };
+        let mut decoder = SubmissionDecoder::new(&params);
+        let mut buf = Vec::new();
+        let (decoded_submission, merging_data, bid_adjustment_data) =
+            decoder.decode(&body, &mut buf).expect("decode should succeed");
+
+        assert!(matches!(decoded_submission, Submission::Full(_)));
+        assert!(bid_adjustment_data.is_none());
+        assert!(merging_data.is_none());
+    }
+
+    #[test]
+    fn decode_dehydrated_pause_never_carries_merge_data() {
+        let with_merging =
+            DehydratedBidSubmissionFuluWithMergingData::random_for_test(&mut rand::rng());
+        let (submission, _) = with_merging.split();
+        let DehydratedBidSubmission::Fulu(inner) = submission;
+        let body = inner.as_ssz_bytes();
+
+        let params = SubmissionDecoderParams {
+            compression: Compression::None,
+            encoding: Encoding::Ssz,
+            merge_type: MergeType::Pause,
+            is_dehydrated: true,
+            with_mergeable_data: false,
+            with_adjustments: false,
+            // Even with this testing override on, Pause must still suppress merge data.
+            mark_all_txs_mergeable: true,
+            fork_name: ForkName::Fulu,
+        };
+        let mut decoder = SubmissionDecoder::new(&params);
+        let mut buf = Vec::new();
+        let (decoded_submission, merging_data, bid_adjustment_data) =
+            decoder.decode(&body, &mut buf).expect("decode should succeed");
+
+        assert!(matches!(decoded_submission, Submission::Dehydrated(_)));
+        assert!(bid_adjustment_data.is_none());
+        assert!(merging_data.is_none());
     }
 }
