@@ -16,8 +16,8 @@ use helix_tcp_types::merging::{
     order::{BundleOrderRef, MergeOrderRef, TxOrderRef, bundle_order_hash},
 };
 use helix_types::{
-    BlobWithMetadata, BlobsBundle, BuilderInclusionResult, KzgCommitment, MergedBlockTrace, Order,
-    payload_from_v3, requests_from_v4,
+    BlobWithMetadata, BlobsBundle, BuilderInclusionResult, KzgCommitment, MergeOrderFlags,
+    MergedBlockTrace, Order, payload_from_v3, requests_from_v4,
 };
 use rustc_hash::FxHashMap;
 use ssz::Encode;
@@ -54,7 +54,7 @@ fn order_to_ref(order: &Order) -> Option<MergeOrderRef> {
             txs: bundle.txs.iter().map(|&i| idx(i)).collect::<Option<_>>()?,
             reverting_txs: bundle.reverting_txs.iter().map(|&i| idx(i)).collect::<Option<_>>()?,
             dropping_txs: bundle.dropping_txs.iter().map(|&i| idx(i)).collect::<Option<_>>()?,
-            latest_only: bundle.latest_only,
+            latest_only: bundle.flags.contains(MergeOrderFlags::LATEST_ONLY),
         }),
     })
 }
@@ -150,7 +150,7 @@ fn calculate_versioned_hash(commitment: Bytes48) -> B256 {
 
 #[cfg(test)]
 mod tests {
-    use helix_types::{BundleOrder, BundleOrderV2, TransactionOrder, TxIndices};
+    use helix_types::{BundleOrder, BundleOrderV2, MergeOrderFlags, TransactionOrder, TxIndices};
 
     use super::*;
 
@@ -186,7 +186,7 @@ mod tests {
             txs: indices(&[1, 2]),
             reverting_txs: indices(&[0]),
             dropping_txs: indices(&[1]),
-            latest_only: true,
+            flags: MergeOrderFlags::LATEST_ONLY,
         });
         assert_eq!(
             order_to_ref(&bundle_v2),

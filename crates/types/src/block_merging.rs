@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 
 use alloy_primitives::{Address, B256, U256};
+use bitflags::bitflags;
 use lh_test_random::TestRandom;
 use lh_types::test_utils::TestRandom;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
+use ssz::{Decode, Encode};
 use ssz_derive::{Decode, Encode};
 
 use crate::{
@@ -25,9 +27,9 @@ pub struct SignedBidSubmissionWithMergingData {
 pub enum Order {
     Tx(TransactionOrder),
     Bundle(BundleOrder),
-    /// A bundle carrying the `latest_only` flag. Kept as a distinct variant rather than a new
-    /// field on [`BundleOrder`] so that old wire bytes for `Order::Bundle` — encoded before this
-    /// variant existed — keep decoding unchanged: an SSZ union's selector byte makes new
+    /// A bundle carrying merge flags (e.g. `LATEST_ONLY`). Kept as a distinct variant rather than
+    /// a new field on [`BundleOrder`] so that old wire bytes for `Order::Bundle` — encoded before
+    /// this variant existed — keep decoding unchanged: an SSZ union's selector byte makes new
     /// variants additive, whereas a new field changes the container's byte layout.
     BundleV2(BundleOrderV2),
 }
@@ -76,7 +78,7 @@ pub struct BundleOrder {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, TestRandom, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-/// Same as [`BundleOrder`], with the addition of `latest_only`. See [`Order::BundleV2`] for why
+/// Same as [`BundleOrder`], with the addition of `flags`. See [`Order::BundleV2`] for why
 /// this is a separate type rather than a field on `BundleOrder`.
 pub struct BundleOrderV2 {
     /// Signals txs that are part of the bundle and ordering of txs.
@@ -88,9 +90,57 @@ pub struct BundleOrderV2 {
     /// Txs that are allowed to be omitted, but not revert.
     /// Indices are for the [txs](Self::txs) array.
     pub dropping_txs: TxIndices,
-    /// Only eligible for merging if present in the builder's most recent submission for this
-    /// block.
-    pub latest_only: bool,
+    pub flags: MergeOrderFlags,
+}
+
+bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(transparent)]
+    pub struct MergeOrderFlags: u64 {
+        /// Only eligible for merging if present in the builder's most recent submission for this
+        /// block.
+        const LATEST_ONLY = 1 << 0;
+    }
+}
+
+impl TestRandom for MergeOrderFlags {
+    fn random_for_test(rng: &mut impl rand::RngCore) -> Self {
+        Self::from_bits_retain(u64::random_for_test(rng))
+    }
+}
+
+/// SSZ wire bytes are the raw bit pattern; unknown bits round-trip rather than erroring, so a
+/// relay/builder pair with mismatched flag sets stays compatible.
+impl Encode for MergeOrderFlags {
+    fn is_ssz_fixed_len() -> bool {
+        true
+    }
+
+    fn ssz_fixed_len() -> usize {
+        8
+    }
+
+    fn ssz_bytes_len(&self) -> usize {
+        8
+    }
+
+    fn ssz_append(&self, buf: &mut Vec<u8>) {
+        self.bits().ssz_append(buf);
+    }
+}
+
+impl Decode for MergeOrderFlags {
+    fn is_ssz_fixed_len() -> bool {
+        true
+    }
+
+    fn ssz_fixed_len() -> usize {
+        8
+    }
+
+    fn from_ssz_bytes(bytes: &[u8]) -> Result<Self, ssz::DecodeError> {
+        <u64 as Decode>::from_ssz_bytes(bytes).map(Self::from_bits_retain)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -275,7 +325,7 @@ mod tests {
             txs: smallvec::smallvec![1, 2, 3],
             reverting_txs: smallvec::smallvec![0],
             dropping_txs: smallvec::smallvec![2],
-            latest_only: true,
+            flags: MergeOrderFlags::LATEST_ONLY,
         };
 
         let bytes = bundle_order.as_ssz_bytes();
@@ -304,7 +354,7 @@ mod tests {
             txs: smallvec::smallvec![1, 2, 3],
             reverting_txs: smallvec::smallvec![0],
             dropping_txs: smallvec::smallvec![2],
-            latest_only: true,
+            flags: MergeOrderFlags::LATEST_ONLY,
         };
         let order = Order::BundleV2(bundle_order);
 
@@ -328,7 +378,7 @@ mod tests {
             txs: smallvec::smallvec![1],
             reverting_txs: smallvec::smallvec![],
             dropping_txs: smallvec::smallvec![],
-            latest_only: true,
+            flags: MergeOrderFlags::LATEST_ONLY,
         });
 
         assert_eq!(bundle.as_ssz_bytes()[0], 1);
@@ -352,7 +402,7 @@ mod tests {
             txs: smallvec::smallvec![0, 2, 4],
             reverting_txs: smallvec::smallvec![1],
             dropping_txs: smallvec::smallvec![2],
-            latest_only: true,
+            flags: MergeOrderFlags::LATEST_ONLY,
         });
 
         let data = BlockMergingData {
@@ -397,7 +447,7 @@ mod tests {
             txs: smallvec::smallvec![1, 2, 3],
             reverting_txs: smallvec::smallvec![0],
             dropping_txs: smallvec::smallvec![2],
-            latest_only: true,
+            flags: MergeOrderFlags::LATEST_ONLY,
         };
         let order = Order::BundleV2(bundle_order);
 
@@ -409,16 +459,16 @@ mod tests {
     #[test]
     fn order_json_untagged_disambiguates_bundle_from_bundle_v2() {
         // `Order` is `#[serde(untagged)]`, so `Bundle` and `BundleV2` must remain
-        // distinguishable by shape alone: `BundleV2` requires `latest_only`
+        // distinguishable by shape alone: `BundleV2` requires `flags`
         // (no `#[serde(default)]`), so its presence/absence is the discriminator.
         let without_flag = r#"{"txs": [1], "reverting_txs": [], "dropping_txs": []}"#;
         let with_flag_true =
-            r#"{"txs": [1], "reverting_txs": [], "dropping_txs": [], "latest_only": true}"#;
+            r#"{"txs": [1], "reverting_txs": [], "dropping_txs": [], "flags": "LATEST_ONLY"}"#;
         // Presence of the key routes to `BundleV2` regardless of its value — `deny_unknown_fields`
-        // rejects `BundleOrder` here even though the flag is `false`, so it never falls back
+        // rejects `BundleOrder` here even though the flag set is empty, so it never falls back
         // silently and loses the field.
         let with_flag_false =
-            r#"{"txs": [1], "reverting_txs": [], "dropping_txs": [], "latest_only": false}"#;
+            r#"{"txs": [1], "reverting_txs": [], "dropping_txs": [], "flags": ""}"#;
 
         let decoded: Order = serde_json::from_str(without_flag).unwrap();
         assert!(matches!(decoded, Order::Bundle(_)));
@@ -443,7 +493,7 @@ mod tests {
             txs: smallvec::smallvec![0, 2, 4],
             reverting_txs: smallvec::smallvec![1],
             dropping_txs: smallvec::smallvec![2],
-            latest_only: true,
+            flags: MergeOrderFlags::LATEST_ONLY,
         });
 
         let data = BlockMergingData {

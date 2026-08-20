@@ -25,7 +25,7 @@ async-channel = "2.5.0"
 async-trait = "0.1"
 axum = { version = "0.8", features = ["matched-path", "ws"] }
 backtrace = "0.3.69"
-bitflags = "2.10.0"
+bitflags = { version = "2.10.0", features = ["serde"] }
 blst = { version = "0.3.16", features = ["no-threads"] }
 bytes = "1.10"
 chrono = { features = ["serde"], version = "0.4.38" }
