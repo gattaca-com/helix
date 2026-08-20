@@ -2,6 +2,7 @@ use std::{fs::File, sync::Arc};
 
 use clap::Parser;
 use helix_common::{
+    api_provider::DefaultApiProvider,
     local_cache::LocalCache,
     utils::{init_panic_hook, init_tracing_log, install_default_crypto_provider},
 };
@@ -40,5 +41,12 @@ async fn main() -> eyre::Result<()> {
     let db = Arc::new(db);
     let validator_preferences = Arc::new(config.validator_preferences);
 
-    run_data_api(db, validator_preferences, config.api_port, config.router_config).await
+    run_data_api(
+        db,
+        validator_preferences,
+        Arc::new(DefaultApiProvider),
+        config.api_port,
+        config.router_config,
+    )
+    .await
 }

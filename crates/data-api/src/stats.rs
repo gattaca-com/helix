@@ -6,8 +6,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-use helix_common::api::data_api::{
-    BuilderBlocksReceivedParams, DeliveredPayloadsResponse, ProposerPayloadDeliveredParams,
+use helix_common::{
+    Filtering,
+    api::data_api::{
+        BuilderBlocksReceivedParams, DeliveredPayloadsResponse, ProposerPayloadDeliveredParams,
+    },
 };
 use moka::Expiry;
 use tracing::info;
@@ -148,13 +151,16 @@ impl BuilderBlocksReceivedStats {
 
 pub struct SelectiveExpiry;
 
-impl Expiry<ProposerPayloadDeliveredParams, Vec<DeliveredPayloadsResponse>> for SelectiveExpiry {
+impl Expiry<(Filtering, ProposerPayloadDeliveredParams), Vec<DeliveredPayloadsResponse>>
+    for SelectiveExpiry
+{
     fn expire_after_create(
         &self,
-        key: &ProposerPayloadDeliveredParams,
+        key: &(Filtering, ProposerPayloadDeliveredParams),
         _val: &Vec<DeliveredPayloadsResponse>,
         _now: Instant,
     ) -> Option<Duration> {
+        let key = &key.1;
         if key.slot.is_none() &&
             key.cursor.is_none() &&
             key.block_hash.is_none() &&

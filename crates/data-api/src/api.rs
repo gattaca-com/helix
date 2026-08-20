@@ -3,16 +3,18 @@ use std::{sync::Arc, time::Duration};
 use axum::{
     Json,
     extract::{Extension, Query},
+    http::HeaderMap,
     response::IntoResponse,
 };
 use helix_common::{
-    ValidatorPreferences,
+    Filtering, ValidatorPreferences,
     api::data_api::{
         BuilderBlocksReceivedParams, DataAdjustmentsParams, DeliveredPayloadsResponse,
         DeliveredPayloadsResponseV2, MergedBlockParams, ProposerHeaderDeliveredParams,
         ProposerPayloadDeliveredParams, ReceivedBlocksResponse, ReceivedBlocksResponseV2,
         ValidatorRegistrationParams,
     },
+    api_provider::{ApiProvider, DefaultApiProvider},
     metrics,
 };
 use helix_database::{
@@ -29,12 +31,13 @@ use crate::{
 pub type BidsCache = Cache<BuilderBlocksReceivedParams, Vec<ReceivedBlocksResponse>>;
 pub type BidsCacheV2 = Cache<BuilderBlocksReceivedParams, Vec<ReceivedBlocksResponseV2>>;
 pub type DeliveredPayloadsCache =
-    Cache<ProposerPayloadDeliveredParams, Vec<DeliveredPayloadsResponse>>;
+    Cache<(Filtering, ProposerPayloadDeliveredParams), Vec<DeliveredPayloadsResponse>>;
 pub type DeliveredPayloadsCacheV2 =
-    Cache<ProposerPayloadDeliveredParams, Vec<DeliveredPayloadsResponseV2>>;
+    Cache<(Filtering, ProposerPayloadDeliveredParams), Vec<DeliveredPayloadsResponseV2>>;
 
 #[derive(Clone)]
-pub struct DataApi {
+pub struct DataApi<P: ApiProvider = DefaultApiProvider> {
+    api_provider: Arc<P>,
     validator_preferences: Arc<ValidatorPreferences>,
     db: Arc<PostgresDatabaseService>,
     payload_delivered_stats: ProposerPayloadDeliveredStats,
@@ -43,8 +46,9 @@ pub struct DataApi {
     builder_blocks_received_stats_v2: BuilderBlocksReceivedStats,
 }
 
-impl DataApi {
+impl<P: ApiProvider> DataApi<P> {
     pub fn new(
+        api_provider: Arc<P>,
         validator_preferences: Arc<ValidatorPreferences>,
         db: Arc<PostgresDatabaseService>,
     ) -> Self {
@@ -68,6 +72,7 @@ impl DataApi {
         });
 
         Self {
+            api_provider,
             validator_preferences,
             db,
             payload_delivered_stats,
@@ -79,8 +84,9 @@ impl DataApi {
 
     /// Implements this API: <https://flashbots.github.io/relay-specs/#/Data/getDeliveredPayloads>
     pub async fn proposer_payload_delivered(
-        Extension(data_api): Extension<Arc<DataApi>>,
+        Extension(data_api): Extension<Arc<DataApi<P>>>,
         Extension(cache): Extension<DeliveredPayloadsCache>,
+        headers: HeaderMap,
         Query(mut params): Query<ProposerPayloadDeliveredParams>,
     ) -> Result<impl IntoResponse, DataApiError> {
         if params.slot.is_some() && params.cursor.is_some() {
@@ -96,17 +102,25 @@ impl DataApi {
             params.limit = Some(200);
         }
 
-        if let Some(cached_result) = cache.get(&params) {
+        let filtering = data_api
+            .api_provider
+            .get_filtering(&headers, data_api.validator_preferences.filtering);
+        let cache_key = (filtering, params);
+
+        if let Some(cached_result) = cache.get(&cache_key) {
             data_api.payload_delivered_stats.record_cache_hit();
             metrics::delivered_payloads_cache_hit();
             return Ok(Json(cached_result));
         }
 
-        debug!(?params, ?data_api.validator_preferences, "fetching payloads");
+        let mut validator_preferences = (*data_api.validator_preferences).clone();
+        validator_preferences.filtering = filtering;
+
+        debug!(?cache_key, ?validator_preferences, "fetching payloads");
 
         match data_api
             .db
-            .get_delivered_payloads(&(&params).into(), data_api.validator_preferences.clone())
+            .get_delivered_payloads(&(&cache_key.1).into(), Arc::new(validator_preferences))
             .await
         {
             Ok(result) => {
@@ -118,7 +132,7 @@ impl DataApi {
                     .map(|b| b.into())
                     .collect::<Vec<DeliveredPayloadsResponse>>();
 
-                cache.insert(params, response.clone());
+                cache.insert(cache_key, response.clone());
 
                 Ok(Json(response))
             }
@@ -130,8 +144,9 @@ impl DataApi {
     }
 
     pub async fn proposer_payload_delivered_v2(
-        Extension(data_api): Extension<Arc<DataApi>>,
+        Extension(data_api): Extension<Arc<DataApi<P>>>,
         Extension(cache): Extension<DeliveredPayloadsCacheV2>,
+        headers: HeaderMap,
         Query(mut params): Query<ProposerPayloadDeliveredParams>,
     ) -> Result<impl IntoResponse, DataApiError> {
         if params.slot.is_some() && params.cursor.is_some() {
@@ -147,17 +162,25 @@ impl DataApi {
             params.limit = Some(200);
         }
 
-        if let Some(cached_result) = cache.get(&params) {
+        let filtering = data_api
+            .api_provider
+            .get_filtering(&headers, data_api.validator_preferences.filtering);
+        let cache_key = (filtering, params);
+
+        if let Some(cached_result) = cache.get(&cache_key) {
             data_api.payload_delivered_stats_v2.record_cache_hit();
             metrics::delivered_payloads_cache_hit();
             return Ok(Json(cached_result));
         }
 
-        debug!(?params, ?data_api.validator_preferences, "fetching payloads v2");
+        let mut validator_preferences = (*data_api.validator_preferences).clone();
+        validator_preferences.filtering = filtering;
+
+        debug!(?cache_key, ?validator_preferences, "fetching payloads v2");
 
         match data_api
             .db
-            .get_delivered_payloads(&(&params).into(), data_api.validator_preferences.clone())
+            .get_delivered_payloads(&(&cache_key.1).into(), Arc::new(validator_preferences))
             .await
         {
             Ok(result) => {
@@ -167,7 +190,7 @@ impl DataApi {
                     .map(|b| b.into())
                     .collect::<Vec<DeliveredPayloadsResponseV2>>();
 
-                cache.insert(params, response.clone());
+                cache.insert(cache_key, response.clone());
 
                 Ok(Json(response))
             }
@@ -179,7 +202,7 @@ impl DataApi {
     }
     /// Implements this API: <https://flashbots.github.io/relay-specs/#/Data/getReceivedBids>
     pub async fn builder_bids_received(
-        Extension(data_api): Extension<Arc<DataApi>>,
+        Extension(data_api): Extension<Arc<DataApi<P>>>,
         Extension(cache): Extension<BidsCache>,
         Query(mut params): Query<BuilderBlocksReceivedParams>,
     ) -> Result<impl IntoResponse, DataApiError> {
@@ -230,7 +253,7 @@ impl DataApi {
     }
 
     pub async fn builder_bids_received_v2(
-        Extension(data_api): Extension<Arc<DataApi>>,
+        Extension(data_api): Extension<Arc<DataApi<P>>>,
         Extension(cache): Extension<BidsCacheV2>,
         Query(mut params): Query<BuilderBlocksReceivedParams>,
     ) -> Result<impl IntoResponse, DataApiError> {
@@ -278,7 +301,7 @@ impl DataApi {
 
     /// Implements this API: <https://flashbots.github.io/relay-specs/#/Data/getValidatorRegistration>
     pub async fn validator_registration(
-        Extension(data_api): Extension<Arc<DataApi>>,
+        Extension(data_api): Extension<Arc<DataApi<P>>>,
         Query(params): Query<ValidatorRegistrationParams>,
     ) -> Result<impl IntoResponse, DataApiError> {
         match data_api.db.get_validator_registration(&params.pubkey).await {
@@ -299,7 +322,7 @@ impl DataApi {
     // Implements this API: https://docs.ultrasound.money/builders/bid-adjustment#data-api
     // relay/v1/data/adjustments?slot=123
     pub async fn data_adjustments(
-        Extension(data_api): Extension<Arc<DataApi>>,
+        Extension(data_api): Extension<Arc<DataApi<P>>>,
         Query(params): Query<DataAdjustmentsParams>,
     ) -> Result<impl IntoResponse, DataApiError> {
         match data_api.db.get_block_adjustments_for_slot(params.slot).await {
@@ -312,7 +335,7 @@ impl DataApi {
     }
 
     pub async fn proposer_header_delivered(
-        Extension(data_api): Extension<Arc<DataApi>>,
+        Extension(data_api): Extension<Arc<DataApi<P>>>,
         Query(mut params): Query<ProposerHeaderDeliveredParams>,
     ) -> Result<impl IntoResponse, DataApiError> {
         if params.block_number.is_some() {
@@ -341,7 +364,7 @@ impl DataApi {
     }
 
     pub async fn merged_blocks(
-        Extension(data_api): Extension<Arc<DataApi>>,
+        Extension(data_api): Extension<Arc<DataApi<P>>>,
         Query(params): Query<MergedBlockParams>,
     ) -> Result<impl IntoResponse, DataApiError> {
         match data_api.db.get_merged_blocks_for_slot(params.slot).await {

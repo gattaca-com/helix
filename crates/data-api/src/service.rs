@@ -1,7 +1,7 @@
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use axum::{Router, extract::Extension, http::StatusCode, routing::get};
-use helix_common::{Route, RouterConfig, ValidatorPreferences};
+use helix_common::{Route, RouterConfig, ValidatorPreferences, api_provider::ApiProvider};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use moka::sync::Cache;
 use tower_governor::{
@@ -18,8 +18,8 @@ async fn status() -> StatusCode {
     StatusCode::OK
 }
 
-pub fn build_data_router(
-    data_api: Arc<DataApi>,
+pub fn build_data_router<P: ApiProvider>(
+    data_api: Arc<DataApi<P>>,
     bids_cache: BidsCache,
     bids_cache_v2: BidsCacheV2,
     delivered_payloads_cache: DeliveredPayloadsCache,
@@ -32,14 +32,14 @@ pub fn build_data_router(
     for route_info in &router_config.enabled_routes {
         let handler = match route_info.route {
             Route::Status => get(status),
-            Route::ProposerPayloadDelivered => get(DataApi::proposer_payload_delivered),
-            Route::ProposerPayloadDeliveredV2 => get(DataApi::proposer_payload_delivered_v2),
-            Route::ProposerHeaderDelivered => get(DataApi::proposer_header_delivered),
-            Route::BuilderBidsReceived => get(DataApi::builder_bids_received),
-            Route::BuilderBidsReceivedV2 => get(DataApi::builder_bids_received_v2),
-            Route::ValidatorRegistration => get(DataApi::validator_registration),
-            Route::DataAdjustments => get(DataApi::data_adjustments),
-            Route::MergedBlocks => get(DataApi::merged_blocks),
+            Route::ProposerPayloadDelivered => get(DataApi::<P>::proposer_payload_delivered),
+            Route::ProposerPayloadDeliveredV2 => get(DataApi::<P>::proposer_payload_delivered_v2),
+            Route::ProposerHeaderDelivered => get(DataApi::<P>::proposer_header_delivered),
+            Route::BuilderBidsReceived => get(DataApi::<P>::builder_bids_received),
+            Route::BuilderBidsReceivedV2 => get(DataApi::<P>::builder_bids_received_v2),
+            Route::ValidatorRegistration => get(DataApi::<P>::validator_registration),
+            Route::DataAdjustments => get(DataApi::<P>::data_adjustments),
+            Route::MergedBlocks => get(DataApi::<P>::merged_blocks),
             r => {
                 warn!("route {r:?} not supported by data API, skipping");
                 continue;
@@ -85,13 +85,14 @@ pub fn build_data_router(
         .layer(Extension(delivered_payloads_cache_v2))
 }
 
-pub async fn run_data_api(
+pub async fn run_data_api<P: ApiProvider>(
     db: Arc<PostgresDatabaseService>,
     validator_preferences: Arc<ValidatorPreferences>,
+    api_provider: Arc<P>,
     port: u16,
     router_config: RouterConfig,
 ) -> eyre::Result<()> {
-    let data_api = Arc::new(DataApi::new(validator_preferences, db));
+    let data_api = Arc::new(DataApi::new(api_provider, validator_preferences, db));
 
     let bids_cache: BidsCache =
         Cache::builder().time_to_idle(Duration::from_secs(12)).max_capacity(10_000).build();

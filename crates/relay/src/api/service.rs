@@ -159,7 +159,8 @@ pub async fn run_api_service<A: Api>(
         gossip_receiver,
     ));
 
-    let data_api = Arc::new(DataApi::new(validator_preferences.clone(), db.clone()));
+    let data_api =
+        Arc::new(DataApi::new(api_provider.clone(), validator_preferences.clone(), db.clone()));
 
     let bids_cache: BidsCache =
         Cache::builder().time_to_idle(Duration::from_secs(12)).max_capacity(10_000).build();

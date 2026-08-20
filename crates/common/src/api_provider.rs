@@ -6,7 +6,7 @@ use tracing::warn;
 pub use uuid::Uuid;
 
 use crate::{
-    PreferencesHeader, SignedValidatorRegistrationEntry, ValidatorPreferences,
+    Filtering, PreferencesHeader, SignedValidatorRegistrationEntry, ValidatorPreferences,
     api::{HEADER_FORWARDED_FOR, HEADER_TIMEOUT_MS, proposer_api::GetHeaderParams},
 };
 
@@ -44,6 +44,10 @@ pub trait ApiProvider: Send + Sync + Clone + 'static {
         fallback: Arc<ValidatorPreferences>,
         _registrations: &[SignedValidatorRegistration],
     ) -> ValidatorPreferences;
+    
+    fn get_filtering(&self, _headers: &HeaderMap, fallback: Filtering) -> Filtering {
+        fallback
+    }
 
     fn admit_registration(
         &self,
