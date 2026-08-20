@@ -17,6 +17,7 @@ FROM chef AS builder
 
 # Copy back the build dependencies including libclang
 COPY --from=planner /app/recipe.json recipe.json
+COPY crates/vendored ./crates/vendored
 RUN cargo chef cook --release --recipe-path recipe.json
 
 COPY . .
