@@ -123,6 +123,19 @@ pub enum ProposerApiError {
 
     #[error("SszDecodeError {0:?}")]
     SszDecodeError(DecodeError),
+
+    // Gloas (ePBS) builder-API additions, per
+    // https://github.com/ethereum/builder-specs/pull/165. Not yet wired to the auctioneer.
+    #[error("invalid SignedRequestAuth: signature verification failed")]
+    InvalidRequestAuthSignature,
+
+    #[error(
+        "invalid SignedRequestAuth: auth.message.slot ({auth_slot}) does not match the request slot ({request_slot})"
+    )]
+    RequestAuthSlotMismatch { auth_slot: u64, request_slot: u64 },
+
+    #[error("invalid request: Date-Milliseconds and X-Timeout-Ms headers are required")]
+    MissingTimingHeaders,
 }
 
 impl From<DecodeError> for ProposerApiError {
@@ -166,12 +179,14 @@ impl IntoResponse for ProposerApiError {
                 ProposerApiError::SigError(_) |
                 ProposerApiError::DeliveringPayload |
                 ProposerApiError::GetPayloadAlreadyReceived |
-                ProposerApiError::RequestForPastSlot { .. } => StatusCode::BAD_REQUEST,
+                ProposerApiError::RequestForPastSlot { .. } |
+                ProposerApiError::RequestAuthSlotMismatch { .. } |
+                ProposerApiError::MissingTimingHeaders => StatusCode::BAD_REQUEST,
 
                 // All authentication failures, kept indistinguishable by status
-                ProposerApiError::InvalidApiKey | ProposerApiError::StreamNotAdmitted => {
-                    StatusCode::UNAUTHORIZED
-                }
+                ProposerApiError::InvalidApiKey |
+                ProposerApiError::StreamNotAdmitted |
+                ProposerApiError::InvalidRequestAuthSignature => StatusCode::UNAUTHORIZED,
 
                 ProposerApiError::InternalServerError |
                 ProposerApiError::NoExecutionPayloadFound => StatusCode::INTERNAL_SERVER_ERROR,

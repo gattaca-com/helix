@@ -20,6 +20,9 @@ pub struct ChainInfo {
     pub clock: SlotClock,
     pub genesis_time_in_secs: u64,
     pub builder_domain: B256,
+    /// Domain for verifying Gloas builder-API `SignedRequestAuth` signatures. Not a consensus
+    /// domain; see `ChainSpec::get_request_auth_domain`.
+    pub request_auth_domain: B256,
 }
 
 impl ChainInfo {
@@ -27,7 +30,16 @@ impl ChainInfo {
         let name = spec.config_name.clone().expect("spec config name should be set");
         let clock = new_slot_clock(genesis_time_in_secs, spec.get_slot_duration());
         let builder_domain = spec.get_builder_application_domain();
-        Self { name, genesis_validators_root, spec, clock, genesis_time_in_secs, builder_domain }
+        let request_auth_domain = spec.get_request_auth_domain();
+        Self {
+            name,
+            genesis_validators_root,
+            spec,
+            clock,
+            genesis_time_in_secs,
+            builder_domain,
+            request_auth_domain,
+        }
     }
 
     pub fn fork_at_slot(&self, slot: Slot) -> ForkName {
