@@ -102,9 +102,8 @@ impl<P: ApiProvider> DataApi<P> {
             params.limit = Some(200);
         }
 
-        let filtering = data_api
-            .api_provider
-            .get_filtering(&headers, data_api.validator_preferences.filtering);
+        let filtering =
+            data_api.api_provider.get_filtering(&headers, data_api.validator_preferences.filtering);
         let cache_key = (filtering, params);
 
         if let Some(cached_result) = cache.get(&cache_key) {
@@ -162,9 +161,8 @@ impl<P: ApiProvider> DataApi<P> {
             params.limit = Some(200);
         }
 
-        let filtering = data_api
-            .api_provider
-            .get_filtering(&headers, data_api.validator_preferences.filtering);
+        let filtering =
+            data_api.api_provider.get_filtering(&headers, data_api.validator_preferences.filtering);
         let cache_key = (filtering, params);
 
         if let Some(cached_result) = cache.get(&cache_key) {

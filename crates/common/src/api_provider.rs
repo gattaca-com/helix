@@ -44,7 +44,7 @@ pub trait ApiProvider: Send + Sync + Clone + 'static {
         fallback: Arc<ValidatorPreferences>,
         _registrations: &[SignedValidatorRegistration],
     ) -> ValidatorPreferences;
-    
+
     fn get_filtering(&self, _headers: &HeaderMap, fallback: Filtering) -> Filtering {
         fallback
     }

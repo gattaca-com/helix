@@ -402,7 +402,8 @@ impl MergeEngine {
                     } else {
                         // Head gating: the base must build on our synced head.
                         let head_hash = convert::b256(head.hash);
-                        let beneficiary_alloy = base.payload.payload_inner.payload_inner.fee_recipient;
+                        let beneficiary_alloy =
+                            base.payload.payload_inner.payload_inner.fee_recipient;
                         let result = if !head.is_synced {
                             Err(MergeError::NotSynced)
                         } else if head_hash != state.parent_hash {

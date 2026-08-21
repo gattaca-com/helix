@@ -170,7 +170,6 @@ mod tests {
             txs: indices(&[1, 2]),
             reverting_txs: indices(&[0]),
             dropping_txs: indices(&[1]),
-            latest_only: true,
         });
         assert_eq!(
             order_to_ref(&bundle),
