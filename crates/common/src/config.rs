@@ -532,6 +532,9 @@ impl RouterConfig {
             Route::HeaderStream,
             Route::GetPayload,
             Route::GetPayloadV2,
+            Route::GetExecutionPayloadBid,
+            Route::SubmitBuilderPreferences,
+            Route::SubmitSignedBeaconBlock,
         ]);
 
         self.replace_condensed_with_real(Route::DataApi, &[
@@ -581,7 +584,8 @@ impl RouterConfig {
 
         let is_get_header_instance = routes.contains(&Route::ProposerApi) ||
             routes.contains(&Route::GetHeader) ||
-            routes.contains(&Route::HeaderStream);
+            routes.contains(&Route::HeaderStream) ||
+            routes.contains(&Route::GetExecutionPayloadBid);
         let is_submission_instance =
             routes.contains(&Route::BuilderApi) || routes.contains(&Route::SubmitBlock);
 
@@ -655,6 +659,12 @@ pub enum Route {
     DataAdjustments,
     MergedBlocks,
     PromoteBuilder,
+    /// Gloas (ePBS): not yet wired to the auctioneer, see docs/gloas-support-plan.md.
+    GetExecutionPayloadBid,
+    /// Gloas (ePBS): not yet wired to the auctioneer, see docs/gloas-support-plan.md.
+    SubmitBuilderPreferences,
+    /// Gloas (ePBS): not yet wired to the auctioneer, see docs/gloas-support-plan.md.
+    SubmitSignedBeaconBlock,
 }
 
 impl Route {
@@ -672,6 +682,15 @@ impl Route {
             Route::HeaderStream => format!("{PATH_PROPOSER_API}{PATH_HEADER_STREAM}"),
             Route::GetPayload => format!("{PATH_PROPOSER_API}{PATH_GET_PAYLOAD}"),
             Route::GetPayloadV2 => format!("{PATH_PROPOSER_API_V2}{PATH_GET_PAYLOAD}"),
+            Route::GetExecutionPayloadBid => {
+                format!("{PATH_PROPOSER_API}{PATH_GET_EXECUTION_PAYLOAD_BID}")
+            }
+            Route::SubmitBuilderPreferences => {
+                format!("{PATH_PROPOSER_API}{PATH_SUBMIT_BUILDER_PREFERENCES}")
+            }
+            Route::SubmitSignedBeaconBlock => {
+                format!("{PATH_PROPOSER_API}{PATH_SUBMIT_SIGNED_BEACON_BLOCK}")
+            }
             Route::ProposerPayloadDelivered => {
                 format!("{PATH_DATA_API}{PATH_PROPOSER_PAYLOAD_DELIVERED}")
             }

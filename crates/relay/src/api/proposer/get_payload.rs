@@ -579,7 +579,7 @@ fn calculate_slot_time_info(
     Some((since_slot_start, until_slot_start))
 }
 
-fn fork_name_from_header(headers: &HeaderMap) -> Result<Option<ForkName>, String> {
+pub(super) fn fork_name_from_header(headers: &HeaderMap) -> Result<Option<ForkName>, String> {
     headers
         .get(CONSENSUS_VERSION_HEADER)
         .map(|fork_name| fork_name.to_str().map_err(|e| e.to_string()).and_then(ForkName::from_str))
