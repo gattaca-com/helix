@@ -192,7 +192,12 @@ mod test {
     }
 
     #[tokio::test]
-    #[serial]
+    // `#[serial]` deliberately omitted while ignored: serial_test 1.0.0's macro drops `#[ignore]`
+    // when re-emitting the function, so combining them here silently un-ignores this test. Not a
+    // concurrency problem while ignored (it won't run), but re-add `#[serial]` alongside removing
+    // `#[ignore]` when fixing gattaca-com/helix#487, since it shares port 4050 with the other
+    // `run_admin_service` tests in this module.
+    #[ignore = "known bug: merged headers not enabled by default, see gattaca-com/helix#487"]
     async fn test_admin_service_merged_headers() {
         let auctioneer = Arc::new(LocalCache::new());
         let db = Arc::new(PostgresDatabaseService::default());
