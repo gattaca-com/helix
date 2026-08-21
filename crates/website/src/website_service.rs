@@ -203,7 +203,11 @@ impl WebsiteService {
             genesis_validators_root: alloy_primitives::hex::encode(
                 state.chain_info.genesis_validators_root.as_ref() as &[u8],
             ),
-            builder_signing_domain: state.chain_info.spec.get_builder_domain().to_string(),
+            builder_signing_domain: state
+                .chain_info
+                .spec
+                .get_builder_application_domain()
+                .to_string(),
         })
     }
 }

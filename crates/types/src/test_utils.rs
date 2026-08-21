@@ -1,10 +1,10 @@
 use alloy_primitives::{B256, b256};
-use lh_types::test_utils::{TestRandom, XorShiftRng};
 use rand::SeedableRng;
+use rand_xorshift::XorShiftRng;
 use serde_json::Value;
 use ssz::{Decode, Encode};
 
-use crate::{BlsPublicKey, BlsPublicKeyBytes, BlsSecretKey};
+use crate::{BlsPublicKey, BlsPublicKeyBytes, BlsSecretKey, TestRandom};
 
 /// Test that the encoding and decoding works, returns the decoded struct
 pub fn test_encode_decode_json<T: serde::Serialize + serde::de::DeserializeOwned>(d: &str) -> T {

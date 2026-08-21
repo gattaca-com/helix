@@ -6,7 +6,7 @@ use alloy_rpc_types::{
     engine::ExecutionPayloadV3,
 };
 use flux_profiler::timed;
-use lh_types::{ForkName, SignedRoot, Slot, test_utils::TestRandom};
+use lh_types::{ForkName, SignedRoot, Slot};
 use serde::{Deserialize, Serialize};
 use ssz::{Decode, DecodeError};
 use ssz_derive::{Decode, Encode};
@@ -17,7 +17,8 @@ use tree_hash_derive::TreeHash;
 use crate::{
     BlobsBundle, BlobsError, Bloom, BlsPublicKey, BlsPublicKeyBytes, BlsSignature,
     BlsSignatureBytes, DehydratedBidSubmission, ExecutionPayload, ExtraData, PayloadAndBlobs,
-    SszError, bid_adjustment_data::BidAdjustmentData, error::SigError, fields::ExecutionRequests,
+    SszError, TestRandom, bid_adjustment_data::BidAdjustmentData, error::SigError,
+    fields::ExecutionRequests,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, TreeHash)]

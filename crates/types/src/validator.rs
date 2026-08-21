@@ -1,11 +1,12 @@
 use alloy_primitives::{Address, B256};
-use lh_types::{Epoch, SignedRoot, test_utils::TestRandom};
+use lh_types::{Epoch, SignedRoot};
 use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
 use tree_hash_derive::TreeHash;
 
 use crate::{
-    BlsPublicKey, BlsPublicKeyBytes, BlsSignature, BlsSignatureBytes, SigError, TestRandomSeed,
+    BlsPublicKey, BlsPublicKeyBytes, BlsSignature, BlsSignatureBytes, SigError, TestRandom,
+    TestRandomSeed,
 };
 
 /// From Lighthouse, replacing PublicKeyBytes with PublicKey

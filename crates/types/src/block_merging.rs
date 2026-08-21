@@ -2,8 +2,6 @@ use std::collections::HashMap;
 
 use alloy_primitives::{Address, B256, U256};
 use bitflags::bitflags;
-use lh_test_random::TestRandom;
-use lh_types::test_utils::TestRandom;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
@@ -11,7 +9,7 @@ use ssz::{Decode, Encode};
 use ssz_derive::{Decode, Encode};
 
 use crate::{
-    Blob, SignedBidSubmission,
+    Blob, SignedBidSubmission, TestRandom,
     fields::{KzgCommitment, KzgProof},
 };
 
@@ -47,7 +45,7 @@ impl TestRandom for Order {
 /// Vector of transaction indices. Aliased for easier use.
 pub type TxIndices = SmallVec<[usize; 8]>;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Encode, Decode, TestRandom, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Encode, Decode, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct TransactionOrder {
     /// Index into block.transactions
@@ -56,7 +54,13 @@ pub struct TransactionOrder {
     pub can_revert: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, TestRandom, PartialEq, Eq)]
+impl TestRandom for TransactionOrder {
+    fn random_for_test(rng: &mut impl rand::RngCore) -> Self {
+        Self { index: usize::random_for_test(rng), can_revert: bool::random_for_test(rng) }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 /// References a bundle of transactions via their indices.
 /// All indices are for the block the transactions come from.
@@ -72,7 +76,17 @@ pub struct BundleOrder {
     pub dropping_txs: TxIndices,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, TestRandom, PartialEq, Eq)]
+impl TestRandom for BundleOrder {
+    fn random_for_test(rng: &mut impl rand::RngCore) -> Self {
+        Self {
+            txs: TxIndices::random_for_test(rng),
+            reverting_txs: TxIndices::random_for_test(rng),
+            dropping_txs: TxIndices::random_for_test(rng),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 /// Same as [`BundleOrder`], with the addition of `flags`. See [`Order::BundleV2`] for why
 /// this is a separate type rather than a field on `BundleOrder`.
@@ -139,6 +153,17 @@ impl Decode for MergeOrderFlags {
     }
 }
 
+impl TestRandom for BundleOrderV2 {
+    fn random_for_test(rng: &mut impl rand::RngCore) -> Self {
+        Self {
+            txs: TxIndices::random_for_test(rng),
+            reverting_txs: TxIndices::random_for_test(rng),
+            dropping_txs: TxIndices::random_for_test(rng),
+            flags: MergeOrderFlags::random_for_test(rng),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct InvalidTxIndex;
 
@@ -164,14 +189,22 @@ impl BundleOrderV2 {
     }
 }
 
-#[derive(
-    Debug, Default, Clone, Serialize, Deserialize, Encode, Decode, TestRandom, PartialEq, Eq,
-)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, Encode, Decode, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct BlockMergingData {
     pub allow_appending: bool,
     pub builder_address: Address,
     pub merge_orders: Vec<Order>,
+}
+
+impl TestRandom for BlockMergingData {
+    fn random_for_test(rng: &mut impl rand::RngCore) -> Self {
+        Self {
+            allow_appending: bool::random_for_test(rng),
+            builder_address: Address::random_for_test(rng),
+            merge_orders: Vec::random_for_test(rng),
+        }
+    }
 }
 
 impl BlockMergingData {

@@ -158,7 +158,8 @@ impl<B: BidAdjustor> Context<B> {
             SignedBlindedBeaconBlock::Capella(_) |
             SignedBlindedBeaconBlock::Deneb(_) |
             SignedBlindedBeaconBlock::Electra(_) |
-            SignedBlindedBeaconBlock::Gloas(_) => {
+            SignedBlindedBeaconBlock::Gloas(_) |
+            SignedBlindedBeaconBlock::Heze(_) => {
                 Err(ProposerApiError::UnsupportedBeaconChainVersion)
             }
             SignedBlindedBeaconBlock::Fulu(blinded_block) => {

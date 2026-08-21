@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
 use alloy_eips::eip7594::CELLS_PER_EXT_BLOB;
-use lh_types::{ForkName, ForkVersionDecode, test_utils::TestRandom};
+use lh_types::{ForkName, ForkVersionDecode};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use ssz::DecodeError;
 use ssz_derive::{Decode, Encode};
 
 use crate::{
-    BlobsError, BlockValidationError, ExecutionPayload, SignedBeaconBlock,
+    BlobsError, BlockValidationError, ExecutionPayload, SignedBeaconBlock, TestRandom,
     fields::{KzgCommitment, KzgCommitments, KzgProof, KzgProofs},
 };
 
@@ -203,15 +203,13 @@ pub struct SignedBlockContents {
 #[cfg(test)]
 mod tests {
     use lh_eth2::types::BlobsBundle as LhBlobsBundle;
-    use lh_types::{
-        KzgCommitment as LhKzgCommitment, KzgProof as LhKzgProof, MainnetEthSpec,
-        test_utils::{TestRandom, XorShiftRng},
-    };
+    use lh_types::{KzgCommitment as LhKzgCommitment, KzgProof as LhKzgProof, MainnetEthSpec};
     use rand::SeedableRng;
+    use rand_xorshift::XorShiftRng;
     use ssz::Encode;
 
     use super::*;
-    use crate::{SignedBidSubmission, test_encode_decode_json};
+    use crate::{SignedBidSubmission, TestRandom, test_encode_decode_json};
 
     #[test]
     fn test_blobs_bundle_() {
