@@ -196,7 +196,11 @@ impl Fixture {
     /// chosen payment value — lets a test hold the user tx fixed (so the
     /// non-payment prefix is byte-identical) while only the trailing payment
     /// tx changes, as in a real bid-ratchet resubmission.
-    fn build_base_with_payment(&self, user_value: U256, payment_value: U256) -> (MergeableBlockV1, B256) {
+    fn build_base_with_payment(
+        &self,
+        user_value: U256,
+        payment_value: U256,
+    ) -> (MergeableBlockV1, B256) {
         let builder = &self.signers[0];
         let base_txs = vec![
             signed_transfer(
@@ -208,15 +212,7 @@ impl Fixture {
                 100 * GWEI,
                 GWEI,
             ),
-            signed_transfer(
-                builder,
-                self.chain_id,
-                0,
-                self.proposer,
-                payment_value,
-                100 * GWEI,
-                0,
-            ),
+            signed_transfer(builder, self.chain_id, 0, self.proposer, payment_value, 100 * GWEI, 0),
         ];
         let args = BuildPayloadArgs {
             parent: self.genesis_hash,
@@ -458,7 +454,10 @@ async fn checkpoint_hit_reuses_shared_prefix_on_resubmission() {
     );
 }
 
-fn revoke_event(order_hash: B256, builder_pubkey: alloy_rpc_types::beacon::BlsPublicKey) -> EngineEvent {
+fn revoke_event(
+    order_hash: B256,
+    builder_pubkey: alloy_rpc_types::beacon::BlsPublicKey,
+) -> EngineEvent {
     EngineEvent::RevokeOrder {
         msg: RevokeOrderV1 { slot: SLOT, order_hash, builder_pubkey },
         generation: 0,
@@ -483,10 +482,7 @@ async fn revoke_removes_pooled_order_before_it_applies() {
     engine.handle_event(mergeable_event(&donor_msg, 2));
 
     engine.handle_event(revoke_event(order_hash, Default::default()));
-    assert!(
-        engine.slot.as_ref().unwrap().orders.is_empty(),
-        "revoked order must leave the pool"
-    );
+    assert!(engine.slot.as_ref().unwrap().orders.is_empty(), "revoked order must leave the pool");
 
     engine.handle_event(activate_event(base_block_hash));
     engine.merge_pass();

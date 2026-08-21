@@ -31,6 +31,12 @@ proptest-regressions/
 # Release artifacts
 dist/
 
+# crates/admin/frontend/dist/ needs to exist (via .gitkeep, see
+# crates/admin/frontend/.gitignore) for its `#[derive(RustEmbed)]` folder
+# to resolve at compile time -- the blanket rule above prunes the
+# directory before that nested .gitignore is ever consulted.
+!crates/admin/frontend/dist/
+
 # Database debugging tools
 db-tools/
 

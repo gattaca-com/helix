@@ -237,7 +237,13 @@ impl MergeSession {
 
         let last_ix = base.txs.len() - 1;
         let checkpoint_hit = checkpoint.is_some_and(|ck| {
-            ck.extends_to(base, beneficiary_alloy, slot.proposer_fee_recipient, v1.parent_hash, v1.gas_limit)
+            ck.extends_to(
+                base,
+                beneficiary_alloy,
+                slot.proposer_fee_recipient,
+                v1.parent_hash,
+                v1.gas_limit,
+            )
         });
 
         let (mut ctx, mut tx_hashes, replay_from) = if checkpoint_hit {
@@ -328,7 +334,8 @@ impl MergeSession {
             }
             if ix == last_ix {
                 proposer_balance_before_payment = Some(
-                    balance_of(&mut ctx.vm, proposer).map_err(|e| MergeError::Internal(e.to_string()))?,
+                    balance_of(&mut ctx.vm, proposer)
+                        .map_err(|e| MergeError::Internal(e.to_string()))?,
                 );
                 new_checkpoint = Some(ReplayCheckpoint {
                     beneficiary_alloy,
@@ -352,8 +359,8 @@ impl MergeSession {
                 .map_err(|e| MergeError::InvalidBaseBlock(format!("base tx failed: {e}")))?;
             tx_hashes.insert(decoded.hash);
         }
-        let new_checkpoint =
-            new_checkpoint.expect("base.txs is non-empty (checked above), so last_ix is always visited");
+        let new_checkpoint = new_checkpoint
+            .expect("base.txs is non-empty (checked above), so last_ix is always visited");
         debug!(
             base_block_hash = %base.block_hash,
             txs = base.txs.len(),
@@ -775,10 +782,8 @@ impl MergeSession {
                 txs: revenue.txs.clone(),
             })
             .collect();
-        let relay_revenue = updated_revenues
-            .get(&relay_config.relay_fee_recipient)
-            .cloned()
-            .unwrap_or_default();
+        let relay_revenue =
+            updated_revenues.get(&relay_config.relay_fee_recipient).cloned().unwrap_or_default();
 
         self.best_emitted = proposer_value;
         self.last_emit = Some(Instant::now());
