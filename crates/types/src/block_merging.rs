@@ -70,10 +70,6 @@ pub struct BundleOrder {
     /// Txs that are allowed to be omitted, but not revert.
     /// Indices are for the [txs](Self::txs) array.
     pub dropping_txs: TxIndices,
-    /// Only eligible for merging if present in the builder's most recent submission for this
-    /// block.
-    #[serde(default)]
-    pub latest_only: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, TestRandom, PartialEq, Eq)]
@@ -311,7 +307,6 @@ mod tests {
             txs: smallvec::smallvec![1, 2, 3],
             reverting_txs: smallvec::smallvec![0],
             dropping_txs: smallvec::smallvec![2],
-            latest_only: false,
         };
 
         let bytes = bundle_order.as_ssz_bytes();
@@ -339,7 +334,6 @@ mod tests {
             txs: smallvec::smallvec![1, 2, 3],
             reverting_txs: smallvec::smallvec![0],
             dropping_txs: smallvec::smallvec![2],
-            latest_only: true,
         };
         let order = Order::Bundle(bundle_order);
 
@@ -372,7 +366,6 @@ mod tests {
             txs: smallvec::smallvec![1],
             reverting_txs: smallvec::smallvec![],
             dropping_txs: smallvec::smallvec![],
-            latest_only: false,
         });
         let bundle_v2 = Order::BundleV2(BundleOrderV2 {
             txs: smallvec::smallvec![1],
@@ -396,7 +389,6 @@ mod tests {
             txs: smallvec::smallvec![0, 2, 4],
             reverting_txs: smallvec::smallvec![1],
             dropping_txs: smallvec::smallvec![2],
-            latest_only: false,
         });
         let bundle_v2_order = Order::BundleV2(BundleOrderV2 {
             txs: smallvec::smallvec![0, 2, 4],
@@ -432,7 +424,6 @@ mod tests {
             txs: smallvec::smallvec![1, 2, 3],
             reverting_txs: smallvec::smallvec![0],
             dropping_txs: smallvec::smallvec![2],
-            latest_only: true,
         };
         let order = Order::Bundle(bundle_order);
 
@@ -487,7 +478,6 @@ mod tests {
             txs: smallvec::smallvec![0, 2, 4],
             reverting_txs: smallvec::smallvec![1],
             dropping_txs: smallvec::smallvec![2],
-            latest_only: false,
         });
         let bundle_v2_order = Order::BundleV2(BundleOrderV2 {
             txs: smallvec::smallvec![0, 2, 4],
