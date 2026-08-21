@@ -31,6 +31,13 @@ pub const PATH_GET_HEADER: &str = "/header/{slot}/{parent_hash}/{pubkey}";
 pub const PATH_HEADER_STREAM: &str = "/header_stream/{slot}/{parent_hash}/{pubkey}";
 pub const PATH_GET_PAYLOAD: &str = "/blinded_blocks";
 
+// Gloas (ePBS) builder-API additions, per https://github.com/ethereum/builder-specs/pull/165.
+// Not yet wired to the auctioneer -- see docs/gloas-support-plan.md.
+pub const PATH_GET_EXECUTION_PAYLOAD_BID: &str =
+    "/execution_payload_bid/{slot}/{parent_hash}/{parent_root}/{proposer_pubkey}";
+pub const PATH_SUBMIT_BUILDER_PREFERENCES: &str = "/builder_preferences/{proposer_pubkey}";
+pub const PATH_SUBMIT_SIGNED_BEACON_BLOCK: &str = "/beacon_blocks";
+
 pub const PATH_DATA_API: &str = "/relay/v1/data";
 pub const PATH_DATA_API_V2: &str = "/relay/v2/data";
 

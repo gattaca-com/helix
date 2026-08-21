@@ -10,6 +10,7 @@ mod execution_payload;
 mod fields;
 mod hydration;
 mod operator;
+mod request_auth;
 mod test_random_compat;
 mod test_utils;
 mod utils;
@@ -35,6 +36,7 @@ pub use lh_types::{
     SignedRoot,
 };
 pub use operator::*;
+pub use request_auth::*;
 use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
 pub use test_random_compat::TestRandom;
@@ -62,6 +64,7 @@ pub type BlobsBundle = crate::blobs::BlobsBundle;
 pub type VersionedSignedProposal = SignedBlockContents;
 pub type SignedBeaconBlock = lh_types::SignedBeaconBlock<MainnetEthSpec>;
 pub type SignedBeaconBlockFulu = lh_types::SignedBeaconBlockFulu<MainnetEthSpec>;
+pub type SignedBeaconBlockGloas = lh_types::SignedBeaconBlockGloas<MainnetEthSpec>;
 
 // Beacon block
 pub type BeaconBlockFulu = lh_types::BeaconBlockFulu<MainnetEthSpec>;

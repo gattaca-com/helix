@@ -1,8 +1,11 @@
 mod error;
+mod get_execution_payload_bid;
 mod get_header;
 pub(crate) mod get_payload;
 mod header_stream;
 mod register;
+mod submit_builder_preferences;
+mod submit_signed_beacon_block;
 
 use std::sync::{Arc, atomic::Ordering};
 
