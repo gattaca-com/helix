@@ -35,6 +35,10 @@ as work proceeds.
 Scope each PR to one step of one issue. Use
 [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md).
 
+Stack a step's PR on the previous step's branch rather than waiting for
+it to merge. Note the base branch in the PR description, and retarget to
+the base branch (`develop`/`main`) once the step below merges.
+
 ## Verification bar
 
 Before merging:
