@@ -485,8 +485,8 @@ fn gzip_size_hint(buf: &[u8]) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use helix_types::{
-        BlobsBundle, DehydratedBidSubmission, DehydratedBidSubmissionFuluWithMergingData,
-        MergeType, TestRandom,
+        BidAdjData, BidAdjustmentDataV1, BlobsBundle, BundleOrder, DehydratedBidSubmission,
+        DehydratedBidSubmissionFuluWithMergingData, MergeType, Order, TestRandom,
     };
     use ssz::Encode;
 
@@ -632,5 +632,259 @@ mod tests {
         assert!(matches!(decoded_submission, Submission::Dehydrated(_)));
         assert!(bid_adjustment_data.is_none());
         assert!(merging_data.is_none());
+    }
+
+    #[test]
+    fn decode_default_with_adjustments_carries_adjustment_data() {
+        let mut submission = SignedBidSubmission::random_for_test(&mut rand::rng());
+        submission.blobs_bundle = BlobsBundle::default().into();
+        let SignedBidSubmission {
+            message,
+            execution_payload,
+            blobs_bundle,
+            execution_requests,
+            signature,
+        } = submission;
+        let bid_adjustment_data =
+            BidAdjustmentData::V1(BidAdjustmentDataV1::Original(BidAdjData::default()));
+        let with_adjustments = SignedBidSubmissionWithAdjustments {
+            message,
+            execution_payload,
+            blobs_bundle,
+            execution_requests,
+            signature,
+            bid_adjustment_data: bid_adjustment_data.clone(),
+        };
+        let body = with_adjustments.as_ssz_bytes();
+
+        let params = SubmissionDecoderParams {
+            compression: Compression::None,
+            encoding: Encoding::Ssz,
+            merge_type: MergeType::None,
+            is_dehydrated: false,
+            with_mergeable_data: false,
+            with_adjustments: true,
+            mark_all_txs_mergeable: false,
+            fork_name: ForkName::Fulu,
+        };
+        let mut decoder = SubmissionDecoder::new(&params);
+        let mut buf = Vec::new();
+        let (decoded_submission, merging_data, bid_adjustment) =
+            decoder.decode(&body, &mut buf).expect("decode should succeed");
+
+        assert!(matches!(decoded_submission, Submission::Full(_)));
+        assert!(merging_data.is_none());
+        assert_eq!(bid_adjustment.expect("adjustments should be carried"), bid_adjustment_data);
+    }
+
+    #[test]
+    fn decode_merge_mergeable_carries_merging_data() {
+        let mut submission = SignedBidSubmission::random_for_test(&mut rand::rng());
+        submission.blobs_bundle = BlobsBundle::default().into();
+        let merging_data = BlockMergingData::random_for_test(&mut rand::rng());
+        let with_merging =
+            SignedBidSubmissionWithMergingData { submission, merging_data: merging_data.clone() };
+        let body = with_merging.as_ssz_bytes();
+
+        let params = SubmissionDecoderParams {
+            compression: Compression::None,
+            encoding: Encoding::Ssz,
+            merge_type: MergeType::Mergeable,
+            is_dehydrated: false,
+            with_mergeable_data: true,
+            with_adjustments: false,
+            mark_all_txs_mergeable: false,
+            fork_name: ForkName::Fulu,
+        };
+        let mut decoder = SubmissionDecoder::new(&params);
+        let mut buf = Vec::new();
+        let (decoded_submission, decoded_merging_data, bid_adjustment) =
+            decoder.decode(&body, &mut buf).expect("decode should succeed");
+
+        assert!(matches!(decoded_submission, Submission::Full(_)));
+        assert!(bid_adjustment.is_none());
+        assert_eq!(
+            decoded_merging_data.expect("mergeable submission should carry merging data"),
+            merging_data
+        );
+    }
+
+    #[test]
+    fn decode_merge_preserves_plain_bundle_order() {
+        // Regression: `BundleOrder` briefly carried a stray `latest_only` field (added in one
+        // commit, never removed, despite `Order::BundleV2`'s doc comment saying it was kept off
+        // `BundleOrder` on purpose). That grew its SSZ fixed portion from 12 to 13 bytes, so
+        // every builder — which only ever encodes the original 3-field, 12-byte shape — got its
+        // entire merge submission rejected with `OffsetIntoFixedPortion(12)` the moment it
+        // included so much as one plain (non-V2) bundle order.
+        let mut submission = SignedBidSubmission::random_for_test(&mut rand::rng());
+        submission.blobs_bundle = BlobsBundle::default().into();
+        let merging_data = BlockMergingData {
+            allow_appending: true,
+            builder_address: submission.fee_recipient(),
+            merge_orders: vec![Order::Bundle(BundleOrder {
+                txs: vec![0, 1].into(),
+                reverting_txs: vec![0].into(),
+                dropping_txs: vec![].into(),
+            })],
+        };
+        let with_merging =
+            SignedBidSubmissionWithMergingData { submission, merging_data: merging_data.clone() };
+        let body = with_merging.as_ssz_bytes();
+
+        let params = SubmissionDecoderParams {
+            compression: Compression::None,
+            encoding: Encoding::Ssz,
+            merge_type: MergeType::Mergeable,
+            is_dehydrated: false,
+            with_mergeable_data: true,
+            with_adjustments: false,
+            mark_all_txs_mergeable: false,
+            fork_name: ForkName::Fulu,
+        };
+        let mut decoder = SubmissionDecoder::new(&params);
+        let mut buf = Vec::new();
+        let (decoded_submission, decoded_merging_data, _) =
+            decoder.decode(&body, &mut buf).expect("decode should succeed");
+
+        assert!(matches!(decoded_submission, Submission::Full(_)));
+        assert_eq!(
+            decoded_merging_data.expect("mergeable submission should carry merging data"),
+            merging_data
+        );
+    }
+
+    #[test]
+    fn decode_merge_append_only_clears_merge_orders() {
+        // Retry until a non-empty `merge_orders` shows up, since that's what proves AppendOnly
+        // actively clears them rather than happening to pass through an already-empty vec.
+        let (body, expected_allow_appending, expected_builder_address) = (0..100)
+            .find_map(|_| {
+                let mut submission = SignedBidSubmission::random_for_test(&mut rand::rng());
+                submission.blobs_bundle = BlobsBundle::default().into();
+                let merging_data = BlockMergingData::random_for_test(&mut rand::rng());
+                if merging_data.merge_orders.is_empty() {
+                    return None;
+                }
+                let allow_appending = merging_data.allow_appending;
+                let builder_address = merging_data.builder_address;
+                let with_merging = SignedBidSubmissionWithMergingData { submission, merging_data };
+                Some((with_merging.as_ssz_bytes(), allow_appending, builder_address))
+            })
+            .expect("should produce a submission with non-empty merge_orders within 100 tries");
+
+        let params = SubmissionDecoderParams {
+            compression: Compression::None,
+            encoding: Encoding::Ssz,
+            merge_type: MergeType::AppendOnly,
+            is_dehydrated: false,
+            with_mergeable_data: true,
+            with_adjustments: false,
+            mark_all_txs_mergeable: false,
+            fork_name: ForkName::Fulu,
+        };
+        let mut decoder = SubmissionDecoder::new(&params);
+        let mut buf = Vec::new();
+        let (decoded_submission, merging_data, _) =
+            decoder.decode(&body, &mut buf).expect("decode should succeed");
+
+        assert!(matches!(decoded_submission, Submission::Full(_)));
+        let merging_data = merging_data.expect("append-only should still carry merging data");
+        assert!(merging_data.merge_orders.is_empty());
+        assert_eq!(merging_data.allow_appending, expected_allow_appending);
+        assert_eq!(merging_data.builder_address, expected_builder_address);
+    }
+
+    #[test]
+    fn decode_dehydrated_with_adjustments_carries_adjustment_data() {
+        // `DehydratedBidSubmissionFuluWithAdjustments` has no `TestRandom` impl and its fields
+        // are private, so build one by swapping `merging_data` for `bid_adjustment_data` on a
+        // JSON encoding of a random `..WithMergingData` (same field set otherwise).
+        let with_merging =
+            DehydratedBidSubmissionFuluWithMergingData::random_for_test(&mut rand::rng());
+        let mut value = serde_json::to_value(&with_merging).expect("serialize");
+        let obj = value.as_object_mut().expect("object");
+        obj.remove("merging_data");
+        let bid_adjustment_data =
+            BidAdjustmentData::V1(BidAdjustmentDataV1::Original(BidAdjData::default()));
+        obj.insert(
+            "bid_adjustment_data".to_string(),
+            serde_json::to_value(&bid_adjustment_data).expect("serialize adjustment data"),
+        );
+        let with_adjustments: DehydratedBidSubmissionFuluWithAdjustments =
+            serde_json::from_value(value).expect("reconstruct with adjustments");
+        let body = with_adjustments.as_ssz_bytes();
+
+        let params = SubmissionDecoderParams {
+            compression: Compression::None,
+            encoding: Encoding::Ssz,
+            merge_type: MergeType::None,
+            is_dehydrated: true,
+            with_mergeable_data: false,
+            with_adjustments: true,
+            mark_all_txs_mergeable: false,
+            fork_name: ForkName::Fulu,
+        };
+        let mut decoder = SubmissionDecoder::new(&params);
+        let mut buf = Vec::new();
+        let (decoded_submission, merging_data, bid_adjustment) =
+            decoder.decode(&body, &mut buf).expect("decode should succeed");
+
+        assert!(matches!(decoded_submission, Submission::Dehydrated(_)));
+        assert!(merging_data.is_none());
+        assert_eq!(bid_adjustment.expect("adjustments should be carried"), bid_adjustment_data);
+    }
+
+    #[test]
+    fn decode_default_json_round_trip() {
+        let mut submission = SignedBidSubmission::random_for_test(&mut rand::rng());
+        submission.blobs_bundle = BlobsBundle::default().into();
+        let body = serde_json::to_vec(&submission).expect("serialize");
+
+        let params = SubmissionDecoderParams {
+            compression: Compression::None,
+            encoding: Encoding::Json,
+            merge_type: MergeType::None,
+            is_dehydrated: false,
+            with_mergeable_data: false,
+            with_adjustments: false,
+            mark_all_txs_mergeable: false,
+            fork_name: ForkName::Fulu,
+        };
+        let mut decoder = SubmissionDecoder::new(&params);
+        let mut buf = Vec::new();
+        let (decoded_submission, merging_data, bid_adjustment) =
+            decoder.decode(&body, &mut buf).expect("decode should succeed");
+
+        assert!(matches!(decoded_submission, Submission::Full(_)));
+        assert!(merging_data.is_none());
+        assert!(bid_adjustment.is_none());
+    }
+
+    #[test]
+    fn decode_dehydrated_json_round_trip() {
+        let with_merging =
+            DehydratedBidSubmissionFuluWithMergingData::random_for_test(&mut rand::rng());
+        let (submission, _) = with_merging.split();
+        let body = serde_json::to_vec(&submission).expect("serialize");
+
+        let params = SubmissionDecoderParams {
+            compression: Compression::None,
+            encoding: Encoding::Json,
+            merge_type: MergeType::None,
+            is_dehydrated: true,
+            with_mergeable_data: false,
+            with_adjustments: false,
+            mark_all_txs_mergeable: false,
+            fork_name: ForkName::Fulu,
+        };
+        let mut decoder = SubmissionDecoder::new(&params);
+        let mut buf = Vec::new();
+        let (decoded_submission, merging_data, bid_adjustment) =
+            decoder.decode(&body, &mut buf).expect("decode should succeed");
+
+        assert!(matches!(decoded_submission, Submission::Dehydrated(_)));
+        assert!(merging_data.is_none());
+        assert!(bid_adjustment.is_none());
     }
 }
