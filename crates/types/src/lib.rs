@@ -10,6 +10,7 @@ mod execution_payload;
 mod fields;
 mod hydration;
 mod operator;
+mod test_random_compat;
 mod test_utils;
 mod utils;
 mod validator;
@@ -29,14 +30,14 @@ pub use fields::*;
 pub use helix_tcp_types::{Compression, MergeType};
 pub use hydration::*;
 pub use lh_kzg::{KzgCommitment, KzgProof};
-pub use lh_test_random::TestRandom;
 pub use lh_types::{
     Config as LhConfig, EthSpec, ExecPayload, ForkName, ForkVersionDecode, MainnetEthSpec,
-    SignedRoot, test_utils::TestRandom,
+    SignedRoot,
 };
 pub use operator::*;
 use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
+pub use test_random_compat::TestRandom;
 pub use test_utils::*;
 pub use validator::*;
 

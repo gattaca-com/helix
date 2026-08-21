@@ -270,6 +270,7 @@ fn fork_byte(fork: ForkName) -> u8 {
         ForkName::Electra => 5,
         ForkName::Fulu => 6,
         ForkName::Gloas => 7,
+        ForkName::Heze => 8,
     }
 }
 

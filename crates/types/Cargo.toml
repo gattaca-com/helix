@@ -23,10 +23,10 @@ lh-bls.workspace = true
 lh-eth2 = { workspace = true, features = ["events"] }
 lh-kzg.workspace = true
 lh-slot-clock.workspace = true
-lh-test-random.workspace = true
 lh-types.workspace = true
 libp2p.workspace = true
 rand.workspace = true
+rand_xorshift.workspace = true
 rustc-hash.workspace = true
 serde.workspace = true
 serde_json.workspace = true

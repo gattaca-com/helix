@@ -2,7 +2,7 @@ use std::{hash::Hasher, sync::Arc};
 
 use alloy_primitives::{Address, B256, U256};
 use flux_profiler::timed;
-use lh_types::{ForkName, ForkVersionDecode, test_utils::TestRandom};
+use lh_types::{ForkName, ForkVersionDecode};
 use rustc_hash::{FxHashMap, FxHasher};
 use serde::{Deserialize, Serialize};
 use ssz::{Decode, DecodeError};
@@ -12,7 +12,7 @@ use tree_hash::TreeHash;
 
 use crate::{
     BidTrace, Blob, BlobsBundle, BlockMergingData, BlockValidationError, BlsPublicKeyBytes,
-    BlsSignatureBytes, ExecutionPayload, SignedBidSubmission,
+    BlsSignatureBytes, ExecutionPayload, SignedBidSubmission, TestRandom,
     bid_adjustment_data::BidAdjustmentData,
     bid_submission,
     fields::{ExecutionRequests, KzgCommitment, KzgProof, Transaction},
@@ -34,7 +34,8 @@ impl ForkVersionDecode for DehydratedBidSubmission {
             ForkName::Capella |
             ForkName::Deneb |
             ForkName::Electra |
-            ForkName::Gloas => Err(DecodeError::NoMatchingVariant),
+            ForkName::Gloas |
+            ForkName::Heze => Err(DecodeError::NoMatchingVariant),
             ForkName::Fulu => DehydratedBidSubmissionFulu::from_ssz_bytes(bytes)
                 .map(DehydratedBidSubmission::Fulu),
         }
@@ -212,6 +213,7 @@ impl ForkVersionDecode for DehydratedBidSubmissionFuluWithAdjustments {
             ForkName::Capella |
             ForkName::Deneb |
             ForkName::Gloas |
+            ForkName::Heze |
             ForkName::Electra => Err(DecodeError::NoMatchingVariant),
             ForkName::Fulu => DehydratedBidSubmissionFuluWithAdjustments::from_ssz_bytes(bytes),
         }
@@ -254,6 +256,7 @@ impl ForkVersionDecode for DehydratedBidSubmissionFuluWithMergingData {
             ForkName::Capella |
             ForkName::Deneb |
             ForkName::Gloas |
+            ForkName::Heze |
             ForkName::Electra => Err(DecodeError::NoMatchingVariant),
             ForkName::Fulu => DehydratedBidSubmissionFuluWithMergingData::from_ssz_bytes(bytes),
         }
