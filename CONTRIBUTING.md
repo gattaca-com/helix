@@ -13,10 +13,11 @@ Design, review, and testing are human responsibilities. Implementation
 work can be delegated to an agent to speed things up. But we follow
 a trust but verify approach for ai work.
 
-Tests define correctness, not issues or design docs. Write tests before
-or alongside implementation, and run them throughout, not just at the end.
-A human must review and approve the tests (and the issue, if there is one)
-before implementation code is written against them.
+This is test-driven development: tests are written before or alongside
+implementation and define correctness, not issues or design docs. Run
+tests throughout implementation, not just at the end. A human must review
+and approve the tests (and the issue, if there is one) before
+implementation code is written against them.
 
 ## Issues
 
