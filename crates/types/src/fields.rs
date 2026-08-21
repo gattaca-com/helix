@@ -1,13 +1,18 @@
 use alloy_primitives::FixedBytes;
-use lh_types::{EthSpec, MainnetEthSpec, test_utils::TestRandom};
+use lh_types::{EthSpec, MainnetEthSpec};
 use rand::Rng;
 use ssz_types::{FixedVector, VariableList};
 
-use crate::{SszError, ssz_bytes_wrapper};
+use crate::{SszError, TestRandom, ssz_bytes_wrapper};
 
 pub type Withdrawal = lh_types::Withdrawal;
 pub type Withdrawals = lh_types::Withdrawals<MainnetEthSpec>;
-pub type ExecutionRequests = lh_types::ExecutionRequests<MainnetEthSpec>;
+// `ExecutionRequests` is a fork-versioned superstruct as of Gloas (which adds
+// `builder_deposits`/`builder_exits`, EIP-8282). helix's active fork is still pre-Gloas, so --
+// mirroring how `ExecutionPayload` is pinned to a flat, non-fork-versioned shape elsewhere in
+// this crate -- we pin to the Electra shape here too. Revisit once helix actually needs to
+// serve Gloas submissions.
+pub type ExecutionRequests = lh_types::ExecutionRequestsElectra<MainnetEthSpec>;
 pub type KzgCommitment = alloy_consensus::Bytes48;
 pub type KzgCommitments =
     VariableList<KzgCommitment, <MainnetEthSpec as EthSpec>::MaxBlobCommitmentsPerBlock>;

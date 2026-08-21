@@ -6,12 +6,8 @@ use crate::Slot;
 
 pub const MAINNET_GENESIS_TIME: u64 = 1606824023;
 
-pub fn new_slot_clock(genesis_time: u64, seconds_per_slot: u64) -> SlotClock {
-    SlotClock::new(
-        0u64.into(),
-        Duration::from_secs(genesis_time),
-        Duration::from_secs(seconds_per_slot),
-    )
+pub fn new_slot_clock(genesis_time: u64, slot_duration: Duration) -> SlotClock {
+    SlotClock::new(0u64.into(), Duration::from_secs(genesis_time), slot_duration)
 }
 
 pub fn duration_into_slot(clock: &SlotClock, slot: Slot) -> Option<Duration> {
@@ -28,7 +24,7 @@ mod tests {
 
     #[test]
     fn test_duration_into_slot() {
-        let clock = new_slot_clock(MAINNET_GENESIS_TIME, 12);
+        let clock = new_slot_clock(MAINNET_GENESIS_TIME, Duration::from_secs(12));
 
         for _ in 0..100 {
             let slot = clock.now().unwrap();
