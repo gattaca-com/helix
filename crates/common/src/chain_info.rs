@@ -25,8 +25,8 @@ pub struct ChainInfo {
 impl ChainInfo {
     pub fn new(spec: ChainSpec, genesis_validators_root: B256, genesis_time_in_secs: u64) -> Self {
         let name = spec.config_name.clone().expect("spec config name should be set");
-        let clock = new_slot_clock(genesis_time_in_secs, spec.seconds_per_slot);
-        let builder_domain = spec.get_builder_domain();
+        let clock = new_slot_clock(genesis_time_in_secs, spec.get_slot_duration());
+        let builder_domain = spec.get_builder_application_domain();
         Self { name, genesis_validators_root, spec, clock, genesis_time_in_secs, builder_domain }
     }
 
@@ -39,7 +39,7 @@ impl ChainInfo {
     }
 
     pub fn seconds_per_slot(&self) -> u64 {
-        self.spec.seconds_per_slot
+        self.spec.get_slot_duration().as_secs()
     }
 
     pub fn slots_per_epoch(&self) -> u64 {

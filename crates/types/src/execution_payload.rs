@@ -1,5 +1,5 @@
 use alloy_primitives::{Address, B256, U256};
-use lh_types::{EthSpec, ForkName, ForkVersionDecode, MainnetEthSpec, test_utils::TestRandom};
+use lh_types::{EthSpec, ForkName, ForkVersionDecode, MainnetEthSpec};
 use serde::{Deserialize, Serialize};
 use ssz::Decode;
 use ssz_derive::{Decode, Encode};
@@ -7,7 +7,7 @@ use tree_hash::TreeHash;
 use tree_hash_derive::TreeHash;
 
 use crate::{
-    BlockValidationError, SszError, convert_bloom_to_lighthouse,
+    BlockValidationError, SszError, TestRandom, convert_bloom_to_lighthouse,
     convert_transactions_to_lighthouse,
     fields::{Bloom, ExtraData, Transactions, Withdrawals},
 };
@@ -167,7 +167,8 @@ impl ForkVersionDecode for ExecutionPayload {
             ForkName::Capella |
             ForkName::Deneb |
             ForkName::Electra |
-            ForkName::Gloas => {
+            ForkName::Gloas |
+            ForkName::Heze => {
                 return Err(ssz::DecodeError::BytesInvalid(format!(
                     "unsupported fork for ExecutionPayloadHeader: {fork_name}",
                 )));
