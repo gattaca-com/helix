@@ -66,9 +66,9 @@ flate2 = "1.0"
 flux = { git = "https://github.com/gattaca-com/flux", rev = "ce40087" }
 flux-network = { package = "flux-network", git = "https://github.com/gattaca-com/flux", rev = "ce40087" }
 flux-profiler = { package = "flux-profiler", git = "https://github.com/gattaca-com/flux", rev = "ce40087" }
-flux-type-hash = { package = "type-hash", git = "https://github.com/gattaca-com/flux", rev = "ce40087" }
-flux-type-hash-derive = { package = "type-hash-derive", git = "https://github.com/gattaca-com/flux", rev = "ce40087" }
 flux-utils = { package = "flux-utils", git = "https://github.com/gattaca-com/flux", rev = "ce40087" }
+type-hash = { git = "https://github.com/gattaca-com/flux", rev = "ce40087" }
+type-hash-derive = { git = "https://github.com/gattaca-com/flux", rev = "ce40087" }
 
 futures = "0.3"
 futures-util = { version = "0.3", features = ["compat"] }

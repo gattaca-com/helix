@@ -3,9 +3,9 @@ pub mod merging;
 use std::fmt::{self, Display};
 
 use bytes::Bytes;
-use flux_type_hash_derive::TypeHash;
 use serde::{Deserialize, Serialize};
 use strum::{AsRefStr, EnumString};
+use type_hash_derive::TypeHash;
 
 #[repr(u8)]
 #[derive(
