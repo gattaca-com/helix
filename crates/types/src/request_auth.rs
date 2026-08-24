@@ -2,8 +2,9 @@
 //! `getExecutionPayloadBid` and `submitBuilderPreferences` requests, and to carry a
 //! proposer's per-builder payment preferences.
 //!
-//! See <https://github.com/ethereum/builder-specs/pull/165>. Not yet part of any merged
-//! spec, so field shapes may still change.
+//! See <https://github.com/ethereum/builder-specs/blob/main/specs/gloas/validator.md#new-containers>.
+//! TODO(gloas): the merged spec renamed these to `BuilderRequestAuth`/`SignedBuilderRequestAuth`;
+//! rename here to match.
 
 use alloy_primitives::B256;
 use lh_types::SignedRoot;

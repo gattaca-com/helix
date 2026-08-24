@@ -19,11 +19,8 @@ use crate::api::{Api, proposer::error::ProposerApiError};
 
 impl<A: Api> ProposerApi<A> {
     /// Serves a `SignedExecutionPayloadBid` for the given slot/parent_hash/parent_root to a
-    /// Gloas (ePBS) proposer.
-    ///
-    /// Not yet wired to the auctioneer: this only validates the request per
-    /// <https://github.com/ethereum/builder-specs/pull/165> and always answers with the
-    /// spec's "no bid available" response.
+    /// Gloas (ePBS) proposer, per
+    /// <https://github.com/ethereum/builder-specs/blob/main/specs/gloas/builder.md#per-request-validator-inputs>.
     #[tracing::instrument(skip_all, err(level = tracing::Level::TRACE), fields(id =% extract_request_id(&headers), slot = params.slot))]
     pub async fn get_execution_payload_bid(
         Extension(proposer_api): Extension<Arc<ProposerApi<A>>>,
@@ -67,8 +64,8 @@ impl<A: Api> ProposerApi<A> {
         );
 
         // TODO(gloas): fetch/build the SignedExecutionPayloadBid from the auctioneer, honoring
-        // any stored max_execution_payment preference. Not wired in yet -- always reports "no
-        // bid available", which is a valid response per spec.
+        // any stored max_execution_payment preference. Until then, "no bid available" is a
+        // valid response per spec.
         Ok(StatusCode::NO_CONTENT)
     }
 }
