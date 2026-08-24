@@ -95,7 +95,7 @@ lh-eth2 = { package = "eth2", git = "https://github.com/sigp/lighthouse", rev = 
 lh-kzg = { package = "kzg", git = "https://github.com/sigp/lighthouse", rev = "f064e9e061997c41658c3544da47627c6db92bc9" }
 lh-slot-clock = { package = "slot_clock", git = "https://github.com/sigp/lighthouse", rev = "f064e9e061997c41658c3544da47627c6db92bc9" }
 lh-types = { package = "types", git = "https://github.com/sigp/lighthouse", rev = "f064e9e061997c41658c3544da47627c6db92bc9" }
-libp2p = { version = "0.56", features = ["macros", "ping", "quic", "floodsub", "secp256k1", "tokio"] }
+libp2p = { version = "0.56", features = ["macros", "ping", "quic", "gossipsub", "secp256k1", "tokio"] }
 metrics = "0.24.0"
 mime_guess = "2"
 mockito = "1.1.1"
