@@ -1,4 +1,10 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use alloy_primitives::{Address, B256, Bytes, U256, keccak256};
 use flux::{
@@ -194,6 +200,11 @@ pub struct BlockMergingTile {
     decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
     slot_events: Arc<SharedVector<SlotUpdate>>,
     merged_blocks: Arc<SharedVector<BlockMergeResponse>>,
+    /// Admin-toggled kill switch for the merge builder connection. While
+    /// `false`, the tile neither dials nor completes a handshake, and
+    /// force-disconnects any active connection. Only an admin can set this
+    /// back to `true` (never automatic).
+    block_merging_enabled: Arc<AtomicBool>,
 
     // Buffered during `poll_with` (the connector is exclusively borrowed
     // there), drained right after.
@@ -237,6 +248,17 @@ impl Tile<HelixSpine> for BlockMergingTile {
     fn name(&self) -> flux::tile::TileName {
         flux_utils::short_typename::<Self>()
     }
+}
+
+/// Whether the tile should attempt to dial the merge builder.
+fn should_dial(enabled: bool, has_token: bool) -> bool {
+    enabled && !has_token
+}
+
+/// Whether the tile should force-disconnect its current connection to the
+/// merge builder.
+fn should_force_disconnect(enabled: bool, has_token: bool) -> bool {
+    !enabled && has_token
 }
 
 /// order_id -> order_hash for every `latest_only` bundle in this submission.
@@ -283,6 +305,7 @@ impl BlockMergingTile {
         slot_events: Arc<SharedVector<SlotUpdate>>,
         merged_blocks: Arc<SharedVector<BlockMergeResponse>>,
         chain_info: ChainInfo,
+        block_merging_enabled: Arc<AtomicBool>,
     ) -> Self {
         let relay_config_msg = RelayConfigV1 {
             relay_fee_recipient: config.relay_fee_recipient,
@@ -339,6 +362,7 @@ impl BlockMergingTile {
             decoded,
             slot_events,
             merged_blocks,
+            block_merging_enabled,
             to_disconnect: Vec::new(),
             to_register: Vec::new(),
             handshaken: Vec::new(),
@@ -354,7 +378,8 @@ impl BlockMergingTile {
     /// is not retried by the connector (unlike an established conn, which
     /// auto-reconnects), so this runs on a repeater.
     fn dial_endpoint(&mut self) {
-        if self.token.is_some() {
+        let enabled = self.block_merging_enabled.load(Ordering::Relaxed);
+        if !should_dial(enabled, self.token.is_some()) {
             return;
         }
         let addr = self.endpoint.addr;
@@ -408,6 +433,8 @@ impl BlockMergingTile {
     }
 
     fn poll_sockets(&mut self) {
+        let enabled = self.block_merging_enabled.load(Ordering::Relaxed);
+
         // Split borrows: the connector is exclusively borrowed for the whole
         // poll, all reactions are buffered.
         let Self {
@@ -434,8 +461,12 @@ impl BlockMergingTile {
             PollEvent::Reconnect { token } => {
                 info!(?token, "reconnected to merging builder");
                 if *my_token == Some(token) {
-                    conn.reset();
-                    to_register.push(token);
+                    if should_force_disconnect(enabled, true) {
+                        to_disconnect.push(token);
+                    } else {
+                        conn.reset();
+                        to_register.push(token);
+                    }
                 }
             }
             PollEvent::Disconnect { token } => {
@@ -615,6 +646,15 @@ impl BlockMergingTile {
             self.connector.write_or_enqueue_with(SendBehavior::Single(token), |buf| {
                 append_frame(buf, MergingMsgId::PongV1, &PongV1 { nonce });
             });
+        }
+
+        // Catches an already-active connection the tick after the flag
+        // flips to disabled; a no-op once the token is no longer in the
+        // connector's active set.
+        if let Some(token) = self.token &&
+            should_force_disconnect(enabled, true)
+        {
+            self.connector.disconnect(token);
         }
     }
 
@@ -1122,5 +1162,21 @@ mod tests {
             find_unbundled_txs(&filtered_final_txs, &orders, &mut Vec::new(), &mut Vec::new()),
             Vec::<B256>::new(),
         );
+    }
+
+    #[test]
+    fn should_dial_only_when_enabled_and_disconnected() {
+        assert!(should_dial(true, false));
+        assert!(!should_dial(true, true));
+        assert!(!should_dial(false, false));
+        assert!(!should_dial(false, true));
+    }
+
+    #[test]
+    fn should_force_disconnect_only_when_disabled_and_connected() {
+        assert!(should_force_disconnect(false, true));
+        assert!(!should_force_disconnect(false, false));
+        assert!(!should_force_disconnect(true, true));
+        assert!(!should_force_disconnect(true, false));
     }
 }

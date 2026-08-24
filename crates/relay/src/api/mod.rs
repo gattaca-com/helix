@@ -1,6 +1,6 @@
 #![allow(clippy::too_many_arguments)]
 
-use std::sync::Arc;
+use std::sync::{Arc, atomic::AtomicBool};
 
 use helix_common::{api_provider::ApiProvider, local_cache::LocalCache};
 pub use helix_data_api::{
@@ -27,8 +27,14 @@ pub fn start_admin_service(
     auctioneer: Arc<LocalCache>,
     db: Arc<PostgresDatabaseService>,
     admin_token: String,
+    block_merging_enabled: Arc<AtomicBool>,
 ) {
-    tokio::spawn(admin_service::run_admin_service(auctioneer, db, admin_token));
+    tokio::spawn(admin_service::run_admin_service(
+        auctioneer,
+        db,
+        admin_token,
+        block_merging_enabled,
+    ));
 }
 
 pub trait Api: Clone + Send + Sync + 'static {
