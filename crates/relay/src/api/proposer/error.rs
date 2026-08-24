@@ -1,3 +1,4 @@
+use alloy_primitives::B256;
 use axum::{
     self,
     response::{IntoResponse, Response},
@@ -136,6 +137,19 @@ pub enum ProposerApiError {
 
     #[error("invalid request: Date-Milliseconds and X-Timeout-Ms headers are required")]
     MissingTimingHeaders,
+
+    #[error("no held execution payload for bid block hash {0:?}")]
+    NoHeldPayloadForBlock(B256),
+
+    #[error(
+        "held payload block hash {held:?} does not match the bid's committed block hash {bid:?}"
+    )]
+    HeldPayloadBlockHashMismatch { held: B256, bid: B256 },
+
+    #[error(
+        "bid builder_index {bid} does not match this relay's configured builder_index {configured}"
+    )]
+    BuilderIndexMismatch { bid: u64, configured: u64 },
 }
 
 impl From<DecodeError> for ProposerApiError {
@@ -181,7 +195,10 @@ impl IntoResponse for ProposerApiError {
                 ProposerApiError::GetPayloadAlreadyReceived |
                 ProposerApiError::RequestForPastSlot { .. } |
                 ProposerApiError::RequestAuthSlotMismatch { .. } |
-                ProposerApiError::MissingTimingHeaders => StatusCode::BAD_REQUEST,
+                ProposerApiError::MissingTimingHeaders |
+                ProposerApiError::NoHeldPayloadForBlock(_) |
+                ProposerApiError::HeldPayloadBlockHashMismatch { .. } |
+                ProposerApiError::BuilderIndexMismatch { .. } => StatusCode::BAD_REQUEST,
 
                 // All authentication failures, kept indistinguishable by status
                 ProposerApiError::InvalidApiKey |
