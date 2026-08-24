@@ -125,12 +125,12 @@ pub enum ProposerApiError {
     SszDecodeError(DecodeError),
 
     // Gloas (ePBS) builder-API additions, per
-    // https://github.com/ethereum/builder-specs/pull/165. Not yet wired to the auctioneer.
-    #[error("invalid SignedRequestAuth: signature verification failed")]
+    // https://github.com/ethereum/builder-specs/blob/main/specs/gloas/builder.md.
+    #[error("invalid SignedBuilderRequestAuth: signature verification failed")]
     InvalidRequestAuthSignature,
 
     #[error(
-        "invalid SignedRequestAuth: auth.message.slot ({auth_slot}) does not match the request slot ({request_slot})"
+        "invalid SignedBuilderRequestAuth: auth.message.slot ({auth_slot}) does not match the request slot ({request_slot})"
     )]
     RequestAuthSlotMismatch { auth_slot: u64, request_slot: u64 },
 

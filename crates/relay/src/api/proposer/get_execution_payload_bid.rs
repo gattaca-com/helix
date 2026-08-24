@@ -9,7 +9,7 @@ use helix_common::{
     decoder::Encoding,
     utils::extract_request_id,
 };
-use helix_types::{ForkName, SignedRequestAuth};
+use helix_types::{ForkName, SignedBuilderRequestAuth};
 use hyper::StatusCode;
 use ssz::Decode;
 use tracing::info;
@@ -39,10 +39,11 @@ impl<A: Api> ProposerApi<A> {
             return Err(ProposerApiError::MissingTimingHeaders);
         }
 
-        let signed_request_auth: SignedRequestAuth = match Encoding::from_content_type(&headers) {
-            Encoding::Json => serde_json::from_slice(&body)?,
-            Encoding::Ssz => SignedRequestAuth::from_ssz_bytes(&body)?,
-        };
+        let signed_request_auth: SignedBuilderRequestAuth =
+            match Encoding::from_content_type(&headers) {
+                Encoding::Json => serde_json::from_slice(&body)?,
+                Encoding::Ssz => SignedBuilderRequestAuth::from_ssz_bytes(&body)?,
+            };
 
         if signed_request_auth.message.slot != params.slot {
             return Err(ProposerApiError::RequestAuthSlotMismatch {

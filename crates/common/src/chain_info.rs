@@ -20,8 +20,8 @@ pub struct ChainInfo {
     pub clock: SlotClock,
     pub genesis_time_in_secs: u64,
     pub builder_domain: B256,
-    /// Domain for verifying Gloas builder-API `SignedRequestAuth` signatures. Not a consensus
-    /// domain; see `ChainSpec::get_request_auth_domain`.
+    /// Domain for verifying Gloas builder-API `SignedBuilderRequestAuth` signatures. Not a
+    /// consensus domain; see `ChainSpec::get_request_auth_domain`.
     pub request_auth_domain: B256,
 }
 
