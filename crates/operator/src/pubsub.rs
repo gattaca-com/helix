@@ -24,6 +24,21 @@ struct NetBehaviour {
     ping: ping::Behaviour,
 }
 
+fn record_builder_collateral(
+    builder_collateral: &mut HashMap<String, BuilderCollateral>,
+    builder_id: String,
+    collateral: BuilderCollateral,
+) -> bool {
+    let changed = builder_collateral.get(&builder_id).is_none_or(|existing| {
+        collateral.collateral_wei != existing.collateral_wei ||
+            existing.builder_pubkeys != collateral.builder_pubkeys
+    });
+    if changed {
+        builder_collateral.insert(builder_id, collateral);
+    }
+    changed
+}
+
 pub(super) async fn run_operator_connection(
     quic_port: u16,
     keypair: Keypair,
@@ -96,15 +111,7 @@ pub(super) async fn run_operator_connection(
                                 continue;
                             };
 
-                            match builder_collateral.get(&id) {
-                                Some(existing) if collateral.collateral_wei != existing.collateral_wei || existing.builder_pubkeys != collateral.builder_pubkeys => {
-                                    builder_collateral.insert(id, collateral.clone());
-                                    true
-                                }
-                                _ => {
-                                    false
-                                }
-                            }
+                            record_builder_collateral(&mut builder_collateral, id, collateral.clone())
                         }
                         _ => true,
                     };
@@ -192,4 +199,29 @@ pub(super) async fn run_operator_connection(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use helix_types::BlsPublicKeyBytes;
+
+    use super::*;
+
+    #[test]
+    fn first_builder_collateral_message_is_recorded_for_publish_and_replay() {
+        let mut state = HashMap::new();
+        let collateral = BuilderCollateral {
+            ts_ms: 1,
+            slot: 2,
+            builder_pubkeys: vec![BlsPublicKeyBytes::random()],
+            collateral_wei: 3,
+            operator_group: Some(b"operator-a".to_vec()),
+        };
+
+        assert!(
+            record_builder_collateral(&mut state, "builder-a".to_string(), collateral.clone(),)
+        );
+        assert_eq!(state.len(), 1);
+        assert!(!record_builder_collateral(&mut state, "builder-a".to_string(), collateral,));
+    }
 }
