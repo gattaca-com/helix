@@ -32,8 +32,8 @@ pub use helix_tcp_types::{Compression, MergeType};
 pub use hydration::*;
 pub use lh_kzg::{KzgCommitment, KzgProof};
 pub use lh_types::{
-    Config as LhConfig, EthSpec, ExecPayload, ForkName, ForkVersionDecode, MainnetEthSpec,
-    SignedRoot,
+    Config as LhConfig, EmptyBlock, EthSpec, ExecPayload, ExecutionBlockHash, ForkName,
+    ForkVersionDecode, MainnetEthSpec, SignedRoot,
 };
 pub use operator::*;
 pub use request_auth::*;
@@ -65,6 +65,13 @@ pub type VersionedSignedProposal = SignedBlockContents;
 pub type SignedBeaconBlock = lh_types::SignedBeaconBlock<MainnetEthSpec>;
 pub type SignedBeaconBlockFulu = lh_types::SignedBeaconBlockFulu<MainnetEthSpec>;
 pub type SignedBeaconBlockGloas = lh_types::SignedBeaconBlockGloas<MainnetEthSpec>;
+
+// Gloas (ePBS) builder-API additions.
+pub type BeaconBlockGloas = lh_types::BeaconBlockGloas<MainnetEthSpec>;
+pub type ExecutionPayloadGloas = lh_types::ExecutionPayloadGloas<MainnetEthSpec>;
+pub type ExecutionRequestsGloas = lh_types::ExecutionRequestsGloas<MainnetEthSpec>;
+pub type ExecutionPayloadEnvelope = lh_types::ExecutionPayloadEnvelope<MainnetEthSpec>;
+pub type SignedExecutionPayloadEnvelope = lh_types::SignedExecutionPayloadEnvelope<MainnetEthSpec>;
 
 // Beacon block
 pub type BeaconBlockFulu = lh_types::BeaconBlockFulu<MainnetEthSpec>;

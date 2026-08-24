@@ -4,7 +4,7 @@ use std::sync::{
 };
 
 use futures::future::join_all;
-use helix_types::{ForkName, VersionedSignedProposal};
+use helix_types::{ForkName, SignedExecutionPayloadEnvelope, VersionedSignedProposal};
 
 use crate::{
     beacon::{beacon_client::BeaconClient, error::BeaconClientError, types::BroadcastValidation},
@@ -82,5 +82,91 @@ impl MultiBeaconClient {
         }
 
         Err(last_error.unwrap_or(BeaconClientError::BeaconNodeUnavailable))
+    }
+
+    /// Publishes the signed execution payload envelope to all beacon clients; returns on first
+    /// success. Unlike `publish_block`, fans out via plain concurrent futures, not
+    /// `spawn_tracked!`.
+    pub async fn publish_execution_payload_envelope(
+        &self,
+        envelope: Arc<SignedExecutionPayloadEnvelope>,
+        fork: ForkName,
+    ) -> Result<(), BeaconClientError> {
+        let futures = self
+            .beacon_clients
+            .iter()
+            .map(|client| client.publish_execution_payload_envelope(envelope.clone(), fork));
+
+        let mut last_error: Option<BeaconClientError> = None;
+        for res in join_all(futures).await {
+            match res {
+                Ok(_) => return Ok(()),
+                Err(err) => last_error = Some(err),
+            }
+        }
+
+        Err(last_error.unwrap_or(BeaconClientError::BeaconNodeUnavailable))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use helix_types::{BlsSignature, ExecutionPayloadEnvelope};
+    use httpmock::{Method::POST, MockServer};
+    use reqwest::Url;
+
+    use super::*;
+    use crate::BeaconClientConfig;
+
+    fn envelope() -> Arc<SignedExecutionPayloadEnvelope> {
+        Arc::new(SignedExecutionPayloadEnvelope {
+            message: ExecutionPayloadEnvelope::empty(),
+            signature: BlsSignature::empty(),
+        })
+    }
+
+    fn client_for(server: &MockServer) -> Arc<BeaconClient> {
+        let url = Url::parse(&server.url("/")).unwrap();
+        Arc::new(BeaconClient::new(BeaconClientConfig { url }))
+    }
+
+    #[tokio::test]
+    async fn publish_execution_payload_envelope_returns_ok_on_first_success() {
+        crate::utils::install_default_crypto_provider();
+        let failing = MockServer::start();
+        failing.mock(|when, then| {
+            when.method(POST).path("/eth/v1/beacon/execution_payload_envelopes");
+            then.status(500);
+        });
+        let succeeding = MockServer::start();
+        succeeding.mock(|when, then| {
+            when.method(POST).path("/eth/v1/beacon/execution_payload_envelopes");
+            then.status(200);
+        });
+
+        let multi = MultiBeaconClient::new(vec![client_for(&failing), client_for(&succeeding)]);
+        let result = multi.publish_execution_payload_envelope(envelope(), ForkName::Gloas).await;
+
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
+    }
+
+    #[tokio::test]
+    async fn publish_execution_payload_envelope_returns_err_when_all_clients_fail() {
+        crate::utils::install_default_crypto_provider();
+        let a = MockServer::start();
+        a.mock(|when, then| {
+            when.method(POST).path("/eth/v1/beacon/execution_payload_envelopes");
+            then.status(500);
+        });
+        let b = MockServer::start();
+        b.mock(|when, then| {
+            when.method(POST).path("/eth/v1/beacon/execution_payload_envelopes");
+            then.status(500);
+        });
+
+        let multi = MultiBeaconClient::new(vec![client_for(&a), client_for(&b)]);
+        let result = multi.publish_execution_payload_envelope(envelope(), ForkName::Gloas).await;
+
+        assert!(result.is_err(), "expected Err, got {result:?}");
     }
 }
