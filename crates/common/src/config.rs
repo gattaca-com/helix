@@ -77,6 +77,10 @@ pub struct RelayConfig {
     pub enable_flux_profiler: bool,
     #[serde(default)]
     pub operator_config: Option<OperatorConfig>,
+    /// This relay's on-chain Gloas (ePBS) builder_index. Placeholder until helix has a real
+    /// on-chain builder registration; signs under the relay's own key in the meantime.
+    #[serde(default)]
+    pub gloas_builder_index: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -131,6 +135,7 @@ impl RelayConfig {
             clickhouse: None,
             enable_flux_profiler: false,
             operator_config: None,
+            gloas_builder_index: 0,
         }
     }
 }
