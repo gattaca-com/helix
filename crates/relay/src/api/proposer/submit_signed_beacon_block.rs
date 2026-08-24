@@ -5,7 +5,7 @@ use axum::{Extension, http::HeaderMap};
 use helix_common::{chain_info::ChainInfo, decoder::Encoding, utils::extract_request_id};
 use helix_types::{
     BlsKeypair, Domain, EthSpec, ExecutionPayloadEnvelope, ExecutionPayloadGloas,
-    ExecutionRequestsGloas, ForkName, MainnetEthSpec, SignedBeaconBlock, SignedBeaconBlockGloas,
+    ExecutionRequestsGloas, ForkName, MainnetEthSpec, SignedBeaconBlockGloas,
     SignedExecutionPayloadEnvelope, SignedRoot,
 };
 use hyper::StatusCode;
@@ -17,8 +17,6 @@ use super::{ProposerApi, get_payload::fork_name_from_header};
 use crate::api::{Api, proposer::error::ProposerApiError};
 
 /// A payload a builder has already handed helix for a proposer's committed bid.
-// TODO(gloas): wire into ProposerApi's shared state and call from the handler below.
-#[allow(dead_code)]
 pub struct HeldGloasPayload {
     pub payload: ExecutionPayloadGloas,
     pub execution_requests: ExecutionRequestsGloas,
@@ -26,15 +24,22 @@ pub struct HeldGloasPayload {
 
 /// Looks up and consumes the payload held for a bid's committed block hash. Must not return
 /// the same payload twice.
-// TODO(gloas): implement against the auctioneer; see gattaca-com/helix#489 step 3.
-#[allow(dead_code)]
 pub trait GloasPayloadStore: Send + Sync {
     fn take_held_payload(&self, block_hash: B256) -> Option<HeldGloasPayload>;
 }
 
+/// Placeholder `GloasPayloadStore`: nothing has held a payload yet.
+// TODO(gloas): implement against the auctioneer; see gattaca-com/helix#489 step 3.
+pub struct NoHeldPayloads;
+
+impl GloasPayloadStore for NoHeldPayloads {
+    fn take_held_payload(&self, _block_hash: B256) -> Option<HeldGloasPayload> {
+        None
+    }
+}
+
 /// Helix's own on-chain Gloas builder identity: `builder_index` plus signing key.
 // TODO(gloas): support external builder-signed bids/envelopes; see gattaca-com/helix#489 step 5.
-#[allow(dead_code)]
 pub struct GloasBuilderIdentity {
     pub builder_index: u64,
     pub keypair: BlsKeypair,
@@ -43,7 +48,6 @@ pub struct GloasBuilderIdentity {
 impl GloasBuilderIdentity {
     /// Signs under `DOMAIN_BEACON_BUILDER`, not `ChainInfo::builder_domain`, per
     /// <https://github.com/ethereum/consensus-specs/blob/master/specs/gloas/builder.md#constructing-the-signedexecutionpayloadenvelope>.
-    #[allow(dead_code)]
     pub fn sign_envelope(
         &self,
         message: ExecutionPayloadEnvelope,
@@ -63,7 +67,6 @@ impl GloasBuilderIdentity {
 }
 
 /// Constructs and signs the `SignedExecutionPayloadEnvelope` fulfilling `block`'s committed bid.
-#[allow(dead_code)]
 pub(super) fn construct_signed_envelope(
     block: &SignedBeaconBlockGloas,
     store: &dyn GloasPayloadStore,
@@ -109,7 +112,7 @@ impl<A: Api> ProposerApi<A> {
     /// Gloas has no blinded-block variant.
     #[tracing::instrument(skip_all, err(level = tracing::Level::TRACE), fields(id =% extract_request_id(&headers)))]
     pub async fn submit_signed_beacon_block(
-        Extension(_proposer_api): Extension<Arc<ProposerApi<A>>>,
+        Extension(proposer_api): Extension<Arc<ProposerApi<A>>>,
         headers: HeaderMap,
         body: bytes::Bytes,
     ) -> Result<StatusCode, ProposerApiError> {
@@ -118,23 +121,25 @@ impl<A: Api> ProposerApi<A> {
             return Err(ProposerApiError::InvalidFork);
         }
 
-        let signed_block: SignedBeaconBlock = match Encoding::from_content_type(&headers) {
-            Encoding::Json => {
-                let block: SignedBeaconBlockGloas = serde_json::from_slice(&body)?;
-                block.into()
-            }
-            Encoding::Ssz => {
-                let block = SignedBeaconBlockGloas::from_ssz_bytes(&body)?;
-                block.into()
-            }
+        let block: SignedBeaconBlockGloas = match Encoding::from_content_type(&headers) {
+            Encoding::Json => serde_json::from_slice(&body)?,
+            Encoding::Ssz => SignedBeaconBlockGloas::from_ssz_bytes(&body)?,
         };
 
-        info!(
-            slot = signed_block.slot().as_u64(),
-            "accepted submitSignedBeaconBlock request (not yet wired to the auctioneer)"
-        );
+        info!(slot = block.message.slot.as_u64(), "accepted submitSignedBeaconBlock request");
 
-        // TODO(gloas): call construct_signed_envelope and broadcast via MultiBeaconClient.
+        let signed_envelope = construct_signed_envelope(
+            &block,
+            proposer_api.gloas_payload_store.as_ref(),
+            &proposer_api.gloas_builder_identity,
+            &proposer_api.chain_info,
+        )?;
+
+        proposer_api
+            .multi_beacon_client
+            .publish_execution_payload_envelope(Arc::new(signed_envelope), ForkName::Gloas)
+            .await?;
+
         Ok(StatusCode::ACCEPTED)
     }
 }
