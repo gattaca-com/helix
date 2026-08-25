@@ -44,6 +44,7 @@ use crate::{
         bid_adjustor::BidAdjustor,
         bid_sorter::BidSorter,
         block_merger::BlockMerger,
+        builder_preferences::BuilderPreferencesStore,
         types::{PayloadEntry, PendingPayload, SlotData, SubmissionRef, SubmissionRefKind},
     },
     simulator::{
@@ -86,6 +87,7 @@ pub struct Context<B: BidAdjustor> {
     /// Resolved at startup: the webhook's DNS lookup blocks, so it must stay off the loop.
     discord_addr: Option<SocketAddr>,
     discord_alert: Option<PendingResponse>,
+    pub builder_preferences: BuilderPreferencesStore,
 }
 
 const EXPECTED_PAYLOADS_PER_SLOT: usize = 5000;
@@ -163,6 +165,7 @@ impl<B: BidAdjustor> Context<B> {
                     .ok()
             }),
             discord_alert: None,
+            builder_preferences: BuilderPreferencesStore::default(),
         }
     }
 
@@ -271,6 +274,7 @@ impl<B: BidAdjustor> Context<B> {
 
         self.block_merger.on_new_slot(bid_slot.as_u64());
         self.bid_adjustor.on_new_slot(bid_slot.as_u64());
+        self.builder_preferences.on_new_slot(bid_slot.as_u64());
         self.auctioneer_handle.clear_inflight_payloads();
         self.decoded.clear();
 
