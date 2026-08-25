@@ -36,6 +36,7 @@ use crate::{
         bid_adjustor::BidAdjustor,
         bid_sorter::BidSorter,
         block_merger::BlockMerger,
+        builder_preferences::BuilderPreferencesStore,
         types::{PayloadEntry, PendingPayload, SubmissionRef},
     },
     simulator::{SimRequest, tile::ValidationResult},
@@ -75,6 +76,7 @@ pub struct Context<B: BidAdjustor> {
     pub failsafe_triggered: Arc<AtomicBool>,
     pub alert_manager: Arc<AlertManager>,
     pub operator_api: Option<Arc<OperatorPubSub>>,
+    pub builder_preferences: BuilderPreferencesStore,
 }
 
 const EXPECTED_PAYLOADS_PER_SLOT: usize = 5000;
@@ -143,6 +145,7 @@ impl<B: BidAdjustor> Context<B> {
             failsafe_triggered,
             alert_manager,
             operator_api,
+            builder_preferences: BuilderPreferencesStore::default(),
         }
     }
 
@@ -254,6 +257,7 @@ impl<B: BidAdjustor> Context<B> {
 
         self.block_merger.on_new_slot(bid_slot.as_u64());
         self.bid_adjustor.on_new_slot(bid_slot.as_u64());
+        self.builder_preferences.on_new_slot(bid_slot.as_u64());
         self.auctioneer_handle.clear_inflight_payloads();
         self.decoded.clear();
 

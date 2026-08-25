@@ -1,6 +1,7 @@
 mod bid_adjustor;
 mod bid_sorter;
 mod block_merger;
+mod builder_preferences;
 mod context;
 mod get_execution_payload_bid;
 mod get_header;
@@ -663,6 +664,28 @@ impl State {
                 Event::BuilderDemotion { slot, builder_pubkey, block_hash, reason },
             ) => {
                 ctx.handle_builder_demotion(slot, builder_pubkey, block_hash, reason, false);
+            }
+
+            // submit_builder_preferences (Gloas), valid regardless of state
+            (
+                State::Slot { .. } | State::Sorting(_) | State::Broadcasting { .. },
+                Event::SubmitBuilderPreferences {
+                    proposer_pubkey,
+                    slot,
+                    max_execution_payment,
+                    res_tx,
+                },
+            ) => {
+                let bid_slot = self.bid_slot();
+                if slot < bid_slot {
+                    let _ = res_tx.send(Err(ProposerApiError::RequestForPastSlot {
+                        request_slot: slot.into(),
+                        head_slot: bid_slot.into(),
+                    }));
+                } else {
+                    ctx.builder_preferences.store(proposer_pubkey, slot, max_execution_payment);
+                    let _ = res_tx.send(Ok(()));
+                }
             }
         }
     }
