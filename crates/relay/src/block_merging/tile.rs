@@ -386,6 +386,39 @@ fn merge_sim_disable_check(
     Some((block_hash, err.clone()))
 }
 
+/// Whether a merged-block simulation failure is attributable to the merge builder, as
+/// opposed to a relay/simulator-side infra hiccup. Builds on `is_demotable()` (the same
+/// logic that decides whether a failed bid-submission simulation demotes its builder) but
+/// additionally excludes internal channel/queue failures, which are never the builder's
+/// fault even though `is_demotable()` -- calibrated for bid-submission demotion -- doesn't
+/// exclude them.
+fn is_merge_builder_attributable(err: &BlockSimError) -> bool {
+    err.is_demotable() &&
+        !matches!(
+            err,
+            BlockSimError::SendError |
+                BlockSimError::SimulationDropped |
+                BlockSimError::HydrationMiss
+        )
+}
+
+/// Decides whether a merged-block simulation result should disable block merging.
+/// Returns the block's hash and the failure reason to report if so.
+fn merge_sim_disable_check(
+    result: &MergedSimulationResultInner,
+    merged_blocks: &SharedVector<BlockMergeResponse>,
+) -> Option<(B256, BlockSimError)> {
+    let Err(err) = &result.result else { return None };
+    if !is_merge_builder_attributable(err) {
+        return None;
+    }
+    let block_hash = merged_blocks
+        .get(result.merged_block_ix)
+        .map(|r| r.execution_payload.block_hash)
+        .unwrap_or_default();
+    Some((block_hash, err.clone()))
+}
+
 /// order_id -> order_hash for every `latest_only` bundle in this submission.
 fn latest_only_ids(
     builder_pubkey: BlsPublicKeyBytes,
@@ -1566,6 +1599,79 @@ mod tests {
         assert!(result.is_some());
         assert!(slot.best_merged.contains_key(&base_block_hash));
         assert_eq!(stats.merged_blocks, 1);
+    }
+
+    #[test]
+    fn merge_sim_disable_check_table() {
+        let mut rng = SmallRng::seed_from_u64(3);
+        let payload = ExecutionPayload::random_for_test(&mut rng);
+        let merged_blocks = SharedVector::<BlockMergeResponse>::with_capacity(4);
+        let ix = merged_blocks.push(merge_response(payload, U256::from(1u64), vec![]));
+
+        let cases: &[(BlockSimError, bool)] = &[
+            (BlockSimError::RpcError, false),
+            (BlockSimError::Timeout, false),
+            (BlockSimError::NoSimulatorAvailable, false),
+            (BlockSimError::SendError, false),
+            (BlockSimError::SimulationDropped, false),
+            (BlockSimError::HydrationMiss, false),
+            (BlockSimError::BlockValidationFailed("unknown ancestor".to_owned()), false),
+            (BlockSimError::BlockValidationFailed("parent block not found".to_owned()), false),
+            (BlockSimError::BlockValidationFailed("block requires a reorg".to_owned()), false),
+            (BlockSimError::BlockValidationFailed("block already known".to_owned()), false),
+            (
+                BlockSimError::BlockValidationFailed(
+                    "block is too old, outside validation window".to_owned(),
+                ),
+                false,
+            ),
+            (
+                BlockSimError::BlockValidationFailed("some other validation failure".to_owned()),
+                true,
+            ),
+            (
+                BlockSimError::InvalidTxRoot { got: B256::ZERO, expected: B256::repeat_byte(1) },
+                true,
+            ),
+        ];
+
+        for (err, expect_disable) in cases {
+            let inner =
+                MergedSimulationResultInner { merged_block_ix: ix, result: Err(err.clone()) };
+            let outcome = merge_sim_disable_check(&inner, &merged_blocks);
+            assert_eq!(outcome.is_some(), *expect_disable, "case: {err:?}");
+        }
+    }
+
+    #[test]
+    fn merge_sim_disable_check_reports_block_hash() {
+        let mut rng = SmallRng::seed_from_u64(4);
+        let payload = ExecutionPayload::random_for_test(&mut rng);
+        let merged_blocks = SharedVector::<BlockMergeResponse>::with_capacity(4);
+        let ix = merged_blocks.push(merge_response(payload.clone(), U256::from(1u64), vec![]));
+
+        let inner = MergedSimulationResultInner {
+            merged_block_ix: ix,
+            result: Err(BlockSimError::InvalidTxRoot {
+                got: B256::ZERO,
+                expected: B256::repeat_byte(1),
+            }),
+        };
+        let (block_hash, err) = merge_sim_disable_check(&inner, &merged_blocks).unwrap();
+        assert_eq!(block_hash, payload.block_hash);
+        assert!(matches!(err, BlockSimError::InvalidTxRoot { .. }));
+    }
+
+    #[test]
+    fn merge_sim_disable_check_none_on_success() {
+        let merged_blocks = SharedVector::<BlockMergeResponse>::with_capacity(4);
+        let ix = merged_blocks.push(merge_response(
+            ExecutionPayload::random_for_test(&mut SmallRng::seed_from_u64(5)),
+            U256::ZERO,
+            vec![],
+        ));
+        let inner = MergedSimulationResultInner { merged_block_ix: ix, result: Ok(()) };
+        assert!(merge_sim_disable_check(&inner, &merged_blocks).is_none());
     }
 
     #[test]
