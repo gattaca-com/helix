@@ -16,7 +16,7 @@ use helix_common::{
 };
 use helix_database::{PostgresDatabaseService, handle::DbHandle};
 use helix_types::{BuilderCollateral, Operator, OperatorMessage, Payload};
-use libp2p::{BehaviourBuilderError, TransportError, identity::Keypair, multiaddr};
+use libp2p::{BehaviourBuilderError, TransportError, gossipsub, identity::Keypair, multiaddr};
 use thiserror::Error;
 use tokio::task::AbortHandle;
 
@@ -33,6 +33,9 @@ pub enum OperatorError {
     MultiaddrParseError(#[from] multiaddr::Error),
     SwarmNetworkError(#[from] TransportError<std::io::Error>),
     SwarmBuildError(#[from] BehaviourBuilderError),
+    GossipsubConfigError(#[from] gossipsub::ConfigBuilderError),
+    GossipsubBehaviourError(&'static str),
+    GossipsubSubscriptionError(#[from] gossipsub::SubscriptionError),
     MessageSendError(#[from] SendError<(Option<String>, OperatorMessage)>),
     MessageTrySendError(#[from] TrySendError<(Option<String>, OperatorMessage)>),
     MessageRecvError(#[from] RecvError),
@@ -270,7 +273,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
+    use std::{str::FromStr, time::Duration};
 
     use alloy_primitives::B256;
     use helix_types::{BlsPublicKeyBytes, Demotion, OperatorMessage, Promotion};
@@ -303,12 +306,17 @@ mod tests {
             vec![operator_b],
             helix_common::OperatorP2pMode::On,
         );
+        // Ensure A is listening before B initiates its dial.
+        tokio::time::sleep(Duration::from_millis(100)).await;
         let op_b = OperatorPubSub::new(
             32023,
             keypair_b,
             vec![operator_a],
             helix_common::OperatorP2pMode::On,
         );
+        // Wait for the gossipsub subscription exchange before publishing. Messages are
+        // intentionally best-effort and are not queued for peers that have not subscribed yet.
+        tokio::time::sleep(Duration::from_millis(500)).await;
 
         let builder_pubkey = BlsPublicKeyBytes::random();
         let demotion = Demotion {
@@ -316,15 +324,24 @@ mod tests {
             slot: 1,
             builder_pubkey,
             block_hash: B256::random(),
-            reason_msg: "fail".as_bytes().to_vec(),
+            // Exercise a message larger than floodsub's former 2 KiB frame limit.
+            reason_msg: vec![42; 4 * 1024],
         };
         let promotion = Promotion { ts_ms: 2, slot: 2, builder_pubkey };
         op_a.send(None, helix_types::OperatorMessage::Demotion(demotion)).await.unwrap();
-        let (_, msg) = op_b.recv().await.unwrap();
-        assert!(matches!(msg, OperatorMessage::Demotion(_)));
+        let (_, msg) = tokio::time::timeout(Duration::from_secs(5), op_b.recv())
+            .await
+            .expect("timed out waiting for demotion")
+            .unwrap();
+        assert!(
+            matches!(msg, OperatorMessage::Demotion(demotion) if demotion.reason_msg.len() == 4 * 1024)
+        );
 
         op_b.send(None, OperatorMessage::Promotion(promotion)).await.unwrap();
-        let (_, msg) = op_a.recv().await.unwrap();
+        let (_, msg) = tokio::time::timeout(Duration::from_secs(5), op_a.recv())
+            .await
+            .expect("timed out waiting for promotion")
+            .unwrap();
         assert!(matches!(msg, OperatorMessage::Promotion(_)));
     }
 }
