@@ -92,7 +92,7 @@ pub enum BlockSimError {
     HydrationMiss,
 
     /// Not the builder's fault -- helix's own simulator client has no validation RPC method for
-    /// this fork yet.
+    /// this fork yet. See gattaca-com/helix#518.
     #[error("no validation RPC method for fork {0}")]
     UnsupportedFork(ForkName),
 }
