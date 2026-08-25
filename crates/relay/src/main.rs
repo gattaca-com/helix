@@ -340,20 +340,20 @@ async fn run(
                 Arc::new(SharedVector::<SimRequest>::with_capacity(MAX_SUBMISSIONS_PER_SLOT));
             let sim_results =
                 Arc::new(SharedVector::<SimResult>::with_capacity(MAX_SUBMISSIONS_PER_SLOT));
+            let merged_blocks = Arc::new(SharedVector::<BlockMergeResponse>::with_capacity(1024));
 
             let (accept_optimistic, failsafe_triggered, sim_tile) = SimulatorTile::create(
                 config.simulators.clone(),
                 sim_requests.clone(),
                 sim_results.clone(),
                 decoded.clone(),
+                merged_blocks.clone(),
                 chain_info.as_ref().clone(),
                 failsafe_triggered,
             );
 
             let sim_core = config.cores.simulator;
             attach_tile(sim_tile, spine, TileConfig::new(sim_core, ThreadPriority::OSDefault));
-
-            let merged_blocks = Arc::new(SharedVector::<BlockMergeResponse>::with_capacity(1024));
 
             if config.block_merging_config.is_enabled &&
                 let Some(merging_tcp) = config.block_merging_config.tcp.clone()

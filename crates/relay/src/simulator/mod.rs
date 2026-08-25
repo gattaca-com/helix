@@ -9,7 +9,10 @@ use helix_types::{
     BlobWithMetadata, BuilderInclusionResult, ExecutionPayload, ExecutionRequests, MergedBlockTrace,
 };
 
-use crate::{SubmissionRef, simulator::tile::ValidationResult};
+use crate::{
+    SubmissionRef,
+    simulator::tile::{MergedSimulationResult, ValidationResult},
+};
 
 pub mod client;
 pub mod tile;
@@ -31,6 +34,24 @@ pub struct ValidationRequest {
 
 pub type MergeResult = (usize, Result<BlockMergeResponse, BlockSimError>);
 
+/// Simulation of an incoming merged block from the merge builder. Unlike `ValidationRequest`,
+/// there's no decoded bid submission to look up: the block itself lives in `merged_blocks`,
+/// indexed by `merged_block_ix`.
+#[derive(Debug, Clone)]
+pub struct MergedValidationRequest {
+    pub merged_block_ix: usize,
+    /// Kept alongside the index for `PendingMergeRequests`' eviction key, avoiding a
+    /// `merged_blocks` lookup at queue time.
+    pub base_block_hash: B256,
+    pub slot: u64,
+    pub parent_beacon_block_root: B256,
+    pub proposer_fee_recipient: Address,
+    pub registered_gas_limit: u64,
+    pub apply_blacklist: bool,
+    pub inclusion_list: InclusionListWithMetadata,
+    pub receive_ns: u64,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BlockMergeResponse {
     pub base_block_hash: B256,
@@ -50,6 +71,7 @@ pub struct BlockMergeResponse {
 /// Large payload stored in `SharedVector` for auctioneer → sim tile transfer.
 pub enum SimRequest {
     Validate { req: Box<ValidationRequest>, fast_track: bool },
+    ValidateMerged(Box<MergedValidationRequest>),
 }
 
 /// Large payload stored in `SharedVector` for sim tile → auctioneer transfer.
@@ -57,6 +79,7 @@ pub enum SimRequest {
 #[allow(clippy::large_enum_variant)]
 pub enum SimResult {
     Validate(ValidationResult),
+    ValidateMerged(MergedSimulationResult),
 }
 
 impl ValidationRequest {
