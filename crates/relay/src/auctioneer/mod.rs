@@ -6,6 +6,7 @@ mod context;
 mod get_execution_payload_bid;
 mod get_header;
 mod get_payload;
+mod gloas_payload;
 mod handle;
 mod submit_block;
 mod types;
@@ -42,7 +43,11 @@ pub use types::{
 
 use crate::{
     HelixSpine, SubmissionDataWithSpan,
-    api::{FutureBidSubmissionResult, builder::error::BuilderApiError, proposer::ProposerApiError},
+    api::{
+        FutureBidSubmissionResult,
+        builder::error::BuilderApiError,
+        proposer::{GloasBuilderIdentity, ProposerApiError},
+    },
     auctioneer::types::PendingPayload,
     housekeeper::SlotUpdate,
     simulator::{SimRequest, SimResult},
@@ -93,6 +98,7 @@ impl<B: BidAdjustor> Auctioneer<B> {
         merged_blocks: Arc<SharedVector<BlockMergeResponse>>,
         alert_manager: Arc<AlertManager>,
         operator_api: Option<Arc<OperatorPubSub>>,
+        gloas_builder_identity: Arc<GloasBuilderIdentity>,
     ) -> Self {
         let ctx = Context::new(
             chain_info,
@@ -109,6 +115,7 @@ impl<B: BidAdjustor> Auctioneer<B> {
             auctioneer_handle,
             alert_manager,
             operator_api,
+            gloas_builder_identity,
         );
         Self {
             ctx,
@@ -686,6 +693,15 @@ impl State {
                     ctx.builder_preferences.store(proposer_pubkey, slot, max_execution_payment);
                     let _ = res_tx.send(Ok(()));
                 }
+            }
+
+            // take_held_gloas_payload (Gloas), valid regardless of state -- payloads are
+            // block-hash-keyed, so a lookup after the slot has moved on just misses.
+            (
+                State::Slot { .. } | State::Sorting(_) | State::Broadcasting { .. },
+                Event::TakeHeldGloasPayload { block_hash, slot, res_tx },
+            ) => {
+                ctx.handle_take_held_gloas_payload(block_hash, slot, res_tx);
             }
         }
     }

@@ -30,7 +30,9 @@ use tracing::{debug, info, warn};
 
 use crate::{
     SubmissionDataWithSpan,
-    api::{FutureBidSubmissionResult, builder::error::BuilderApiError},
+    api::{
+        FutureBidSubmissionResult, builder::error::BuilderApiError, proposer::GloasBuilderIdentity,
+    },
     auctioneer::{
         AuctioneerHandle, BlockMergeResponse,
         bid_adjustor::BidAdjustor,
@@ -77,6 +79,7 @@ pub struct Context<B: BidAdjustor> {
     pub alert_manager: Arc<AlertManager>,
     pub operator_api: Option<Arc<OperatorPubSub>>,
     pub builder_preferences: BuilderPreferencesStore,
+    pub gloas_builder_identity: Arc<GloasBuilderIdentity>,
 }
 
 const EXPECTED_PAYLOADS_PER_SLOT: usize = 5000;
@@ -100,6 +103,7 @@ impl<B: BidAdjustor> Context<B> {
         auctioneer_handle: AuctioneerHandle,
         alert_manager: Arc<AlertManager>,
         operator_api: Option<Arc<OperatorPubSub>>,
+        gloas_builder_identity: Arc<GloasBuilderIdentity>,
     ) -> Self {
         let unknown_builder_info = BuilderInfo {
             collateral: U256::ZERO,
@@ -146,6 +150,7 @@ impl<B: BidAdjustor> Context<B> {
             alert_manager,
             operator_api,
             builder_preferences: BuilderPreferencesStore::default(),
+            gloas_builder_identity,
         }
     }
 
