@@ -364,6 +364,8 @@ async fn run(
                     decoded.clone(),
                     slot_events.clone(),
                     merged_blocks.clone(),
+                    sim_requests.clone(),
+                    sim_results.clone(),
                     chain_info.as_ref().clone(),
                     block_merging_enabled.clone(),
                 );
