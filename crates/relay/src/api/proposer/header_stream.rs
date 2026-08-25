@@ -64,7 +64,7 @@ impl<A: Api> ProposerApi<A> {
 
         proposer_api
             .api_provider
-            .admit_header_stream(&params, &headers, &preferences, &config)
+            .admit_header_stream(&params, &headers, &preferences, config)
             .map_err(|reason| {
                 warn!(slot = params.slot, proposer = %params.pubkey, reason, "refusing header stream");
                 ProposerApiError::StreamNotAdmitted
