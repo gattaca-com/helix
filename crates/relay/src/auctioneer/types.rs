@@ -8,7 +8,7 @@ use helix_common::{
     GetPayloadTrace, PayloadAttributesUpdate, SubmissionTrace,
     api::{
         builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
-        proposer_api::GetHeaderParams,
+        proposer_api::{GetExecutionPayloadBidParams, GetHeaderParams},
     },
     decoder::{Encoding, SubmissionDecoderParams, SubmissionType},
     metrics::BID_CREATION_LATENCY,
@@ -17,8 +17,8 @@ use helix_tcp_types::{BidSubmissionFlags, BidSubmissionHeader};
 use helix_types::{
     BidAdjustmentData, BlockMergingDataV2, BlsPublicKeyBytes, BuilderBid, Compression,
     ExecutionPayload, ForkName, GetPayloadResponse, MergeType, PayloadAndBlobs, PayloadBidData,
-    PayloadBidDataRef, SignedBidSubmission, SignedBlindedBeaconBlock, Slot, Submission,
-    SubmissionVersion, VersionedSignedProposal, mock_public_key_bytes,
+    PayloadBidDataRef, SignedBidSubmission, SignedBlindedBeaconBlock, SignedExecutionPayloadBid,
+    Slot, Submission, SubmissionVersion, VersionedSignedProposal, mock_public_key_bytes,
 };
 use http::{
     HeaderMap, HeaderValue,
@@ -75,6 +75,7 @@ impl SubmissionRef {
 
 pub type GetHeaderResult = Result<PayloadEntry, ProposerApiError>;
 pub type GetPayloadResult = Result<GetPayloadResultData, ProposerApiError>;
+pub type GetExecutionPayloadBidResult = Result<SignedExecutionPayloadBid, ProposerApiError>;
 
 versioned_struct!(InternalBidSubmissionHeader =>
     #[derive(Default)]
@@ -462,6 +463,12 @@ pub enum Event {
         span: tracing::Span,
         is_mev_boost: bool,
     },
+    /// Gloas (ePBS) analogue of `GetHeader`.
+    GetExecutionPayloadBid {
+        params: GetExecutionPayloadBidParams,
+        res_tx: oneshot::Sender<GetExecutionPayloadBidResult>,
+        span: tracing::Span,
+    },
     // Receive multiple of these potentially, assume some light validation
     GetPayload {
         block_hash: B256,
@@ -487,6 +494,7 @@ impl Event {
             Event::SlotData { .. } => "SlotData",
             Event::Submission { .. } => "Submission",
             Event::GetHeader { .. } => "GetHeader",
+            Event::GetExecutionPayloadBid { .. } => "GetExecutionPayloadBid",
             Event::GetPayload { .. } => "GetPayload",
             Event::GossipPayload(_) => "GossipPayload",
             Event::SimResult(_) => "SimResult",
