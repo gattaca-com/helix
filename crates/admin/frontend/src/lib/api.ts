@@ -53,6 +53,7 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
 export interface Overview {
   adjustments_enabled: boolean;
   kill_switch_enabled: boolean | null;
+  block_merging_enabled: boolean | null;
   builders_pending_promotion: number;
 }
 
@@ -107,6 +108,8 @@ export const api = {
 
   setKillSwitch: (enabled: boolean) =>
     apiFetch<void>("/api/v1/actions/killswitch", { method: enabled ? "POST" : "DELETE" }),
+  setBlockMerging: (enabled: boolean) =>
+    apiFetch<void>("/api/v1/actions/block-merging", { method: enabled ? "POST" : "DELETE" }),
   demoteBuilder: (pubkey: string, reason: string) =>
     apiFetch<void>(`/api/v1/actions/builders/${pubkey}/demote`, {
       method: "POST",

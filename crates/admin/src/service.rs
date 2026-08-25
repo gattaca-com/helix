@@ -35,6 +35,10 @@ pub fn build_admin_router(
             "/actions/killswitch",
             post(handlers::enable_kill_switch).delete(handlers::disable_kill_switch),
         )
+        .route(
+            "/actions/block-merging",
+            post(handlers::enable_block_merging).delete(handlers::disable_block_merging),
+        )
         .route("/actions/builders/{pubkey}/demote", post(handlers::demote_builder))
         .route("/actions/builders/{pubkey}/promote", post(handlers::promote_builder))
         .route("/actions/adjustments/disable", post(handlers::disable_adjustments))
