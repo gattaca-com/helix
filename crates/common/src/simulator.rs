@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use alloy_primitives::B256;
 use helix_types::{
-    BidTrace, BlobsBundle, BlsSignatureBytes, ExecutionPayload, ExecutionRequests,
+    BidTrace, BlobsBundle, BlsSignatureBytes, ExecutionPayload, ExecutionRequests, ForkName,
     SignedBidSubmission,
 };
 use ssz_derive::{Decode, Encode};
@@ -90,6 +90,11 @@ pub enum BlockSimError {
 
     #[error("hydration miss: simulator cache does not have required transactions/blobs")]
     HydrationMiss,
+
+    /// Not the builder's fault -- helix's own simulator client has no validation RPC method for
+    /// this fork yet.
+    #[error("no validation RPC method for fork {0}")]
+    UnsupportedFork(ForkName),
 }
 
 impl BlockSimError {
@@ -106,6 +111,7 @@ impl BlockSimError {
             BlockSimError::Timeout => true,
             BlockSimError::RpcError => true,
             BlockSimError::NoSimulatorAvailable => true,
+            BlockSimError::UnsupportedFork(_) => true,
             _ => false,
         }
     }

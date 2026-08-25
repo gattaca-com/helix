@@ -56,9 +56,17 @@ impl SimulatorClient {
         self.ssz_url.as_ref().map(|url| self.client.post(format!("{url}/validate")))
     }
 
-    pub fn sim_request_builder(&self, fork: ForkName) -> (RequestBuilder, &str) {
-        let method = if fork == ForkName::Fulu { &self.sim_method_v5 } else { &self.sim_method_v4 };
-        (self.client.post(&self.config.url), method)
+    /// Returns `None` for a fork this client has no validation RPC method for yet, rather than
+    /// silently mis-routing it to a method shaped for a different fork.
+    pub fn sim_request_builder(&self, fork: ForkName) -> Option<(RequestBuilder, &str)> {
+        let method = match fork {
+            ForkName::Fulu => &self.sim_method_v5,
+            ForkName::Bellatrix | ForkName::Capella | ForkName::Deneb | ForkName::Electra => {
+                &self.sim_method_v4
+            }
+            ForkName::Base | ForkName::Altair | ForkName::Gloas | ForkName::Heze => return None,
+        };
+        Some((self.client.post(&self.config.url), method))
     }
 
     pub async fn do_json_sim_request(
@@ -179,6 +187,37 @@ impl SimulatorClient {
 mod test {
     use alloy_primitives::hex::FromHex;
     use helix_common::SimulatorConfig;
+    use helix_types::ForkName;
+
+    use super::SimulatorClient;
+
+    fn sim_client() -> SimulatorClient {
+        SimulatorClient::new(reqwest::Client::new(), SimulatorConfig {
+            url: "http://localhost:8545".into(),
+            namespace: "relay".into(),
+            max_concurrent_tasks: 1,
+            ssz_url: None,
+        })
+    }
+
+    #[test]
+    fn routes_fulu_to_v5() {
+        let client = sim_client();
+        let (_, method) = client.sim_request_builder(ForkName::Fulu).unwrap();
+        assert!(method.ends_with("V5"));
+    }
+
+    #[test]
+    fn routes_electra_to_v4() {
+        let client = sim_client();
+        let (_, method) = client.sim_request_builder(ForkName::Electra).unwrap();
+        assert!(method.ends_with("V4"));
+    }
+
+    #[test]
+    fn gloas_has_no_validation_method_yet() {
+        assert!(sim_client().sim_request_builder(ForkName::Gloas).is_none());
+    }
 
     #[tokio::test]
     async fn balance_request() {
