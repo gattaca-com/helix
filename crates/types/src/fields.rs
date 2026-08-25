@@ -43,6 +43,13 @@ pub fn convert_transactions_to_progressive(
     )
 }
 
+/// Real, progressive-list Gloas KZG commitments shape, per EIP-7688.
+pub fn convert_kzg_commitments_to_progressive(
+    commitments: &KzgCommitments,
+) -> lh_types::ProgressiveKzgCommitments {
+    ProgressiveVariableList::new(commitments.iter().map(|c| lh_types::KzgCommitment(c.0)).collect())
+}
+
 /// Converts helix's Electra-shaped builder-submission execution requests into the real,
 /// progressive-list Gloas shape. `builder_deposits`/`builder_exits` are left empty --
 /// TODO(gloas): populate once EIP-8282 builder deposit/exit submission exists.
@@ -159,6 +166,22 @@ mod tests {
         assert_eq!(progressive.len(), txs.len());
         for (converted, original) in progressive.as_slice().iter().zip(txs.iter()) {
             assert_eq!(converted.as_slice(), original.as_ref());
+        }
+    }
+
+    #[test]
+    fn convert_kzg_commitments_to_progressive_preserves_bytes() {
+        let commitments = KzgCommitments::new(vec![
+            KzgCommitment::repeat_byte(0x11),
+            KzgCommitment::repeat_byte(0x22),
+        ])
+        .unwrap();
+
+        let progressive = convert_kzg_commitments_to_progressive(&commitments);
+
+        assert_eq!(progressive.len(), commitments.len());
+        for (converted, original) in progressive.as_slice().iter().zip(commitments.iter()) {
+            assert_eq!(converted.0, original.0);
         }
     }
 
