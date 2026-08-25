@@ -76,6 +76,7 @@ impl SubmissionRef {
 pub type GetHeaderResult = Result<PayloadEntry, ProposerApiError>;
 pub type GetPayloadResult = Result<GetPayloadResultData, ProposerApiError>;
 pub type GetExecutionPayloadBidResult = Result<SignedExecutionPayloadBid, ProposerApiError>;
+pub type SubmitBuilderPreferencesResult = Result<(), ProposerApiError>;
 
 versioned_struct!(InternalBidSubmissionHeader =>
     #[derive(Default)]
@@ -469,6 +470,14 @@ pub enum Event {
         res_tx: oneshot::Sender<GetExecutionPayloadBidResult>,
         span: tracing::Span,
     },
+    /// Gloas (ePBS) `submitBuilderPreferences`: a proposer's per-builder `max_execution_payment`
+    /// for a future slot, valid regardless of the current auctioneer state.
+    SubmitBuilderPreferences {
+        proposer_pubkey: BlsPublicKeyBytes,
+        slot: u64,
+        max_execution_payment: u64,
+        res_tx: oneshot::Sender<SubmitBuilderPreferencesResult>,
+    },
     // Receive multiple of these potentially, assume some light validation
     GetPayload {
         block_hash: B256,
@@ -495,6 +504,7 @@ impl Event {
             Event::Submission { .. } => "Submission",
             Event::GetHeader { .. } => "GetHeader",
             Event::GetExecutionPayloadBid { .. } => "GetExecutionPayloadBid",
+            Event::SubmitBuilderPreferences { .. } => "SubmitBuilderPreferences",
             Event::GetPayload { .. } => "GetPayload",
             Event::GossipPayload(_) => "GossipPayload",
             Event::SimResult(_) => "SimResult",
