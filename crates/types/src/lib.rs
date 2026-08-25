@@ -72,6 +72,8 @@ pub type ExecutionPayloadGloas = lh_types::ExecutionPayloadGloas<MainnetEthSpec>
 pub type ExecutionRequestsGloas = lh_types::ExecutionRequestsGloas<MainnetEthSpec>;
 pub type ExecutionPayloadEnvelope = lh_types::ExecutionPayloadEnvelope<MainnetEthSpec>;
 pub type SignedExecutionPayloadEnvelope = lh_types::SignedExecutionPayloadEnvelope<MainnetEthSpec>;
+pub type ExecutionPayloadBid = lh_types::ExecutionPayloadBid<MainnetEthSpec>;
+pub type SignedExecutionPayloadBid = lh_types::SignedExecutionPayloadBid<MainnetEthSpec>;
 
 // Beacon block
 pub type BeaconBlockFulu = lh_types::BeaconBlockFulu<MainnetEthSpec>;
