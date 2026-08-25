@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use alloy_primitives::B256;
 use axum::{Extension, http::HeaderMap};
-use dashmap::DashMap;
 use helix_common::{chain_info::ChainInfo, decoder::Encoding, utils::extract_request_id};
 use helix_types::{
     BeaconBlockRef, BlobsBundle, BlsKeypair, BlsPublicKey, BlsPublicKeyBytes, Domain, EthSpec,
@@ -12,7 +11,7 @@ use helix_types::{
 };
 use hyper::StatusCode;
 use ssz::Decode;
-use tracing::info;
+use tracing::{info, warn};
 use tree_hash::TreeHash;
 
 use super::{ProposerApi, get_payload::fork_name_from_header};
@@ -24,21 +23,6 @@ pub struct HeldGloasPayload {
     pub payload: ExecutionPayloadGloas,
     pub execution_requests: ExecutionRequestsGloas,
     pub blobs_bundle: Arc<BlobsBundle>,
-}
-
-/// Payloads held by a bid's committed block hash, removed once the envelope is broadcast.
-// TODO(gloas): populate from the auctioneer; see gattaca-com/helix#489 step 3.
-#[derive(Default)]
-pub struct GloasPayloadStore(DashMap<B256, HeldGloasPayload>);
-
-impl GloasPayloadStore {
-    pub fn held_payload(&self, block_hash: B256) -> Option<HeldGloasPayload> {
-        self.0.get(&block_hash).map(|payload| payload.clone())
-    }
-
-    pub fn remove(&self, block_hash: B256) {
-        self.0.remove(&block_hash);
-    }
 }
 
 /// Helix's own on-chain Gloas builder identity: `builder_index` plus signing key.
@@ -67,12 +51,31 @@ impl GloasBuilderIdentity {
         let signature = self.keypair.sk.sign(message.signing_root(domain));
         SignedExecutionPayloadEnvelope { message, signature }
     }
+
+    /// Signs a `SignedExecutionPayloadBid` under the same domain as `sign_envelope`.
+    pub fn sign_bid(
+        &self,
+        message: helix_types::ExecutionPayloadBid,
+        chain_info: &ChainInfo,
+    ) -> helix_types::SignedExecutionPayloadBid {
+        let epoch = message.slot.epoch(MainnetEthSpec::slots_per_epoch());
+        let fork = chain_info.spec.fork_at_epoch(epoch);
+        let domain = chain_info.spec.get_domain(
+            epoch,
+            Domain::BeaconBuilder,
+            &fork,
+            chain_info.genesis_validators_root,
+        );
+        let signature = self.keypair.sk.sign(message.signing_root(domain));
+        helix_types::SignedExecutionPayloadBid { message, signature }
+    }
 }
 
 /// Constructs and signs the `SignedExecutionPayloadEnvelope` fulfilling `block`'s committed bid.
+/// `held` is the payload the auctioneer has stored for the bid's committed block hash, if any.
 pub(super) fn construct_signed_envelope(
     block: &SignedBeaconBlockGloas,
-    store: &GloasPayloadStore,
+    held: Option<HeldGloasPayload>,
     identity: &GloasBuilderIdentity,
     chain_info: &ChainInfo,
 ) -> Result<SignedExecutionPayloadEnvelopeContents, ProposerApiError> {
@@ -86,9 +89,7 @@ pub(super) fn construct_signed_envelope(
         });
     }
 
-    let held = store
-        .held_payload(bid_block_hash)
-        .ok_or(ProposerApiError::NoHeldPayloadForBlock(bid_block_hash))?;
+    let held = held.ok_or(ProposerApiError::NoHeldPayloadForBlock(bid_block_hash))?;
 
     let held_block_hash: B256 = held.payload.block_hash.0;
     if held_block_hash != bid_block_hash {
@@ -173,9 +174,25 @@ impl<A: Api> ProposerApi<A> {
             &proposer_api.chain_info,
         )?;
 
+        let bid_block_hash: B256 =
+            block.message.body.signed_execution_payload_bid.message.block_hash.0;
+        let Ok(rx) = proposer_api
+            .auctioneer_handle
+            .take_held_gloas_payload(bid_block_hash, block.message.slot)
+        else {
+            return Err(ProposerApiError::InternalServerError);
+        };
+        let held = match rx.await {
+            Ok(held) => held,
+            Err(err) => {
+                warn!(%err, "failed to fetch held Gloas payload from auctioneer");
+                return Err(ProposerApiError::InternalServerError);
+            }
+        };
+
         let signed_envelope = construct_signed_envelope(
             &block,
-            &proposer_api.gloas_payload_store,
+            held,
             &proposer_api.gloas_builder_identity,
             &proposer_api.chain_info,
         )?;
@@ -184,9 +201,6 @@ impl<A: Api> ProposerApi<A> {
             .multi_beacon_client
             .publish_execution_payload_envelope(Arc::new(signed_envelope), ForkName::Gloas)
             .await?;
-        proposer_api
-            .gloas_payload_store
-            .remove(block.message.body.signed_execution_payload_bid.message.block_hash.0);
 
         Ok(StatusCode::ACCEPTED)
     }
@@ -198,12 +212,6 @@ mod construct_signed_envelope_tests {
     use helix_types::{BeaconBlockGloas, BlsSignature, EmptyBlock, ExecutionBlockHash};
 
     use super::*;
-
-    fn store_holding(block_hash: B256, payload: HeldGloasPayload) -> GloasPayloadStore {
-        let store = GloasPayloadStore::default();
-        store.0.insert(block_hash, payload);
-        store
-    }
 
     fn held_payload(block_hash: B256) -> HeldGloasPayload {
         let mut payload = ExecutionPayloadGloas::default();
@@ -240,11 +248,11 @@ mod construct_signed_envelope_tests {
         let block_hash = B256::repeat_byte(0x11);
         let parent_root = B256::repeat_byte(0x22);
         let block = test_block(block_hash, 7, parent_root);
-        let store = store_holding(block_hash, held_payload(block_hash));
+        let held = Some(held_payload(block_hash));
         let identity = identity(7);
 
         let signed_envelope =
-            construct_signed_envelope(&block, &store, &identity, &chain_info).unwrap();
+            construct_signed_envelope(&block, held, &identity, &chain_info).unwrap();
 
         assert_eq!(signed_envelope.signed_execution_payload_envelope.message.builder_index, 7);
         assert_eq!(
@@ -266,11 +274,11 @@ mod construct_signed_envelope_tests {
         let chain_info = ChainInfo::default();
         let block_hash = B256::repeat_byte(0x33);
         let block = test_block(block_hash, 3, B256::ZERO);
-        let store = store_holding(block_hash, held_payload(block_hash));
+        let held = Some(held_payload(block_hash));
         let identity = identity(3);
 
         let signed_envelope =
-            construct_signed_envelope(&block, &store, &identity, &chain_info).unwrap();
+            construct_signed_envelope(&block, held, &identity, &chain_info).unwrap();
 
         let epoch = signed_envelope
             .signed_execution_payload_envelope
@@ -291,10 +299,9 @@ mod construct_signed_envelope_tests {
         let chain_info = ChainInfo::default();
         let block_hash = B256::repeat_byte(0x44);
         let block = test_block(block_hash, 1, B256::ZERO);
-        let store = GloasPayloadStore::default();
         let identity = identity(1);
 
-        let result = construct_signed_envelope(&block, &store, &identity, &chain_info);
+        let result = construct_signed_envelope(&block, None, &identity, &chain_info);
 
         assert!(
             matches!(result, Err(ProposerApiError::NoHeldPayloadForBlock(hash)) if hash == block_hash)
@@ -307,10 +314,10 @@ mod construct_signed_envelope_tests {
         let bid_block_hash = B256::repeat_byte(0x55);
         let wrong_held_hash = B256::repeat_byte(0x66);
         let block = test_block(bid_block_hash, 1, B256::ZERO);
-        let store = store_holding(bid_block_hash, held_payload(wrong_held_hash));
+        let held = Some(held_payload(wrong_held_hash));
         let identity = identity(1);
 
-        let result = construct_signed_envelope(&block, &store, &identity, &chain_info);
+        let result = construct_signed_envelope(&block, held, &identity, &chain_info);
 
         assert!(matches!(
             result,
@@ -324,10 +331,10 @@ mod construct_signed_envelope_tests {
         let chain_info = ChainInfo::default();
         let block_hash = B256::repeat_byte(0x77);
         let block = test_block(block_hash, 9, B256::ZERO);
-        let store = store_holding(block_hash, held_payload(block_hash));
+        let held = Some(held_payload(block_hash));
         let identity = identity(1);
 
-        let result = construct_signed_envelope(&block, &store, &identity, &chain_info);
+        let result = construct_signed_envelope(&block, held, &identity, &chain_info);
 
         assert!(matches!(
             result,

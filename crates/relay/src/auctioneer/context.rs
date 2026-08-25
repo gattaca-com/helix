@@ -38,7 +38,9 @@ use uuid::Uuid;
 
 use crate::{
     SubmissionDataWithSpan,
-    api::{FutureBidSubmissionResult, builder::error::BuilderApiError},
+    api::{
+        FutureBidSubmissionResult, builder::error::BuilderApiError, proposer::GloasBuilderIdentity,
+    },
     auctioneer::{
         AuctioneerHandle, BlockMergeResponse,
         bid_adjustor::BidAdjustor,
@@ -88,6 +90,7 @@ pub struct Context<B: BidAdjustor> {
     discord_addr: Option<SocketAddr>,
     discord_alert: Option<PendingResponse>,
     pub builder_preferences: BuilderPreferencesStore,
+    pub gloas_builder_identity: Arc<GloasBuilderIdentity>,
 }
 
 const EXPECTED_PAYLOADS_PER_SLOT: usize = 5000;
@@ -111,6 +114,7 @@ impl<B: BidAdjustor> Context<B> {
         auctioneer_handle: AuctioneerHandle,
         alert_manager: Arc<AlertManager>,
         operator_api: Option<Arc<OperatorPubSub>>,
+        gloas_builder_identity: Arc<GloasBuilderIdentity>,
     ) -> Self {
         // Local dev builders have random keys, so none is ever in config.
         let local_dev = is_local_dev();
@@ -166,6 +170,7 @@ impl<B: BidAdjustor> Context<B> {
             }),
             discord_alert: None,
             builder_preferences: BuilderPreferencesStore::default(),
+            gloas_builder_identity,
         }
     }
 
