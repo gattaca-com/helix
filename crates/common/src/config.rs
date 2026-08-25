@@ -758,11 +758,12 @@ pub struct HeaderStreamConfig {
     /// Interval between bid updates.
     #[serde(default = "default_u64::<5>")]
     pub interval_ms: u64,
+    pub admit_all: bool,
 }
 
 impl Default for HeaderStreamConfig {
     fn default() -> Self {
-        Self { stream_for_ms: 300, interval_ms: 5 }
+        Self { stream_for_ms: 300, interval_ms: 5, admit_all: false }
     }
 }
 
