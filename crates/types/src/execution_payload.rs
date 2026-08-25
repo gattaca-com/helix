@@ -8,7 +8,7 @@ use tree_hash_derive::TreeHash;
 
 use crate::{
     BlockValidationError, SszError, TestRandom, convert_bloom_to_lighthouse,
-    convert_transactions_to_lighthouse,
+    convert_transactions_to_lighthouse, convert_transactions_to_progressive,
     fields::{Bloom, ExtraData, Transactions, Withdrawals},
 };
 
@@ -155,10 +155,42 @@ impl ExecutionPayload {
             excess_blob_gas: self.excess_blob_gas,
         })
     }
+
+    /// Converts to the real, progressive-list Gloas execution payload shape used on-chain.
+    /// `block_access_list` is left empty -- TODO(gloas): populate once EIP-7928 block-access-list
+    /// tracking exists.
+    pub fn to_lighthouse_gloas_payload(
+        &self,
+        slot: lh_types::Slot,
+    ) -> Result<lh_types::ExecutionPayloadGloas<MainnetEthSpec>, SszError> {
+        Ok(lh_types::ExecutionPayloadGloas {
+            parent_hash: self.parent_hash.into(),
+            fee_recipient: self.fee_recipient,
+            state_root: self.state_root,
+            receipts_root: self.receipts_root,
+            logs_bloom: convert_bloom_to_lighthouse(&self.logs_bloom),
+            prev_randao: self.prev_randao,
+            block_number: self.block_number,
+            gas_limit: self.gas_limit,
+            gas_used: self.gas_used,
+            timestamp: self.timestamp,
+            extra_data: self.extra_data.to_ssz_type()?,
+            base_fee_per_gas: self.base_fee_per_gas,
+            block_hash: self.block_hash.into(),
+            transactions: convert_transactions_to_progressive(&self.transactions),
+            withdrawals: self.withdrawals.iter().cloned().collect(),
+            blob_gas_used: self.blob_gas_used,
+            excess_blob_gas: self.excess_blob_gas,
+            block_access_list: Default::default(),
+            slot_number: slot,
+        })
+    }
 }
 
 impl ForkVersionDecode for ExecutionPayload {
-    /// SSZ decode with explicit fork variant.
+    /// SSZ decode with explicit fork variant. Gloas uses the same bounded-list wire shape as
+    /// Fulu here -- this is helix's own builder<->relay representation, not the real,
+    /// progressive-list consensus `ExecutionPayloadGloas`; see `to_lighthouse_gloas_payload`.
     fn from_ssz_bytes_by_fork(bytes: &[u8], fork_name: ForkName) -> Result<Self, ssz::DecodeError> {
         let builder_bid = match fork_name {
             ForkName::Altair |
@@ -167,13 +199,12 @@ impl ForkVersionDecode for ExecutionPayload {
             ForkName::Capella |
             ForkName::Deneb |
             ForkName::Electra |
-            ForkName::Gloas |
             ForkName::Heze => {
                 return Err(ssz::DecodeError::BytesInvalid(format!(
                     "unsupported fork for ExecutionPayloadHeader: {fork_name}",
                 )));
             }
-            ForkName::Fulu => ExecutionPayload::from_ssz_bytes(bytes)?,
+            ForkName::Fulu | ForkName::Gloas => ExecutionPayload::from_ssz_bytes(bytes)?,
         };
         Ok(builder_bid)
     }
@@ -326,6 +357,55 @@ mod tests {
         let json_str = serde_json::to_value(&our_payload).unwrap();
         let lh_json_str: LhExecutionPayload = serde_json::from_value(json_str).unwrap();
         assert_eq!(our_payload.tree_hash_root(), lh_json_str.tree_hash_root());
+    }
+
+    #[test]
+    fn test_execution_payload_decodes_under_gloas_fork() {
+        let our_payload = ExecutionPayload::test_random();
+        let ssz_bytes = our_payload.as_ssz_bytes();
+
+        let decoded = ExecutionPayload::from_ssz_bytes_by_fork(&ssz_bytes, ForkName::Gloas)
+            .expect("Gloas should decode via the same shape as Fulu");
+
+        assert_eq!(our_payload.tree_hash_root(), decoded.tree_hash_root());
+    }
+
+    #[test]
+    fn to_lighthouse_gloas_payload_preserves_fields() {
+        let our_payload = ExecutionPayload::test_random();
+        let slot = lh_types::Slot::new(42);
+
+        let gloas = our_payload.to_lighthouse_gloas_payload(slot).unwrap();
+
+        assert_eq!(gloas.parent_hash.0, our_payload.parent_hash);
+        assert_eq!(gloas.block_hash.0, our_payload.block_hash);
+        assert_eq!(gloas.fee_recipient, our_payload.fee_recipient);
+        assert_eq!(gloas.state_root, our_payload.state_root);
+        assert_eq!(gloas.receipts_root, our_payload.receipts_root);
+        assert_eq!(gloas.prev_randao, our_payload.prev_randao);
+        assert_eq!(gloas.block_number, our_payload.block_number);
+        assert_eq!(gloas.gas_limit, our_payload.gas_limit);
+        assert_eq!(gloas.gas_used, our_payload.gas_used);
+        assert_eq!(gloas.timestamp, our_payload.timestamp);
+        assert_eq!(gloas.base_fee_per_gas, our_payload.base_fee_per_gas);
+        assert_eq!(gloas.blob_gas_used, our_payload.blob_gas_used);
+        assert_eq!(gloas.excess_blob_gas, our_payload.excess_blob_gas);
+        assert_eq!(gloas.slot_number, slot);
+        assert!(gloas.block_access_list.is_empty());
+
+        assert_eq!(gloas.transactions.len(), our_payload.transactions.len());
+        for (converted, original) in
+            gloas.transactions.as_slice().iter().zip(our_payload.transactions.iter())
+        {
+            assert_eq!(converted.as_slice(), original.as_ref());
+        }
+
+        assert_eq!(gloas.withdrawals.len(), our_payload.withdrawals.len());
+        for (converted, original) in
+            gloas.withdrawals.as_slice().iter().zip(our_payload.withdrawals.iter())
+        {
+            assert_eq!(converted, original);
+        }
     }
 
     #[test]
