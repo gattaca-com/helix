@@ -686,9 +686,7 @@ impl BlockMergingTile {
                                     .copied()
                                     .unwrap_or_default(),
                                 proposer_fee_recipient: slot.fee_recipient.unwrap_or_default(),
-                                registered_gas_limit: slot
-                                    .registered_gas_limit
-                                    .unwrap_or_default(),
+                                registered_gas_limit: slot.registered_gas_limit.unwrap_or_default(),
                                 apply_blacklist: slot.apply_blacklist.unwrap_or(true),
                                 inclusion_list: slot.inclusion_list.clone().unwrap_or_default(),
                                 receive_ns: Nanos::now().0,
