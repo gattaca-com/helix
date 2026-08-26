@@ -169,6 +169,9 @@ struct SlotStats {
     merged_regressed: usize,
     /// Merged blocks dropped because an appended blob's sidecar wasn't in our cache.
     merged_blob_missing: usize,
+    /// Merged blocks whose simulation was skipped because this slot's beacon parent
+    /// root for the merged block's parent hash isn't known yet.
+    merged_root_missing: usize,
     /// Merged blocks dropped because the builder broke an order's atomicity.
     merged_unbundled: usize,
     /// TopBidUpdate messages received for the current bid slot.
@@ -353,6 +356,33 @@ fn handle_merged_block(
     }
     stats.merged_blocks += 1;
     Some(response)
+}
+
+/// Builds the simulation request for a freshly accepted merged block, resolving
+/// `parent_beacon_block_root` from this slot's cached beacon payload attributes
+/// (`slot.attrs`, keyed by the merged block's own parent hash). `None` if that root
+/// isn't known yet: EIP-4788 writes it into the beacon-roots contract during
+/// execution, so simulating with a wrong (e.g. zero-defaulted) root would produce a
+/// genuine state-root mismatch that isn't actually the merge builder's fault.
+fn merged_validation_request(
+    base_block_hash: B256,
+    parent_hash: B256,
+    slot: &SlotState,
+    merged_block_ix: usize,
+    receive_ns: u64,
+) -> Option<MergedValidationRequest> {
+    let parent_beacon_block_root = *slot.attrs.get(&parent_hash)?;
+    Some(MergedValidationRequest {
+        merged_block_ix,
+        base_block_hash,
+        slot: slot.bid_slot,
+        parent_beacon_block_root,
+        proposer_fee_recipient: slot.fee_recipient.unwrap_or_default(),
+        registered_gas_limit: slot.registered_gas_limit.unwrap_or_default(),
+        apply_blacklist: slot.apply_blacklist.unwrap_or(true),
+        inclusion_list: slot.inclusion_list.clone().unwrap_or_default(),
+        receive_ns,
+    })
 }
 
 /// Whether a merged-block simulation failure is attributable to the merge builder, as
@@ -680,24 +710,28 @@ impl BlockMergingTile {
                             let ix = merged_blocks.push(response);
                             merged_ixs.push(ix);
 
-                            let sim_req = MergedValidationRequest {
-                                merged_block_ix: ix,
+                            match merged_validation_request(
                                 base_block_hash,
-                                slot: slot.bid_slot,
-                                parent_beacon_block_root: slot
-                                    .attrs
-                                    .get(&parent_hash)
-                                    .copied()
-                                    .unwrap_or_default(),
-                                proposer_fee_recipient: slot.fee_recipient.unwrap_or_default(),
-                                registered_gas_limit: slot.registered_gas_limit.unwrap_or_default(),
-                                apply_blacklist: slot.apply_blacklist.unwrap_or(true),
-                                inclusion_list: slot.inclusion_list.clone().unwrap_or_default(),
-                                receive_ns: Nanos::now().0,
-                            };
-                            let sim_ix =
-                                sim_requests.push(SimRequest::ValidateMerged(Box::new(sim_req)));
-                            merge_sim_ixs.push(sim_ix);
+                                parent_hash,
+                                slot,
+                                ix,
+                                Nanos::now().0,
+                            ) {
+                                Some(sim_req) => {
+                                    let sim_ix = sim_requests
+                                        .push(SimRequest::ValidateMerged(Box::new(sim_req)));
+                                    merge_sim_ixs.push(sim_ix);
+                                }
+                                None => {
+                                    stats.merged_root_missing += 1;
+                                    warn!(
+                                        ?token,
+                                        %parent_hash,
+                                        "no cached beacon parent root for merged block's \
+                                         parent hash, skipping simulation"
+                                    );
+                                }
+                            }
                         }
                     }
                     MergingMsgId::RejectV1 => {
@@ -836,6 +870,7 @@ impl BlockMergingTile {
             merged_stale = stats.merged_stale,
             merged_regressed = stats.merged_regressed,
             merged_blob_missing = stats.merged_blob_missing,
+            merged_root_missing = stats.merged_root_missing,
             merged_unbundled = stats.merged_unbundled,
             appendable_blocks = self.slot.appendable.len(),
             hydration_txs = self.hydration_cache.tx_count(),
@@ -1649,5 +1684,39 @@ mod tests {
         ));
         let inner = MergedSimulationResultInner { merged_block_ix: ix, result: Ok(()) };
         assert!(merge_sim_disable_check(&inner, &merged_blocks).is_none());
+    }
+
+    /// RELAY-FR: when this slot has no cached beacon payload attributes for the merged
+    /// block's own parent hash, the request must be skipped rather than silently carry
+    /// a zero `parent_beacon_block_root`. EIP-4788 writes this value into the
+    /// beacon-roots contract during execution, so sending zero when the real root is
+    /// non-zero produces a genuine state-root mismatch downstream ("invalid merkle
+    /// root").
+    #[test]
+    fn merged_validation_request_none_when_attrs_missing() {
+        let slot = SlotState { bid_slot: 5, ..Default::default() }; // attrs empty
+        let base_block_hash = B256::repeat_byte(1);
+        let parent_hash = B256::repeat_byte(2);
+
+        let req = merged_validation_request(base_block_hash, parent_hash, &slot, 0, 0);
+
+        assert!(req.is_none(), "must not silently send a zero beacon root when it's unknown");
+    }
+
+    #[test]
+    fn merged_validation_request_uses_known_parent_beacon_block_root() {
+        let mut slot = SlotState { bid_slot: 5, ..Default::default() };
+        let base_block_hash = B256::repeat_byte(1);
+        let parent_hash = B256::repeat_byte(2);
+        let expected_root = B256::repeat_byte(3);
+        slot.attrs.insert(parent_hash, expected_root);
+
+        let req = merged_validation_request(base_block_hash, parent_hash, &slot, 7, 42)
+            .expect("known root resolves");
+
+        assert_eq!(req.parent_beacon_block_root, expected_root);
+        assert_eq!(req.base_block_hash, base_block_hash);
+        assert_eq!(req.merged_block_ix, 7);
+        assert_eq!(req.receive_ns, 42);
     }
 }
