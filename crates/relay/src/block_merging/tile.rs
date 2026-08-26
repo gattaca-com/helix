@@ -289,6 +289,7 @@ fn handle_merged_block(
     tx_hash_cache: &mut FxHashMap<Bytes, B256>,
     unbundled_scratch_bundled: &mut Vec<bool>,
     unbundled_scratch_covered: &mut Vec<bool>,
+    max_blobs_per_block: usize,
 ) -> Option<BlockMergeResponse> {
     if !enabled {
         return None;
@@ -317,7 +318,8 @@ fn handle_merged_block(
         value: merged.proposer_value,
         order_ids: merged.included_order_ids.iter().copied().collect(),
     });
-    let Some(response) = merged_block_to_response(merged, blob_sidecars) else {
+    let Some(response) = merged_block_to_response(merged, blob_sidecars, max_blobs_per_block)
+    else {
         stats.merged_blob_missing += 1;
         warn!(
             ?token,
@@ -564,6 +566,7 @@ impl BlockMergingTile {
 
     fn poll_sockets(&mut self) {
         let enabled = self.block_merging_enabled.load(Ordering::Relaxed);
+        let max_blobs_per_block = self.chain_info.max_blobs_per_block();
 
         // Split borrows: the connector is exclusively borrowed for the whole
         // poll, all reactions are buffered.
@@ -670,6 +673,7 @@ impl BlockMergingTile {
                             tx_hash_cache,
                             unbundled_scratch_bundled,
                             unbundled_scratch_covered,
+                            max_blobs_per_block,
                         ) {
                             let base_block_hash = response.base_block_hash;
                             let parent_hash = response.execution_payload.parent_hash;
@@ -1182,7 +1186,7 @@ mod tests {
         },
     };
     use helix_types::{
-        BlockMergingData, Compression, ExecutionPayload, ExecutionRequests, ForkName,
+        BlobsBundle, BlockMergingData, Compression, ExecutionPayload, ExecutionRequests, ForkName,
         MergedBlockTrace, SignedBidSubmission, SubmissionVersion, TestRandom, TestRandomSeed,
     };
     use rand::{SeedableRng, rngs::SmallRng};
@@ -1204,11 +1208,15 @@ mod tests {
         proposer_value: U256,
         blobs: Vec<BlobWithMetadata>,
     ) -> BlockMergeResponse {
+        let mut blobs_bundle = BlobsBundle::default();
+        for blob in blobs {
+            blobs_bundle.push_blob(blob.commitment, &blob.proofs, blob.blob, 9).unwrap();
+        }
         BlockMergeResponse {
             base_block_hash: payload.parent_hash,
             execution_payload: payload,
             execution_requests: ExecutionRequests::default(),
-            appended_blobs: blobs,
+            blobs_bundle,
             proposer_value,
             base_builder_revenue: U256::ZERO,
             relay_revenue: U256::ZERO,
@@ -1533,6 +1541,7 @@ mod tests {
             &mut tx_hash_cache,
             &mut bundled_scratch,
             &mut covered_scratch,
+            9,
         );
 
         assert!(result.is_none());
@@ -1561,6 +1570,7 @@ mod tests {
             &mut tx_hash_cache,
             &mut bundled_scratch,
             &mut covered_scratch,
+            9,
         );
 
         assert!(result.is_some());

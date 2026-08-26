@@ -8,15 +8,11 @@ use alloy_primitives::{Address, B256, U256};
 use flux_profiler::timed;
 use helix_common::{
     RelayConfig,
-    chain_info::ChainInfo,
     local_cache::LocalCache,
     metrics::MERGE_TRACE_LATENCY,
     utils::{utcnow_ms, utcnow_ns},
 };
-use helix_types::{
-    BlobWithMetadata, BlobsBundle, BlsPublicKeyBytes, MergedBlock, PayloadAndBlobs, PayloadBidData,
-    Transactions,
-};
+use helix_types::{BlsPublicKeyBytes, MergedBlock, PayloadAndBlobs, PayloadBidData, Transactions};
 use rustc_hash::{FxBuildHasher, FxHashSet};
 use tracing::{debug, error, info, trace, warn};
 
@@ -30,8 +26,6 @@ pub enum PayloadMergingError {
         "merged payload value is lower or equal to original bid. original: {original}, merged: {merged}"
     )]
     MergedPayloadNotValuable { original: U256, merged: U256 },
-    #[error("reached maximum blob count for block")]
-    MaxBlobCountReached,
 }
 
 /// Stores merged blocks so they can be served via `get_header`/`get_payload`. Everything
@@ -42,7 +36,6 @@ pub enum PayloadMergingError {
 pub struct BlockMerger {
     curr_bid_slot: u64,
     config: RelayConfig,
-    chain_info: ChainInfo,
     local_cache: LocalCache,
     best_merged_blocks: HashMap<Address, BestMergedBlock>,
     /// Base block hashes for which `get_header` found that the merged bid only differed
@@ -53,16 +46,10 @@ pub struct BlockMerger {
 }
 
 impl BlockMerger {
-    pub fn new(
-        curr_bid_slot: u64,
-        chain_info: ChainInfo,
-        local_cache: LocalCache,
-        config: RelayConfig,
-    ) -> Self {
+    pub fn new(curr_bid_slot: u64, local_cache: LocalCache, config: RelayConfig) -> Self {
         Self {
             curr_bid_slot,
             config,
-            chain_info,
             local_cache,
             best_merged_blocks: HashMap::with_capacity(16),
             flagged_payment_tx_only_blocks: FxHashSet::with_capacity_and_hasher(16, FxBuildHasher),
@@ -201,7 +188,6 @@ impl BlockMerger {
         }
 
         let bid_slot = self.curr_bid_slot;
-        let max_blobs_per_block = self.chain_info.max_blobs_per_block();
 
         let original_block_hash = original_payload.execution_payload.block_hash;
         if self.flagged_payment_tx_only_blocks.remove(&original_block_hash) {
@@ -236,8 +222,7 @@ impl BlockMerger {
             original_tx_count: original_payload.execution_payload.transactions.len(),
             merged_tx_count: response.execution_payload.transactions.len(),
             original_blob_count: original_payload.blobs_bundle.blobs.len(),
-            merged_blob_count: original_payload.blobs_bundle.blobs.len() +
-                response.appended_blobs.len(),
+            merged_blob_count: response.blobs_bundle.blobs.len(),
             original_gas_used: original_payload.execution_payload.gas_used,
             merged_gas_used: response.execution_payload.gas_used,
             builder_inclusions: response.builder_inclusions,
@@ -246,18 +231,11 @@ impl BlockMerger {
 
         trace!(%block_hash, "stored merged block in local cache");
 
-        let mut merged_blobs_bundle = original_payload.blobs_bundle.as_ref().to_owned();
-        append_merged_blobs(
-            &mut merged_blobs_bundle,
-            response.appended_blobs,
-            max_blobs_per_block,
-        )?;
-
         let withdrawals_root = response.execution_payload.withdrawals_root();
 
         let payload_and_blobs = PayloadAndBlobs {
             execution_payload: Arc::new(response.execution_payload),
-            blobs_bundle: Arc::new(merged_blobs_bundle),
+            blobs_bundle: Arc::new(response.blobs_bundle),
         };
 
         let bid_data = PayloadBidData {
@@ -268,7 +246,7 @@ impl BlockMerger {
             builder_pubkey,
         };
 
-        trace!(%block_hash, %response.proposer_value, "blobs appended to merged payload");
+        trace!(%block_hash, %response.proposer_value, "merged payload ready for storage");
 
         let new_bid = PayloadEntry::new_gossip(payload_and_blobs, bid_data);
 
@@ -299,22 +277,6 @@ impl BlockMerger {
 struct BestMergedBlock {
     base_block_time_ms: u64,
     bid: PayloadEntry,
-}
-
-/// Appends the merged blobs to the original blobs bundle.
-#[timed]
-fn append_merged_blobs(
-    original_blobs_bundle: &mut BlobsBundle,
-    appended_blobs: Vec<BlobWithMetadata>,
-    max_blobs_per_block: usize,
-) -> Result<(), PayloadMergingError> {
-    for blob_data in appended_blobs {
-        original_blobs_bundle
-            .push_blob(blob_data.commitment, &blob_data.proofs, blob_data.blob, max_blobs_per_block)
-            .map_err(|_| PayloadMergingError::MaxBlobCountReached)?;
-    }
-
-    Ok(())
 }
 
 /// Checks whether the merged block kept the original builder's tx ordering completely

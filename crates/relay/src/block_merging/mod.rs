@@ -8,16 +8,17 @@ mod unbundling;
 
 use std::collections::HashMap;
 
-use alloy_consensus::Bytes48;
+use alloy_consensus::{Bytes48, Transaction as _, TxEnvelope};
 use alloy_primitives::B256;
+use alloy_rlp::Decodable;
 use helix_tcp_types::merging::{
     MergingFrameHeader, MergingMsgId,
     builder_to_relay::MergedBlockV1,
     order::{BundleOrderRef, MergeOrderRef, TxOrderRef, bundle_order_hash},
 };
 use helix_types::{
-    BlobWithMetadata, BlobsBundle, BuilderInclusionResult, KzgCommitment, MergeOrderFlags,
-    MergedBlockTrace, Order, payload_from_v3, requests_from_v4,
+    BlobWithMetadata, BlobsBundle, BuilderInclusionResult, ExecutionPayload, KzgCommitment,
+    MergeOrderFlags, MergedBlockTrace, Order, payload_from_v3, requests_from_v4,
 };
 use rustc_hash::FxHashMap;
 use ssz::Encode;
@@ -84,18 +85,19 @@ fn order_ref_hash(order_ref: &MergeOrderRef, tx_hashes: &[B256]) -> B256 {
 }
 
 /// Maps the wire message onto the simulator response type so the auctioneer reuses
-/// `handle_merge_response` unchanged. Resolves each appended blob hash from `blob_sidecars`
-/// (this tile's own cache of blob sidecars seen in submissions this slot); `None` if any
-/// hash can't be resolved, since a merged block missing a blob sidecar can't be finalized.
+/// `handle_merge_response` unchanged. Resolves the merged block's full blob set --
+/// the base block's own blob txs as well as any newly appended ones -- from
+/// `blob_sidecars` (this tile's own cache of blob sidecars seen in submissions this
+/// slot); `None` if any referenced hash can't be resolved or the resolved set is
+/// invalid, since a merged block missing a blob sidecar can't be finalized.
 fn merged_block_to_response(
     m: MergedBlockV1,
     blob_sidecars: &FxHashMap<B256, BlobWithMetadata>,
+    max_blobs_per_block: usize,
 ) -> Option<BlockMergeResponse> {
-    let appended_blobs = m
-        .appended_blobs
-        .iter()
-        .map(|h| blob_sidecars.get(h).cloned())
-        .collect::<Option<Vec<_>>>()?;
+    let execution_payload = payload_from_v3(m.execution_payload)?;
+    let blobs_bundle =
+        resolve_blobs_bundle(&execution_payload, blob_sidecars, max_blobs_per_block)?;
 
     let builder_inclusions: HashMap<_, _> = m
         .builder_inclusions
@@ -110,9 +112,9 @@ fn merged_block_to_response(
         .collect();
     Some(BlockMergeResponse {
         base_block_hash: m.base_block_hash,
-        execution_payload: payload_from_v3(m.execution_payload)?,
+        execution_payload,
         execution_requests: requests_from_v4(m.execution_requests)?,
-        appended_blobs,
+        blobs_bundle,
         proposer_value: m.proposer_value,
         base_builder_revenue: m.base_builder_revenue,
         relay_revenue: m.relay_revenue,
@@ -128,6 +130,36 @@ fn merged_block_to_response(
             top_bid: None,
         },
     })
+}
+
+/// Resolves every blob versioned hash referenced by the merged block's own transactions --
+/// base txs and newly appended txs alike -- from `blob_sidecars`. Trusting only the wire's
+/// `appended_blobs` list would drop the base block's own blob sidecars whenever it already
+/// carried blob txs, producing a merged block whose transactions reference blob hashes with
+/// no matching `blobs_bundle` entry (surfaces downstream as a blob-versioned-hash mismatch
+/// during simulation).
+fn resolve_blobs_bundle(
+    payload: &ExecutionPayload,
+    blob_sidecars: &FxHashMap<B256, BlobWithMetadata>,
+    max_blobs_per_block: usize,
+) -> Option<BlobsBundle> {
+    let mut bundle = BlobsBundle::default();
+    for tx in payload.transactions.iter() {
+        let envelope = TxEnvelope::decode(&mut tx.0.as_ref()).ok()?;
+        for hash in envelope.blob_versioned_hashes().unwrap_or_default() {
+            let sidecar = blob_sidecars.get(hash)?;
+            bundle
+                .push_blob(
+                    sidecar.commitment,
+                    &sidecar.proofs,
+                    sidecar.blob.clone(),
+                    max_blobs_per_block,
+                )
+                .ok()?;
+        }
+    }
+    bundle.validate_ssz_lengths(max_blobs_per_block).ok()?;
+    Some(bundle)
 }
 
 /// This submission's own blob sidecars, keyed by KZG versioned hash — cached so a later
@@ -244,5 +276,179 @@ mod tests {
         assert_eq!(header.msg_id, MergingMsgId::PingV1);
         let ping = PingV1::from_ssz_bytes(&buf[2..]).unwrap();
         assert_eq!(ping.nonce, 42);
+    }
+
+    /// Reproduces the RELAY-FR incident: a merge builder appends no new blob
+    /// txs (`appended_blobs` empty on the wire) to a base block that already
+    /// carries one. The resolved response must still include the base
+    /// block's own blob, or downstream simulation sees a blob tx with no
+    /// matching `blobs_bundle` entry ("expected blob versioned hashes do not
+    /// match the given transactions").
+    #[test]
+    fn merged_block_to_response_includes_base_blocks_own_blob_tx() {
+        use alloy_consensus::{TxEip4844, TxEnvelope};
+        use alloy_primitives::{Address, Bloom, Signature, U256};
+        use alloy_rlp::Encodable;
+        use alloy_rpc_types::{
+            beacon::{BlsPublicKey, requests::ExecutionRequestsV4},
+            engine::{ExecutionPayloadV1, ExecutionPayloadV2, ExecutionPayloadV3},
+        };
+        use helix_tcp_types::merging::builder_to_relay::MergeTraceV1;
+        use helix_types::Blob;
+
+        let commitment: Bytes48 = Bytes48::default();
+        let hash = calculate_versioned_hash(commitment);
+
+        let tx = TxEip4844 { blob_versioned_hashes: vec![hash], ..Default::default() };
+        let envelope = TxEnvelope::new_unhashed(
+            tx.into(),
+            Signature::new(Default::default(), Default::default(), Default::default()),
+        );
+        let mut raw = vec![];
+        envelope.encode(&mut raw);
+
+        let base_block_hash = B256::repeat_byte(9);
+        let execution_payload = ExecutionPayloadV3 {
+            payload_inner: ExecutionPayloadV2 {
+                payload_inner: ExecutionPayloadV1 {
+                    parent_hash: B256::ZERO,
+                    fee_recipient: Address::ZERO,
+                    state_root: B256::ZERO,
+                    receipts_root: B256::ZERO,
+                    logs_bloom: Bloom::default(),
+                    prev_randao: B256::ZERO,
+                    block_number: 1,
+                    gas_limit: 30_000_000,
+                    gas_used: 0,
+                    timestamp: 0,
+                    extra_data: Default::default(),
+                    base_fee_per_gas: U256::from(1),
+                    block_hash: base_block_hash,
+                    transactions: vec![raw.into()],
+                },
+                withdrawals: vec![],
+            },
+            blob_gas_used: 0,
+            excess_blob_gas: 0,
+        };
+        let merged = MergedBlockV1 {
+            slot: 5,
+            response_id: 0,
+            base_block_hash,
+            base_builder_pubkey: BlsPublicKey::default(),
+            execution_payload,
+            execution_requests: ExecutionRequestsV4::default(),
+            appended_blobs: vec![],
+            proposer_value: U256::from(1),
+            base_builder_revenue: U256::ZERO,
+            relay_revenue: U256::ZERO,
+            builder_inclusions: vec![],
+            included_order_ids: vec![],
+            trace: MergeTraceV1::default(),
+        };
+
+        let mut blob_sidecars = FxHashMap::default();
+        blob_sidecars.insert(hash, BlobWithMetadata {
+            commitment,
+            proofs: vec![Bytes48::default(); 128],
+            blob: Blob::default(),
+        });
+
+        let response =
+            merged_block_to_response(merged, &blob_sidecars, 9).expect("known blob resolves");
+
+        assert_eq!(response.blobs_bundle.blobs.len(), 1);
+        assert_eq!(response.blobs_bundle.commitments[0], commitment);
+    }
+
+    /// The base block's own blob tx and a merge builder's newly appended
+    /// blob tx must both survive resolution, not just the appended one.
+    #[test]
+    fn merged_block_to_response_includes_both_base_and_appended_blobs() {
+        use alloy_consensus::{TxEip4844, TxEnvelope};
+        use alloy_primitives::{Address, Bloom, Signature, U256};
+        use alloy_rlp::Encodable;
+        use alloy_rpc_types::{
+            beacon::{BlsPublicKey, requests::ExecutionRequestsV4},
+            engine::{ExecutionPayloadV1, ExecutionPayloadV2, ExecutionPayloadV3},
+        };
+        use helix_tcp_types::merging::builder_to_relay::MergeTraceV1;
+        use helix_types::Blob;
+
+        fn raw_blob_tx(hash: B256) -> alloy_primitives::Bytes {
+            let tx = TxEip4844 { blob_versioned_hashes: vec![hash], ..Default::default() };
+            let envelope = TxEnvelope::new_unhashed(
+                tx.into(),
+                Signature::new(Default::default(), Default::default(), Default::default()),
+            );
+            let mut raw = vec![];
+            envelope.encode(&mut raw);
+            raw.into()
+        }
+
+        let base_commitment: Bytes48 = Bytes48::default();
+        let base_hash = calculate_versioned_hash(base_commitment);
+        let appended_commitment: Bytes48 = Bytes48::repeat_byte(1);
+        let appended_hash = calculate_versioned_hash(appended_commitment);
+
+        let base_block_hash = B256::repeat_byte(9);
+        let execution_payload = ExecutionPayloadV3 {
+            payload_inner: ExecutionPayloadV2 {
+                payload_inner: ExecutionPayloadV1 {
+                    parent_hash: B256::ZERO,
+                    fee_recipient: Address::ZERO,
+                    state_root: B256::ZERO,
+                    receipts_root: B256::ZERO,
+                    logs_bloom: Bloom::default(),
+                    prev_randao: B256::ZERO,
+                    block_number: 1,
+                    gas_limit: 30_000_000,
+                    gas_used: 0,
+                    timestamp: 0,
+                    extra_data: Default::default(),
+                    base_fee_per_gas: U256::from(1),
+                    block_hash: base_block_hash,
+                    transactions: vec![raw_blob_tx(base_hash), raw_blob_tx(appended_hash)],
+                },
+                withdrawals: vec![],
+            },
+            blob_gas_used: 0,
+            excess_blob_gas: 0,
+        };
+        let merged = MergedBlockV1 {
+            slot: 5,
+            response_id: 0,
+            base_block_hash,
+            base_builder_pubkey: BlsPublicKey::default(),
+            execution_payload,
+            execution_requests: ExecutionRequestsV4::default(),
+            appended_blobs: vec![appended_hash],
+            proposer_value: U256::from(1),
+            base_builder_revenue: U256::ZERO,
+            relay_revenue: U256::ZERO,
+            builder_inclusions: vec![],
+            included_order_ids: vec![],
+            trace: MergeTraceV1::default(),
+        };
+
+        let mut blob_sidecars = FxHashMap::default();
+        blob_sidecars.insert(base_hash, BlobWithMetadata {
+            commitment: base_commitment,
+            proofs: vec![Bytes48::default(); 128],
+            blob: Blob::default(),
+        });
+        blob_sidecars.insert(appended_hash, BlobWithMetadata {
+            commitment: appended_commitment,
+            proofs: vec![Bytes48::default(); 128],
+            blob: Blob::default(),
+        });
+
+        let response =
+            merged_block_to_response(merged, &blob_sidecars, 9).expect("both blobs resolve");
+
+        let commitments: Vec<_> = response.blobs_bundle.commitments.iter().copied().collect();
+        assert_eq!(commitments.len(), 2);
+        assert!(commitments.contains(&base_commitment));
+        assert!(commitments.contains(&appended_commitment));
     }
 }

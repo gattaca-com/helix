@@ -29,8 +29,8 @@ use helix_common::{
     validator_preferences::{Filtering, ValidatorPreferences},
 };
 use helix_types::{
-    BidTrace, BlobWithMetadata, BlobsBundle, BlsPublicKeyBytes, BlsSignatureBytes, KzgCommitments,
-    SignedBidSubmission, SimHydrationCache, Submission,
+    BidTrace, BlsPublicKeyBytes, BlsSignatureBytes, SignedBidSubmission, SimHydrationCache,
+    Submission,
 };
 use ssz::Encode as _;
 use tracing::{debug, error, info, warn};
@@ -942,24 +942,10 @@ fn merged_block_to_submission(
     Ok(SignedBidSubmission {
         message,
         execution_payload: Arc::new(payload.clone()),
-        blobs_bundle: Arc::new(blobs_bundle_from_appended(&response.appended_blobs)?),
+        blobs_bundle: Arc::new(response.blobs_bundle.clone()),
         execution_requests: Arc::new(response.execution_requests.clone()),
         signature: BlsSignatureBytes::default(),
     })
-}
-
-fn blobs_bundle_from_appended(appended: &[BlobWithMetadata]) -> Result<BlobsBundle, BlockSimError> {
-    let mut commitments = Vec::with_capacity(appended.len());
-    let mut proofs = Vec::new();
-    let mut blobs = Vec::with_capacity(appended.len());
-    for b in appended {
-        commitments.push(b.commitment);
-        proofs.extend(b.proofs.iter().copied());
-        blobs.push(b.blob.clone());
-    }
-    let commitments = KzgCommitments::new(commitments)
-        .map_err(|_| BlockSimError::BlockValidationFailed("too many appended blobs".to_owned()))?;
-    Ok(BlobsBundle { commitments, proofs, blobs })
 }
 
 fn create_ssz_request(
@@ -995,7 +981,10 @@ fn ssz_request(
 #[cfg(test)]
 mod tests {
     use alloy_primitives::{Address, U256};
-    use helix_types::{ExecutionPayload, ExecutionRequests, MergedBlockTrace, TestRandom};
+    use helix_types::{
+        BlobWithMetadata, BlobsBundle, ExecutionPayload, ExecutionRequests, MergedBlockTrace,
+        TestRandom,
+    };
     use rand::{SeedableRng, rngs::SmallRng};
 
     use super::*;
@@ -1005,11 +994,15 @@ mod tests {
         proposer_value: U256,
         blobs: Vec<BlobWithMetadata>,
     ) -> BlockMergeResponse {
+        let mut blobs_bundle = BlobsBundle::default();
+        for blob in blobs {
+            blobs_bundle.push_blob(blob.commitment, &blob.proofs, blob.blob, 9).unwrap();
+        }
         BlockMergeResponse {
             base_block_hash: payload.parent_hash,
             execution_payload: payload,
             execution_requests: ExecutionRequests::default(),
-            appended_blobs: blobs,
+            blobs_bundle,
             proposer_value,
             base_builder_revenue: U256::ZERO,
             relay_revenue: U256::ZERO,
