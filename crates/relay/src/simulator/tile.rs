@@ -324,7 +324,27 @@ impl SimulatorTile {
                 http: sim.client.client.clone(),
             }
         } else {
-            let (builder, method) = sim.client.sim_request_builder(submission.fork_name());
+            let fork = submission.fork_name();
+            let Some((builder, method)) = sim.client.sim_request_builder(fork) else {
+                warn!(%fork, "no validation RPC method for fork, dropping submission");
+                sim.pending += 1;
+                let result_ix = self.sim_results.push(SimResult::Validate((
+                    id,
+                    Some(SimulationResultInner {
+                        submission_ref: req.submission_ref,
+                        optimistic_version: req.optimistic_version(),
+                        bid: None,
+                        result: Err(BlockSimError::UnsupportedFork(fork)),
+                    }),
+                )));
+                let _ = self.task_tx.try_send(SimTileInternalEvent::TaskDone {
+                    id,
+                    paused_until: None,
+                    result_ix,
+                    elapsed: None,
+                });
+                return;
+            };
             SimDispatch::Json { to_send: builder, method: method.to_owned() }
         };
         sim.pending += 1;
