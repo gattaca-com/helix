@@ -45,6 +45,9 @@ pub struct RelayConfig {
     pub router_config: RouterConfig,
     #[serde(default = "default_duration")]
     pub target_get_payload_propagation_duration_ms: u64,
+    /// Requests this close to the V1 getPayload cutoff are published but not returned.
+    #[serde(default = "default_get_payload_v1_response_buffer_ms")]
+    pub get_payload_v1_response_buffer_ms: u64,
     /// Configuration for block merging parameters.
     #[serde(default)]
     pub block_merging_config: BlockMergingConfig,
@@ -101,6 +104,7 @@ impl RelayConfig {
             validator_preferences: Default::default(),
             router_config: Default::default(),
             target_get_payload_propagation_duration_ms: Default::default(),
+            get_payload_v1_response_buffer_ms: Default::default(),
             block_merging_config: Default::default(),
             header_stream: Default::default(),
             primev_config: Default::default(),
@@ -718,6 +722,10 @@ impl Route {
 
 fn default_duration() -> u64 {
     1000
+}
+
+fn default_get_payload_v1_response_buffer_ms() -> u64 {
+    800
 }
 
 #[derive(Serialize, Deserialize, Clone)]
