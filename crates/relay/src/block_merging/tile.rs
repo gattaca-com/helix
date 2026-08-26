@@ -1,6 +1,6 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
-use alloy_primitives::{B256, Bytes, U256, keccak256};
+use alloy_primitives::{Address, B256, Bytes, U256, keccak256};
 use flux::{
     spine::SpineProducers,
     tile::Tile,
@@ -22,7 +22,10 @@ use helix_tcp_types::merging::{
     order::{MergeOrderRef, order_id},
     relay_to_builder::{ActivateBaseBlockV1, MergeableBlockV1, RevokeOrderV1, SlotStartV1},
 };
-use helix_types::{BlobWithMetadata, BlsPublicKeyBytes, HydrationCache, Submission, payload_to_v3};
+use helix_types::{
+    BlobWithMetadata, BlsPublicKeyBytes, BuilderInclusionResult, HydrationCache, Submission,
+    payload_to_v3,
+};
 use rustc_hash::{FxHashMap, FxHashSet};
 use ssz::Decode;
 use tracing::{debug, error, info, trace, warn};
@@ -258,6 +261,18 @@ fn revoked_ids(
 ) -> Vec<(B256, B256)> {
     let Some(prev) = prev else { return Vec::new() };
     prev.iter().filter(|(id, _)| !new.contains_key(*id)).map(|(&id, &hash)| (id, hash)).collect()
+}
+
+/// Tx hashes the merge builder actually appended onto the base block.
+/// `builder_inclusions` only ever records orders that were applied (see
+/// `record_inclusion` on the builder side), so this never includes anything
+/// from the base block's own original content — which is what the
+/// unbundling check must ignore, since orders sharing a tx hash with base
+/// content that was never touched by the merge builder aren't its concern.
+fn appended_tx_hashes(
+    builder_inclusions: &HashMap<Address, BuilderInclusionResult>,
+) -> FxHashSet<B256> {
+    builder_inclusions.values().flat_map(|inclusion| inclusion.txs.iter().copied()).collect()
 }
 
 impl BlockMergingTile {
@@ -521,7 +536,8 @@ impl BlockMergingTile {
                             );
                             return;
                         };
-                        let final_txs: Vec<B256> = response
+                        let appended = appended_tx_hashes(&response.builder_inclusions);
+                        let appended_txs: Vec<B256> = response
                             .execution_payload
                             .transactions
                             .iter()
@@ -530,9 +546,10 @@ impl BlockMergingTile {
                                     .entry(tx.0.clone())
                                     .or_insert_with(|| keccak256(tx.as_ref()))
                             })
+                            .filter(|hash| appended.contains(hash))
                             .collect();
                         let unbundled = find_unbundled_txs(
-                            &final_txs,
+                            &appended_txs,
                             &slot.order_txs,
                             unbundled_scratch_bundled,
                             unbundled_scratch_covered,
@@ -1048,5 +1065,62 @@ mod tests {
         let new =
             latest_only_ids(BlsPublicKeyBytes::default(), &[bundle(true)], &[B256::repeat_byte(7)]);
         assert!(revoked_ids(None, &new).is_empty());
+    }
+
+    fn inclusion(txs: Vec<B256>) -> BuilderInclusionResult {
+        BuilderInclusionResult { contribution: U256::ZERO, revenue: U256::ZERO, txs }
+    }
+
+    #[test]
+    fn appended_tx_hashes_collects_across_builders() {
+        let tx_a = B256::repeat_byte(1);
+        let tx_b = B256::repeat_byte(2);
+        let tx_c = B256::repeat_byte(3);
+        let builder_inclusions = HashMap::from([
+            (Address::repeat_byte(0xa), inclusion(vec![tx_a, tx_b])),
+            (Address::repeat_byte(0xb), inclusion(vec![tx_c])),
+        ]);
+
+        let appended = appended_tx_hashes(&builder_inclusions);
+
+        assert_eq!(appended, FxHashSet::from_iter([tx_a, tx_b, tx_c]));
+    }
+
+    #[test]
+    fn appended_tx_hashes_empty_when_nothing_was_appended() {
+        assert!(appended_tx_hashes(&HashMap::new()).is_empty());
+    }
+
+    // Regression test for a false-positive class: an order sharing a tx hash
+    // with the base block's own (untouched) content, that was never itself
+    // satisfied, must not flag that base-block tx as unbundled. Filtering to
+    // `appended_tx_hashes` before the check removes base content from
+    // consideration entirely, so an unrelated, never-applied order can no
+    // longer explain (or fail to explain) it.
+    #[test]
+    fn filtering_to_appended_txs_ignores_base_block_content() {
+        let base_tx = B256::repeat_byte(1);
+        let never_appended_tx = B256::repeat_byte(2);
+        let appended_tx = B256::repeat_byte(3);
+
+        // An unrelated, never-applied bundle that happens to share `base_tx`
+        // with the base block's own plain content.
+        let foreign_unsatisfied_order = OrderTxs::new(vec![base_tx, never_appended_tx], []);
+        // The order actually applied by the merge builder.
+        let applied_order = OrderTxs::new(vec![appended_tx], []);
+
+        let builder_inclusions =
+            HashMap::from([(Address::repeat_byte(0xa), inclusion(vec![appended_tx]))]);
+        let appended = appended_tx_hashes(&builder_inclusions);
+
+        let full_final_txs = vec![base_tx, appended_tx];
+        let filtered_final_txs: Vec<B256> =
+            full_final_txs.iter().copied().filter(|h| appended.contains(h)).collect();
+
+        let orders = [foreign_unsatisfied_order, applied_order];
+        assert_eq!(
+            find_unbundled_txs(&filtered_final_txs, &orders, &mut Vec::new(), &mut Vec::new()),
+            Vec::<B256>::new(),
+        );
     }
 }
