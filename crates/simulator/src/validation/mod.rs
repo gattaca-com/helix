@@ -16,6 +16,7 @@ use alloy_rpc_types::{
         ExecutionPayloadSidecar, PraguePayloadFields,
     },
 };
+use alloy_sol_types::{SolCall, sol};
 use async_trait::async_trait;
 use dashmap::DashSet;
 use helix_common::{
@@ -520,10 +521,12 @@ impl ValidationApi {
             return Err(ValidationApiError::ProposerPayment);
         }
 
-        // Either a direct transfer, or one routed through the PaymentForwarder,
-        // which sends the full value on to the recipient in its calldata. The
-        // forwarder is only trusted where its runtime is actually deployed,
-        // since a value call to a codeless address succeeds and keeps the value.
+        // Either a direct transfer, one routed through the PaymentForwarder (which
+        // sends the full value on to the recipient in its calldata), or a Gnosis
+        // Safe execTransaction -> multiSend delegatecall (the merge-builder payment
+        // engine's mechanism, see crates/builder/src/engine/payment.rs). The
+        // forwarder is only trusted where its runtime is actually deployed, since a
+        // value call to a codeless address succeeds and keeps the value.
         let paid_directly =
             tx.to() == Some(message.proposer_fee_recipient) && tx.input().is_empty();
         let paid_via_forwarder = tx.to() == Some(PAYMENT_FORWARDER) &&
@@ -536,11 +539,16 @@ impl ValidationApi {
                         account.bytecode_hash == Some(PAYMENT_FORWARDER_CODE_HASH)
                     })
                 });
-        if !paid_directly && !paid_via_forwarder {
+        let paid_via_multisend =
+            multisend_pays(tx.input(), message.proposer_fee_recipient, message.value);
+        if !paid_directly && !paid_via_forwarder && !paid_via_multisend {
             return Err(ValidationApiError::ProposerPayment);
         }
 
-        if tx.value() != message.value {
+        // The multisend's value moves from the Safe's own balance via internal
+        // calls, not from this outer tx's msg.value, so it doesn't apply here --
+        // multisend_pays already confirmed a matching (recipient, value) entry.
+        if !paid_via_multisend && tx.value() != message.value {
             return Err(ValidationApiError::ProposerPayment);
         }
 
@@ -694,6 +702,174 @@ impl ValidationApi {
             parent_header
         };
         Ok(parent_header)
+    }
+}
+
+sol! {
+    /// Gnosis Safe entry point the merge-builder payment engine calls
+    /// (crates/builder/src/engine/payment.rs) to delegatecall `multiSend`.
+    function execTransaction(
+        address to,
+        uint256 value,
+        bytes data,
+        uint8 operation,
+        uint256 safeTxGas,
+        uint256 baseGas,
+        uint256 gasPrice,
+        address gasToken,
+        address refundReceiver,
+        bytes signatures
+    ) external returns (bool);
+
+    /// Gnosis `MultiSendCallOnly` entry point, delegatecalled by `execTransaction`.
+    function multiSend(bytes transactions) external payable;
+}
+
+const SAFE_DELEGATECALL: u8 = 1;
+
+/// Whether a Safe `execTransaction` -> `multiSend` delegatecall's batched calls pay
+/// `recipient` exactly `value`. `false` on any decode failure or shape mismatch
+/// (not a delegatecall, not a multiSend payload, no matching entry) -- this is a
+/// best-effort recognizer, not a signature/authenticity check: the caller must
+/// already know the transaction actually succeeded on-chain.
+fn multisend_pays(input: &[u8], recipient: Address, value: U256) -> bool {
+    let Ok(exec) = execTransactionCall::abi_decode(input) else { return false };
+    if exec.operation != SAFE_DELEGATECALL {
+        return false;
+    }
+    let Ok(multisend) = multiSendCall::abi_decode(&exec.data) else { return false };
+    multisend_entries(&multisend.transactions).any(|(to, val)| to == recipient && val == value)
+}
+
+/// Iterates a Safe `multiSend` packed payload: per entry, `[1B operation][20B
+/// to][32B value][32B dataLength][dataLength B data]`. Stops (yields no more
+/// entries) on any length that doesn't fit the remaining bytes, rather than
+/// panicking on malformed/adversarial input.
+fn multisend_entries(transactions: &[u8]) -> impl Iterator<Item = (Address, U256)> + '_ {
+    const ENTRY_HEADER_LEN: usize = 1 + 20 + 32 + 32;
+    let mut offset = 0usize;
+    std::iter::from_fn(move || {
+        if transactions.len().saturating_sub(offset) < ENTRY_HEADER_LEN {
+            return None;
+        }
+        offset += 1; // operation: irrelevant for a payment check
+        let to = Address::from_slice(&transactions[offset..offset + 20]);
+        offset += 20;
+        let value = U256::from_be_slice(&transactions[offset..offset + 32]);
+        offset += 32;
+        let data_len: usize =
+            U256::from_be_slice(&transactions[offset..offset + 32]).try_into().ok()?;
+        offset += 32;
+        if transactions.len().saturating_sub(offset) < data_len {
+            return None;
+        }
+        offset += data_len;
+        Some((to, value))
+    })
+}
+
+#[cfg(test)]
+mod multisend_payment_tests {
+    use alloy_primitives::{Bytes, address};
+    use alloy_sol_types::SolCall;
+
+    use super::*;
+
+    /// Mirrors `crates/builder/src/engine/payment.rs::build_multisend_payload`.
+    fn multisend_payload(entries: &[(Address, U256)]) -> Vec<u8> {
+        let mut payload = Vec::new();
+        for (to, value) in entries {
+            payload.push(0u8); // operation = CALL
+            payload.extend_from_slice(to.as_slice());
+            payload.extend_from_slice(&value.to_be_bytes::<32>());
+            payload.extend_from_slice(&U256::ZERO.to_be_bytes::<32>()); // data length
+        }
+        payload
+    }
+
+    /// Mirrors `crates/builder/src/engine/payment.rs::encode_multisend_calldata`'s
+    /// `execTransaction` wrapping, minus the real Safe signature (irrelevant here:
+    /// `multisend_pays` only decodes calldata shape, it doesn't verify signatures).
+    fn exec_transaction_calldata(
+        multisend_contract: Address,
+        entries: &[(Address, U256)],
+    ) -> Vec<u8> {
+        let multisend_calldata =
+            multiSendCall { transactions: multisend_payload(entries).into() }.abi_encode();
+        execTransactionCall {
+            to: multisend_contract,
+            value: U256::ZERO,
+            data: multisend_calldata.into(),
+            operation: SAFE_DELEGATECALL,
+            safeTxGas: U256::ZERO,
+            baseGas: U256::ZERO,
+            gasPrice: U256::ZERO,
+            gasToken: Address::ZERO,
+            refundReceiver: Address::ZERO,
+            signatures: Bytes::new(),
+        }
+        .abi_encode()
+    }
+
+    #[test]
+    fn multisend_pays_recognizes_matching_entry_among_several() {
+        let multisend_contract = address!("0x1111111111111111111111111111111111111111");
+        let proposer = address!("0x2222222222222222222222222222222222222222");
+        let other = address!("0x3333333333333333333333333333333333333333");
+        let calldata = exec_transaction_calldata(multisend_contract, &[
+            (other, U256::from(100)),
+            (proposer, U256::from(42)),
+        ]);
+
+        assert!(multisend_pays(&calldata, proposer, U256::from(42)));
+    }
+
+    #[test]
+    fn multisend_pays_rejects_wrong_value() {
+        let multisend_contract = address!("0x1111111111111111111111111111111111111111");
+        let proposer = address!("0x2222222222222222222222222222222222222222");
+        let calldata = exec_transaction_calldata(multisend_contract, &[(proposer, U256::from(42))]);
+
+        assert!(!multisend_pays(&calldata, proposer, U256::from(43)));
+    }
+
+    #[test]
+    fn multisend_pays_rejects_non_delegatecall_operation() {
+        let multisend_contract = address!("0x1111111111111111111111111111111111111111");
+        let proposer = address!("0x2222222222222222222222222222222222222222");
+        let multisend_calldata =
+            multiSendCall { transactions: multisend_payload(&[(proposer, U256::from(42))]).into() }
+                .abi_encode();
+        let calldata = execTransactionCall {
+            to: multisend_contract,
+            value: U256::ZERO,
+            data: multisend_calldata.into(),
+            operation: 0, // CALL, not DELEGATECALL
+            safeTxGas: U256::ZERO,
+            baseGas: U256::ZERO,
+            gasPrice: U256::ZERO,
+            gasToken: Address::ZERO,
+            refundReceiver: Address::ZERO,
+            signatures: Bytes::new(),
+        }
+        .abi_encode();
+
+        assert!(!multisend_pays(&calldata, proposer, U256::from(42)));
+    }
+
+    #[test]
+    fn multisend_pays_rejects_unrelated_calldata() {
+        let proposer = address!("0x2222222222222222222222222222222222222222");
+        assert!(!multisend_pays(&[0xde, 0xad, 0xbe, 0xef], proposer, U256::from(42)));
+    }
+
+    #[test]
+    fn multisend_entries_stops_on_truncated_payload() {
+        let to = address!("0x2222222222222222222222222222222222222222");
+        let mut payload = multisend_payload(&[(to, U256::from(42))]);
+        payload.truncate(payload.len() - 1); // cut into the last entry's data-length field
+
+        assert_eq!(multisend_entries(&payload).count(), 0);
     }
 }
 
