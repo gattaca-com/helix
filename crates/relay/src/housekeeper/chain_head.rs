@@ -24,6 +24,12 @@ pub struct ChainHead {
     payload_attributes_done: bool,
     duties_done: bool,
     inclusion_list_done: bool,
+    /// Whether duties/payload-attributes/inclusion-list were all done at the moment
+    /// of the last `sent()` call. `false` means that send went out incomplete (the
+    /// deadline fired first), so `is_ready()` re-arms once the picture completes,
+    /// letting a corrective `SlotUpdate` go out instead of losing late-arriving data
+    /// for this slot.
+    sent_was_complete: bool,
 }
 
 // let epoch = self.chain_head.slot.epoch(self.chain_info.slots_per_epoch());
@@ -48,6 +54,7 @@ impl ChainHead {
             duties_done: false,
             payload_attributes_done: false,
             inclusion_list_done: false,
+            sent_was_complete: false,
             chain_info,
         }
     }
@@ -78,7 +85,14 @@ impl ChainHead {
                         self.payload_attributes_done &&
                         self.inclusion_list_done)
             }
-            ChainHeadState::Sent => false,
+            // Already sent: only re-ready for a corrective send if the original went
+            // out incomplete and the picture has since become fully complete.
+            ChainHeadState::Sent => {
+                !self.sent_was_complete &&
+                    self.duties_done &&
+                    self.payload_attributes_done &&
+                    self.inclusion_list_done
+            }
         }
     }
     pub fn is_new_slot(&mut self) -> bool {
@@ -98,6 +112,7 @@ impl ChainHead {
             self.duties_done = false;
             self.payload_attributes_done = false;
             self.inclusion_list_done = false;
+            self.sent_was_complete = false;
             true
         } else {
             false
@@ -125,6 +140,7 @@ impl ChainHead {
             self.duties_done = false;
             self.payload_attributes_done = false;
             self.inclusion_list_done = false;
+            self.sent_was_complete = false;
             true
         }
     }
@@ -139,6 +155,8 @@ impl ChainHead {
     }
     pub fn sent(&mut self) {
         self.state = ChainHeadState::Sent;
+        self.sent_was_complete =
+            self.duties_done && self.payload_attributes_done && self.inclusion_list_done;
     }
 
     #[cfg(test)]
@@ -354,6 +372,54 @@ mod tests {
         ch.sent();
         ch.force_deadline_expired();
         assert!(!ch.is_ready());
+    }
+
+    // --- Corrective update after an incomplete send ---
+
+    #[test]
+    fn sent_incomplete_becomes_ready_once_late_data_completes_the_picture() {
+        // The deadline fires before the inclusion list has arrived, so an
+        // incomplete SlotUpdate goes out (RELAY-FR: this is why merged-block
+        // simulation sometimes sees a slot with no known fee recipient/beacon
+        // root -- housekeeper gave up early and never corrected itself).
+        // Housekeeper does eventually learn the inclusion list; it must be able
+        // to send a corrective update instead of silently dropping the data for
+        // this slot forever.
+        let (mut ch, ci) = make_head();
+        ch.update(head_event(ci.current_slot() + 1));
+        ch.mark_duties_done();
+        ch.mark_payload_attrs_done();
+        // inclusion list not done yet
+        ch.force_deadline_expired();
+        assert!(ch.is_ready());
+        ch.sent();
+        assert!(!ch.is_ready());
+
+        // Late-arriving inclusion list completes the picture.
+        ch.mark_il_done();
+
+        assert!(
+            ch.is_ready(),
+            "a corrective SlotUpdate must be sendable once previously-missing data arrives"
+        );
+    }
+
+    #[test]
+    fn sent_incomplete_stays_not_ready_while_still_incomplete() {
+        // Only one of two missing pieces arrives -- the picture is still
+        // incomplete, so no corrective update should be sendable yet.
+        let (mut ch, ci) = make_head();
+        ch.update(head_event(ci.current_slot() + 1));
+        ch.mark_duties_done();
+        // payload attrs and il both still missing
+        ch.force_deadline_expired();
+        assert!(ch.is_ready());
+        ch.sent();
+        assert!(!ch.is_ready());
+
+        ch.mark_payload_attrs_done();
+
+        assert!(!ch.is_ready(), "must not re-ready until the picture is fully complete");
     }
 
     // --- Flag reset on new head ---
