@@ -474,8 +474,10 @@ impl ValidationApi {
     /// Ensures that the proposer has received [`BidTrace::value`] for this block.
     ///
     /// Firstly attempts to verify the payment by checking the state changes, otherwise falls back
-    /// to checking the latest block transaction, which may pay the recipient directly or through
-    /// the [`PAYMENT_FORWARDER`].
+    /// to summing every transaction's recognized payment to the recipient -- the payment isn't
+    /// always confined to (or even present in) the last transaction: a merged block keeps the
+    /// base block's own payment tx in place and pays the rest of the value via a newly appended
+    /// one (see crates/builder/src/engine/session.rs), so no single position can be assumed.
     fn ensure_payment(
         &self,
         block: &SealedBlock<Block>,
@@ -507,58 +509,70 @@ impl ValidationApi {
             return Ok(());
         }
 
-        let (receipt, tx) = output
-            .receipts
-            .last()
-            .zip(block.body().transactions().last())
-            .ok_or(ValidationApiError::ProposerPayment)?;
-
-        if !receipt.status() {
-            return Err(ValidationApiError::ProposerPayment);
+        let total = self.sum_recognized_payments(block, output, message.proposer_fee_recipient)?;
+        if total >= message.value {
+            return Ok(());
         }
 
-        if tx.chain_id() != Some(self.evm_config.chain_spec().chain().id()) {
-            return Err(ValidationApiError::ProposerPayment);
-        }
+        Err(ValidationApiError::ProposerPayment)
+    }
 
-        // Either a direct transfer, one routed through the PaymentForwarder (which
-        // sends the full value on to the recipient in its calldata), or a Gnosis
-        // Safe execTransaction -> multiSend delegatecall (the merge-builder payment
-        // engine's mechanism, see crates/builder/src/engine/payment.rs). The
-        // forwarder is only trusted where its runtime is actually deployed, since a
-        // value call to a codeless address succeeds and keeps the value.
-        let paid_directly =
-            tx.to() == Some(message.proposer_fee_recipient) && tx.input().is_empty();
-        let paid_via_forwarder = tx.to() == Some(PAYMENT_FORWARDER) &&
-            payment_forwarder_recipient(tx.input()) == Some(message.proposer_fee_recipient) &&
-            self.provider
-                .latest()
-                .and_then(|state| state.basic_account(&PAYMENT_FORWARDER))
-                .is_ok_and(|account| {
-                    account.is_some_and(|account| {
-                        account.bytecode_hash == Some(PAYMENT_FORWARDER_CODE_HASH)
-                    })
-                });
-        let paid_via_multisend =
-            multisend_pays(tx.input(), message.proposer_fee_recipient, message.value);
-        if !paid_directly && !paid_via_forwarder && !paid_via_multisend {
-            return Err(ValidationApiError::ProposerPayment);
-        }
+    /// Sums every successful transaction's recognized payment to `recipient`: a direct
+    /// transfer, one routed through the [`PAYMENT_FORWARDER`], or a batched entry in a Gnosis
+    /// Safe `execTransaction` -> `multiSend` delegatecall (the merge-builder payment engine's
+    /// mechanism, see crates/builder/src/engine/payment.rs). Not position-restricted, since a
+    /// legitimate payment can be split across more than one transaction and need not be last.
+    /// A contributing transaction must still pass the same anti-MEV-extraction checks the old
+    /// single-tx fallback applied (chain id, zero priority fee) -- if it doesn't, its payment
+    /// isn't credited, but that alone doesn't fail the block: another transaction's payment may
+    /// still be enough.
+    fn sum_recognized_payments(
+        &self,
+        block: &SealedBlock<Block>,
+        output: &BlockExecutionOutput<Receipt>,
+        recipient: Address,
+    ) -> Result<U256, ValidationApiError> {
+        let chain_id = self.evm_config.chain_spec().chain().id();
+        let block_base_fee = block.header().base_fee_per_gas();
 
-        // The multisend's value moves from the Safe's own balance via internal
-        // calls, not from this outer tx's msg.value, so it doesn't apply here --
-        // multisend_pays already confirmed a matching (recipient, value) entry.
-        if !paid_via_multisend && tx.value() != message.value {
-            return Err(ValidationApiError::ProposerPayment);
-        }
-
-        if let Some(block_base_fee) = block.header().base_fee_per_gas() {
-            if tx.effective_tip_per_gas(block_base_fee).unwrap_or_default() != 0 {
-                return Err(ValidationApiError::ProposerPayment);
+        let mut total = U256::ZERO;
+        for (receipt, tx) in output.receipts.iter().zip(block.body().transactions()) {
+            if !receipt.status() {
+                continue;
             }
-        }
 
-        Ok(())
+            let paid_directly = tx.to() == Some(recipient) && tx.input().is_empty();
+            let paid_via_forwarder = tx.to() == Some(PAYMENT_FORWARDER) &&
+                payment_forwarder_recipient(tx.input()) == Some(recipient) &&
+                self.provider
+                    .latest()
+                    .and_then(|state| state.basic_account(&PAYMENT_FORWARDER))
+                    .is_ok_and(|account| {
+                        account.is_some_and(|account| {
+                            account.bytecode_hash == Some(PAYMENT_FORWARDER_CODE_HASH)
+                        })
+                    });
+            let contributed = if paid_directly || paid_via_forwarder {
+                tx.value()
+            } else {
+                multisend_paid_amount(tx.input(), recipient)
+            };
+            if contributed.is_zero() {
+                continue;
+            }
+
+            if tx.chain_id() != Some(chain_id) {
+                continue;
+            }
+            if let Some(block_base_fee) = block_base_fee &&
+                tx.effective_tip_per_gas(block_base_fee).unwrap_or_default() != 0
+            {
+                continue;
+            }
+
+            total += contributed;
+        }
+        Ok(total)
     }
 
     /// Validates the given [`BlobsBundleV1`] and returns versioned hashes for blobs.
@@ -727,18 +741,20 @@ sol! {
 
 const SAFE_DELEGATECALL: u8 = 1;
 
-/// Whether a Safe `execTransaction` -> `multiSend` delegatecall's batched calls pay
-/// `recipient` exactly `value`. `false` on any decode failure or shape mismatch
-/// (not a delegatecall, not a multiSend payload, no matching entry) -- this is a
-/// best-effort recognizer, not a signature/authenticity check: the caller must
-/// already know the transaction actually succeeded on-chain.
-fn multisend_pays(input: &[u8], recipient: Address, value: U256) -> bool {
-    let Ok(exec) = execTransactionCall::abi_decode(input) else { return false };
+/// Sums the value a Safe `execTransaction` -> `multiSend` delegatecall's batched
+/// calls pay `recipient` (zero on any decode failure or shape mismatch: not a
+/// delegatecall, not a multiSend payload, no matching entry). Best-effort
+/// recognition, not a signature/authenticity check: the caller must already know
+/// the transaction actually succeeded on-chain.
+fn multisend_paid_amount(input: &[u8], recipient: Address) -> U256 {
+    let Ok(exec) = execTransactionCall::abi_decode(input) else { return U256::ZERO };
     if exec.operation != SAFE_DELEGATECALL {
-        return false;
+        return U256::ZERO;
     }
-    let Ok(multisend) = multiSendCall::abi_decode(&exec.data) else { return false };
-    multisend_entries(&multisend.transactions).any(|(to, val)| to == recipient && val == value)
+    let Ok(multisend) = multiSendCall::abi_decode(&exec.data) else { return U256::ZERO };
+    multisend_entries(&multisend.transactions)
+        .filter(|(to, _)| *to == recipient)
+        .fold(U256::ZERO, |acc, (_, value)| acc + value)
 }
 
 /// Iterates a Safe `multiSend` packed payload: per entry, `[1B operation][20B
@@ -789,7 +805,8 @@ mod multisend_payment_tests {
 
     /// Mirrors `crates/builder/src/engine/payment.rs::encode_multisend_calldata`'s
     /// `execTransaction` wrapping, minus the real Safe signature (irrelevant here:
-    /// `multisend_pays` only decodes calldata shape, it doesn't verify signatures).
+    /// `multisend_paid_amount` only decodes calldata shape, it doesn't verify
+    /// signatures).
     fn exec_transaction_calldata(
         multisend_contract: Address,
         entries: &[(Address, U256)],
@@ -812,7 +829,7 @@ mod multisend_payment_tests {
     }
 
     #[test]
-    fn multisend_pays_recognizes_matching_entry_among_several() {
+    fn multisend_paid_amount_finds_matching_entry_among_several() {
         let multisend_contract = address!("0x1111111111111111111111111111111111111111");
         let proposer = address!("0x2222222222222222222222222222222222222222");
         let other = address!("0x3333333333333333333333333333333333333333");
@@ -821,20 +838,33 @@ mod multisend_payment_tests {
             (proposer, U256::from(42)),
         ]);
 
-        assert!(multisend_pays(&calldata, proposer, U256::from(42)));
+        assert_eq!(multisend_paid_amount(&calldata, proposer), U256::from(42));
     }
 
     #[test]
-    fn multisend_pays_rejects_wrong_value() {
+    fn multisend_paid_amount_sums_multiple_entries_to_the_same_recipient() {
         let multisend_contract = address!("0x1111111111111111111111111111111111111111");
         let proposer = address!("0x2222222222222222222222222222222222222222");
-        let calldata = exec_transaction_calldata(multisend_contract, &[(proposer, U256::from(42))]);
+        let calldata = exec_transaction_calldata(multisend_contract, &[
+            (proposer, U256::from(42)),
+            (proposer, U256::from(8)),
+        ]);
 
-        assert!(!multisend_pays(&calldata, proposer, U256::from(43)));
+        assert_eq!(multisend_paid_amount(&calldata, proposer), U256::from(50));
     }
 
     #[test]
-    fn multisend_pays_rejects_non_delegatecall_operation() {
+    fn multisend_paid_amount_zero_when_recipient_absent() {
+        let multisend_contract = address!("0x1111111111111111111111111111111111111111");
+        let proposer = address!("0x2222222222222222222222222222222222222222");
+        let other = address!("0x3333333333333333333333333333333333333333");
+        let calldata = exec_transaction_calldata(multisend_contract, &[(other, U256::from(42))]);
+
+        assert_eq!(multisend_paid_amount(&calldata, proposer), U256::ZERO);
+    }
+
+    #[test]
+    fn multisend_paid_amount_zero_for_non_delegatecall_operation() {
         let multisend_contract = address!("0x1111111111111111111111111111111111111111");
         let proposer = address!("0x2222222222222222222222222222222222222222");
         let multisend_calldata =
@@ -854,13 +884,13 @@ mod multisend_payment_tests {
         }
         .abi_encode();
 
-        assert!(!multisend_pays(&calldata, proposer, U256::from(42)));
+        assert_eq!(multisend_paid_amount(&calldata, proposer), U256::ZERO);
     }
 
     #[test]
-    fn multisend_pays_rejects_unrelated_calldata() {
+    fn multisend_paid_amount_zero_for_unrelated_calldata() {
         let proposer = address!("0x2222222222222222222222222222222222222222");
-        assert!(!multisend_pays(&[0xde, 0xad, 0xbe, 0xef], proposer, U256::from(42)));
+        assert_eq!(multisend_paid_amount(&[0xde, 0xad, 0xbe, 0xef], proposer), U256::ZERO);
     }
 
     #[test]
