@@ -66,6 +66,13 @@ pub struct BlockMergeResponse {
     pub base_builder_revenue: U256,
     pub relay_revenue: U256,
     pub builder_inclusions: HashMap<Address, BuilderInclusionResult>,
+    /// Index, within `execution_payload.transactions`, of the base block's own proposer
+    /// payment tx. Base txs keep their original positions in a merged block -- only new
+    /// content is ever appended after them -- so this is always
+    /// `execution_payload.transactions.len() - <appended order txs> - 2` (the `- 2` for the
+    /// appended order txs' own count and the trailing distribution tx). Lets a merged-block
+    /// validator recognise the base block's payment directly instead of scanning every tx.
+    pub base_payment_tx_index: usize,
     pub trace: MergedBlockTrace,
 }
 

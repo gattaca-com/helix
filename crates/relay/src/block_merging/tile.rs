@@ -1,12 +1,9 @@
-use std::{
-    collections::HashMap,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
 };
 
-use alloy_primitives::{Address, B256, Bytes, U256, keccak256};
+use alloy_primitives::{B256, Bytes, U256, keccak256};
 use flux::{
     spine::SpineProducers,
     tile::Tile,
@@ -34,10 +31,7 @@ use helix_tcp_types::merging::{
     order::{MergeOrderRef, order_id},
     relay_to_builder::{ActivateBaseBlockV1, MergeableBlockV1, RevokeOrderV1, SlotStartV1},
 };
-use helix_types::{
-    BlobWithMetadata, BlsPublicKeyBytes, BuilderInclusionResult, HydrationCache, Submission,
-    payload_to_v3,
-};
+use helix_types::{BlobWithMetadata, BlsPublicKeyBytes, HydrationCache, Submission, payload_to_v3};
 use rustc_hash::{FxHashMap, FxHashSet};
 use ssz::Decode;
 use tracing::{debug, error, info, trace, warn};
@@ -46,7 +40,7 @@ use uuid::Uuid;
 use crate::{
     HelixSpine, SimRequest, SimResult, SubmissionDataWithSpan,
     block_merging::{
-        append_frame, merged_block_to_response, order_ref_hash, order_to_ref,
+        append_frame, appended_tx_hashes, merged_block_to_response, order_ref_hash, order_to_ref,
         submission_blob_sidecars,
         unbundling::{OrderTxs, find_unbundled_txs},
     },
@@ -445,18 +439,6 @@ fn revoked_ids(
 ) -> Vec<(B256, B256)> {
     let Some(prev) = prev else { return Vec::new() };
     prev.iter().filter(|(id, _)| !new.contains_key(*id)).map(|(&id, &hash)| (id, hash)).collect()
-}
-
-/// Tx hashes the merge builder actually appended onto the base block.
-/// `builder_inclusions` only ever records orders that were applied (see
-/// `record_inclusion` on the builder side), so this never includes anything
-/// from the base block's own original content — which is what the
-/// unbundling check must ignore, since orders sharing a tx hash with base
-/// content that was never touched by the merge builder aren't its concern.
-fn appended_tx_hashes(
-    builder_inclusions: &HashMap<Address, BuilderInclusionResult>,
-) -> FxHashSet<B256> {
-    builder_inclusions.values().flat_map(|inclusion| inclusion.txs.iter().copied()).collect()
 }
 
 impl BlockMergingTile {
@@ -1209,6 +1191,8 @@ impl BlockMergingTile {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use alloy_primitives::{Address, Bloom, U256};
     use alloy_rpc_types::{
         beacon::{BlsPublicKey, requests::ExecutionRequestsV4},
@@ -1227,8 +1211,9 @@ mod tests {
         },
     };
     use helix_types::{
-        BlobsBundle, BlockMergingData, Compression, ExecutionPayload, ExecutionRequests, ForkName,
-        MergedBlockTrace, SignedBidSubmission, SubmissionVersion, TestRandom, TestRandomSeed,
+        BlobsBundle, BlockMergingData, BuilderInclusionResult, Compression, ExecutionPayload,
+        ExecutionRequests, ForkName, MergedBlockTrace, SignedBidSubmission, SubmissionVersion,
+        TestRandom, TestRandomSeed,
     };
     use rand::{SeedableRng, rngs::SmallRng};
 
@@ -1262,6 +1247,7 @@ mod tests {
             base_builder_revenue: U256::ZERO,
             relay_revenue: U256::ZERO,
             builder_inclusions: Default::default(),
+            base_payment_tx_index: 0,
             trace: MergedBlockTrace::default(),
         }
     }
@@ -1520,6 +1506,20 @@ mod tests {
         assert_eq!(tile.stats.activations_sent, 0);
     }
 
+    fn raw_plain_tx() -> Bytes {
+        use alloy_consensus::TxEip1559;
+        use alloy_primitives::Signature;
+        use alloy_rlp::Encodable;
+
+        let envelope = alloy_consensus::TxEnvelope::new_unhashed(
+            TxEip1559::default().into(),
+            Signature::new(Default::default(), Default::default(), Default::default()),
+        );
+        let mut raw = vec![];
+        envelope.encode(&mut raw);
+        raw.into()
+    }
+
     fn test_merged_block(bid_slot: u64, base_block_hash: B256) -> MergedBlockV1 {
         let execution_payload = ExecutionPayloadV3 {
             payload_inner: ExecutionPayloadV2 {
@@ -1537,7 +1537,9 @@ mod tests {
                     extra_data: Default::default(),
                     base_fee_per_gas: U256::from(1),
                     block_hash: base_block_hash,
-                    transactions: vec![],
+                    // The base block's own payment tx plus the trailing distribution tx --
+                    // every real merged block has at least these two (see `MergeSession::emit`).
+                    transactions: vec![raw_plain_tx(), raw_plain_tx()],
                 },
                 withdrawals: vec![],
             },

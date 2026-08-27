@@ -9,7 +9,7 @@ mod unbundling;
 use std::collections::HashMap;
 
 use alloy_consensus::{Bytes48, Transaction as _, TxEnvelope};
-use alloy_primitives::B256;
+use alloy_primitives::{Address, B256};
 use alloy_rlp::Decodable;
 use helix_tcp_types::merging::{
     MergingFrameHeader, MergingMsgId,
@@ -20,7 +20,7 @@ use helix_types::{
     BlobWithMetadata, BlobsBundle, BuilderInclusionResult, ExecutionPayload, KzgCommitment,
     MergeOrderFlags, MergedBlockTrace, Order, payload_from_v3, requests_from_v4,
 };
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use ssz::Encode;
 pub use tile::BlockMergingTile;
 // Bench-only visibility, see benches/unbundling.rs.
@@ -110,6 +110,15 @@ fn merged_block_to_response(
             })
         })
         .collect();
+    // Base txs are replayed verbatim at the front of a merged block; every appended order tx
+    // and the trailing distribution tx come after them, in that order (see
+    // `MergeSession::emit` in crates/builder/src/engine/session.rs). So the base payment tx's
+    // index is always total-appended-count minus the appended order txs minus the distribution
+    // tx. `checked_sub` guards against a malformed/adversarial wire count exceeding the actual
+    // tx list, same failure mode as this function's other validity checks.
+    let appended_order_txs = appended_tx_hashes(&builder_inclusions).len();
+    let base_payment_tx_index =
+        execution_payload.transactions.len().checked_sub(appended_order_txs + 2)?;
     Some(BlockMergeResponse {
         base_block_hash: m.base_block_hash,
         execution_payload,
@@ -119,6 +128,7 @@ fn merged_block_to_response(
         base_builder_revenue: m.base_builder_revenue,
         relay_revenue: m.relay_revenue,
         builder_inclusions,
+        base_payment_tx_index,
         trace: MergedBlockTrace {
             request_time_ns: m.trace.base_block_recv_ns,
             sim_start_time_ns: m.trace.sim_start_ns,
@@ -130,6 +140,16 @@ fn merged_block_to_response(
             top_bid: None,
         },
     })
+}
+
+/// Every tx hash contributed by a merged-in order, across all builders -- as opposed to the
+/// base block's own content or the trailing distribution tx (which isn't attributed to any
+/// builder's `revenue.txs`; see `MergeSession::emit`). Used both to filter the unbundling
+/// check to genuinely appended content and to locate the base block's own payment tx.
+fn appended_tx_hashes(
+    builder_inclusions: &HashMap<Address, BuilderInclusionResult>,
+) -> FxHashSet<B256> {
+    builder_inclusions.values().flat_map(|inclusion| inclusion.txs.iter().copied()).collect()
 }
 
 /// Resolves every blob versioned hash referenced by the merged block's own transactions --
@@ -324,7 +344,9 @@ mod tests {
                     extra_data: Default::default(),
                     base_fee_per_gas: U256::from(1),
                     block_hash: base_block_hash,
-                    transactions: vec![raw.into()],
+                    // The blob tx plus a trailing distribution tx -- every real merged block
+                    // has at least these two (see `MergeSession::emit`).
+                    transactions: vec![raw.into(), raw_plain_tx()],
                 },
                 withdrawals: vec![],
             },
@@ -450,5 +472,115 @@ mod tests {
         assert_eq!(commitments.len(), 2);
         assert!(commitments.contains(&base_commitment));
         assert!(commitments.contains(&appended_commitment));
+    }
+
+    fn raw_plain_tx() -> alloy_primitives::Bytes {
+        use alloy_consensus::{TxEip1559, TxEnvelope};
+        use alloy_primitives::Signature;
+        use alloy_rlp::Encodable;
+
+        let envelope = TxEnvelope::new_unhashed(
+            TxEip1559::default().into(),
+            Signature::new(Default::default(), Default::default(), Default::default()),
+        );
+        let mut raw = vec![];
+        envelope.encode(&mut raw);
+        raw.into()
+    }
+
+    fn merged_block_with_txs(n_txs: usize, appended: &[B256]) -> MergedBlockV1 {
+        use alloy_rpc_types::{
+            beacon::{BlsPublicKey, requests::ExecutionRequestsV4},
+            engine::{ExecutionPayloadV1, ExecutionPayloadV2, ExecutionPayloadV3},
+        };
+        use helix_tcp_types::merging::builder_to_relay::{BuilderInclusion, MergeTraceV1};
+
+        let base_block_hash = B256::repeat_byte(9);
+        let execution_payload = ExecutionPayloadV3 {
+            payload_inner: ExecutionPayloadV2 {
+                payload_inner: ExecutionPayloadV1 {
+                    parent_hash: B256::ZERO,
+                    fee_recipient: Address::ZERO,
+                    state_root: B256::ZERO,
+                    receipts_root: B256::ZERO,
+                    logs_bloom: Default::default(),
+                    prev_randao: B256::ZERO,
+                    block_number: 1,
+                    gas_limit: 30_000_000,
+                    gas_used: 0,
+                    timestamp: 0,
+                    extra_data: Default::default(),
+                    base_fee_per_gas: alloy_primitives::U256::from(1),
+                    block_hash: base_block_hash,
+                    transactions: (0..n_txs).map(|_| raw_plain_tx()).collect(),
+                },
+                withdrawals: vec![],
+            },
+            blob_gas_used: 0,
+            excess_blob_gas: 0,
+        };
+        let builder_inclusions = if appended.is_empty() {
+            vec![]
+        } else {
+            vec![BuilderInclusion {
+                builder_pubkey: BlsPublicKey::default(),
+                origin_coinbase: Address::repeat_byte(0xa),
+                contribution: alloy_primitives::U256::ZERO,
+                revenue: alloy_primitives::U256::ZERO,
+                txs: appended.to_vec(),
+            }]
+        };
+        MergedBlockV1 {
+            slot: 5,
+            response_id: 0,
+            base_block_hash,
+            base_builder_pubkey: BlsPublicKey::default(),
+            execution_payload,
+            execution_requests: ExecutionRequestsV4::default(),
+            appended_blobs: vec![],
+            proposer_value: alloy_primitives::U256::from(1),
+            base_builder_revenue: alloy_primitives::U256::ZERO,
+            relay_revenue: alloy_primitives::U256::ZERO,
+            builder_inclusions,
+            included_order_ids: vec![],
+            trace: MergeTraceV1::default(),
+        }
+    }
+
+    /// No appended orders: the base block's own trailing tx is the only
+    /// candidate, so `base_payment_tx_index` is just the second-to-last
+    /// position (the distribution tx is always last).
+    #[test]
+    fn merged_block_to_response_base_payment_tx_index_with_no_appended_orders() {
+        let merged = merged_block_with_txs(4, &[]);
+        let blob_sidecars = FxHashMap::default();
+
+        let response = merged_block_to_response(merged, &blob_sidecars, 9).unwrap();
+
+        assert_eq!(response.base_payment_tx_index, 2);
+    }
+
+    /// With appended order txs in between the base content and the
+    /// distribution tx, the base payment tx index must skip over them.
+    #[test]
+    fn merged_block_to_response_base_payment_tx_index_with_appended_orders() {
+        let appended = [B256::repeat_byte(1), B256::repeat_byte(2)];
+        let merged = merged_block_with_txs(5, &appended);
+        let blob_sidecars = FxHashMap::default();
+
+        let response = merged_block_to_response(merged, &blob_sidecars, 9).unwrap();
+
+        assert_eq!(response.base_payment_tx_index, 1);
+    }
+
+    /// A wire count of appended txs that exceeds the actual tx list is
+    /// malformed; must be rejected rather than underflow the index.
+    #[test]
+    fn merged_block_to_response_none_when_appended_count_exceeds_tx_list() {
+        let appended = [B256::repeat_byte(1), B256::repeat_byte(2), B256::repeat_byte(3)];
+        let merged = merged_block_with_txs(2, &appended);
+        let blob_sidecars = FxHashMap::default();
+
+        assert!(merged_block_to_response(merged, &blob_sidecars, 9).is_none());
     }
 }
