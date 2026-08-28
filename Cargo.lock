@@ -6476,6 +6476,7 @@ dependencies = [
  "flux-utils",
  "helix-tcp-types",
  "hex",
+ "num_cpus",
  "rand 0.9.5",
  "rand_xorshift 0.4.0",
  "rayon",
