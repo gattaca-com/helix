@@ -53,4 +53,5 @@ uuid = { workspace = true, features = ["serde"] }
 zstd.workspace = true
 
 [dev-dependencies]
+helix-common.workspace = true
 rand_xorshift.workspace = true

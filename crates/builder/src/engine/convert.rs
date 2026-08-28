@@ -9,8 +9,16 @@ use alloy_rpc_types::{
 };
 use ethrex_common::{
     Address as EAddress, H256, U256 as EU256,
-    types::{Block, Withdrawal, requests::EncodedRequests},
+    constants::DEFAULT_OMMERS_HASH,
+    types::{
+        Block, BlockBody, BlockHeader, Transaction, Withdrawal, compute_transactions_root,
+        compute_withdrawals_root,
+        requests::{EncodedRequests, compute_requests_hash},
+    },
 };
+use ethrex_crypto::NativeCrypto;
+
+use crate::validation::error::ValidationError;
 
 pub fn h256(b: B256) -> H256 {
     H256(b.0)
@@ -81,6 +89,63 @@ pub fn block_to_payload_v3(block: &Block) -> ExecutionPayloadV3 {
         blob_gas_used: header.blob_gas_used.unwrap_or_default(),
         excess_blob_gas: header.excess_blob_gas.unwrap_or_default(),
     }
+}
+
+/// Inverse of [`block_to_payload_v3`]. The roots the payload omits are
+/// recomputed, so the hash this yields is the one the submission is bound to.
+#[allow(dead_code)]
+pub fn payload_v3_to_block(
+    payload: &ExecutionPayloadV3,
+    parent_beacon_block_root: B256,
+    requests: &ExecutionRequestsV4,
+) -> Result<Block, ValidationError> {
+    let inner = &payload.payload_inner.payload_inner;
+
+    let transactions = inner
+        .transactions
+        .iter()
+        .map(|encoded| Transaction::decode_canonical(encoded))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| ValidationError::DecodeTransaction(e.to_string()))?;
+    let withdrawals: Vec<Withdrawal> =
+        payload.payload_inner.withdrawals.iter().map(ewithdrawal).collect();
+
+    let base_fee_per_gas: u64 =
+        inner.base_fee_per_gas.try_into().map_err(|_| ValidationError::BaseFeeTooLarge)?;
+
+    let header = BlockHeader {
+        parent_hash: h256(inner.parent_hash),
+        ommers_hash: *DEFAULT_OMMERS_HASH,
+        coinbase: eaddr(inner.fee_recipient),
+        state_root: h256(inner.state_root),
+        transactions_root: compute_transactions_root(&transactions, &NativeCrypto),
+        receipts_root: h256(inner.receipts_root),
+        logs_bloom: ethrex_common::Bloom(inner.logs_bloom.0.0),
+        difficulty: EU256::zero(),
+        number: inner.block_number,
+        gas_limit: inner.gas_limit,
+        gas_used: inner.gas_used,
+        timestamp: inner.timestamp,
+        extra_data: inner.extra_data.0.clone(),
+        prev_randao: h256(inner.prev_randao),
+        nonce: 0,
+        base_fee_per_gas: Some(base_fee_per_gas),
+        withdrawals_root: Some(compute_withdrawals_root(&withdrawals, &NativeCrypto)),
+        blob_gas_used: Some(payload.blob_gas_used),
+        excess_blob_gas: Some(payload.excess_blob_gas),
+        parent_beacon_block_root: Some(h256(parent_beacon_block_root)),
+        requests_hash: Some(compute_requests_hash(&encoded_requests(requests))),
+        ..Default::default()
+    };
+
+    let body = BlockBody { transactions, ommers: vec![], withdrawals: Some(withdrawals) };
+    Ok(Block::new(header, body))
+}
+
+/// Inverse of [`requests_to_v4`]. `compute_requests_hash` skips type-byte-only
+/// entries, so the empty ones the wire format drops need not be restored.
+fn encoded_requests(requests: &ExecutionRequestsV4) -> Vec<EncodedRequests> {
+    requests.to_requests().iter().map(|request| EncodedRequests(request.clone().0.into())).collect()
 }
 
 /// Converts ethrex's encoded EIP-7685 requests into the wire
