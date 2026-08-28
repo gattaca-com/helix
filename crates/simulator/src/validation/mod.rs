@@ -16,11 +16,13 @@ use alloy_rpc_types::{
         ExecutionPayloadSidecar, PraguePayloadFields,
     },
 };
-use alloy_sol_types::{SolCall, sol};
 use async_trait::async_trait;
 use dashmap::DashSet;
 use helix_common::{
-    PAYMENT_FORWARDER, PAYMENT_FORWARDER_CODE_HASH, api::builder_api::InclusionListWithMetadata,
+    PAYMENT_FORWARDER, PAYMENT_FORWARDER_CODE_HASH,
+    api::builder_api::InclusionListWithMetadata,
+    blacklist::{changed_disallow_hash, parse_disallow_list},
+    payment::multisend_paid_amount,
     payment_forwarder_recipient,
 };
 use jsonrpsee::{core::RpcResult, proc_macros::rpc, types::ErrorObject};
@@ -52,7 +54,6 @@ use reth_tasks::TaskExecutor;
 use revm::{Database, database::State};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
-use sha2::{Digest, Sha256};
 use tokio::{
     spawn,
     sync::{RwLock, oneshot},
@@ -123,7 +124,7 @@ impl ValidationApi {
                 match client.get(&ep).send().await {
                     Ok(resp) if resp.status().is_success() => {
                         if let Ok(list) = resp.json::<Vec<String>>().await {
-                            let parsed = ValidationApi::parse_disallow_list(list);
+                            let parsed = parse_disallow_list(list);
                             dash.clear();
                             for addr in parsed {
                                 dash.insert(addr);
@@ -152,17 +153,6 @@ impl ValidationApi {
         });
 
         Self { inner }
-    }
-
-    /// Parses a blacklist payload into the addresses to disallow.
-    fn parse_disallow_list(list: Vec<String>) -> Vec<Address> {
-        let mut addrs = Vec::new();
-        for hex in list {
-            if let Ok(addr) = hex.strip_prefix("0x").unwrap_or(&hex).parse::<Address>() {
-                addrs.push(addr);
-            }
-        }
-        addrs
     }
 
     /// Returns the cached reads for the given head hash.
@@ -849,190 +839,6 @@ impl ValidationApi {
     }
 }
 
-sol! {
-    /// Gnosis Safe entry point the merge-builder payment engine calls
-    /// (crates/builder/src/engine/payment.rs) to delegatecall `multiSend`.
-    function execTransaction(
-        address to,
-        uint256 value,
-        bytes data,
-        uint8 operation,
-        uint256 safeTxGas,
-        uint256 baseGas,
-        uint256 gasPrice,
-        address gasToken,
-        address refundReceiver,
-        bytes signatures
-    ) external returns (bool);
-
-    /// Gnosis `MultiSendCallOnly` entry point, delegatecalled by `execTransaction`.
-    function multiSend(bytes transactions) external payable;
-}
-
-const SAFE_DELEGATECALL: u8 = 1;
-
-/// Sums the value a Safe `execTransaction` -> `multiSend` delegatecall's batched
-/// calls pay `recipient` (zero on any decode failure or shape mismatch: not a
-/// delegatecall, not a multiSend payload, no matching entry). Best-effort
-/// recognition, not a signature/authenticity check: the caller must already know
-/// the transaction actually succeeded on-chain.
-fn multisend_paid_amount(input: &[u8], recipient: Address) -> U256 {
-    let Ok(exec) = execTransactionCall::abi_decode(input) else { return U256::ZERO };
-    if exec.operation != SAFE_DELEGATECALL {
-        return U256::ZERO;
-    }
-    let Ok(multisend) = multiSendCall::abi_decode(&exec.data) else { return U256::ZERO };
-    multisend_entries(&multisend.transactions)
-        .filter(|(to, _)| *to == recipient)
-        .fold(U256::ZERO, |acc, (_, value)| acc + value)
-}
-
-/// Iterates a Safe `multiSend` packed payload: per entry, `[1B operation][20B
-/// to][32B value][32B dataLength][dataLength B data]`. Stops (yields no more
-/// entries) on any length that doesn't fit the remaining bytes, rather than
-/// panicking on malformed/adversarial input.
-fn multisend_entries(transactions: &[u8]) -> impl Iterator<Item = (Address, U256)> + '_ {
-    const ENTRY_HEADER_LEN: usize = 1 + 20 + 32 + 32;
-    let mut offset = 0usize;
-    std::iter::from_fn(move || {
-        if transactions.len().saturating_sub(offset) < ENTRY_HEADER_LEN {
-            return None;
-        }
-        offset += 1; // operation: irrelevant for a payment check
-        let to = Address::from_slice(&transactions[offset..offset + 20]);
-        offset += 20;
-        let value = U256::from_be_slice(&transactions[offset..offset + 32]);
-        offset += 32;
-        let data_len: usize =
-            U256::from_be_slice(&transactions[offset..offset + 32]).try_into().ok()?;
-        offset += 32;
-        if transactions.len().saturating_sub(offset) < data_len {
-            return None;
-        }
-        offset += data_len;
-        Some((to, value))
-    })
-}
-
-#[cfg(test)]
-mod multisend_payment_tests {
-    use alloy_primitives::{Bytes, address};
-    use alloy_sol_types::SolCall;
-
-    use super::*;
-
-    /// Mirrors `crates/builder/src/engine/payment.rs::build_multisend_payload`.
-    fn multisend_payload(entries: &[(Address, U256)]) -> Vec<u8> {
-        let mut payload = Vec::new();
-        for (to, value) in entries {
-            payload.push(0u8); // operation = CALL
-            payload.extend_from_slice(to.as_slice());
-            payload.extend_from_slice(&value.to_be_bytes::<32>());
-            payload.extend_from_slice(&U256::ZERO.to_be_bytes::<32>()); // data length
-        }
-        payload
-    }
-
-    /// Mirrors `crates/builder/src/engine/payment.rs::encode_multisend_calldata`'s
-    /// `execTransaction` wrapping, minus the real Safe signature (irrelevant here:
-    /// `multisend_paid_amount` only decodes calldata shape, it doesn't verify
-    /// signatures).
-    fn exec_transaction_calldata(
-        multisend_contract: Address,
-        entries: &[(Address, U256)],
-    ) -> Vec<u8> {
-        let multisend_calldata =
-            multiSendCall { transactions: multisend_payload(entries).into() }.abi_encode();
-        execTransactionCall {
-            to: multisend_contract,
-            value: U256::ZERO,
-            data: multisend_calldata.into(),
-            operation: SAFE_DELEGATECALL,
-            safeTxGas: U256::ZERO,
-            baseGas: U256::ZERO,
-            gasPrice: U256::ZERO,
-            gasToken: Address::ZERO,
-            refundReceiver: Address::ZERO,
-            signatures: Bytes::new(),
-        }
-        .abi_encode()
-    }
-
-    #[test]
-    fn multisend_paid_amount_finds_matching_entry_among_several() {
-        let multisend_contract = address!("0x1111111111111111111111111111111111111111");
-        let proposer = address!("0x2222222222222222222222222222222222222222");
-        let other = address!("0x3333333333333333333333333333333333333333");
-        let calldata = exec_transaction_calldata(multisend_contract, &[
-            (other, U256::from(100)),
-            (proposer, U256::from(42)),
-        ]);
-
-        assert_eq!(multisend_paid_amount(&calldata, proposer), U256::from(42));
-    }
-
-    #[test]
-    fn multisend_paid_amount_sums_multiple_entries_to_the_same_recipient() {
-        let multisend_contract = address!("0x1111111111111111111111111111111111111111");
-        let proposer = address!("0x2222222222222222222222222222222222222222");
-        let calldata = exec_transaction_calldata(multisend_contract, &[
-            (proposer, U256::from(42)),
-            (proposer, U256::from(8)),
-        ]);
-
-        assert_eq!(multisend_paid_amount(&calldata, proposer), U256::from(50));
-    }
-
-    #[test]
-    fn multisend_paid_amount_zero_when_recipient_absent() {
-        let multisend_contract = address!("0x1111111111111111111111111111111111111111");
-        let proposer = address!("0x2222222222222222222222222222222222222222");
-        let other = address!("0x3333333333333333333333333333333333333333");
-        let calldata = exec_transaction_calldata(multisend_contract, &[(other, U256::from(42))]);
-
-        assert_eq!(multisend_paid_amount(&calldata, proposer), U256::ZERO);
-    }
-
-    #[test]
-    fn multisend_paid_amount_zero_for_non_delegatecall_operation() {
-        let multisend_contract = address!("0x1111111111111111111111111111111111111111");
-        let proposer = address!("0x2222222222222222222222222222222222222222");
-        let multisend_calldata =
-            multiSendCall { transactions: multisend_payload(&[(proposer, U256::from(42))]).into() }
-                .abi_encode();
-        let calldata = execTransactionCall {
-            to: multisend_contract,
-            value: U256::ZERO,
-            data: multisend_calldata.into(),
-            operation: 0, // CALL, not DELEGATECALL
-            safeTxGas: U256::ZERO,
-            baseGas: U256::ZERO,
-            gasPrice: U256::ZERO,
-            gasToken: Address::ZERO,
-            refundReceiver: Address::ZERO,
-            signatures: Bytes::new(),
-        }
-        .abi_encode();
-
-        assert_eq!(multisend_paid_amount(&calldata, proposer), U256::ZERO);
-    }
-
-    #[test]
-    fn multisend_paid_amount_zero_for_unrelated_calldata() {
-        let proposer = address!("0x2222222222222222222222222222222222222222");
-        assert_eq!(multisend_paid_amount(&[0xde, 0xad, 0xbe, 0xef], proposer), U256::ZERO);
-    }
-
-    #[test]
-    fn multisend_entries_stops_on_truncated_payload() {
-        let to = address!("0x2222222222222222222222222222222222222222");
-        let mut payload = multisend_payload(&[(to, U256::from(42))]);
-        payload.truncate(payload.len() - 1); // cut into the last entry's data-length field
-
-        assert_eq!(multisend_entries(&payload).count(), 0);
-    }
-}
-
 #[async_trait]
 impl BlockSubmissionValidationApiServer for ValidationApi {
     async fn validate_builder_submission_v1(
@@ -1187,28 +993,6 @@ pub(crate) struct ValidationMetrics {
     pub(crate) disallow_size: Gauge,
 }
 
-/// Fingerprints the disallow list so operators can confirm every node enforces the same one.
-///
-/// Entries are sorted first because `DashSet` iteration order is not stable. Mirrors reth's
-/// `hash_disallow_list` so the digests are comparable against reth-based builders.
-fn hash_disallow_list(disallow: &DashSet<Address>) -> String {
-    let mut sorted: Vec<Address> = disallow.iter().map(|addr| *addr).collect();
-    sorted.sort_unstable();
-
-    let mut hasher = Sha256::new();
-    for addr in &sorted {
-        hasher.update(addr.as_slice());
-    }
-
-    format!("{:x}", hasher.finalize())
-}
-
-/// Returns the disallow list's digest, or `None` when it still matches `previous`.
-fn changed_disallow_hash(disallow: &DashSet<Address>, previous: Option<&str>) -> Option<String> {
-    let hash = hash_disallow_list(disallow);
-    (previous != Some(hash.as_str())).then_some(hash)
-}
-
 #[serde_as]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtendedValidationRequestV4 {
@@ -1290,57 +1074,4 @@ pub trait BlockSubmissionValidationApi {
         &self,
         request: ExtendedMergedValidationRequestV5,
     ) -> jsonrpsee::core::RpcResult<()>;
-}
-
-#[cfg(test)]
-mod blacklist_tests {
-    use alloy_primitives::address;
-
-    use super::*;
-
-    #[test]
-    fn loads_an_address_list() {
-        let parsed = ValidationApi::parse_disallow_list(vec![
-            "0x8589427373D6D84E98730D7795D8f6f8731FDA16".into(),
-            "722122dF12D4e14e13Ac3b6895a86e84145b6967".into(),
-            "0xdd4c48c0b24039969fc16d1cdf626eab821d3384".into(),
-        ]);
-
-        assert_eq!(parsed.len(), 3, "every entry must load");
-        assert!(parsed.contains(&address!("0x8589427373D6D84E98730D7795D8f6f8731FDA16")));
-    }
-
-    const ADDR_A: Address = address!("0x722122dF12D4e14e13Ac3b6895a86e84145b6967");
-    const ADDR_B: Address = address!("0x8589427373D6D84E98730D7795D8f6f8731FDA16");
-
-    fn disallow_set(addrs: &[Address]) -> DashSet<Address> {
-        let set = DashSet::new();
-        for addr in addrs {
-            set.insert(*addr);
-        }
-        set
-    }
-
-    #[test]
-    fn an_unchanged_list_reports_no_change() {
-        let previous = disallow_set(&[ADDR_A, ADDR_B]);
-        let current = disallow_set(&[ADDR_B, ADDR_A]);
-
-        let hash = changed_disallow_hash(&previous, None).expect("a first list is always new");
-
-        assert_eq!(changed_disallow_hash(&current, Some(&hash)), None);
-    }
-
-    #[test]
-    fn an_amended_list_reports_a_new_hash() {
-        let previous = disallow_set(&[ADDR_A]);
-        let current = disallow_set(&[ADDR_A, ADDR_B]);
-
-        let superseded =
-            changed_disallow_hash(&previous, None).expect("a first list is always new");
-
-        let in_force =
-            changed_disallow_hash(&current, Some(&superseded)).expect("the digest must change");
-        assert_ne!(in_force, superseded);
-    }
 }
