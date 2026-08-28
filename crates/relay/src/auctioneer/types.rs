@@ -31,7 +31,8 @@ use crate::{
     SubmissionDataWithSpan,
     api::{
         HEADER_API_KEY, HEADER_API_TOKEN, HEADER_HYDRATE, HEADER_IS_MERGEABLE, HEADER_MERGE_TYPE,
-        HEADER_PESSIMISTIC, HEADER_SEQUENCE, HEADER_WITH_ADJUSTMENTS, proposer::ProposerApiError,
+        HEADER_PESSIMISTIC, HEADER_SEQUENCE, HEADER_WITH_ADJUSTMENTS,
+        proposer::{HeldGloasPayload, ProposerApiError},
     },
     auctioneer::MergeResult,
     gossip::BroadcastPayloadParams,
@@ -450,6 +451,13 @@ pub enum Event {
         max_execution_payment: u64,
         res_tx: oneshot::Sender<SubmitBuilderPreferencesResult>,
     },
+    /// Looks up the execution payload a submission held for `block_hash`, so
+    /// `submitSignedBeaconBlock` can build the envelope fulfilling a proposer's committed bid.
+    TakeHeldGloasPayload {
+        block_hash: B256,
+        slot: Slot,
+        res_tx: oneshot::Sender<Option<HeldGloasPayload>>,
+    },
     // Receive multiple of these potentially, assume some light validation
     GetPayload {
         block_hash: B256,
@@ -477,6 +485,7 @@ impl Event {
             Event::GetHeader { .. } => "GetHeader",
             Event::GetExecutionPayloadBid { .. } => "GetExecutionPayloadBid",
             Event::SubmitBuilderPreferences { .. } => "SubmitBuilderPreferences",
+            Event::TakeHeldGloasPayload { .. } => "TakeHeldGloasPayload",
             Event::GetPayload { .. } => "GetPayload",
             Event::GossipPayload(_) => "GossipPayload",
             Event::SimResult(_) => "SimResult",

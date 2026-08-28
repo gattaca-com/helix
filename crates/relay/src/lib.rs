@@ -28,7 +28,7 @@ pub use crate::block_merging::{OrderTxs, find_unbundled_txs};
 pub use crate::{
     api::{
         Api, BidAdjustor, DefaultBidAdjustor, FutureBidSubmissionResult, builder::TopBidTile,
-        start_admin_service, start_api_service,
+        proposer::GloasBuilderIdentity, start_admin_service, start_api_service,
     },
     auctioneer::{
         Auctioneer, AuctioneerHandle, BidSorter, Context, Event, PayloadEntry, SimulatorClient,

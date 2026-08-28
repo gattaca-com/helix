@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use alloy_primitives::B256;
 use dashmap::DashMap;
 use futures::{FutureExt, future::Shared};
 use helix_common::{
@@ -9,13 +10,13 @@ use helix_common::{
 };
 use helix_types::{
     BlsPublicKey, BlsPublicKeyBytes, ExecPayload, GetPayloadResponse, SigError,
-    SignedBlindedBeaconBlock,
+    SignedBlindedBeaconBlock, Slot,
 };
 use tokio::sync::oneshot::{self, Receiver};
 use tracing::trace;
 
 use crate::{
-    api::proposer::{ProposerApiError, get_payload::ProposerApiVersion},
+    api::proposer::{HeldGloasPayload, ProposerApiError, get_payload::ProposerApiVersion},
     auctioneer::types::{
         Event, GetExecutionPayloadBidResult, GetHeaderResult, GetPayloadResult,
         SubmitBuilderPreferencesResult,
@@ -103,6 +104,19 @@ impl AuctioneerHandle {
                 max_execution_payment,
                 res_tx: tx,
             })
+            .map_err(|_| ChannelFull)?;
+        Ok(rx)
+    }
+
+    pub fn take_held_gloas_payload(
+        &self,
+        block_hash: B256,
+        slot: Slot,
+    ) -> Result<oneshot::Receiver<Option<HeldGloasPayload>>, ChannelFull> {
+        let (tx, rx) = oneshot::channel();
+        trace!("sending to auctioneer");
+        self.auctioneer
+            .try_send(Event::TakeHeldGloasPayload { block_hash, slot, res_tx: tx })
             .map_err(|_| ChannelFull)?;
         Ok(rx)
     }

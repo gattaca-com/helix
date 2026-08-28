@@ -10,7 +10,7 @@ use helix_types::{
 };
 use hyper::StatusCode;
 use ssz::Decode;
-use tracing::info;
+use tracing::{info, warn};
 use tree_hash::TreeHash;
 
 use super::{ProposerApi, get_payload::fork_name_from_header};
@@ -20,22 +20,6 @@ use crate::api::{Api, proposer::error::ProposerApiError};
 pub struct HeldGloasPayload {
     pub payload: ExecutionPayloadGloas,
     pub execution_requests: ExecutionRequestsGloas,
-}
-
-/// Looks up and consumes the payload held for a bid's committed block hash. Must not return
-/// the same payload twice.
-pub trait GloasPayloadStore: Send + Sync {
-    fn take_held_payload(&self, block_hash: B256) -> Option<HeldGloasPayload>;
-}
-
-/// Placeholder `GloasPayloadStore`: nothing has held a payload yet.
-// TODO(gloas): implement against the auctioneer; see gattaca-com/helix#489 step 3.
-pub struct NoHeldPayloads;
-
-impl GloasPayloadStore for NoHeldPayloads {
-    fn take_held_payload(&self, _block_hash: B256) -> Option<HeldGloasPayload> {
-        None
-    }
 }
 
 /// Helix's own on-chain Gloas builder identity: `builder_index` plus signing key.
@@ -64,12 +48,31 @@ impl GloasBuilderIdentity {
         let signature = self.keypair.sk.sign(message.signing_root(domain));
         SignedExecutionPayloadEnvelope { message, signature }
     }
+
+    /// Signs a `SignedExecutionPayloadBid` under the same domain as `sign_envelope`.
+    pub fn sign_bid(
+        &self,
+        message: helix_types::ExecutionPayloadBid,
+        chain_info: &ChainInfo,
+    ) -> helix_types::SignedExecutionPayloadBid {
+        let epoch = message.slot.epoch(MainnetEthSpec::slots_per_epoch());
+        let fork = chain_info.spec.fork_at_epoch(epoch);
+        let domain = chain_info.spec.get_domain(
+            epoch,
+            Domain::BeaconBuilder,
+            &fork,
+            chain_info.genesis_validators_root,
+        );
+        let signature = self.keypair.sk.sign(message.signing_root(domain));
+        helix_types::SignedExecutionPayloadBid { message, signature }
+    }
 }
 
 /// Constructs and signs the `SignedExecutionPayloadEnvelope` fulfilling `block`'s committed bid.
+/// `held` is the payload the auctioneer has stored for the bid's committed block hash, if any.
 pub(super) fn construct_signed_envelope(
     block: &SignedBeaconBlockGloas,
-    store: &dyn GloasPayloadStore,
+    held: Option<HeldGloasPayload>,
     identity: &GloasBuilderIdentity,
     chain_info: &ChainInfo,
 ) -> Result<SignedExecutionPayloadEnvelope, ProposerApiError> {
@@ -83,9 +86,7 @@ pub(super) fn construct_signed_envelope(
         });
     }
 
-    let held = store
-        .take_held_payload(bid_block_hash)
-        .ok_or(ProposerApiError::NoHeldPayloadForBlock(bid_block_hash))?;
+    let held = held.ok_or(ProposerApiError::NoHeldPayloadForBlock(bid_block_hash))?;
 
     let held_block_hash: B256 = held.payload.block_hash.0;
     if held_block_hash != bid_block_hash {
@@ -128,9 +129,25 @@ impl<A: Api> ProposerApi<A> {
 
         info!(slot = block.message.slot.as_u64(), "accepted submitSignedBeaconBlock request");
 
+        let bid_block_hash: B256 =
+            block.message.body.signed_execution_payload_bid.message.block_hash.0;
+        let Ok(rx) = proposer_api
+            .auctioneer_handle
+            .take_held_gloas_payload(bid_block_hash, block.message.slot)
+        else {
+            return Err(ProposerApiError::InternalServerError);
+        };
+        let held = match rx.await {
+            Ok(held) => held,
+            Err(err) => {
+                warn!(%err, "failed to fetch held Gloas payload from auctioneer");
+                return Err(ProposerApiError::InternalServerError);
+            }
+        };
+
         let signed_envelope = construct_signed_envelope(
             &block,
-            proposer_api.gloas_payload_store.as_ref(),
+            held,
             &proposer_api.gloas_builder_identity,
             &proposer_api.chain_info,
         )?;
@@ -146,30 +163,10 @@ impl<A: Api> ProposerApi<A> {
 
 #[cfg(test)]
 mod construct_signed_envelope_tests {
-    use std::sync::Mutex;
-
     use helix_common::utils::install_default_crypto_provider;
     use helix_types::{BeaconBlockGloas, BlsSignature, EmptyBlock, ExecutionBlockHash};
 
     use super::*;
-
-    struct StubStore(Mutex<Option<HeldGloasPayload>>);
-
-    impl StubStore {
-        fn holding(payload: HeldGloasPayload) -> Self {
-            Self(Mutex::new(Some(payload)))
-        }
-
-        fn empty() -> Self {
-            Self(Mutex::new(None))
-        }
-    }
-
-    impl GloasPayloadStore for StubStore {
-        fn take_held_payload(&self, _block_hash: B256) -> Option<HeldGloasPayload> {
-            self.0.lock().unwrap().take()
-        }
-    }
 
     fn held_payload(block_hash: B256) -> HeldGloasPayload {
         let mut payload = ExecutionPayloadGloas::default();
@@ -202,11 +199,11 @@ mod construct_signed_envelope_tests {
         let block_hash = B256::repeat_byte(0x11);
         let parent_root = B256::repeat_byte(0x22);
         let block = test_block(block_hash, 7, parent_root);
-        let store = StubStore::holding(held_payload(block_hash));
+        let held = Some(held_payload(block_hash));
         let identity = identity(7);
 
         let signed_envelope =
-            construct_signed_envelope(&block, &store, &identity, &chain_info).unwrap();
+            construct_signed_envelope(&block, held, &identity, &chain_info).unwrap();
 
         assert_eq!(signed_envelope.message.builder_index, 7);
         assert_eq!(signed_envelope.message.beacon_block_root, block.message.tree_hash_root());
@@ -219,11 +216,11 @@ mod construct_signed_envelope_tests {
         let chain_info = ChainInfo::default();
         let block_hash = B256::repeat_byte(0x33);
         let block = test_block(block_hash, 3, B256::ZERO);
-        let store = StubStore::holding(held_payload(block_hash));
+        let held = Some(held_payload(block_hash));
         let identity = identity(3);
 
         let signed_envelope =
-            construct_signed_envelope(&block, &store, &identity, &chain_info).unwrap();
+            construct_signed_envelope(&block, held, &identity, &chain_info).unwrap();
 
         let epoch = signed_envelope.message.slot().epoch(MainnetEthSpec::slots_per_epoch());
         let fork = chain_info.spec.fork_at_epoch(epoch);
@@ -240,10 +237,9 @@ mod construct_signed_envelope_tests {
         let chain_info = ChainInfo::default();
         let block_hash = B256::repeat_byte(0x44);
         let block = test_block(block_hash, 1, B256::ZERO);
-        let store = StubStore::empty();
         let identity = identity(1);
 
-        let result = construct_signed_envelope(&block, &store, &identity, &chain_info);
+        let result = construct_signed_envelope(&block, None, &identity, &chain_info);
 
         assert!(
             matches!(result, Err(ProposerApiError::NoHeldPayloadForBlock(hash)) if hash == block_hash)
@@ -256,10 +252,10 @@ mod construct_signed_envelope_tests {
         let bid_block_hash = B256::repeat_byte(0x55);
         let wrong_held_hash = B256::repeat_byte(0x66);
         let block = test_block(bid_block_hash, 1, B256::ZERO);
-        let store = StubStore::holding(held_payload(wrong_held_hash));
+        let held = Some(held_payload(wrong_held_hash));
         let identity = identity(1);
 
-        let result = construct_signed_envelope(&block, &store, &identity, &chain_info);
+        let result = construct_signed_envelope(&block, held, &identity, &chain_info);
 
         assert!(matches!(
             result,
@@ -273,10 +269,10 @@ mod construct_signed_envelope_tests {
         let chain_info = ChainInfo::default();
         let block_hash = B256::repeat_byte(0x77);
         let block = test_block(block_hash, 9, B256::ZERO);
-        let store = StubStore::holding(held_payload(block_hash));
+        let held = Some(held_payload(block_hash));
         let identity = identity(1);
 
-        let result = construct_signed_envelope(&block, &store, &identity, &chain_info);
+        let result = construct_signed_envelope(&block, held, &identity, &chain_info);
 
         assert!(matches!(
             result,
