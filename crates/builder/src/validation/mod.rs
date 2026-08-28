@@ -10,7 +10,15 @@ use alloy_rpc_types::{
     beacon::{relay::BidTrace, requests::ExecutionRequestsV4},
     engine::ExecutionPayloadV3,
 };
-use ethrex_common::types::{Block, BlockHeader};
+use ethrex_blockchain::{BlockchainType, new_evm, vm::StoreVmDatabase};
+use ethrex_common::{
+    types::{AccountUpdate, Block, BlockHeader, ELASTICITY_MULTIPLIER, Receipt},
+    validation::{
+        validate_block_pre_execution, validate_gas_used, validate_receipts_root_and_logs_bloom,
+        validate_requests_hash,
+    },
+};
+use ethrex_crypto::NativeCrypto;
 use ethrex_storage::Store;
 use tokio::sync::watch;
 
@@ -24,6 +32,13 @@ use crate::{
 pub struct PreparedBlock {
     pub block: Block,
     pub parent_header: BlockHeader,
+}
+
+#[derive(Debug)]
+pub struct ExecutedBlock {
+    pub block: Block,
+    pub receipts: Vec<Receipt>,
+    pub account_updates: Vec<AccountUpdate>,
 }
 
 #[derive(Clone)]
@@ -49,6 +64,60 @@ impl BlockValidator {
         self.validate_message_against_header(&block, message)?;
         let parent_header = self.parent_header(&block.header)?;
         Ok(PreparedBlock { block, parent_header })
+    }
+
+    pub fn validate(
+        &self,
+        payload: &ExecutionPayloadV3,
+        message: &BidTrace,
+        parent_beacon_block_root: B256,
+        requests: &ExecutionRequestsV4,
+    ) -> Result<ExecutedBlock, ValidationError> {
+        let prepared = self.prepare(payload, message, parent_beacon_block_root, requests)?;
+        self.execute(prepared)
+    }
+
+    /// Executes against the parent state and checks the header against what
+    /// execution produced. Writes nothing to the store.
+    pub fn execute(&self, prepared: PreparedBlock) -> Result<ExecutedBlock, ValidationError> {
+        let PreparedBlock { block, parent_header } = prepared;
+        let chain_config = self.store.get_chain_config();
+
+        validate_block_pre_execution(&block, &parent_header, &chain_config, ELASTICITY_MULTIPLIER)
+            .map_err(|e| ValidationError::PreExecution(e.to_string()))?;
+
+        let vm_db = StoreVmDatabase::new(self.store.clone(), parent_header)
+            .map_err(|e| ValidationError::Execution(e.to_string()))?;
+        let mut vm = new_evm(&BlockchainType::L1, vm_db)
+            .map_err(|e| ValidationError::Execution(e.to_string()))?;
+
+        let (result, _bal) =
+            vm.execute_block(&block).map_err(|e| ValidationError::Execution(e.to_string()))?;
+
+        validate_gas_used(result.block_gas_used, &block.header)
+            .map_err(|e| ValidationError::PostExecution(e.to_string()))?;
+        validate_receipts_root_and_logs_bloom(&block.header, &result.receipts, &NativeCrypto)
+            .map_err(|e| ValidationError::PostExecution(e.to_string()))?;
+        validate_requests_hash(&block.header, &chain_config, &result.requests)
+            .map_err(|e| ValidationError::PostExecution(e.to_string()))?;
+
+        let account_updates =
+            vm.get_state_transitions().map_err(|e| ValidationError::Execution(e.to_string()))?;
+        let state_root = self
+            .store
+            .apply_account_updates_batch(block.header.parent_hash, &account_updates)
+            .map_err(|e| ValidationError::Store(e.to_string()))?
+            .ok_or(ValidationError::MissingParentState)?
+            .state_trie_hash;
+
+        if state_root != block.header.state_root {
+            return Err(ValidationError::StateRootMismatch {
+                got: b256(block.header.state_root),
+                expected: b256(state_root),
+            });
+        }
+
+        Ok(ExecutedBlock { block, receipts: result.receipts, account_updates })
     }
 
     fn to_block(
