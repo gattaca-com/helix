@@ -13,7 +13,10 @@ mod engine;
 mod node;
 mod server;
 mod spine;
+#[cfg(test)]
+mod testing;
 mod utils;
+mod validation;
 
 use cli::BuilderCli;
 use config::{MergingConfig, Roles, SimulationConfig};
