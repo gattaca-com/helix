@@ -26,6 +26,8 @@ pub enum DehydratedBidSubmission {
 }
 
 impl ForkVersionDecode for DehydratedBidSubmission {
+    /// Gloas uses the same bounded-list wire shape as Fulu here -- this is helix's own
+    /// builder<->relay representation, not the real Gloas consensus shape.
     fn from_ssz_bytes_by_fork(bytes: &[u8], fork: ForkName) -> Result<Self, DecodeError> {
         match fork {
             ForkName::Base |
@@ -34,9 +36,8 @@ impl ForkVersionDecode for DehydratedBidSubmission {
             ForkName::Capella |
             ForkName::Deneb |
             ForkName::Electra |
-            ForkName::Gloas |
             ForkName::Heze => Err(DecodeError::NoMatchingVariant),
-            ForkName::Fulu => DehydratedBidSubmissionFulu::from_ssz_bytes(bytes)
+            ForkName::Fulu | ForkName::Gloas => DehydratedBidSubmissionFulu::from_ssz_bytes(bytes)
                 .map(DehydratedBidSubmission::Fulu),
         }
     }
@@ -212,10 +213,11 @@ impl ForkVersionDecode for DehydratedBidSubmissionFuluWithAdjustments {
             ForkName::Bellatrix |
             ForkName::Capella |
             ForkName::Deneb |
-            ForkName::Gloas |
             ForkName::Heze |
             ForkName::Electra => Err(DecodeError::NoMatchingVariant),
-            ForkName::Fulu => DehydratedBidSubmissionFuluWithAdjustments::from_ssz_bytes(bytes),
+            ForkName::Fulu | ForkName::Gloas => {
+                DehydratedBidSubmissionFuluWithAdjustments::from_ssz_bytes(bytes)
+            }
         }
     }
 }
@@ -255,10 +257,11 @@ impl ForkVersionDecode for DehydratedBidSubmissionFuluWithMergingData {
             ForkName::Bellatrix |
             ForkName::Capella |
             ForkName::Deneb |
-            ForkName::Gloas |
             ForkName::Heze |
             ForkName::Electra => Err(DecodeError::NoMatchingVariant),
-            ForkName::Fulu => DehydratedBidSubmissionFuluWithMergingData::from_ssz_bytes(bytes),
+            ForkName::Fulu | ForkName::Gloas => {
+                DehydratedBidSubmissionFuluWithMergingData::from_ssz_bytes(bytes)
+            }
         }
     }
 }
@@ -644,5 +647,37 @@ mod tests {
 
         assert_eq!(split_merging_data, expected_merging_data);
         assert!(matches!(dehydrated, DehydratedBidSubmission::Fulu(_)));
+    }
+
+    #[test]
+    fn dehydrated_with_merging_data_decodes_under_gloas_fork() {
+        let submission =
+            DehydratedBidSubmissionFuluWithMergingData::random_for_test(&mut rand::rng());
+        let bytes = submission.as_ssz_bytes();
+
+        let decoded = DehydratedBidSubmissionFuluWithMergingData::from_ssz_bytes_by_fork(
+            &bytes,
+            ForkName::Gloas,
+        )
+        .expect("Gloas should decode via the same shape as Fulu");
+
+        assert_eq!(decoded.message, submission.message);
+        assert_eq!(decoded.merging_data, submission.merging_data);
+    }
+
+    #[test]
+    fn dehydrated_bid_submission_decodes_under_gloas_fork() {
+        let (dehydrated, _) =
+            DehydratedBidSubmissionFuluWithMergingData::random_for_test(&mut rand::rng()).split();
+        let inner_bytes = match &dehydrated {
+            DehydratedBidSubmission::Fulu(inner) => inner.as_ssz_bytes(),
+        };
+
+        let decoded =
+            DehydratedBidSubmission::from_ssz_bytes_by_fork(&inner_bytes, ForkName::Gloas)
+                .expect("Gloas should decode via the same shape as Fulu");
+
+        assert!(matches!(decoded, DehydratedBidSubmission::Fulu(_)));
+        assert_eq!(decoded.bid_trace(), dehydrated.bid_trace());
     }
 }
