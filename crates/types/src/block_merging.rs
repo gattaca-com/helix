@@ -278,8 +278,8 @@ impl MergedBlock {
         format!(
             "📦 *Merged Block Delivered*\n\
                 \n\
-                *Slot:* `{}`\n\
-                *Block Number:* `{}`\n\
+                *Slot:* [{}](https://beaconcha.in/slot/{})\n\
+                *Block Number:* [{}](https://etherscan.io/block/{})\n\
                 *Block Hash:* `{}`\n\
                 *Value:* `{}` → `{}`\n\
                 *Transactions:* `{}` → `{}`\n\
@@ -289,6 +289,8 @@ impl MergedBlock {
                 *Merged txs by builder:*\n{}\n\
                 ━━━━━━━━━━━━━━━\n",
             self.slot,
+            self.slot,
+            self.block_number,
             self.block_number,
             self.block_hash,
             self.original_value,
