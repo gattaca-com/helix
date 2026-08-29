@@ -6635,6 +6635,7 @@ dependencies = [
  "alloy-eips",
  "alloy-primitives",
  "alloy-rlp",
+ "alloy-rpc-types",
  "askama",
  "async-trait",
  "aws-sdk-s3",

@@ -1,4 +1,10 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use alloy_primitives::{Address, B256, Bytes, U256, keccak256};
 use flux::{
@@ -194,6 +200,12 @@ pub struct BlockMergingTile {
     decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
     slot_events: Arc<SharedVector<SlotUpdate>>,
     merged_blocks: Arc<SharedVector<BlockMergeResponse>>,
+    /// Admin-toggled kill switch. The connection itself (dial, handshake,
+    /// ping/pong) is unaffected — only an admin can set this back to `true`
+    /// (never automatic). While `false`, the tile stops forwarding
+    /// mergeable blocks and top-bid activations, and silently drops any
+    /// merged blocks it receives.
+    block_merging_enabled: Arc<AtomicBool>,
 
     // Buffered during `poll_with` (the connector is exclusively borrowed
     // there), drained right after.
@@ -237,6 +249,87 @@ impl Tile<HelixSpine> for BlockMergingTile {
     fn name(&self) -> flux::tile::TileName {
         flux_utils::short_typename::<Self>()
     }
+}
+
+/// Validates and converts an incoming `MergedBlockV1` into a response to
+/// forward to the auctioneer, or `None` if it's dropped (disabled, stale,
+/// regressed, missing a blob sidecar, or unbundled by the builder).
+/// Extracted from `poll_sockets` so this compute is unit-testable without a
+/// real connection: `enabled` is checked first, before any state mutation,
+/// so a disabled tile silently drops every merged block it receives.
+#[allow(clippy::too_many_arguments)]
+fn handle_merged_block(
+    enabled: bool,
+    token: Token,
+    merged: MergedBlockV1,
+    slot: &mut SlotState,
+    stats: &mut SlotStats,
+    blob_sidecars: &FxHashMap<B256, BlobWithMetadata>,
+    tx_hash_cache: &mut FxHashMap<Bytes, B256>,
+    unbundled_scratch_bundled: &mut Vec<bool>,
+    unbundled_scratch_covered: &mut Vec<bool>,
+) -> Option<BlockMergeResponse> {
+    if !enabled {
+        return None;
+    }
+    if merged.slot != slot.bid_slot || !slot.appendable.contains(&merged.base_block_hash) {
+        stats.merged_stale += 1;
+        debug!(
+            ?token,
+            slot = merged.slot,
+            bid_slot = slot.bid_slot,
+            "stale or unknown merged block"
+        );
+        return None;
+    }
+    // Builders only guarantee monotonicity within a connection; filter
+    // so the stored merged bid never regresses.
+    if slot
+        .best_merged
+        .get(&merged.base_block_hash)
+        .is_some_and(|floor| merged.proposer_value <= floor.value)
+    {
+        stats.merged_regressed += 1;
+        return None;
+    }
+    slot.best_merged.insert(merged.base_block_hash, BestMergedFloor {
+        value: merged.proposer_value,
+        order_ids: merged.included_order_ids.iter().copied().collect(),
+    });
+    let Some(response) = merged_block_to_response(merged, blob_sidecars) else {
+        stats.merged_blob_missing += 1;
+        warn!(
+            ?token,
+            "could not build merge response (missing blob sidecar or invalid payload), dropping \
+             merged block"
+        );
+        return None;
+    };
+    let appended = appended_tx_hashes(&response.builder_inclusions);
+    let appended_txs: Vec<B256> = response
+        .execution_payload
+        .transactions
+        .iter()
+        .map(|tx| *tx_hash_cache.entry(tx.0.clone()).or_insert_with(|| keccak256(tx.as_ref())))
+        .filter(|hash| appended.contains(hash))
+        .collect();
+    let unbundled = find_unbundled_txs(
+        &appended_txs,
+        &slot.order_txs,
+        unbundled_scratch_bundled,
+        unbundled_scratch_covered,
+    );
+    if !unbundled.is_empty() {
+        stats.merged_unbundled += 1;
+        warn!(
+            ?token,
+            count = unbundled.len(),
+            "merge builder unbundled an order, dropping merged block"
+        );
+        return None;
+    }
+    stats.merged_blocks += 1;
+    Some(response)
 }
 
 /// order_id -> order_hash for every `latest_only` bundle in this submission.
@@ -283,6 +376,7 @@ impl BlockMergingTile {
         slot_events: Arc<SharedVector<SlotUpdate>>,
         merged_blocks: Arc<SharedVector<BlockMergeResponse>>,
         chain_info: ChainInfo,
+        block_merging_enabled: Arc<AtomicBool>,
     ) -> Self {
         let relay_config_msg = RelayConfigV1 {
             relay_fee_recipient: config.relay_fee_recipient,
@@ -339,6 +433,7 @@ impl BlockMergingTile {
             decoded,
             slot_events,
             merged_blocks,
+            block_merging_enabled,
             to_disconnect: Vec::new(),
             to_register: Vec::new(),
             handshaken: Vec::new(),
@@ -408,6 +503,8 @@ impl BlockMergingTile {
     }
 
     fn poll_sockets(&mut self) {
+        let enabled = self.block_merging_enabled.load(Ordering::Relaxed);
+
         // Split borrows: the connector is exclusively borrowed for the whole
         // poll, all reactions are buffered.
         let Self {
@@ -501,71 +598,20 @@ impl BlockMergingTile {
                             warn!(?token, "undecodable merged block");
                             return;
                         };
-                        if merged.slot != slot.bid_slot ||
-                            !slot.appendable.contains(&merged.base_block_hash)
-                        {
-                            stats.merged_stale += 1;
-                            debug!(
-                                ?token,
-                                slot = merged.slot,
-                                bid_slot = slot.bid_slot,
-                                "stale or unknown merged block"
-                            );
-                            return;
-                        }
-                        // Builders only guarantee monotonicity within a connection; filter
-                        // so the stored merged bid never regresses.
-                        if slot
-                            .best_merged
-                            .get(&merged.base_block_hash)
-                            .is_some_and(|floor| merged.proposer_value <= floor.value)
-                        {
-                            stats.merged_regressed += 1;
-                            return;
-                        }
-                        slot.best_merged.insert(merged.base_block_hash, BestMergedFloor {
-                            value: merged.proposer_value,
-                            order_ids: merged.included_order_ids.iter().copied().collect(),
-                        });
-                        let Some(response) = merged_block_to_response(merged, blob_sidecars) else {
-                            stats.merged_blob_missing += 1;
-                            warn!(
-                                ?token,
-                                "could not build merge response (missing blob sidecar or invalid \
-                                 payload), dropping merged block"
-                            );
-                            return;
-                        };
-                        let appended = appended_tx_hashes(&response.builder_inclusions);
-                        let appended_txs: Vec<B256> = response
-                            .execution_payload
-                            .transactions
-                            .iter()
-                            .map(|tx| {
-                                *tx_hash_cache
-                                    .entry(tx.0.clone())
-                                    .or_insert_with(|| keccak256(tx.as_ref()))
-                            })
-                            .filter(|hash| appended.contains(hash))
-                            .collect();
-                        let unbundled = find_unbundled_txs(
-                            &appended_txs,
-                            &slot.order_txs,
+                        if let Some(response) = handle_merged_block(
+                            enabled,
+                            token,
+                            merged,
+                            slot,
+                            stats,
+                            blob_sidecars,
+                            tx_hash_cache,
                             unbundled_scratch_bundled,
                             unbundled_scratch_covered,
-                        );
-                        if !unbundled.is_empty() {
-                            stats.merged_unbundled += 1;
-                            warn!(
-                                ?token,
-                                count = unbundled.len(),
-                                "merge builder unbundled an order, dropping merged block"
-                            );
-                            return;
+                        ) {
+                            let ix = merged_blocks.push(response);
+                            merged_ixs.push(ix);
                         }
-                        stats.merged_blocks += 1;
-                        let ix = merged_blocks.push(response);
-                        merged_ixs.push(ix);
                     }
                     MergingMsgId::RejectV1 => {
                         if let Ok(reject) = RejectV1::from_ssz_bytes(body) {
@@ -718,8 +764,12 @@ impl BlockMergingTile {
     }
 
     /// Forwards the decoded submission at `ix` as a `MergeableBlockV1`, or
-    /// replays it to `only` on re-handshake.
+    /// replays it to `only` on re-handshake. A no-op while block merging is
+    /// administratively disabled.
     fn forward_decoded(&mut self, ix: usize, only: Option<Token>) {
+        if !self.block_merging_enabled.load(Ordering::Relaxed) {
+            return;
+        }
         let is_replay = only.is_some();
         if is_replay {
             self.stats.replayed += 1;
@@ -946,6 +996,9 @@ impl BlockMergingTile {
         }
         self.stats.last_top_bid_ns = top_bid.timestamp;
 
+        if !self.block_merging_enabled.load(Ordering::Relaxed) {
+            return;
+        }
         if !self.slot.appendable.contains(&top_bid.block_hash) {
             return;
         }
@@ -993,9 +1046,30 @@ impl BlockMergingTile {
 
 #[cfg(test)]
 mod tests {
-    use helix_tcp_types::merging::order::{BundleOrderRef, TxOrderRef};
+    use alloy_primitives::{Address, Bloom};
+    use alloy_rpc_types::{
+        beacon::{BlsPublicKey, requests::ExecutionRequestsV4},
+        engine::{ExecutionPayloadV1, ExecutionPayloadV2, ExecutionPayloadV3},
+    };
+    use flux::timing::Nanos;
+    use helix_common::{
+        MergingBuilderCollateral, MergingBuilderEndpoint, SubmissionTrace,
+        decoder::{Encoding, SubmissionDecoderParams},
+    };
+    use helix_tcp_types::{
+        MergeType,
+        merging::{
+            builder_to_relay::MergeTraceV1,
+            order::{BundleOrderRef, TxOrderRef},
+        },
+    };
+    use helix_types::{
+        BlockMergingData, Compression, ForkName, SignedBidSubmission, SubmissionVersion,
+        TestRandomSeed,
+    };
 
     use super::*;
+    use crate::{SubmissionRef, auctioneer::SubmissionData};
 
     fn bundle(latest_only: bool) -> MergeOrderRef {
         MergeOrderRef::Bundle(BundleOrderRef {
@@ -1122,5 +1196,236 @@ mod tests {
             find_unbundled_txs(&filtered_final_txs, &orders, &mut Vec::new(), &mut Vec::new()),
             Vec::<B256>::new(),
         );
+    }
+
+    fn test_tile(enabled: bool) -> BlockMergingTile {
+        let config = BlockMergingTcpConfig {
+            builder: MergingBuilderEndpoint {
+                addr: "127.0.0.1:1".parse().unwrap(),
+                api_key: Uuid::nil().to_string(),
+            },
+            relay_fee_recipient: Address::ZERO,
+            multisend_contract: Address::ZERO,
+            relay_bps: 0,
+            merged_builder_bps: 0,
+            winning_builder_bps: 0,
+            distribution_gas_limit: 140_000,
+            builder_collaterals: vec![MergingBuilderCollateral {
+                builder_coinbase: Address::ZERO,
+                collateral_safe: Address::ZERO,
+            }],
+        };
+        BlockMergingTile::new(
+            config,
+            "test-relay".to_string(),
+            Arc::new(SharedVector::default()),
+            Arc::new(SharedVector::default()),
+            Arc::new(SharedVector::default()),
+            ChainInfo::default(),
+            Arc::new(AtomicBool::new(enabled)),
+        )
+    }
+
+    /// A decoded submission carrying merging data for `bid_slot`/`block_hash`, with no merge
+    /// orders — the per-slot order-budget/unbundling logic isn't under test here.
+    fn test_submission(
+        bid_slot: u64,
+        block_hash: B256,
+        allow_appending: bool,
+    ) -> SubmissionDataWithSpan {
+        let mut signed = SignedBidSubmission::test_random();
+        signed.message.slot = bid_slot;
+        signed.message.block_hash = block_hash;
+        // `TestRandom` for `BlobsBundle` doesn't respect the
+        // proofs/blobs/commitments length invariant (see the #[ignore]d
+        // `fulu_bid_submission*` tests in helix-types) and panics on use;
+        // this submission carries no blobs so it isn't touched.
+        signed.blobs_bundle = Arc::new(Default::default());
+        let submission_data = SubmissionData {
+            submission_ref: SubmissionRef::Internal,
+            submission: Submission::Full(signed),
+            merging_data: Some(BlockMergingData {
+                allow_appending,
+                builder_address: Address::ZERO,
+                merge_orders: vec![],
+            }),
+            bid_adjustment_data: None,
+            version: SubmissionVersion::new(0, None),
+            withdrawals_root: B256::ZERO,
+            trace: SubmissionTrace::default(),
+            decoder_params: SubmissionDecoderParams {
+                compression: Compression::None,
+                encoding: Encoding::Ssz,
+                merge_type: MergeType::default(),
+                is_dehydrated: false,
+                with_mergeable_data: true,
+                with_adjustments: false,
+                mark_all_txs_mergeable: false,
+                fork_name: ForkName::Deneb,
+            },
+            is_pessimistic: false,
+        };
+        SubmissionDataWithSpan { submission_data, span: tracing::Span::none(), sent_at: Nanos(0) }
+    }
+
+    #[test]
+    fn forward_decoded_noop_when_disabled() {
+        let mut tile = test_tile(false);
+        tile.slot.bid_slot = 5;
+        tile.slot.slot_start = Some(SlotStartV1 {
+            slot: 5,
+            parent_hash: B256::ZERO,
+            proposer_fee_recipient: Address::ZERO,
+            parent_beacon_block_root: B256::ZERO,
+        });
+        let block_hash = B256::repeat_byte(7);
+        let ix = tile.decoded.push(test_submission(5, block_hash, true));
+
+        tile.forward_decoded(ix, None);
+
+        assert!(tile.slot.appendable.is_empty());
+        assert!(tile.slot.replay_log.is_empty());
+    }
+
+    #[test]
+    fn forward_decoded_tracks_when_enabled() {
+        let mut tile = test_tile(true);
+        tile.slot.bid_slot = 5;
+        tile.slot.slot_start = Some(SlotStartV1 {
+            slot: 5,
+            parent_hash: B256::ZERO,
+            proposer_fee_recipient: Address::ZERO,
+            parent_beacon_block_root: B256::ZERO,
+        });
+        let block_hash = B256::repeat_byte(7);
+        let ix = tile.decoded.push(test_submission(5, block_hash, true));
+
+        tile.forward_decoded(ix, None);
+
+        assert!(tile.slot.appendable.contains(&block_hash));
+        assert_eq!(tile.slot.replay_log.len(), 1);
+    }
+
+    #[test]
+    fn on_top_bid_skips_activation_when_disabled() {
+        let mut tile = test_tile(false);
+        let block_hash = B256::repeat_byte(3);
+        tile.slot.bid_slot = 5;
+        tile.slot.appendable.insert(block_hash);
+        tile.conn.forwarded.insert(block_hash);
+        tile.conn.active = true;
+        // Never touched: the disabled gate returns before the connector is reached.
+        tile.token = Some(Token(0));
+
+        tile.on_top_bid(TopBidUpdate {
+            timestamp: 1,
+            slot: 5,
+            block_number: 0,
+            block_hash,
+            parent_hash: B256::ZERO,
+            builder_pubkey: BlsPublicKeyBytes::default(),
+            fee_recipient: Address::ZERO,
+            value: U256::ZERO,
+        });
+
+        assert!(tile.conn.activated.is_none());
+        assert_eq!(tile.stats.activations_sent, 0);
+    }
+
+    fn test_merged_block(bid_slot: u64, base_block_hash: B256) -> MergedBlockV1 {
+        let execution_payload = ExecutionPayloadV3 {
+            payload_inner: ExecutionPayloadV2 {
+                payload_inner: ExecutionPayloadV1 {
+                    parent_hash: B256::ZERO,
+                    fee_recipient: Address::ZERO,
+                    state_root: B256::ZERO,
+                    receipts_root: B256::ZERO,
+                    logs_bloom: Bloom::default(),
+                    prev_randao: B256::ZERO,
+                    block_number: 1,
+                    gas_limit: 30_000_000,
+                    gas_used: 0,
+                    timestamp: 0,
+                    extra_data: Default::default(),
+                    base_fee_per_gas: U256::from(1),
+                    block_hash: base_block_hash,
+                    transactions: vec![],
+                },
+                withdrawals: vec![],
+            },
+            blob_gas_used: 0,
+            excess_blob_gas: 0,
+        };
+        MergedBlockV1 {
+            slot: bid_slot,
+            response_id: 0,
+            base_block_hash,
+            base_builder_pubkey: BlsPublicKey::default(),
+            execution_payload,
+            execution_requests: ExecutionRequestsV4::default(),
+            appended_blobs: vec![],
+            proposer_value: U256::from(1),
+            base_builder_revenue: U256::ZERO,
+            relay_revenue: U256::ZERO,
+            builder_inclusions: vec![],
+            included_order_ids: vec![],
+            trace: MergeTraceV1::default(),
+        }
+    }
+
+    #[test]
+    fn handle_merged_block_dropped_when_disabled() {
+        let base_block_hash = B256::repeat_byte(9);
+        let mut slot = SlotState { bid_slot: 5, ..Default::default() };
+        slot.appendable.insert(base_block_hash);
+        let mut stats = SlotStats::default();
+        let blob_sidecars = FxHashMap::default();
+        let mut tx_hash_cache = FxHashMap::default();
+        let mut bundled_scratch = Vec::new();
+        let mut covered_scratch = Vec::new();
+
+        let result = handle_merged_block(
+            false,
+            Token(0),
+            test_merged_block(5, base_block_hash),
+            &mut slot,
+            &mut stats,
+            &blob_sidecars,
+            &mut tx_hash_cache,
+            &mut bundled_scratch,
+            &mut covered_scratch,
+        );
+
+        assert!(result.is_none());
+        assert!(slot.best_merged.is_empty());
+        assert_eq!(stats.merged_blocks, 0);
+    }
+
+    #[test]
+    fn handle_merged_block_accepted_when_enabled() {
+        let base_block_hash = B256::repeat_byte(9);
+        let mut slot = SlotState { bid_slot: 5, ..Default::default() };
+        slot.appendable.insert(base_block_hash);
+        let mut stats = SlotStats::default();
+        let blob_sidecars = FxHashMap::default();
+        let mut tx_hash_cache = FxHashMap::default();
+        let mut bundled_scratch = Vec::new();
+        let mut covered_scratch = Vec::new();
+
+        let result = handle_merged_block(
+            true,
+            Token(0),
+            test_merged_block(5, base_block_hash),
+            &mut slot,
+            &mut stats,
+            &blob_sidecars,
+            &mut tx_hash_cache,
+            &mut bundled_scratch,
+            &mut covered_scratch,
+        );
+
+        assert!(result.is_some());
+        assert!(slot.best_merged.contains_key(&base_block_hash));
+        assert_eq!(stats.merged_blocks, 1);
     }
 }

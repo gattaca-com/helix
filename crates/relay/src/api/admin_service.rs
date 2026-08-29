@@ -1,4 +1,10 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{
+    net::SocketAddr,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use axum::{
     Extension, Json, Router,
@@ -18,6 +24,10 @@ pub async fn run_admin_service(
     auctioneer: Arc<LocalCache>,
     db: Arc<PostgresDatabaseService>,
     admin_token: String,
+    // Bare Arc<AtomicBool>: the router's only extension of this exact type today.
+    // A second one would silently collide (axum keys extensions by type) — wrap
+    // both in distinct newtypes if that's ever added.
+    block_merging_enabled: Arc<AtomicBool>,
 ) {
     let router = Router::new()
         .route("/admin/v1/status", get(status))
@@ -26,11 +36,13 @@ pub async fn run_admin_service(
             "/admin/v1/merged-headers",
             post(enable_merged_headers).delete(disable_merged_headers),
         )
+        .route("/admin/v1/block-merging", post(enable_block_merging).delete(disable_block_merging))
         .route("/admin/v1/builders/{pubkey}/demote", post(demote_builder))
         .route("/admin/v1/builders/{pubkey}/promote", post(promote_builder))
         .route("/admin/v1/adjustments/disable", post(disable_adjustments))
         .layer(Extension(auctioneer))
         .layer(Extension(db))
+        .layer(Extension(block_merging_enabled))
         .layer(ValidateRequestHeaderLayer::bearer(&admin_token));
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:4050").await.unwrap();
@@ -42,8 +54,12 @@ pub async fn run_admin_service(
 
 async fn status(
     Extension(auctioneer): Extension<Arc<LocalCache>>,
+    Extension(block_merging_enabled): Extension<Arc<AtomicBool>>,
 ) -> Result<impl IntoResponse, StatusCode> {
-    Ok(Json(serde_json::json!({ "kill_switch_enabled": auctioneer.kill_switch_enabled() })))
+    Ok(Json(serde_json::json!({
+        "kill_switch_enabled": auctioneer.kill_switch_enabled(),
+        "block_merging_enabled": block_merging_enabled.load(Ordering::Relaxed),
+    })))
 }
 
 async fn enable_kill_switch(
@@ -75,6 +91,22 @@ async fn disable_merged_headers(
 ) -> Result<impl IntoResponse, StatusCode> {
     auctioneer.disable_merged_headers();
     info!("Merged header serving disabled");
+    Ok((StatusCode::NO_CONTENT, ()))
+}
+
+async fn enable_block_merging(
+    Extension(block_merging_enabled): Extension<Arc<AtomicBool>>,
+) -> Result<impl IntoResponse, StatusCode> {
+    block_merging_enabled.store(true, Ordering::Relaxed);
+    info!("Block merging enabled");
+    Ok((StatusCode::NO_CONTENT, ()))
+}
+
+async fn disable_block_merging(
+    Extension(block_merging_enabled): Extension<Arc<AtomicBool>>,
+) -> Result<impl IntoResponse, StatusCode> {
+    block_merging_enabled.store(false, Ordering::Relaxed);
+    info!("Block merging disabled");
     Ok((StatusCode::NO_CONTENT, ()))
 }
 
@@ -143,7 +175,10 @@ async fn disable_adjustments(
 #[cfg(test)]
 #[allow(clippy::field_reassign_with_default)]
 mod test {
-    use std::sync::Arc;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
 
     use helix_common::local_cache::LocalCache;
     use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
@@ -156,9 +191,10 @@ mod test {
     async fn test_admin_service() {
         let auctioneer = Arc::new(LocalCache::new());
         let db = Arc::new(PostgresDatabaseService::default());
+        let block_merging_enabled = Arc::new(AtomicBool::new(true));
 
         let admin_token = "test_token".into();
-        tokio::spawn(run_admin_service(auctioneer.clone(), db, admin_token));
+        tokio::spawn(run_admin_service(auctioneer.clone(), db, admin_token, block_merging_enabled));
         tokio::time::sleep(std::time::Duration::from_secs(1)).await; // wait for server to start
         let client = reqwest::Client::new();
 
@@ -201,10 +237,11 @@ mod test {
     async fn test_admin_service_merged_headers() {
         let auctioneer = Arc::new(LocalCache::new());
         let db = Arc::new(PostgresDatabaseService::default());
+        let block_merging_enabled = Arc::new(AtomicBool::new(true));
         assert!(auctioneer.merged_headers_enabled(), "should be enabled by default");
 
         let admin_token = "test_token".into();
-        tokio::spawn(run_admin_service(auctioneer.clone(), db, admin_token));
+        tokio::spawn(run_admin_service(auctioneer.clone(), db, admin_token, block_merging_enabled));
         tokio::time::sleep(std::time::Duration::from_secs(1)).await; // wait for server to start
         let client = reqwest::Client::new();
 
@@ -232,9 +269,10 @@ mod test {
     async fn test_admin_service_unauthorized() {
         let auctioneer = Arc::new(LocalCache::new());
         let db = Arc::new(PostgresDatabaseService::default());
+        let block_merging_enabled = Arc::new(AtomicBool::new(true));
 
         let admin_token = "test_token".into();
-        tokio::spawn(run_admin_service(auctioneer.clone(), db, admin_token));
+        tokio::spawn(run_admin_service(auctioneer.clone(), db, admin_token, block_merging_enabled));
         tokio::time::sleep(std::time::Duration::from_secs(1)).await; // wait for server to start
         let client = reqwest::Client::new();
 
@@ -247,5 +285,45 @@ mod test {
             client.get("http://localhost:4050/admin/v1/killswitch/disable").send().await.unwrap();
         assert_eq!(response.status(), 401);
         assert!(!auctioneer.kill_switch_enabled());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_admin_service_block_merging() {
+        let auctioneer = Arc::new(LocalCache::new());
+        let db = Arc::new(PostgresDatabaseService::default());
+        let block_merging_enabled = Arc::new(AtomicBool::new(true));
+
+        let admin_token = "test_token".into();
+        tokio::spawn(run_admin_service(auctioneer, db, admin_token, block_merging_enabled.clone()));
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await; // wait for server to start
+        let client = reqwest::Client::new();
+
+        let response = client
+            .delete("http://localhost:4050/admin/v1/block-merging")
+            .bearer_auth("test_token")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 204);
+        assert!(!block_merging_enabled.load(Ordering::Relaxed));
+
+        let response = client
+            .get("http://localhost:4050/admin/v1/status")
+            .bearer_auth("test_token")
+            .send()
+            .await
+            .unwrap();
+        let status: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(status["block_merging_enabled"], false);
+
+        let response = client
+            .post("http://localhost:4050/admin/v1/block-merging")
+            .bearer_auth("test_token")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 204);
+        assert!(block_merging_enabled.load(Ordering::Relaxed));
     }
 }
