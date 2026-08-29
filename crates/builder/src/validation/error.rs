@@ -32,4 +32,6 @@ pub enum ValidationError {
     StateRootMismatch { got: B256, expected: B256 },
     #[error("parent state is not available")]
     MissingParentState,
+    #[error("could not verify proposer payment")]
+    ProposerPayment,
 }
