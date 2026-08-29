@@ -10,14 +10,20 @@ use alloy_primitives::{Address, B256, Bytes, U256, keccak256};
 use flux::{
     spine::SpineProducers,
     tile::Tile,
-    timing::{Duration, Repeater},
+    timing::{Duration, Nanos, Repeater},
 };
 use flux_network::{
     Token,
     tcp::{PollEvent, SendBehavior, TcpConnector, TcpTelemetry},
 };
 use flux_utils::SharedVector;
-use helix_common::{BlockMergingTcpConfig, api::builder_api::TopBidUpdate, chain_info::ChainInfo};
+use helix_common::{
+    BlockMergingTcpConfig,
+    api::builder_api::{InclusionListWithMetadata, TopBidUpdate},
+    chain_info::ChainInfo,
+    simulator::BlockSimError,
+    utils::alert_discord,
+};
 use helix_tcp_types::merging::{
     MERGING_HEADER_SIZE, MERGING_PROTOCOL_VERSION, MergingFrameHeader, MergingHeaderError,
     MergingMsgId,
@@ -38,15 +44,17 @@ use tracing::{debug, error, info, trace, warn};
 use uuid::Uuid;
 
 use crate::{
-    HelixSpine, SubmissionDataWithSpan,
+    HelixSpine, SimRequest, SimResult, SubmissionDataWithSpan,
     block_merging::{
         append_frame, merged_block_to_response, order_ref_hash, order_to_ref,
         submission_blob_sidecars,
         unbundling::{OrderTxs, find_unbundled_txs},
     },
     housekeeper::SlotUpdate,
-    simulator::BlockMergeResponse,
-    spine::messages::{DecodedSubmission, MergedBlockMsg, SlotMsg},
+    simulator::{BlockMergeResponse, MergedValidationRequest, tile::MergedSimulationResultInner},
+    spine::messages::{
+        DecodedSubmission, FromSimMsg, MergedBlockMsg, SlotMsg, ToSimKind, ToSimMsg,
+    },
 };
 
 const REDIAL_INTERVAL_S: u64 = 2;
@@ -103,6 +111,12 @@ struct SlotState {
     /// went out; cached for handshake replay.
     slot_start: Option<SlotStartV1>,
     fee_recipient: Option<alloy_primitives::Address>,
+    /// Registered gas limit of the current proposer, for merged-block simulation requests.
+    registered_gas_limit: Option<u64>,
+    /// Current proposer's blacklist-filtering preference, for merged-block simulation requests.
+    apply_blacklist: Option<bool>,
+    /// Current inclusion list, for merged-block simulation requests.
+    inclusion_list: Option<InclusionListWithMetadata>,
     /// parent_hash -> parent_beacon_block_root.
     attrs: FxHashMap<B256, B256>,
     /// Appendable block hashes forwarded this slot.
@@ -200,6 +214,8 @@ pub struct BlockMergingTile {
     decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
     slot_events: Arc<SharedVector<SlotUpdate>>,
     merged_blocks: Arc<SharedVector<BlockMergeResponse>>,
+    sim_requests: Arc<SharedVector<SimRequest>>,
+    sim_results: Arc<SharedVector<SimResult>>,
     /// Admin-toggled kill switch. The connection itself (dial, handshake,
     /// ping/pong) is unaffected — only an admin can set this back to `true`
     /// (never automatic). While `false`, the tile stops forwarding
@@ -214,6 +230,7 @@ pub struct BlockMergingTile {
     handshaken: Vec<Token>,
     pongs: Vec<(Token, u64)>,
     merged_ixs: Vec<usize>,
+    merge_sim_ixs: Vec<usize>,
     encode_buf: Vec<u8>,
     // Scratch space for `find_unbundled_txs`, reused across calls.
     unbundled_scratch_bundled: Vec<bool>,
@@ -227,6 +244,9 @@ impl Tile<HelixSpine> for BlockMergingTile {
         for ix in std::mem::take(&mut self.merged_ixs) {
             adapter.producers.produce(MergedBlockMsg { ix });
         }
+        for ix in std::mem::take(&mut self.merge_sim_ixs) {
+            adapter.producers.produce(ToSimMsg { kind: ToSimKind::Request, ix, bid_slot: 0 });
+        }
 
         if self.redial.fired() {
             self.dial_endpoint();
@@ -238,6 +258,7 @@ impl Tile<HelixSpine> for BlockMergingTile {
         adapter.consume(|msg: SlotMsg, _| self.on_slot_msg(msg));
         adapter.consume(|msg: DecodedSubmission, _| self.forward_decoded(msg.ix, None));
         adapter.consume(|top_bid: TopBidUpdate, _| self.on_top_bid(top_bid));
+        adapter.consume(|msg: FromSimMsg, _| self.on_merge_sim_result(msg));
     }
 
     fn try_init(&mut self, _adapter: &mut flux::spine::SpineAdapter<HelixSpine>) -> bool {
@@ -332,6 +353,39 @@ fn handle_merged_block(
     Some(response)
 }
 
+/// Whether a merged-block simulation failure is attributable to the merge builder, as
+/// opposed to a relay/simulator-side infra hiccup. Builds on `is_demotable()` (the same
+/// logic that decides whether a failed bid-submission simulation demotes its builder) but
+/// additionally excludes internal channel/queue failures, which are never the builder's
+/// fault even though `is_demotable()` -- calibrated for bid-submission demotion -- doesn't
+/// exclude them.
+fn is_merge_builder_attributable(err: &BlockSimError) -> bool {
+    err.is_demotable() &&
+        !matches!(
+            err,
+            BlockSimError::SendError |
+                BlockSimError::SimulationDropped |
+                BlockSimError::HydrationMiss
+        )
+}
+
+/// Decides whether a merged-block simulation result should disable block merging.
+/// Returns the block's hash and the failure reason to report if so.
+fn merge_sim_disable_check(
+    result: &MergedSimulationResultInner,
+    merged_blocks: &SharedVector<BlockMergeResponse>,
+) -> Option<(B256, BlockSimError)> {
+    let Err(err) = &result.result else { return None };
+    if !is_merge_builder_attributable(err) {
+        return None;
+    }
+    let block_hash = merged_blocks
+        .get(result.merged_block_ix)
+        .map(|r| r.execution_payload.block_hash)
+        .unwrap_or_default();
+    Some((block_hash, err.clone()))
+}
+
 /// order_id -> order_hash for every `latest_only` bundle in this submission.
 fn latest_only_ids(
     builder_pubkey: BlsPublicKeyBytes,
@@ -369,12 +423,15 @@ fn appended_tx_hashes(
 }
 
 impl BlockMergingTile {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: BlockMergingTcpConfig,
         relay_id: String,
         decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
         slot_events: Arc<SharedVector<SlotUpdate>>,
         merged_blocks: Arc<SharedVector<BlockMergeResponse>>,
+        sim_requests: Arc<SharedVector<SimRequest>>,
+        sim_results: Arc<SharedVector<SimResult>>,
         chain_info: ChainInfo,
         block_merging_enabled: Arc<AtomicBool>,
     ) -> Self {
@@ -433,12 +490,15 @@ impl BlockMergingTile {
             decoded,
             slot_events,
             merged_blocks,
+            sim_requests,
+            sim_results,
             block_merging_enabled,
             to_disconnect: Vec::new(),
             to_register: Vec::new(),
             handshaken: Vec::new(),
             pongs: Vec::new(),
             merged_ixs: Vec::new(),
+            merge_sim_ixs: Vec::new(),
             encode_buf: Vec::new(),
             unbundled_scratch_bundled: Vec::new(),
             unbundled_scratch_covered: Vec::new(),
@@ -519,6 +579,8 @@ impl BlockMergingTile {
             pongs,
             merged_ixs,
             merged_blocks,
+            sim_requests,
+            merge_sim_ixs,
             blob_sidecars,
             tx_hash_cache,
             unbundled_scratch_bundled,
@@ -609,8 +671,29 @@ impl BlockMergingTile {
                             unbundled_scratch_bundled,
                             unbundled_scratch_covered,
                         ) {
+                            let base_block_hash = response.base_block_hash;
+                            let parent_hash = response.execution_payload.parent_hash;
                             let ix = merged_blocks.push(response);
                             merged_ixs.push(ix);
+
+                            let sim_req = MergedValidationRequest {
+                                merged_block_ix: ix,
+                                base_block_hash,
+                                slot: slot.bid_slot,
+                                parent_beacon_block_root: slot
+                                    .attrs
+                                    .get(&parent_hash)
+                                    .copied()
+                                    .unwrap_or_default(),
+                                proposer_fee_recipient: slot.fee_recipient.unwrap_or_default(),
+                                registered_gas_limit: slot.registered_gas_limit.unwrap_or_default(),
+                                apply_blacklist: slot.apply_blacklist.unwrap_or(true),
+                                inclusion_list: slot.inclusion_list.clone().unwrap_or_default(),
+                                receive_ns: Nanos::now().0,
+                            };
+                            let sim_ix =
+                                sim_requests.push(SimRequest::ValidateMerged(Box::new(sim_req)));
+                            merge_sim_ixs.push(sim_ix);
                         }
                     }
                     MergingMsgId::RejectV1 => {
@@ -684,6 +767,11 @@ impl BlockMergingTile {
         // housekeeper sends incremental updates for the same slot
         if let Some(reg) = &ev.registration_data {
             self.slot.fee_recipient = Some(reg.entry.registration.message.fee_recipient);
+            self.slot.registered_gas_limit = Some(reg.entry.registration.message.gas_limit);
+            self.slot.apply_blacklist = Some(reg.entry.preferences.filtering.is_regional());
+        }
+        if let Some(il) = &ev.il {
+            self.slot.inclusion_list = Some(il.clone());
         }
         for attr in &ev.payload_attributes {
             self.slot
@@ -1017,6 +1105,36 @@ impl BlockMergingTile {
         });
     }
 
+    /// Ignores results for anything other than this tile's own `ValidateMerged` requests
+    /// (the `from_sim` queue also carries the auctioneer's ordinary submission-validation
+    /// results). On a builder-attributable failure, disables block merging -- this alone
+    /// triggers the existing force-disconnect gating in `poll_sockets`/`dial_endpoint`, so
+    /// no separate disconnect call is needed here. Nothing re-enables the flag except the
+    /// admin API.
+    fn on_merge_sim_result(&mut self, msg: FromSimMsg) {
+        let Some(result) = self.sim_results.get(msg.ix) else {
+            error!(?msg, "sim outbound payload not found");
+            return;
+        };
+        let SimResult::ValidateMerged((_, Some(inner))) = result.as_ref() else { return };
+        let Some((block_hash, err)) = merge_sim_disable_check(inner, &self.merged_blocks) else {
+            return;
+        };
+
+        self.block_merging_enabled.store(false, Ordering::Relaxed);
+        error!(
+            %block_hash,
+            %err,
+            endpoint = %self.endpoint.addr,
+            "merged block simulation failed, disabling block merging"
+        );
+        alert_discord(&format!(
+            "CRITICAL: block merging disabled -- merged block simulation failed for block \
+             {block_hash:#x} from merge builder {} ({err})",
+            self.endpoint.addr
+        ));
+    }
+
     /// Median of unsorted samples; 0 if empty.
     fn median(samples: &mut [u64]) -> u64 {
         if samples.is_empty() {
@@ -1046,7 +1164,7 @@ impl BlockMergingTile {
 
 #[cfg(test)]
 mod tests {
-    use alloy_primitives::{Address, Bloom};
+    use alloy_primitives::{Address, Bloom, U256};
     use alloy_rpc_types::{
         beacon::{BlsPublicKey, requests::ExecutionRequestsV4},
         engine::{ExecutionPayloadV1, ExecutionPayloadV2, ExecutionPayloadV3},
@@ -1064,9 +1182,10 @@ mod tests {
         },
     };
     use helix_types::{
-        BlockMergingData, Compression, ForkName, SignedBidSubmission, SubmissionVersion,
-        TestRandomSeed,
+        BlockMergingData, Compression, ExecutionPayload, ExecutionRequests, ForkName,
+        MergedBlockTrace, SignedBidSubmission, SubmissionVersion, TestRandom, TestRandomSeed,
     };
+    use rand::{SeedableRng, rngs::SmallRng};
 
     use super::*;
     use crate::{SubmissionRef, auctioneer::SubmissionData};
@@ -1078,6 +1197,24 @@ mod tests {
             dropping_txs: vec![],
             latest_only,
         })
+    }
+
+    fn merge_response(
+        payload: ExecutionPayload,
+        proposer_value: U256,
+        blobs: Vec<BlobWithMetadata>,
+    ) -> BlockMergeResponse {
+        BlockMergeResponse {
+            base_block_hash: payload.parent_hash,
+            execution_payload: payload,
+            execution_requests: ExecutionRequests::default(),
+            appended_blobs: blobs,
+            proposer_value,
+            base_builder_revenue: U256::ZERO,
+            relay_revenue: U256::ZERO,
+            builder_inclusions: Default::default(),
+            trace: MergedBlockTrace::default(),
+        }
     }
 
     #[test]
@@ -1218,6 +1355,8 @@ mod tests {
         BlockMergingTile::new(
             config,
             "test-relay".to_string(),
+            Arc::new(SharedVector::default()),
+            Arc::new(SharedVector::default()),
             Arc::new(SharedVector::default()),
             Arc::new(SharedVector::default()),
             Arc::new(SharedVector::default()),
@@ -1427,5 +1566,78 @@ mod tests {
         assert!(result.is_some());
         assert!(slot.best_merged.contains_key(&base_block_hash));
         assert_eq!(stats.merged_blocks, 1);
+    }
+
+    #[test]
+    fn merge_sim_disable_check_table() {
+        let mut rng = SmallRng::seed_from_u64(3);
+        let payload = ExecutionPayload::random_for_test(&mut rng);
+        let merged_blocks = SharedVector::<BlockMergeResponse>::with_capacity(4);
+        let ix = merged_blocks.push(merge_response(payload, U256::from(1u64), vec![]));
+
+        let cases: &[(BlockSimError, bool)] = &[
+            (BlockSimError::RpcError, false),
+            (BlockSimError::Timeout, false),
+            (BlockSimError::NoSimulatorAvailable, false),
+            (BlockSimError::SendError, false),
+            (BlockSimError::SimulationDropped, false),
+            (BlockSimError::HydrationMiss, false),
+            (BlockSimError::BlockValidationFailed("unknown ancestor".to_owned()), false),
+            (BlockSimError::BlockValidationFailed("parent block not found".to_owned()), false),
+            (BlockSimError::BlockValidationFailed("block requires a reorg".to_owned()), false),
+            (BlockSimError::BlockValidationFailed("block already known".to_owned()), false),
+            (
+                BlockSimError::BlockValidationFailed(
+                    "block is too old, outside validation window".to_owned(),
+                ),
+                false,
+            ),
+            (
+                BlockSimError::BlockValidationFailed("some other validation failure".to_owned()),
+                true,
+            ),
+            (
+                BlockSimError::InvalidTxRoot { got: B256::ZERO, expected: B256::repeat_byte(1) },
+                true,
+            ),
+        ];
+
+        for (err, expect_disable) in cases {
+            let inner =
+                MergedSimulationResultInner { merged_block_ix: ix, result: Err(err.clone()) };
+            let outcome = merge_sim_disable_check(&inner, &merged_blocks);
+            assert_eq!(outcome.is_some(), *expect_disable, "case: {err:?}");
+        }
+    }
+
+    #[test]
+    fn merge_sim_disable_check_reports_block_hash() {
+        let mut rng = SmallRng::seed_from_u64(4);
+        let payload = ExecutionPayload::random_for_test(&mut rng);
+        let merged_blocks = SharedVector::<BlockMergeResponse>::with_capacity(4);
+        let ix = merged_blocks.push(merge_response(payload.clone(), U256::from(1u64), vec![]));
+
+        let inner = MergedSimulationResultInner {
+            merged_block_ix: ix,
+            result: Err(BlockSimError::InvalidTxRoot {
+                got: B256::ZERO,
+                expected: B256::repeat_byte(1),
+            }),
+        };
+        let (block_hash, err) = merge_sim_disable_check(&inner, &merged_blocks).unwrap();
+        assert_eq!(block_hash, payload.block_hash);
+        assert!(matches!(err, BlockSimError::InvalidTxRoot { .. }));
+    }
+
+    #[test]
+    fn merge_sim_disable_check_none_on_success() {
+        let merged_blocks = SharedVector::<BlockMergeResponse>::with_capacity(4);
+        let ix = merged_blocks.push(merge_response(
+            ExecutionPayload::random_for_test(&mut SmallRng::seed_from_u64(5)),
+            U256::ZERO,
+            vec![],
+        ));
+        let inner = MergedSimulationResultInner { merged_block_ix: ix, result: Ok(()) };
+        assert!(merge_sim_disable_check(&inner, &merged_blocks).is_none());
     }
 }
