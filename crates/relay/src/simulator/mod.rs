@@ -6,7 +6,7 @@ use helix_common::{
     simulator::BlockSimError,
 };
 use helix_types::{
-    BlobWithMetadata, BuilderInclusionResult, ExecutionPayload, ExecutionRequests, MergedBlockTrace,
+    BlobsBundle, BuilderInclusionResult, ExecutionPayload, ExecutionRequests, MergedBlockTrace,
 };
 
 use crate::{
@@ -57,14 +57,22 @@ pub struct BlockMergeResponse {
     pub base_block_hash: B256,
     pub execution_payload: ExecutionPayload,
     pub execution_requests: ExecutionRequests,
-    /// Blob sidecars for appended blob transactions, re-attached from `BlockMergingTile`'s
-    /// own cache of blobs seen in submissions this slot.
-    pub appended_blobs: Vec<BlobWithMetadata>,
+    /// The merged block's full blob set (base block's own blob txs plus any newly
+    /// appended ones), re-attached from `BlockMergingTile`'s own cache of blobs seen in
+    /// submissions this slot.
+    pub blobs_bundle: BlobsBundle,
     /// Total value for the proposer
     pub proposer_value: U256,
     pub base_builder_revenue: U256,
     pub relay_revenue: U256,
     pub builder_inclusions: HashMap<Address, BuilderInclusionResult>,
+    /// Index, within `execution_payload.transactions`, of the base block's own proposer
+    /// payment tx. Base txs keep their original positions in a merged block -- only new
+    /// content is ever appended after them -- so this is always
+    /// `execution_payload.transactions.len() - <appended order txs> - 2` (the `- 2` for the
+    /// appended order txs' own count and the trailing distribution tx). Lets a merged-block
+    /// validator recognise the base block's payment directly instead of scanning every tx.
+    pub base_payment_tx_index: usize,
     pub trace: MergedBlockTrace,
 }
 

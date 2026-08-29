@@ -1,8 +1,5 @@
 use alloy_primitives::{Address, U256};
-use helix_common::{
-    SimulatorConfig,
-    simulator::{BlockSimError, JsonValidationRequest, SszValidationRequest},
-};
+use helix_common::{SimulatorConfig, simulator::BlockSimError};
 use helix_types::ForkName;
 use reqwest::{
     RequestBuilder,
@@ -36,6 +33,9 @@ pub struct SimulatorClient {
     pub config: SimulatorConfig,
     pub sim_method_v4: String,
     pub sim_method_v5: String,
+    /// Relay-internal merged-block validation method; never reachable by an externally
+    /// submitted builder block. See `helix_common::simulator::MergedJsonValidationRequest`.
+    pub sim_method_merged_v5: String,
     /// If set, use SSZ binary endpoint instead of JSON-RPC for simulations
     pub ssz_url: Option<String>,
 }
@@ -44,8 +44,10 @@ impl SimulatorClient {
     pub fn new(client: reqwest::Client, config: SimulatorConfig) -> Self {
         let sim_method_v4 = format!("{}_validateBuilderSubmissionV4", config.namespace);
         let sim_method_v5 = format!("{}_validateBuilderSubmissionV5", config.namespace);
+        let sim_method_merged_v5 =
+            format!("{}_validateMergedBuilderSubmissionV5", config.namespace);
         let ssz_url = config.ssz_url.clone();
-        Self { client, config, sim_method_v4, sim_method_v5, ssz_url }
+        Self { client, config, sim_method_v4, sim_method_v5, sim_method_merged_v5, ssz_url }
     }
 
     pub fn endpoint(&self) -> &str {
@@ -54,6 +56,11 @@ impl SimulatorClient {
 
     pub fn ssz_request_builder(&self) -> Option<RequestBuilder> {
         self.ssz_url.as_ref().map(|url| self.client.post(format!("{url}/validate")))
+    }
+
+    /// Relay-internal merged-block SSZ route; see `sim_method_merged_v5`.
+    pub fn ssz_merged_request_builder(&self) -> Option<RequestBuilder> {
+        self.ssz_url.as_ref().map(|url| self.client.post(format!("{url}/validate_merged")))
     }
 
     /// Returns `None` for a fork this client has no validation RPC method for yet, rather than
@@ -69,8 +76,14 @@ impl SimulatorClient {
         Some((self.client.post(&self.config.url), method))
     }
 
+    /// Merged-block counterpart of `sim_request_builder`: only V5 applies (the network is long
+    /// past the forks V4 covers), so this doesn't need a fork parameter.
+    pub fn merged_sim_request_builder(&self) -> (RequestBuilder, &str) {
+        (self.client.post(&self.config.url), &self.sim_method_merged_v5)
+    }
+
     pub async fn do_json_sim_request(
-        request: &JsonValidationRequest,
+        request: &impl serde::Serialize,
         is_top_bid: bool,
         sim_method: &str,
         to_send: RequestBuilder,
@@ -107,7 +120,7 @@ impl SimulatorClient {
     }
 
     pub async fn do_sim_request(
-        ssz_req: &SszValidationRequest,
+        ssz_req: &impl Encode,
         is_top_bid: bool,
         to_send: RequestBuilder,
     ) -> Result<(), BlockSimError> {

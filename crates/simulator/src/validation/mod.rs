@@ -16,6 +16,7 @@ use alloy_rpc_types::{
         ExecutionPayloadSidecar, PraguePayloadFields,
     },
 };
+use alloy_sol_types::{SolCall, sol};
 use async_trait::async_trait;
 use dashmap::DashSet;
 use helix_common::{
@@ -182,7 +183,10 @@ impl ValidationApi {
 }
 
 impl ValidationApi {
-    /// Validates the given block and a [`BidTrace`] against it.
+    /// Validates the given block and a [`BidTrace`] against it. `base_payment_tx_index` is
+    /// `Some` only for the merged-block-only validation endpoint, and switches the payment
+    /// check from `ensure_payment` (regular submissions, single trailing tx) to
+    /// `ensure_merged_payment` (a merged block's base payment tx plus its distribution tx).
     pub async fn validate_message_against_block(
         &self,
         block: RecoveredBlock<Block>,
@@ -190,6 +194,7 @@ impl ValidationApi {
         _registered_gas_limit: u64,
         apply_blacklist: bool,
         inclusion_list: Option<InclusionListWithMetadata>,
+        base_payment_tx_index: Option<usize>,
     ) -> Result<(), ValidationApiError> {
         self.validate_message_against_header(block.sealed_header(), &message)?;
 
@@ -234,7 +239,10 @@ impl ValidationApi {
 
         self.consensus.validate_block_post_execution(&block, &output, None, None)?;
 
-        self.ensure_payment(&block, &output, &message)?;
+        match base_payment_tx_index {
+            Some(ix) => self.ensure_merged_payment(&block, &output, &message, ix)?,
+            None => self.ensure_payment(&block, &output, &message)?,
+        }
 
         let state_root =
             state_provider.state_root(state_provider.hashed_post_state(&output.state))?;
@@ -472,9 +480,13 @@ impl ValidationApi {
 
     /// Ensures that the proposer has received [`BidTrace::value`] for this block.
     ///
-    /// Firstly attempts to verify the payment by checking the state changes, otherwise falls back
-    /// to checking the latest block transaction, which may pay the recipient directly or through
-    /// the [`PAYMENT_FORWARDER`].
+    /// Firstly attempts to verify the payment by checking the state changes, otherwise falls
+    /// back to requiring the last transaction in the block to pay it directly. Shared by every
+    /// externally-submitted builder block (v4/v5) -- regular submissions always pay in a single
+    /// trailing transaction, so this deliberately doesn't scan the rest of the block. A merged
+    /// block's payment can legitimately span two transactions (see
+    /// crates/builder/src/engine/session.rs); that's handled by `ensure_merged_payment`, on the
+    /// merged-block-only validation endpoint, not here.
     fn ensure_payment(
         &self,
         block: &SealedBlock<Block>,
@@ -553,6 +565,122 @@ impl ValidationApi {
         Ok(())
     }
 
+    /// Merged-block counterpart of `ensure_payment`, for the merged-block-only validation
+    /// endpoint. A merged block's payment is legitimately split across exactly two
+    /// transactions: the base block's own payment tx (kept at `base_payment_tx_index`, paying
+    /// `base_value`) and a newly appended distribution tx at the very end of the block (paying
+    /// the incremental `proposer_added_value`) -- see crates/builder/src/engine/session.rs.
+    /// Checking only these two positions (as opposed to `ensure_payment`'s regular-submission
+    /// single-last-tx check, or scanning every tx in the block) is safe here because
+    /// `base_payment_tx_index` is derived and trusted upstream, at the relay
+    /// (`BlockMergeResponse::base_payment_tx_index`) -- if it's wrong, this fails closed (the
+    /// payment isn't found), it never lets an underpaid block through.
+    fn ensure_merged_payment(
+        &self,
+        block: &SealedBlock<Block>,
+        output: &BlockExecutionOutput<Receipt>,
+        message: &BidTrace,
+        base_payment_tx_index: usize,
+    ) -> Result<(), ValidationApiError> {
+        let (mut balance_before, balance_after) = if let Some(acc) =
+            output.state.state.get(&message.proposer_fee_recipient)
+        {
+            let balance_before = acc.original_info.as_ref().map(|i| i.balance).unwrap_or_default();
+            let balance_after = acc.info.as_ref().map(|i| i.balance).unwrap_or_default();
+
+            (balance_before, balance_after)
+        } else {
+            (U256::ZERO, U256::ZERO)
+        };
+
+        if let Some(withdrawals) = block.body().withdrawals() {
+            for withdrawal in withdrawals {
+                if withdrawal.address == message.proposer_fee_recipient {
+                    balance_before += withdrawal.amount_wei();
+                }
+            }
+        }
+
+        if balance_after >= balance_before + message.value {
+            return Ok(());
+        }
+
+        let Some(last_ix) = block.body().transactions().count().checked_sub(1) else {
+            return Err(ValidationApiError::ProposerPayment);
+        };
+
+        let mut total =
+            self.recognized_payment_at(block, output, message.proposer_fee_recipient, last_ix);
+        if base_payment_tx_index != last_ix {
+            total += self.recognized_payment_at(
+                block,
+                output,
+                message.proposer_fee_recipient,
+                base_payment_tx_index,
+            );
+        }
+
+        if total >= message.value {
+            return Ok(());
+        }
+
+        Err(ValidationApiError::ProposerPayment)
+    }
+
+    /// The recognized payment to `recipient` from the transaction at `ix`: a direct transfer,
+    /// one routed through the [`PAYMENT_FORWARDER`], or a batched entry in a Gnosis Safe
+    /// `execTransaction` -> `multiSend` delegatecall (the merge-builder payment engine's
+    /// mechanism, see crates/builder/src/engine/payment.rs). Zero for an out-of-range index, an
+    /// unsuccessful receipt, or a transaction that fails the same anti-MEV-extraction checks
+    /// (chain id, zero priority fee) the payment-recognition checks above apply -- never an
+    /// error, since a single unrecognized/invalid position shouldn't itself fail validation.
+    fn recognized_payment_at(
+        &self,
+        block: &SealedBlock<Block>,
+        output: &BlockExecutionOutput<Receipt>,
+        recipient: Address,
+        ix: usize,
+    ) -> U256 {
+        let Some((receipt, tx)) = output.receipts.get(ix).zip(block.body().transactions().nth(ix))
+        else {
+            return U256::ZERO;
+        };
+        if !receipt.status() {
+            return U256::ZERO;
+        }
+
+        let paid_directly = tx.to() == Some(recipient) && tx.input().is_empty();
+        let paid_via_forwarder = tx.to() == Some(PAYMENT_FORWARDER) &&
+            payment_forwarder_recipient(tx.input()) == Some(recipient) &&
+            self.provider
+                .latest()
+                .and_then(|state| state.basic_account(&PAYMENT_FORWARDER))
+                .is_ok_and(|account| {
+                    account.is_some_and(|account| {
+                        account.bytecode_hash == Some(PAYMENT_FORWARDER_CODE_HASH)
+                    })
+                });
+        let contributed = if paid_directly || paid_via_forwarder {
+            tx.value()
+        } else {
+            multisend_paid_amount(tx.input(), recipient)
+        };
+        if contributed.is_zero() {
+            return U256::ZERO;
+        }
+
+        if tx.chain_id() != Some(self.evm_config.chain_spec().chain().id()) {
+            return U256::ZERO;
+        }
+        if let Some(block_base_fee) = block.header().base_fee_per_gas() &&
+            tx.effective_tip_per_gas(block_base_fee).unwrap_or_default() != 0
+        {
+            return U256::ZERO;
+        }
+
+        contributed
+    }
+
     /// Validates the given [`BlobsBundleV1`] and returns versioned hashes for blobs.
     pub fn validate_blobs_bundle(
         &self,
@@ -624,6 +752,7 @@ impl ValidationApi {
             request.base.registered_gas_limit,
             request.apply_blacklist,
             request.inclusion_list,
+            None,
         )
         .await
     }
@@ -632,6 +761,28 @@ impl ValidationApi {
     async fn _validate_builder_submission_v5(
         &self,
         request: ExtendedValidationRequestV5,
+    ) -> Result<(), ValidationApiError> {
+        self._validate_builder_submission_v5_inner(request, None).await
+    }
+
+    /// Core logic for validating a merged block through the merged-block-only endpoint: the
+    /// same v5 pipeline, but with `base_payment_tx_index` passed through to
+    /// `ensure_merged_payment` instead of the regular submission path's `ensure_payment`.
+    async fn _validate_merged_builder_submission_v5(
+        &self,
+        request: ExtendedMergedValidationRequestV5,
+    ) -> Result<(), ValidationApiError> {
+        self._validate_builder_submission_v5_inner(
+            request.base,
+            Some(request.base_payment_tx_index as usize),
+        )
+        .await
+    }
+
+    async fn _validate_builder_submission_v5_inner(
+        &self,
+        request: ExtendedValidationRequestV5,
+        base_payment_tx_index: Option<usize>,
     ) -> Result<(), ValidationApiError> {
         let block = self.payload_validator.ensure_well_formed_payload(ExecutionData {
             payload: ExecutionPayload::V3(request.base.request.execution_payload),
@@ -666,6 +817,7 @@ impl ValidationApi {
             request.base.registered_gas_limit,
             request.apply_blacklist,
             request.inclusion_list,
+            base_payment_tx_index,
         )
         .await
     }
@@ -694,6 +846,190 @@ impl ValidationApi {
             parent_header
         };
         Ok(parent_header)
+    }
+}
+
+sol! {
+    /// Gnosis Safe entry point the merge-builder payment engine calls
+    /// (crates/builder/src/engine/payment.rs) to delegatecall `multiSend`.
+    function execTransaction(
+        address to,
+        uint256 value,
+        bytes data,
+        uint8 operation,
+        uint256 safeTxGas,
+        uint256 baseGas,
+        uint256 gasPrice,
+        address gasToken,
+        address refundReceiver,
+        bytes signatures
+    ) external returns (bool);
+
+    /// Gnosis `MultiSendCallOnly` entry point, delegatecalled by `execTransaction`.
+    function multiSend(bytes transactions) external payable;
+}
+
+const SAFE_DELEGATECALL: u8 = 1;
+
+/// Sums the value a Safe `execTransaction` -> `multiSend` delegatecall's batched
+/// calls pay `recipient` (zero on any decode failure or shape mismatch: not a
+/// delegatecall, not a multiSend payload, no matching entry). Best-effort
+/// recognition, not a signature/authenticity check: the caller must already know
+/// the transaction actually succeeded on-chain.
+fn multisend_paid_amount(input: &[u8], recipient: Address) -> U256 {
+    let Ok(exec) = execTransactionCall::abi_decode(input) else { return U256::ZERO };
+    if exec.operation != SAFE_DELEGATECALL {
+        return U256::ZERO;
+    }
+    let Ok(multisend) = multiSendCall::abi_decode(&exec.data) else { return U256::ZERO };
+    multisend_entries(&multisend.transactions)
+        .filter(|(to, _)| *to == recipient)
+        .fold(U256::ZERO, |acc, (_, value)| acc + value)
+}
+
+/// Iterates a Safe `multiSend` packed payload: per entry, `[1B operation][20B
+/// to][32B value][32B dataLength][dataLength B data]`. Stops (yields no more
+/// entries) on any length that doesn't fit the remaining bytes, rather than
+/// panicking on malformed/adversarial input.
+fn multisend_entries(transactions: &[u8]) -> impl Iterator<Item = (Address, U256)> + '_ {
+    const ENTRY_HEADER_LEN: usize = 1 + 20 + 32 + 32;
+    let mut offset = 0usize;
+    std::iter::from_fn(move || {
+        if transactions.len().saturating_sub(offset) < ENTRY_HEADER_LEN {
+            return None;
+        }
+        offset += 1; // operation: irrelevant for a payment check
+        let to = Address::from_slice(&transactions[offset..offset + 20]);
+        offset += 20;
+        let value = U256::from_be_slice(&transactions[offset..offset + 32]);
+        offset += 32;
+        let data_len: usize =
+            U256::from_be_slice(&transactions[offset..offset + 32]).try_into().ok()?;
+        offset += 32;
+        if transactions.len().saturating_sub(offset) < data_len {
+            return None;
+        }
+        offset += data_len;
+        Some((to, value))
+    })
+}
+
+#[cfg(test)]
+mod multisend_payment_tests {
+    use alloy_primitives::{Bytes, address};
+    use alloy_sol_types::SolCall;
+
+    use super::*;
+
+    /// Mirrors `crates/builder/src/engine/payment.rs::build_multisend_payload`.
+    fn multisend_payload(entries: &[(Address, U256)]) -> Vec<u8> {
+        let mut payload = Vec::new();
+        for (to, value) in entries {
+            payload.push(0u8); // operation = CALL
+            payload.extend_from_slice(to.as_slice());
+            payload.extend_from_slice(&value.to_be_bytes::<32>());
+            payload.extend_from_slice(&U256::ZERO.to_be_bytes::<32>()); // data length
+        }
+        payload
+    }
+
+    /// Mirrors `crates/builder/src/engine/payment.rs::encode_multisend_calldata`'s
+    /// `execTransaction` wrapping, minus the real Safe signature (irrelevant here:
+    /// `multisend_paid_amount` only decodes calldata shape, it doesn't verify
+    /// signatures).
+    fn exec_transaction_calldata(
+        multisend_contract: Address,
+        entries: &[(Address, U256)],
+    ) -> Vec<u8> {
+        let multisend_calldata =
+            multiSendCall { transactions: multisend_payload(entries).into() }.abi_encode();
+        execTransactionCall {
+            to: multisend_contract,
+            value: U256::ZERO,
+            data: multisend_calldata.into(),
+            operation: SAFE_DELEGATECALL,
+            safeTxGas: U256::ZERO,
+            baseGas: U256::ZERO,
+            gasPrice: U256::ZERO,
+            gasToken: Address::ZERO,
+            refundReceiver: Address::ZERO,
+            signatures: Bytes::new(),
+        }
+        .abi_encode()
+    }
+
+    #[test]
+    fn multisend_paid_amount_finds_matching_entry_among_several() {
+        let multisend_contract = address!("0x1111111111111111111111111111111111111111");
+        let proposer = address!("0x2222222222222222222222222222222222222222");
+        let other = address!("0x3333333333333333333333333333333333333333");
+        let calldata = exec_transaction_calldata(multisend_contract, &[
+            (other, U256::from(100)),
+            (proposer, U256::from(42)),
+        ]);
+
+        assert_eq!(multisend_paid_amount(&calldata, proposer), U256::from(42));
+    }
+
+    #[test]
+    fn multisend_paid_amount_sums_multiple_entries_to_the_same_recipient() {
+        let multisend_contract = address!("0x1111111111111111111111111111111111111111");
+        let proposer = address!("0x2222222222222222222222222222222222222222");
+        let calldata = exec_transaction_calldata(multisend_contract, &[
+            (proposer, U256::from(42)),
+            (proposer, U256::from(8)),
+        ]);
+
+        assert_eq!(multisend_paid_amount(&calldata, proposer), U256::from(50));
+    }
+
+    #[test]
+    fn multisend_paid_amount_zero_when_recipient_absent() {
+        let multisend_contract = address!("0x1111111111111111111111111111111111111111");
+        let proposer = address!("0x2222222222222222222222222222222222222222");
+        let other = address!("0x3333333333333333333333333333333333333333");
+        let calldata = exec_transaction_calldata(multisend_contract, &[(other, U256::from(42))]);
+
+        assert_eq!(multisend_paid_amount(&calldata, proposer), U256::ZERO);
+    }
+
+    #[test]
+    fn multisend_paid_amount_zero_for_non_delegatecall_operation() {
+        let multisend_contract = address!("0x1111111111111111111111111111111111111111");
+        let proposer = address!("0x2222222222222222222222222222222222222222");
+        let multisend_calldata =
+            multiSendCall { transactions: multisend_payload(&[(proposer, U256::from(42))]).into() }
+                .abi_encode();
+        let calldata = execTransactionCall {
+            to: multisend_contract,
+            value: U256::ZERO,
+            data: multisend_calldata.into(),
+            operation: 0, // CALL, not DELEGATECALL
+            safeTxGas: U256::ZERO,
+            baseGas: U256::ZERO,
+            gasPrice: U256::ZERO,
+            gasToken: Address::ZERO,
+            refundReceiver: Address::ZERO,
+            signatures: Bytes::new(),
+        }
+        .abi_encode();
+
+        assert_eq!(multisend_paid_amount(&calldata, proposer), U256::ZERO);
+    }
+
+    #[test]
+    fn multisend_paid_amount_zero_for_unrelated_calldata() {
+        let proposer = address!("0x2222222222222222222222222222222222222222");
+        assert_eq!(multisend_paid_amount(&[0xde, 0xad, 0xbe, 0xef], proposer), U256::ZERO);
+    }
+
+    #[test]
+    fn multisend_entries_stops_on_truncated_payload() {
+        let to = address!("0x2222222222222222222222222222222222222222");
+        let mut payload = multisend_payload(&[(to, U256::from(42))]);
+        payload.truncate(payload.len() - 1); // cut into the last entry's data-length field
+
+        assert_eq!(multisend_entries(&payload).count(), 0);
     }
 }
 
@@ -752,6 +1088,26 @@ impl BlockSubmissionValidationApiServer for ValidationApi {
 
         self.task_spawner.spawn_blocking_task(Box::pin(async move {
             let result = Self::_validate_builder_submission_v5(&this, request)
+                .await
+                .map_err(ErrorObject::from);
+            let _ = tx.send(result);
+        }));
+
+        rx.await.map_err(|_| internal_rpc_err("Internal blocking task error"))?
+    }
+
+    /// Validates a merged block. Relay-internal only -- never reachable by an externally
+    /// submitted builder block -- so it can recognise the base block's payment tx by index
+    /// instead of requiring it to be the last transaction.
+    async fn validate_merged_builder_submission_v5(
+        &self,
+        request: ExtendedMergedValidationRequestV5,
+    ) -> RpcResult<()> {
+        let this = self.clone();
+        let (tx, rx) = oneshot::channel();
+
+        self.task_spawner.spawn_blocking_task(Box::pin(async move {
+            let result = Self::_validate_merged_builder_submission_v5(&this, request)
                 .await
                 .map_err(ErrorObject::from);
             let _ = tx.send(result);
@@ -877,6 +1233,19 @@ pub struct ExtendedValidationRequestV5 {
     pub apply_blacklist: bool,
 }
 
+/// Merged-block counterpart of [`ExtendedValidationRequestV5`], carrying the extra
+/// `base_payment_tx_index` the merged-block-only validation endpoint uses to recognise the
+/// base block's own payment tx directly -- see
+/// `helix_common::simulator::SszMergedValidationRequest`.
+#[serde_as]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExtendedMergedValidationRequestV5 {
+    #[serde(flatten)]
+    pub base: ExtendedValidationRequestV5,
+
+    pub base_payment_tx_index: u64,
+}
+
 /// Block validation rpc interface.
 #[rpc(server, namespace = "relay")]
 pub trait BlockSubmissionValidationApi {
@@ -913,6 +1282,13 @@ pub trait BlockSubmissionValidationApi {
     async fn validate_builder_submission_v5(
         &self,
         request: ExtendedValidationRequestV5,
+    ) -> jsonrpsee::core::RpcResult<()>;
+
+    /// A request to validate a merged block. Relay-internal only.
+    #[method(name = "validateMergedBuilderSubmissionV5")]
+    async fn validate_merged_builder_submission_v5(
+        &self,
+        request: ExtendedMergedValidationRequestV5,
     ) -> jsonrpsee::core::RpcResult<()>;
 }
 

@@ -61,5 +61,7 @@ pub struct OverviewResponse {
     pub adjustments_enabled: bool,
     /// `None` when the relay admin API is unreachable.
     pub kill_switch_enabled: Option<bool>,
+    /// `None` when the relay admin API is unreachable.
+    pub block_merging_enabled: Option<bool>,
     pub builders_pending_promotion: i64,
 }

@@ -23,14 +23,17 @@ use helix_common::{
     is_local_dev,
     metrics::SimulatorMetrics,
     record_submission_step,
-    simulator::{BlockSimError, JsonValidationRequest, SszValidationRequest},
+    simulator::{
+        BlockSimError, JsonValidationRequest, MergedJsonValidationRequest,
+        SszMergedValidationRequest, SszValidationRequest,
+    },
     spawn_tracked,
     utils::avg_duration,
     validator_preferences::{Filtering, ValidatorPreferences},
 };
 use helix_types::{
-    BidTrace, BlobWithMetadata, BlobsBundle, BlsPublicKeyBytes, BlsSignatureBytes, KzgCommitments,
-    SignedBidSubmission, SimHydrationCache, Submission,
+    BidTrace, BlsPublicKeyBytes, BlsSignatureBytes, SignedBidSubmission, SimHydrationCache,
+    Submission,
 };
 use ssz::Encode as _;
 use tracing::{debug, error, info, warn};
@@ -520,32 +523,14 @@ impl SimulatorTile {
             }
         };
 
+        let base_payment_tx_index = response.base_payment_tx_index as u64;
+
         let sim = &mut self.simulators[id];
         let dispatch = if let Some(url) = &sim.client.ssz_url {
-            SimDispatch::Ssz {
-                to_send: sim.client.client.post(format!("{url}/validate")),
-                ssz_url: url.clone(),
-                http: sim.client.client.clone(),
-            }
+            MergedSimDispatch::Ssz(sim.client.client.post(format!("{url}/validate_merged")))
         } else {
-            let fork = submission.fork_name();
-            let Some((builder, method)) = sim.client.sim_request_builder(fork) else {
-                warn!(%fork, "no validation RPC method for fork, dropping merged block");
-                sim.pending += 1;
-                let inner = MergedSimulationResultInner {
-                    merged_block_ix: req.merged_block_ix,
-                    result: Err(BlockSimError::UnsupportedFork(fork)),
-                };
-                let result_ix = self.sim_results.push(SimResult::ValidateMerged((id, Some(inner))));
-                let _ = self.task_tx.try_send(SimTileInternalEvent::TaskDone {
-                    id,
-                    paused_until: None,
-                    result_ix,
-                    elapsed: None,
-                });
-                return;
-            };
-            SimDispatch::Json { to_send: builder, method: method.to_owned() }
+            let (builder, method) = sim.client.merged_sim_request_builder();
+            MergedSimDispatch::Json { to_send: builder, method: method.to_owned() }
         };
         sim.pending += 1;
 
@@ -565,26 +550,30 @@ impl SimulatorTile {
 
             SimulatorMetrics::sim_count(false);
             let res = match dispatch {
-                SimDispatch::Ssz { to_send, .. } => {
-                    let request = ssz_request(
+                MergedSimDispatch::Ssz(to_send) => {
+                    let request = ssz_merged_request(
                         apply_blacklist,
                         registered_gas_limit,
                         parent_beacon_block_root,
                         inclusion_list,
                         &submission,
+                        base_payment_tx_index,
                     );
                     SimulatorClient::do_sim_request(&request, false, to_send).await
                 }
-                SimDispatch::Json { to_send, method } => {
+                MergedSimDispatch::Json { to_send, method } => {
                     let filtering =
                         if apply_blacklist { Filtering::Regional } else { Filtering::Global };
-                    let json_req = JsonValidationRequest::new(
-                        registered_gas_limit,
-                        &submission,
-                        ValidatorPreferences { filtering, ..Default::default() },
-                        Some(parent_beacon_block_root),
-                        Some(inclusion_list),
-                    );
+                    let json_req = MergedJsonValidationRequest {
+                        base: JsonValidationRequest::new(
+                            registered_gas_limit,
+                            &submission,
+                            ValidatorPreferences { filtering, ..Default::default() },
+                            Some(parent_beacon_block_root),
+                            Some(inclusion_list),
+                        ),
+                        base_payment_tx_index,
+                    };
                     SimulatorClient::do_json_sim_request(&json_req, false, &method, to_send).await
                 }
             };
@@ -781,6 +770,13 @@ enum SimDispatch {
     Json { to_send: reqwest::RequestBuilder, method: String },
 }
 
+/// Merged-block counterpart of [`SimDispatch`]: no hydration-miss retry (merged blocks are
+/// always full, never dehydrated), so it doesn't need `SimDispatch::Ssz`'s extra fields.
+enum MergedSimDispatch {
+    Ssz(reqwest::RequestBuilder),
+    Json { to_send: reqwest::RequestBuilder, method: String },
+}
+
 /// Internal-only events: async task → sim tile (not tile-to-tile).
 pub(super) enum SimTileInternalEvent {
     /// `elapsed` is `None` for infra errors where no request was actually sent
@@ -942,24 +938,10 @@ fn merged_block_to_submission(
     Ok(SignedBidSubmission {
         message,
         execution_payload: Arc::new(payload.clone()),
-        blobs_bundle: Arc::new(blobs_bundle_from_appended(&response.appended_blobs)?),
+        blobs_bundle: Arc::new(response.blobs_bundle.clone()),
         execution_requests: Arc::new(response.execution_requests.clone()),
         signature: BlsSignatureBytes::default(),
     })
-}
-
-fn blobs_bundle_from_appended(appended: &[BlobWithMetadata]) -> Result<BlobsBundle, BlockSimError> {
-    let mut commitments = Vec::with_capacity(appended.len());
-    let mut proofs = Vec::new();
-    let mut blobs = Vec::with_capacity(appended.len());
-    for b in appended {
-        commitments.push(b.commitment);
-        proofs.extend(b.proofs.iter().copied());
-        blobs.push(b.blob.clone());
-    }
-    let commitments = KzgCommitments::new(commitments)
-        .map_err(|_| BlockSimError::BlockValidationFailed("too many appended blobs".to_owned()))?;
-    Ok(BlobsBundle { commitments, proofs, blobs })
 }
 
 fn create_ssz_request(
@@ -992,10 +974,33 @@ fn ssz_request(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn ssz_merged_request(
+    apply_blacklist: bool,
+    registered_gas_limit: u64,
+    parent_beacon_block_root: B256,
+    inclusion_list: InclusionListWithMetadata,
+    submission: &SignedBidSubmission,
+    base_payment_tx_index: u64,
+) -> SszMergedValidationRequest {
+    SszMergedValidationRequest {
+        apply_blacklist,
+        registered_gas_limit,
+        parent_beacon_block_root,
+        inclusion_list,
+        decoder_params: None,
+        signed_bid_submission: submission.as_ssz_bytes(),
+        base_payment_tx_index,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use alloy_primitives::{Address, U256};
-    use helix_types::{ExecutionPayload, ExecutionRequests, MergedBlockTrace, TestRandom};
+    use helix_types::{
+        BlobWithMetadata, BlobsBundle, ExecutionPayload, ExecutionRequests, MergedBlockTrace,
+        TestRandom,
+    };
     use rand::{SeedableRng, rngs::SmallRng};
 
     use super::*;
@@ -1005,15 +1010,20 @@ mod tests {
         proposer_value: U256,
         blobs: Vec<BlobWithMetadata>,
     ) -> BlockMergeResponse {
+        let mut blobs_bundle = BlobsBundle::default();
+        for blob in blobs {
+            blobs_bundle.push_blob(blob.commitment, &blob.proofs, blob.blob, 9).unwrap();
+        }
         BlockMergeResponse {
             base_block_hash: payload.parent_hash,
             execution_payload: payload,
             execution_requests: ExecutionRequests::default(),
-            appended_blobs: blobs,
+            blobs_bundle,
             proposer_value,
             base_builder_revenue: U256::ZERO,
             relay_revenue: U256::ZERO,
             builder_inclusions: Default::default(),
+            base_payment_tx_index: 0,
             trace: MergedBlockTrace::default(),
         }
     }
