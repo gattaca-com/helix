@@ -1060,6 +1060,78 @@ mod tests {
         }
     }
 
+    /// A tile with one `SimEntry` per spec: `(has_ssz, is_synced, pending)`.
+    fn test_tile_with_sims(specs: &[(bool, bool, usize)]) -> SimulatorTile {
+        let mut tile = test_tile();
+        for &(has_ssz, is_synced, pending) in specs {
+            let client = SimulatorClient::new(reqwest::Client::new(), SimulatorConfig {
+                url: "http://localhost:8545".into(),
+                namespace: "relay".into(),
+                max_concurrent_tasks: 10,
+                ssz_url: has_ssz.then(|| "http://localhost:8546".to_string()),
+            });
+            let mut entry = SimEntry::new(client);
+            entry.is_synced = is_synced;
+            entry.pending = pending;
+            tile.simulators.push(entry);
+        }
+        tile.ssz_sim_indices = tile
+            .simulators
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.client.ssz_url.is_some())
+            .map(|(i, _)| i)
+            .collect();
+        tile.sim_slot_stats = vec![SimSlotStats::default(); tile.simulators.len()];
+        tile
+    }
+
+    /// gattaca-com/helix#551: selection follows pending count, not a pubkey hash.
+    #[test]
+    fn select_simulator_picks_the_least_pending_ssz_sim() {
+        let tile = test_tile_with_sims(&[(false, true, 0), (true, true, 5), (true, true, 1)]);
+
+        assert_eq!(tile.select_simulator(), Some(2));
+    }
+
+    /// SSZ is still preferred over JSON-RPC even when a JSON sim is idler.
+    #[test]
+    fn select_simulator_prefers_ssz_over_a_less_loaded_json_sim() {
+        let tile = test_tile_with_sims(&[(false, true, 0), (true, true, 4)]);
+
+        assert_eq!(tile.select_simulator(), Some(1));
+    }
+
+    #[test]
+    fn select_simulator_falls_back_to_a_json_sim_when_no_ssz_sim_is_available() {
+        let tile = test_tile_with_sims(&[(false, true, 3), (true, false, 0)]);
+
+        assert_eq!(tile.select_simulator(), Some(0));
+    }
+
+    #[test]
+    fn select_simulator_skips_saturated_sims() {
+        // max_concurrent_tasks is 10, so the first SSZ sim cannot take more work.
+        let tile = test_tile_with_sims(&[(true, true, 10), (true, true, 9)]);
+
+        assert_eq!(tile.select_simulator(), Some(1));
+    }
+
+    #[test]
+    fn select_simulator_skips_paused_sims() {
+        let mut tile = test_tile_with_sims(&[(true, true, 0), (true, true, 8)]);
+        tile.simulators[0].paused_until = Some(Instant::now() + Duration::from_secs(60));
+
+        assert_eq!(tile.select_simulator(), Some(1));
+    }
+
+    #[test]
+    fn select_simulator_none_when_nothing_can_simulate() {
+        let tile = test_tile_with_sims(&[(true, false, 0), (false, false, 0)]);
+
+        assert_eq!(tile.select_simulator(), None);
+    }
+
     /// gattaca-com/helix#537: a submission the tile queues instead of simulating
     /// must still put its full transactions in the cache, so a later submission
     /// that references them can be hydrated whatever order the two arrive in.
