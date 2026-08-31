@@ -24,7 +24,7 @@ use helix_common::{
 use helix_tcp_types::merging::{
     MERGING_HEADER_SIZE, MERGING_PROTOCOL_VERSION, MergingFrameHeader, MergingHeaderError,
     MergingMsgId,
-    builder_to_relay::{FatalV1, MergedBlockV1, RejectCode, RejectV1},
+    builder_to_relay::{FatalV1, MergedBlockV1, RejectCode, RejectSubject, RejectV1},
     control::{
         BuilderCollateral, MergerAckV1, MergerRegistrationV1, PingV1, PongV1, RelayConfigV1,
     },
@@ -793,6 +793,10 @@ impl BlockMergingTile {
         if matches!(reject.code, RejectCode::StaleSlot) || reject.slot > self.slot.bid_slot {
             self.conn.builder_ahead = true;
         }
+        // A named block is one the builder does not hold, so it must not be activated.
+        if let RejectSubject::BlockHash(hash) = reject.subject {
+            self.conn.forwarded.remove(&hash);
+        }
     }
 
     fn on_slot_msg(&mut self, msg: SlotMsg) {
@@ -1241,7 +1245,7 @@ mod tests {
     use helix_tcp_types::{
         MergeType,
         merging::{
-            builder_to_relay::{MergeTraceV1, RejectSubject},
+            builder_to_relay::MergeTraceV1,
             order::{BundleOrderRef, TxOrderRef},
         },
     };
