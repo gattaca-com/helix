@@ -231,6 +231,11 @@ impl SimulatorTile {
         let builder_pubkey = *decoded_data.submission_data.submission.builder_pubkey();
         assert_eq!(decoded_data.submission_data.submission.bid_slot(), self.last_bid_slot);
 
+        // Before deciding whether to simulate or queue: a queued submission would
+        // otherwise leave no trace in the cache, and the next submission to
+        // reference its transactions could not be hydrated.
+        self.feed_cache(&decoded_data.submission_data.submission);
+
         self.local_telemetry.sims_reqs += 1;
 
         let sim_id = self.select_simulator(&builder_pubkey);
@@ -240,19 +245,12 @@ impl SimulatorTile {
             self.spawn_sim(id, req)
         } else {
             self.local_telemetry.queued += 1;
-            let evicted = if fast_track {
-                self.priority_requests.store(req, builder_pubkey, &mut self.local_telemetry)
+            // Every request feeds the cache on arrival, so an evicted one has
+            // already contributed its transactions.
+            if fast_track {
+                self.priority_requests.store(req, builder_pubkey, &mut self.local_telemetry);
             } else {
-                self.requests.store(req, builder_pubkey, &mut self.local_telemetry)
-            };
-            // A dropped dehydrated request may carry full transactions that haven't
-            // been inserted into the cache yet. Hydrate it now so subsequent
-            // dehydrated submissions from this builder can resolve their tx hashes.
-            if let Some(evicted_req) = evicted &&
-                let Some(data) = self.decoded.get(evicted_req.decoded_ix) &&
-                let Submission::Dehydrated(d) = data.submission_data.submission.clone()
-            {
-                let _ = self.hydration_cache.hydrate(d, self.chain_info.max_blobs_per_block());
+                self.requests.store(req, builder_pubkey, &mut self.local_telemetry);
             }
         }
     }
@@ -310,6 +308,15 @@ impl SimulatorTile {
             } else if let Some(req) = self.merge_requests.next_req() {
                 self.spawn_merge_sim(id, req);
             }
+        }
+    }
+
+    /// Even when a submission is queued instead of simulated, its full
+    /// transactions and blobs must enter the cache so later dehydrated
+    /// submissions can resolve their references.
+    fn feed_cache(&mut self, submission: &Submission) {
+        if let Submission::Dehydrated(d) = submission {
+            self.hydration_cache.feed(d);
         }
     }
 

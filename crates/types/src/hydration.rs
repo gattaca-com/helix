@@ -566,6 +566,17 @@ impl SimHydrationCache {
         }
     }
 
+    /// Inserts the submission's full transactions and new blobs into the cache
+    /// without building the hydrated payload, so a submission the sim tile will
+    /// not hydrate still lets later submissions resolve their references.
+    pub fn feed(&mut self, submission: &DehydratedBidSubmission) {
+        match submission {
+            DehydratedBidSubmission::Fulu(s) => {
+                s.feed_inner(&mut self.transactions, &mut self.blobs_fulu);
+            }
+        }
+    }
+
     pub fn clear(&mut self) {
         self.transactions.clear();
         self.blobs_fulu.clear();
