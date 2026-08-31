@@ -23,6 +23,7 @@ use config::{MergingConfig, Roles, SimulationConfig};
 use engine::{MergeEngine, types::EngineConfig};
 use server::MergingServerTile;
 use spine::BuilderSpine;
+use validation::{BlockValidator, server as validation_server};
 
 #[global_allocator]
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
@@ -46,11 +47,23 @@ fn main() -> eyre::Result<()> {
     let node = runtime.block_on(node::start(&cli.node))?;
 
     if let Some(simulation_config) = roles.simulation() {
-        info!(
-            ssz_addr = %simulation_config.ssz_addr,
-            rpc_addr = %simulation_config.rpc_addr,
-            "Simulation role active"
+        let disallow = std::sync::Arc::new(dashmap::DashSet::new());
+        let validator = BlockValidator::new(
+            node.store.clone(),
+            node.head.clone(),
+            simulation_config.validation_window,
+            disallow.clone(),
         );
+        runtime.spawn(validation_server::refresh_blacklist(
+            simulation_config.blacklist_endpoint.clone(),
+            disallow,
+        ));
+        runtime.spawn(validation_server::run(
+            validator,
+            simulation_config.ssz_addr,
+            simulation_config.max_concurrent_validations,
+        ));
+        info!(ssz_addr = %simulation_config.ssz_addr, "Simulation role active");
     }
 
     // `BuilderSpine::start` blocks until its tiles stop, so merging starts last.

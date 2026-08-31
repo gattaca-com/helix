@@ -146,6 +146,31 @@ pub fn payload_v3_to_block(
     Ok(Block::new(header, body))
 }
 
+/// The wire bundle carries EIP-7594 cell proofs, so the ethrex bundle is
+/// version 1.
+pub fn eblobs(
+    bundle: &alloy_rpc_types::engine::BlobsBundleV2,
+) -> ethrex_common::types::BlobsBundle {
+    ethrex_common::types::BlobsBundle {
+        // A blob is 128 KiB. Fill the vector in place: collecting through an
+        // iterator moves each blob across the stack.
+        blobs: {
+            let mut blobs = vec![[0u8; ethrex_common::types::BYTES_PER_BLOB]; bundle.blobs.len()];
+            for (out, blob) in blobs.iter_mut().zip(bundle.blobs.iter()) {
+                out.copy_from_slice(blob.as_slice());
+            }
+            blobs
+        },
+        commitments: bundle
+            .commitments
+            .iter()
+            .map(|c| ethrex_common::types::Commitment::from(c.0))
+            .collect(),
+        proofs: bundle.proofs.iter().map(|p| ethrex_common::types::Proof::from(p.0)).collect(),
+        version: 1,
+    }
+}
+
 /// Inverse of [`requests_to_v4`]. `compute_requests_hash` skips type-byte-only
 /// entries, so the empty ones the wire format drops need not be restored.
 fn encoded_requests(requests: &ExecutionRequestsV4) -> Vec<EncodedRequests> {
