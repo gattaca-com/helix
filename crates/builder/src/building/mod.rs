@@ -2,5 +2,8 @@
 //! relay. Shares the embedded ethrex node with the other roles.
 
 mod keys;
+mod slot;
+mod watcher;
 
 pub use keys::BuildingKeys;
+pub use watcher::run;
