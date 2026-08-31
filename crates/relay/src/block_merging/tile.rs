@@ -24,7 +24,7 @@ use helix_common::{
 use helix_tcp_types::merging::{
     MERGING_HEADER_SIZE, MERGING_PROTOCOL_VERSION, MergingFrameHeader, MergingHeaderError,
     MergingMsgId,
-    builder_to_relay::{FatalV1, MergedBlockV1, RejectV1},
+    builder_to_relay::{FatalV1, MergedBlockV1, RejectCode, RejectV1},
     control::{
         BuilderCollateral, MergerAckV1, MergerRegistrationV1, PingV1, PongV1, RelayConfigV1,
     },
@@ -76,6 +76,8 @@ struct Conn {
     /// Appendable block hashes forwarded on this connection this slot.
     forwarded: FxHashSet<B256>,
     activated: Option<B256>,
+    /// Builder's head is past our bid slot, so it refuses everything until we catch up.
+    builder_ahead: bool,
     /// Tx hashes already sent whole on this connection this slot; a repeat
     /// tx is forwarded as a hash reference instead. Cleared with the rest of
     /// the per-slot state so it never outlives the builder's own per-slot
@@ -95,6 +97,7 @@ impl Conn {
         self.forwarded.clear();
         self.activated = None;
         self.sent_txs.clear();
+        self.builder_ahead = false;
     }
 }
 
@@ -151,6 +154,8 @@ struct SlotStats {
     skipped_no_slot_start: usize,
     skipped_wrong_slot: usize,
     skipped_no_merging_data: usize,
+    /// Sends skipped because the builder is already past this slot.
+    skipped_builder_ahead: usize,
     /// Sends skipped over the builder's advertised limits.
     skipped_over_limits: usize,
     /// Merge orders dropped for an out of range tx index.
@@ -227,6 +232,7 @@ pub struct BlockMergingTile {
     to_register: Vec<Token>,
     handshaken: Vec<Token>,
     pongs: Vec<(Token, u64)>,
+    rejects: Vec<(Token, RejectV1)>,
     merged_ixs: Vec<usize>,
     merge_sim_ixs: Vec<usize>,
     encode_buf: Vec<u8>,
@@ -516,6 +522,7 @@ impl BlockMergingTile {
             to_register: Vec::new(),
             handshaken: Vec::new(),
             pongs: Vec::new(),
+            rejects: Vec::new(),
             merged_ixs: Vec::new(),
             merge_sim_ixs: Vec::new(),
             encode_buf: Vec::new(),
@@ -597,6 +604,7 @@ impl BlockMergingTile {
             to_register,
             handshaken,
             pongs,
+            rejects,
             merged_ixs,
             merged_blocks,
             sim_requests,
@@ -732,6 +740,7 @@ impl BlockMergingTile {
                                 msg = %String::from_utf8_lossy(&reject.msg),
                                 "merging reject"
                             );
+                            rejects.push((token, reject));
                         }
                     }
                     MergingMsgId::FatalV1 => {
@@ -770,6 +779,19 @@ impl BlockMergingTile {
             self.connector.write_or_enqueue_with(SendBehavior::Single(token), |buf| {
                 append_frame(buf, MergingMsgId::PongV1, &PongV1 { nonce });
             });
+        }
+        for (token, reject) in std::mem::take(&mut self.rejects) {
+            self.on_reject(token, reject);
+        }
+    }
+
+    /// `StaleSlot` and a later `reject.slot` both mean the builder is ahead of us.
+    fn on_reject(&mut self, token: Token, reject: RejectV1) {
+        if self.token != Some(token) {
+            return;
+        }
+        if matches!(reject.code, RejectCode::StaleSlot) || reject.slot > self.slot.bid_slot {
+            self.conn.builder_ahead = true;
         }
     }
 
@@ -851,6 +873,7 @@ impl BlockMergingTile {
             skipped_no_slot_start = stats.skipped_no_slot_start,
             skipped_wrong_slot = stats.skipped_wrong_slot,
             skipped_no_merging_data = stats.skipped_no_merging_data,
+            skipped_builder_ahead = stats.skipped_builder_ahead,
             skipped_over_limits = stats.skipped_over_limits,
             orders_dropped = stats.orders_dropped,
             replayed = stats.replayed,
@@ -900,6 +923,14 @@ impl BlockMergingTile {
         // also guards replay ixs against the auctioneer's decoded.clear()
         if sub.submission.bid_slot() != self.slot.bid_slot {
             self.stats.skipped_wrong_slot += 1;
+            if !is_replay {
+                self.feed_cache(&sub.submission);
+            }
+            return;
+        }
+        // gattaca-com/helix#538: pointless, the builder refuses this slot.
+        if self.conn.builder_ahead {
+            self.stats.skipped_builder_ahead += 1;
             if !is_replay {
                 self.feed_cache(&sub.submission);
             }
@@ -1117,6 +1148,10 @@ impl BlockMergingTile {
         if !self.slot.appendable.contains(&top_bid.block_hash) {
             return;
         }
+        // Activating past our slot is what produces the builder's `UnknownBaseBlock`.
+        if self.conn.builder_ahead {
+            return;
+        }
         let Some(token) = self.token else { return };
         if !self.conn.active ||
             !self.conn.forwarded.contains(&top_bid.block_hash) ||
@@ -1206,14 +1241,14 @@ mod tests {
     use helix_tcp_types::{
         MergeType,
         merging::{
-            builder_to_relay::{MergeTraceV1, RejectCode, RejectSubject},
+            builder_to_relay::{MergeTraceV1, RejectSubject},
             order::{BundleOrderRef, TxOrderRef},
         },
     };
     use helix_types::{
         BlobsBundle, BlockMergingData, BuilderInclusionResult, Compression, ExecutionPayload,
         ExecutionRequests, ForkName, MergedBlockTrace, SignedBidSubmission, SubmissionVersion,
-        TestRandom, TestRandomSeed,
+        TestRandom, TestRandomSeed, dehydrated_submission_with_txs_for_test, full_tx_for_test,
     };
     use rand::{SeedableRng, rngs::SmallRng};
 
@@ -1619,6 +1654,31 @@ mod tests {
 
         assert!(tile.conn.activated.is_none());
         assert_eq!(tile.stats.activations_sent, 0);
+    }
+
+    /// A skipped forward must still feed the hydration cache, exactly as the
+    /// neighbouring `skipped_no_slot_start` and `skipped_wrong_slot` guards do:
+    /// dropping the frame must not cost later submissions their tx references.
+    /// Testable since gattaca-com/helix#547 landed the submission helpers.
+    #[test]
+    fn a_suppressed_forward_still_feeds_the_hydration_cache() {
+        let tx = full_tx_for_test(1);
+        let dehydrated = dehydrated_submission_with_txs_for_test(vec![tx]);
+        // The helper randomises the slot, so match the tile to it rather than
+        // tripping the wrong-slot guard, which feeds the cache for its own reasons.
+        let bid_slot = dehydrated.slot();
+
+        let mut tile = tile_in_slot(bid_slot);
+        tile.on_reject(Token(0), reject(bid_slot, RejectCode::StaleSlot));
+
+        let mut data = test_submission(bid_slot, B256::repeat_byte(8), true);
+        data.submission_data.submission = Submission::Dehydrated(dehydrated);
+        let ix = tile.decoded.push(data);
+        tile.forward_decoded(ix, None);
+
+        assert_eq!(tile.stats.skipped_builder_ahead, 1, "the skip under test must be the reason");
+        assert_eq!(tile.stats.skipped_wrong_slot, 0);
+        assert_eq!(tile.hydration_cache.tx_count(), 1, "the skip must still feed the cache");
     }
 
     /// The suppression is per slot: once we catch up, forwarding resumes.
