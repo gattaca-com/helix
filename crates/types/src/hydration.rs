@@ -15,7 +15,7 @@ use crate::{
     BlsSignatureBytes, ExecutionPayload, SignedBidSubmission, TestRandom,
     bid_adjustment_data::{BidAdjData, BidAdjustmentData, BidAdjustmentDataV1},
     bid_submission,
-    fields::{ExecutionRequests, KzgCommitment, KzgProof, Transaction},
+    fields::{ExecutionRequests, KzgCommitment, KzgProof, Transaction, Transactions},
 };
 
 /// A bid submission where transactions and blobs may be replaced by hashes instead of payload
@@ -566,6 +566,17 @@ impl SimHydrationCache {
         }
     }
 
+    /// Inserts the submission's full transactions and new blobs into the cache
+    /// without building the hydrated payload, so a submission the sim tile will
+    /// not hydrate still lets later submissions resolve their references.
+    pub fn feed(&mut self, submission: &DehydratedBidSubmission) {
+        match submission {
+            DehydratedBidSubmission::Fulu(s) => {
+                s.feed_inner(&mut self.transactions, &mut self.blobs_fulu);
+            }
+        }
+    }
+
     pub fn clear(&mut self) {
         self.transactions.clear();
         self.blobs_fulu.clear();
@@ -681,11 +692,128 @@ pub enum HydrationError {
     TooManyBlobs { blobs: usize, max: usize },
 }
 
+/// Test helpers. These live here because `DehydratedBidSubmissionFulu`'s fields are
+/// private to this module, and the relay's tile tests need control over which
+/// transactions a submission carries in full and which it carries by reference.
+/// A transaction long enough to be keyed, rather than read as a hash reference.
+pub fn full_tx_for_test(fill: u8) -> Transaction {
+    Transaction(vec![fill; TX_KEY_SIZE + 5].into())
+}
+
+/// The cache key a full transaction is stored under.
+pub fn tx_cache_key(tx: &Transaction) -> u64 {
+    let mut hasher = FxHasher::default();
+    hasher.write(&tx[tx.len() - TX_KEY_SIZE..]);
+    hasher.finish()
+}
+
+/// The 8-byte stand-in a builder sends once the relay has seen the full transaction.
+pub fn tx_hash_ref_for_test(key: u64) -> Transaction {
+    Transaction(key.to_le_bytes().to_vec().into())
+}
+
+/// A dehydrated submission whose payload holds exactly `txs` and no blobs.
+pub fn dehydrated_submission_with_txs_for_test(txs: Vec<Transaction>) -> DehydratedBidSubmission {
+    let (dehydrated, _) =
+        DehydratedBidSubmissionFuluWithMergingData::random_for_test(&mut rand::rng()).split();
+    let DehydratedBidSubmission::Fulu(mut s) = dehydrated;
+    s.execution_payload.transactions = Transactions::new(txs).expect("tx list within limits");
+    s.blobs_bundle = DehydratedBlobsFulu { commitments: vec![], new_items: vec![] };
+    DehydratedBidSubmission::Fulu(s)
+}
+
 #[cfg(test)]
 mod tests {
     use ssz::Encode;
 
     use super::*;
+
+    const MAX_BLOBS: usize = 9;
+
+    fn full_tx(fill: u8) -> Transaction {
+        full_tx_for_test(fill)
+    }
+
+    fn tx_key(tx: &Transaction) -> u64 {
+        tx_cache_key(tx)
+    }
+
+    fn tx_ref(key: u64) -> Transaction {
+        tx_hash_ref_for_test(key)
+    }
+
+    fn submission_with(txs: Vec<Transaction>) -> DehydratedBidSubmission {
+        dehydrated_submission_with_txs_for_test(txs)
+    }
+
+    /// Documents the failure behind gattaca-com/helix#537: the sim tile's cache is
+    /// populated only by `hydrate`, so a submission that arrived and was queued
+    /// without being simulated leaves no trace, and the next submission that
+    /// references its transactions cannot be hydrated.
+    #[test]
+    fn sim_cache_misses_when_the_earlier_submission_was_only_queued() {
+        let tx = full_tx(1);
+        let earlier = submission_with(vec![tx.clone()]);
+        let later = submission_with(vec![tx_ref(tx_key(&tx))]);
+
+        let mut cache = SimHydrationCache::new();
+
+        assert!(!cache.can_hydrate(&later, MAX_BLOBS));
+        assert!(matches!(
+            cache.hydrate(later, MAX_BLOBS),
+            Err(HydrationError::UnknownTxHash { .. })
+        ));
+
+        // Building the earlier payload is currently the only way to fill the cache.
+        assert!(cache.hydrate(earlier, MAX_BLOBS).is_ok());
+    }
+
+    /// `feed` must fill the cache from a submission the tile is not going to
+    /// hydrate, so arrival order stops deciding whether a later submission can be
+    /// simulated. Mirrors `HydrationCache::feed`, used by the merging tile.
+    #[test]
+    fn sim_cache_feed_enables_later_hydration_without_building_a_payload() {
+        let tx = full_tx(2);
+        let earlier = submission_with(vec![tx.clone()]);
+        let later = submission_with(vec![tx_ref(tx_key(&tx))]);
+
+        let mut cache = SimHydrationCache::new();
+        cache.feed(&earlier);
+
+        assert_eq!(cache.tx_count(), 1);
+        assert!(cache.can_hydrate(&later, MAX_BLOBS));
+
+        let hydrated = cache.hydrate(later, MAX_BLOBS).expect("hydration should succeed");
+        assert_eq!(hydrated.tx_cache_hits, 1, "the reference must resolve from the cache");
+        assert_eq!(hydrated.submission.execution_payload.transactions.len(), 1);
+    }
+
+    /// Feeding the same submission twice must not change what the cache holds,
+    /// since every arriving submission is fed and retries re-send the same bid.
+    #[test]
+    fn sim_cache_feed_is_idempotent() {
+        let tx = full_tx(3);
+        let submission = submission_with(vec![tx.clone()]);
+
+        let mut cache = SimHydrationCache::new();
+        cache.feed(&submission);
+        cache.feed(&submission);
+
+        assert_eq!(cache.tx_count(), 1);
+    }
+
+    /// A hash reference carries no transaction bytes, so feeding a submission that
+    /// holds only references must add nothing.
+    #[test]
+    fn sim_cache_feed_ignores_hash_references() {
+        let tx = full_tx(4);
+        let only_refs = submission_with(vec![tx_ref(tx_key(&tx))]);
+
+        let mut cache = SimHydrationCache::new();
+        cache.feed(&only_refs);
+
+        assert_eq!(cache.tx_count(), 0);
+    }
 
     #[test]
     fn dehydrated_with_merging_data_ssz_round_trip() {
