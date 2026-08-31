@@ -5,7 +5,7 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use helix_common::simulator::{SszMergedValidationRequest, SszValidationRequest};
+use helix_common::simulator::SszMergedValidationRequest;
 use ssz::Encode;
 use tower::ServiceExt;
 

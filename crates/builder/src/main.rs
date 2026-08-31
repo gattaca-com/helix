@@ -7,6 +7,7 @@ use flux::{
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
+mod building;
 mod cli;
 mod config;
 mod engine;
@@ -18,8 +19,9 @@ mod testing;
 mod utils;
 mod validation;
 
+use building::BuildingKeys;
 use cli::BuilderCli;
-use config::{MergingConfig, Roles, SimulationConfig};
+use config::{BuildingConfig, MergingConfig, Roles, SimulationConfig};
 use engine::{MergeEngine, types::EngineConfig};
 use server::MergingServerTile;
 use spine::BuilderSpine;
@@ -34,13 +36,26 @@ fn main() -> eyre::Result<()> {
 
     let merging_config = cli.merging_config.as_deref().map(MergingConfig::load).transpose()?;
     let simulation_config = cli.sim_config.as_deref().map(SimulationConfig::load).transpose()?;
-    let roles = Roles::resolve(merging_config, simulation_config)?;
+    let building_config = cli.build_config.as_deref().map(BuildingConfig::load).transpose()?;
+    let roles = Roles::resolve(merging_config, simulation_config, building_config)?;
 
     // Fail fast on a missing/invalid RELAY_KEY, before the node boots.
     let relay_signer = roles.merging().map(|merging_config| {
         info!(listen_addr = %merging_config.listen_addr, "Loaded merging config");
         EngineConfig::load_relay_signer()
     });
+
+    // Same, for the building role's own two keys. The role itself arrives in a
+    // later step; this only proves the keys are usable before the node boots.
+    if let Some(building_config) = roles.building() {
+        let keys = BuildingKeys::load()?;
+        info!(
+            relay_url = %building_config.relay_url,
+            builder_pubkey = %keys.pubkey(),
+            payout_address = %keys.payout_address(),
+            "Loaded building config; register the pubkey and fund the payout address",
+        );
+    }
 
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
 
