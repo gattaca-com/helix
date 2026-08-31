@@ -62,6 +62,9 @@ pub struct MergeTraceV1 {
 /// Non-fatal rejection; the connection stays up.
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub struct RejectV1 {
+    /// The builder's own current slot, not the slot of the rejected message.
+    /// The relay reads this to tell whether the builder's head has moved past
+    /// the slot the relay is still bidding for.
     pub slot: u64,
     pub code: RejectCode,
     pub subject: RejectSubject,
