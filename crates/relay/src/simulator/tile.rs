@@ -999,7 +999,8 @@ mod tests {
     use alloy_primitives::{Address, U256};
     use helix_types::{
         BlobWithMetadata, BlobsBundle, ExecutionPayload, ExecutionRequests, MergedBlockTrace,
-        TestRandom,
+        TestRandom, dehydrated_submission_with_txs_for_test, full_tx_for_test, tx_cache_key,
+        tx_hash_ref_for_test,
     };
     use rand::{SeedableRng, rngs::SmallRng};
 
@@ -1026,6 +1027,68 @@ mod tests {
             base_payment_tx_index: 0,
             trace: MergedBlockTrace::default(),
         }
+    }
+
+    fn test_tile() -> SimulatorTile {
+        let (task_tx, rx) = crossbeam_channel::unbounded();
+        SimulatorTile {
+            simulators: vec![],
+            ssz_sim_indices: vec![],
+            requests: PendingRequests::with_capacity(4),
+            priority_requests: PendingRequests::with_capacity(4),
+            merge_requests: PendingMergeRequests::with_capacity(4),
+            last_bid_slot: 0,
+            local_telemetry: LocalTelemetry::default(),
+            sim_slot_stats: vec![],
+            task_tx,
+            rx,
+            sim_requests: Arc::new(SharedVector::default()),
+            sim_results: Arc::new(SharedVector::default()),
+            decoded: Arc::new(SharedVector::default()),
+            merged_blocks: Arc::new(SharedVector::default()),
+            hydration_cache: SimHydrationCache::new(),
+            chain_info: ChainInfo::default(),
+            accept_optimistic: Arc::new(AtomicBool::new(true)),
+            failsafe_triggered: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// gattaca-com/helix#537: a submission the tile queues instead of simulating
+    /// must still put its full transactions in the cache, so a later submission
+    /// that references them can be hydrated whatever order the two arrive in.
+    #[test]
+    fn feed_cache_fills_from_a_submission_that_is_not_simulated() {
+        let tx = full_tx_for_test(1);
+        let earlier = dehydrated_submission_with_txs_for_test(vec![tx.clone()]);
+        let later =
+            dehydrated_submission_with_txs_for_test(vec![tx_hash_ref_for_test(tx_cache_key(&tx))]);
+
+        let mut tile = test_tile();
+        tile.feed_cache(&Submission::Dehydrated(earlier));
+
+        let max_blobs = tile.chain_info.max_blobs_per_block();
+        assert!(
+            tile.hydration_cache.can_hydrate(&later, max_blobs),
+            "a queued submission's transactions must be usable by the next submission"
+        );
+    }
+
+    /// A full submission carries no hash references, so feeding it is a no-op for
+    /// the cache: only dehydrated submissions contribute keys.
+    #[test]
+    fn feed_cache_ignores_full_submissions() {
+        let mut tile = test_tile();
+        let before = tile.hydration_cache.tx_count();
+
+        let mut rng = SmallRng::seed_from_u64(7);
+        let payload = ExecutionPayload::random_for_test(&mut rng);
+        let response = merge_response(payload, U256::ZERO, vec![]);
+        let req = merge_request(response.base_block_hash, 0);
+        let full = merged_block_to_submission(&response, &req).unwrap();
+
+        tile.feed_cache(&Submission::Full(full));
+
+        assert_eq!(tile.hydration_cache.tx_count(), before);
     }
 
     fn merge_request(base_block_hash: B256, receive_ns: u64) -> MergedValidationRequest {
