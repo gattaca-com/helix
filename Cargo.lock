@@ -6458,6 +6458,7 @@ dependencies = [
  "clap",
  "core_affinity",
  "crossbeam-channel",
+ "dashmap 5.5.3",
  "ethereum_ssz",
  "ethrex-blockchain",
  "ethrex-common",

@@ -87,6 +87,17 @@ pub fn deploy_payment_forwarder(genesis: &mut Genesis) {
     });
 }
 
+/// Runtime that reads the balance of the address in its calldata and stops:
+/// PUSH0 CALLDATALOAD BALANCE POP STOP. Reads an account without touching it.
+pub fn deploy_balance_probe(genesis: &mut Genesis, address: Address) {
+    genesis.alloc.insert(eaddr(address), GenesisAccount {
+        code: hex::decode("5f35315000").unwrap().into(),
+        storage: Default::default(),
+        balance: ethrex_common::U256::zero(),
+        nonce: 0,
+    });
+}
+
 /// A legacy transaction with no chain id, which EIP-155 replay protection does
 /// not cover.
 pub fn signed_unprotected_transfer(
