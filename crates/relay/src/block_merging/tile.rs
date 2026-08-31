@@ -1206,7 +1206,7 @@ mod tests {
     use helix_tcp_types::{
         MergeType,
         merging::{
-            builder_to_relay::MergeTraceV1,
+            builder_to_relay::{MergeTraceV1, RejectCode, RejectSubject},
             order::{BundleOrderRef, TxOrderRef},
         },
     };
@@ -1504,6 +1504,132 @@ mod tests {
 
         assert!(tile.conn.activated.is_none());
         assert_eq!(tile.stats.activations_sent, 0);
+    }
+
+    fn reject(slot: u64, code: RejectCode) -> RejectV1 {
+        RejectV1 {
+            slot,
+            code,
+            subject: RejectSubject::BlockHash(B256::repeat_byte(7)),
+            msg: b"test".to_vec(),
+        }
+    }
+
+    /// Sets up a tile mid-slot with a handshaken connection, ready to forward.
+    fn tile_in_slot(bid_slot: u64) -> BlockMergingTile {
+        let mut tile = test_tile(true);
+        tile.slot.bid_slot = bid_slot;
+        tile.slot.slot_start = Some(SlotStartV1 {
+            slot: bid_slot,
+            parent_hash: B256::ZERO,
+            proposer_fee_recipient: Address::ZERO,
+            parent_beacon_block_root: B256::ZERO,
+        });
+        tile.token = Some(Token(0));
+        tile.conn.active = true;
+        // `max_frame_bytes` stays 0, so a forward that gets past the guards stops at
+        // the over-limits check and never reaches the connector, which has no real
+        // socket in tests.
+        tile
+    }
+
+    /// gattaca-com/helix#538: the merge builder validates against its own head, not
+    /// our `SlotStartV1`. Once it has refused this slot as stale, everything else we
+    /// send for the slot is refused too, so stop sending.
+    #[test]
+    fn stale_slot_reject_stops_forwarding_for_the_rest_of_the_slot() {
+        let mut tile = tile_in_slot(5);
+        tile.on_reject(Token(0), reject(5, RejectCode::StaleSlot));
+
+        let block_hash = B256::repeat_byte(1);
+        let ix = tile.decoded.push(test_submission(5, block_hash, true));
+        tile.forward_decoded(ix, None);
+
+        assert!(tile.slot.appendable.is_empty(), "nothing should be forwarded");
+        assert!(tile.slot.replay_log.is_empty());
+        assert_eq!(tile.stats.skipped_builder_ahead, 1);
+    }
+
+    /// The builder's `RejectV1.slot` is its own current slot, so a reject naming a
+    /// later slot proves we are behind whatever the code says. `tcp-types` does not
+    /// document the field and helix's own builder puts the request's slot there, so
+    /// both signals are honoured.
+    #[test]
+    fn reject_naming_a_later_slot_stops_forwarding() {
+        let mut tile = tile_in_slot(5);
+        tile.on_reject(Token(0), reject(6, RejectCode::Busy));
+
+        let ix = tile.decoded.push(test_submission(5, B256::repeat_byte(2), true));
+        tile.forward_decoded(ix, None);
+
+        assert!(tile.slot.appendable.is_empty());
+        assert_eq!(tile.stats.skipped_builder_ahead, 1);
+    }
+
+    /// A reject for the current slot that is not about staleness says nothing about
+    /// the builder's head, so forwarding must continue.
+    #[test]
+    fn other_reject_codes_for_the_current_slot_do_not_stop_forwarding() {
+        let mut tile = tile_in_slot(5);
+        tile.on_reject(Token(0), reject(5, RejectCode::Busy));
+        tile.on_reject(Token(0), reject(5, RejectCode::InvalidOrder));
+
+        let block_hash = B256::repeat_byte(3);
+        let ix = tile.decoded.push(test_submission(5, block_hash, true));
+        tile.forward_decoded(ix, None);
+
+        assert!(tile.slot.appendable.contains(&block_hash));
+        assert_eq!(tile.stats.skipped_builder_ahead, 0);
+    }
+
+    /// A reject from a connection that is not ours must not gate our forwarding.
+    #[test]
+    fn reject_from_another_token_is_ignored() {
+        let mut tile = tile_in_slot(5);
+        tile.on_reject(Token(1), reject(5, RejectCode::StaleSlot));
+
+        let block_hash = B256::repeat_byte(4);
+        let ix = tile.decoded.push(test_submission(5, block_hash, true));
+        tile.forward_decoded(ix, None);
+
+        assert!(tile.slot.appendable.contains(&block_hash));
+        assert_eq!(tile.stats.skipped_builder_ahead, 0);
+    }
+
+    /// Activating a base block while the builder is past our slot is what produces
+    /// the `UnknownBaseBlock` rejects downstream, so it must stop too.
+    #[test]
+    fn stale_slot_reject_stops_activation() {
+        let mut tile = tile_in_slot(5);
+        let block_hash = B256::repeat_byte(5);
+        tile.slot.appendable.insert(block_hash);
+        tile.conn.forwarded.insert(block_hash);
+
+        tile.on_reject(Token(0), reject(5, RejectCode::StaleSlot));
+        tile.on_top_bid(TopBidUpdate {
+            timestamp: 1,
+            slot: 5,
+            block_number: 0,
+            block_hash,
+            parent_hash: B256::ZERO,
+            builder_pubkey: BlsPublicKeyBytes::default(),
+            fee_recipient: Address::ZERO,
+            value: U256::ZERO,
+        });
+
+        assert!(tile.conn.activated.is_none());
+        assert_eq!(tile.stats.activations_sent, 0);
+    }
+
+    /// The suppression is per slot: once we catch up, forwarding resumes.
+    #[test]
+    fn slot_reset_clears_the_suppression() {
+        let mut conn = Conn::default();
+        conn.builder_ahead = true;
+
+        conn.reset_slot();
+
+        assert!(!conn.builder_ahead);
     }
 
     fn raw_plain_tx() -> Bytes {
