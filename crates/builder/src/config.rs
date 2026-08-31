@@ -94,7 +94,6 @@ impl MergingConfig {
 #[serde(deny_unknown_fields)]
 pub struct SimulationConfig {
     pub ssz_addr: SocketAddr,
-    pub rpc_addr: SocketAddr,
     #[serde(default = "default_blacklist_endpoint")]
     pub blacklist_endpoint: String,
     /// Maximum parent-to-head block distance a submission may build on.
@@ -116,9 +115,6 @@ impl SimulationConfig {
     }
 
     fn validate(&self) -> eyre::Result<()> {
-        if self.ssz_addr == self.rpc_addr {
-            eyre::bail!("simulation config: ssz_addr and rpc_addr must differ");
-        }
         if self.blacklist_endpoint.is_empty() {
             eyre::bail!("simulation config: blacklist_endpoint must not be empty");
         }
@@ -245,7 +241,7 @@ mod simulation_config_tests {
     }
 
     fn minimal_simulation_config() -> SimulationConfig {
-        serde_yaml::from_str("ssz_addr: \"0.0.0.0:8552\"\nrpc_addr: \"0.0.0.0:8553\"\n")
+        serde_yaml::from_str("ssz_addr: \"0.0.0.0:8552\"\n")
             .expect("the minimal simulation config must parse")
     }
 
@@ -256,7 +252,6 @@ mod simulation_config_tests {
         config.validate().unwrap();
 
         assert_eq!(config.ssz_addr, "0.0.0.0:8552".parse::<SocketAddr>().unwrap());
-        assert_eq!(config.rpc_addr, "0.0.0.0:8553".parse::<SocketAddr>().unwrap());
         assert_eq!(config.blacklist_endpoint, "http://localhost:3520/blacklist");
         assert_eq!(config.validation_window, 3);
         assert_eq!(config.max_concurrent_validations, 32);
@@ -270,15 +265,6 @@ mod simulation_config_tests {
         assert_eq!(config.blacklist_endpoint, "http://localhost:3520/blacklist");
         assert_eq!(config.validation_window, 3);
         assert_eq!(config.max_concurrent_validations, num_cpus::get());
-    }
-
-    #[test]
-    fn sim_config_rejects_one_address_for_both_servers() {
-        let config: SimulationConfig =
-            serde_yaml::from_str("ssz_addr: \"0.0.0.0:8552\"\nrpc_addr: \"0.0.0.0:8552\"\n")
-                .unwrap();
-
-        assert!(config.validate().is_err(), "ssz_addr must differ from rpc_addr");
     }
 
     #[test]
