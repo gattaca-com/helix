@@ -24,7 +24,7 @@ use helix_common::{
 use helix_tcp_types::merging::{
     MERGING_HEADER_SIZE, MERGING_PROTOCOL_VERSION, MergingFrameHeader, MergingHeaderError,
     MergingMsgId,
-    builder_to_relay::{FatalV1, MergedBlockV1, RejectCode, RejectV1},
+    builder_to_relay::{FatalV1, MergedBlockV1, RejectCode, RejectSubject, RejectV1},
     control::{
         BuilderCollateral, MergerAckV1, MergerRegistrationV1, PingV1, PongV1, RelayConfigV1,
     },
@@ -793,6 +793,10 @@ impl BlockMergingTile {
         if matches!(reject.code, RejectCode::StaleSlot) || reject.slot > self.slot.bid_slot {
             self.conn.builder_ahead = true;
         }
+        // A named block is one the builder does not hold, so it must not be activated.
+        if let RejectSubject::BlockHash(hash) = reject.subject {
+            self.conn.forwarded.remove(&hash);
+        }
     }
 
     fn on_slot_msg(&mut self, msg: SlotMsg) {
@@ -1241,7 +1245,7 @@ mod tests {
     use helix_tcp_types::{
         MergeType,
         merging::{
-            builder_to_relay::{MergeTraceV1, RejectSubject},
+            builder_to_relay::MergeTraceV1,
             order::{BundleOrderRef, TxOrderRef},
         },
     };
@@ -1550,6 +1554,19 @@ mod tests {
         }
     }
 
+    fn top_bid(slot: u64, block_hash: B256) -> TopBidUpdate {
+        TopBidUpdate {
+            timestamp: 1,
+            slot,
+            block_number: 0,
+            block_hash,
+            parent_hash: B256::ZERO,
+            builder_pubkey: BlsPublicKeyBytes::default(),
+            fee_recipient: Address::ZERO,
+            value: U256::ZERO,
+        }
+    }
+
     /// Sets up a tile mid-slot with a handshaken connection, ready to forward.
     fn tile_in_slot(bid_slot: u64) -> BlockMergingTile {
         let mut tile = test_tile(true);
@@ -1641,16 +1658,7 @@ mod tests {
         tile.conn.forwarded.insert(block_hash);
 
         tile.on_reject(Token(0), reject(5, RejectCode::StaleSlot));
-        tile.on_top_bid(TopBidUpdate {
-            timestamp: 1,
-            slot: 5,
-            block_number: 0,
-            block_hash,
-            parent_hash: B256::ZERO,
-            builder_pubkey: BlsPublicKeyBytes::default(),
-            fee_recipient: Address::ZERO,
-            value: U256::ZERO,
-        });
+        tile.on_top_bid(top_bid(5, block_hash));
 
         assert!(tile.conn.activated.is_none());
         assert_eq!(tile.stats.activations_sent, 0);
@@ -1690,6 +1698,111 @@ mod tests {
         conn.reset_slot();
 
         assert!(!conn.builder_ahead);
+    }
+
+    fn reject_with(slot: u64, code: RejectCode, subject: RejectSubject) -> RejectV1 {
+        RejectV1 { slot, code, subject, msg: b"test".to_vec() }
+    }
+
+    /// gattaca-com/helix#538: `conn.forwarded` records what we sent, not what the
+    /// builder accepted, so a rejected block stayed activatable and the activation
+    /// came back as `UnknownBaseBlock`.
+    #[test]
+    fn reject_naming_a_block_hash_stops_it_being_activated() {
+        let mut tile = tile_in_slot(5);
+        let block_hash = B256::repeat_byte(1);
+        tile.slot.appendable.insert(block_hash);
+        tile.conn.forwarded.insert(block_hash);
+
+        // Not StaleSlot: this must work while the builder is still on our slot,
+        // where the `builder_ahead` guard does not apply.
+        tile.on_reject(
+            Token(0),
+            reject_with(5, RejectCode::InvalidBaseBlock, RejectSubject::BlockHash(block_hash)),
+        );
+        tile.on_top_bid(top_bid(5, block_hash));
+
+        assert!(!tile.conn.builder_ahead, "this reject says nothing about the builder's head");
+        assert!(tile.conn.activated.is_none());
+        assert_eq!(tile.stats.activations_sent, 0);
+    }
+
+    /// A reject naming a block means the builder does not hold it, whatever the
+    /// code says, so it must leave `forwarded`.
+    #[test]
+    fn reject_naming_a_block_hash_drops_only_that_block() {
+        let mut tile = tile_in_slot(5);
+        let rejected = B256::repeat_byte(2);
+        let kept = B256::repeat_byte(3);
+        tile.conn.forwarded.insert(rejected);
+        tile.conn.forwarded.insert(kept);
+
+        tile.on_reject(
+            Token(0),
+            reject_with(5, RejectCode::InvalidOrder, RejectSubject::BlockHash(rejected)),
+        );
+
+        assert!(!tile.conn.forwarded.contains(&rejected));
+        assert!(tile.conn.forwarded.contains(&kept));
+    }
+
+    /// `NotSynced` is documented as resendable, and a resend re-inserts the hash
+    /// when it is forwarded again.
+    #[test]
+    fn a_block_dropped_by_a_reject_is_restored_by_forwarding_it_again() {
+        let mut tile = tile_in_slot(5);
+        tile.conn.max_frame_bytes = u32::MAX;
+        tile.conn.max_orders_per_slot = u32::MAX;
+        let block_hash = B256::repeat_byte(4);
+
+        let ix = tile.decoded.push(test_submission(5, block_hash, true));
+        tile.forward_decoded(ix, None);
+        assert!(tile.conn.forwarded.contains(&block_hash));
+
+        tile.on_reject(
+            Token(0),
+            reject_with(5, RejectCode::NotSynced, RejectSubject::BlockHash(block_hash)),
+        );
+        assert!(!tile.conn.forwarded.contains(&block_hash));
+
+        tile.forward_decoded(ix, None);
+        assert!(tile.conn.forwarded.contains(&block_hash));
+    }
+
+    /// An order-level reject is not about the base block, and a subjectless one
+    /// names nothing, so neither may touch `forwarded`.
+    #[test]
+    fn rejects_without_a_block_subject_leave_forwarded_alone() {
+        let mut tile = tile_in_slot(5);
+        let block_hash = B256::repeat_byte(5);
+        tile.conn.forwarded.insert(block_hash);
+
+        tile.on_reject(
+            Token(0),
+            reject_with(
+                5,
+                RejectCode::InvalidOrder,
+                RejectSubject::OrderHash(B256::repeat_byte(9)),
+            ),
+        );
+        tile.on_reject(Token(0), reject_with(5, RejectCode::Busy, RejectSubject::None(0)));
+
+        assert!(tile.conn.forwarded.contains(&block_hash));
+    }
+
+    /// State for our connection must not be edited by another connection's reject.
+    #[test]
+    fn reject_from_another_token_leaves_forwarded_alone() {
+        let mut tile = tile_in_slot(5);
+        let block_hash = B256::repeat_byte(6);
+        tile.conn.forwarded.insert(block_hash);
+
+        tile.on_reject(
+            Token(1),
+            reject_with(5, RejectCode::InvalidBaseBlock, RejectSubject::BlockHash(block_hash)),
+        );
+
+        assert!(tile.conn.forwarded.contains(&block_hash));
     }
 
     fn raw_plain_tx() -> Bytes {
