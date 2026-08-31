@@ -130,3 +130,41 @@ pub fn funded_signers(genesis: &Genesis, count: usize) -> Vec<PrivateKeySigner> 
     assert_eq!(signers.len(), count, "dev genesis funds too few of the fixture keys");
     signers
 }
+
+/// Blobs with real commitments and EIP-7594 cell proofs. Each blob differs, so
+/// no two commitments collide.
+pub fn blob_bundle(count: usize) -> ethrex_common::types::BlobsBundle {
+    let blobs = (0..count)
+        .map(|i| {
+            let mut blob = [0u8; ethrex_common::types::BYTES_PER_BLOB];
+            blob[0] = i as u8 + 1;
+            blob
+        })
+        .collect();
+    ethrex_common::types::BlobsBundle::create_from_blobs(&blobs, Some(1)).unwrap()
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn signed_blob_transfer(
+    signer: &PrivateKeySigner,
+    chain_id: u64,
+    nonce: u64,
+    to: Address,
+    versioned_hashes: Vec<alloy_primitives::B256>,
+) -> Vec<u8> {
+    let tx = alloy_consensus::TxEip4844 {
+        chain_id,
+        nonce,
+        gas_limit: 100_000,
+        max_fee_per_gas: 100_000_000_000,
+        max_priority_fee_per_gas: 0,
+        to,
+        value: U256::ZERO,
+        access_list: Default::default(),
+        blob_versioned_hashes: versioned_hashes,
+        max_fee_per_blob_gas: 1_000_000_000,
+        input: Default::default(),
+    };
+    let signature = signer.sign_hash_sync(&tx.signature_hash()).unwrap();
+    alloy_consensus::TxEnvelope::from(tx.into_signed(signature)).encoded_2718()
+}
