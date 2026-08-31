@@ -238,7 +238,7 @@ impl SimulatorTile {
 
         self.local_telemetry.sims_reqs += 1;
 
-        let sim_id = self.select_simulator(&builder_pubkey);
+        let sim_id = self.select_simulator();
 
         if let Some(id) = sim_id {
             self.local_telemetry.sims_sent_immediately += 1;
@@ -610,28 +610,16 @@ impl SimulatorTile {
     }
 
     /// Selection priority:
-    /// 1. Sticky sim with SSZ endpoint (state locality + binary protocol)
-    /// 2. Any SSZ-capable sim, least pending (binary protocol)
-    /// 3. Any sim, least pending (JSON-RPC fallback; stickiness irrelevant without SSZ)
+    /// 1. Any SSZ-capable sim, least pending (binary protocol)
+    /// 2. Any sim, least pending (JSON-RPC fallback)
     #[timed]
-    fn select_simulator(&self, builder_pubkey: &BlsPublicKeyBytes) -> Option<usize> {
-        if !self.ssz_sim_indices.is_empty() {
-            let sticky =
-                self.ssz_sim_indices[sticky_sim_index(self.ssz_sim_indices.len(), builder_pubkey)];
-            if self.simulators[sticky].can_simulate() {
-                return Some(sticky);
-            }
-            if let Some(id) = self
-                .ssz_sim_indices
-                .iter()
-                .filter(|&&i| self.simulators[i].can_simulate())
-                .min_by_key(|&&i| self.simulators[i].pending)
-                .copied()
-            {
-                return Some(id);
-            }
-        }
-        self.next_client(|s| s.can_simulate())
+    fn select_simulator(&self) -> Option<usize> {
+        self.ssz_sim_indices
+            .iter()
+            .filter(|&&i| self.simulators[i].can_simulate())
+            .min_by_key(|&&i| self.simulators[i].pending)
+            .copied()
+            .or_else(|| self.next_client(|s| s.can_simulate()))
     }
 
     fn next_client(&self, pred: impl Fn(&SimEntry) -> bool) -> Option<usize> {
@@ -804,29 +792,6 @@ pub(super) enum SimTileInternalEvent {
 struct SimSlotStats {
     count: u32,
     total_time: Duration,
-}
-
-/// Jump consistent hash — maps a builder pubkey to a simulator index with
-/// minimal reassignment when the set size changes.
-fn sticky_sim_index(num_simulators: usize, builder_pubkey: &BlsPublicKeyBytes) -> usize {
-    if num_simulators <= 1 {
-        return 0;
-    }
-    let key = u64::from_le_bytes(builder_pubkey.0[..8].try_into().unwrap());
-    jump_hash(key, num_simulators)
-}
-
-/// Stateless consistent hash — minimises slot reassignment as `n` changes.
-/// <https://arxiv.org/abs/1406.2294>
-fn jump_hash(mut key: u64, n: usize) -> usize {
-    let mut b: i64 = -1;
-    let mut j: i64 = 0;
-    while j < n as i64 {
-        b = j;
-        key = key.wrapping_mul(2862933555777941757).wrapping_add(1);
-        j = ((b + 1) as f64 * ((1u64 << 31) as f64) / ((key >> 33) + 1) as f64) as i64;
-    }
-    b as usize
 }
 
 /// Pending requests, we only keep the last one for each builder.
