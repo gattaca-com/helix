@@ -3,7 +3,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import ConfirmDialog from "../components/ConfirmDialog";
 
-type Action = "engage-kill-switch" | "disarm-kill-switch" | "disable-adjustments";
+type Action =
+  | "engage-kill-switch"
+  | "disarm-kill-switch"
+  | "disable-block-merging"
+  | "enable-block-merging"
+  | "disable-adjustments";
 
 export default function Settings() {
   const queryClient = useQueryClient();
@@ -20,6 +25,8 @@ export default function Settings() {
     mutationFn: async (action: Action) => {
       if (action === "engage-kill-switch") await api.setKillSwitch(true);
       else if (action === "disarm-kill-switch") await api.setKillSwitch(false);
+      else if (action === "disable-block-merging") await api.setBlockMerging(false);
+      else if (action === "enable-block-merging") await api.setBlockMerging(true);
       else await api.disableAdjustments();
     },
     onSuccess: () => {
@@ -31,6 +38,7 @@ export default function Settings() {
   });
 
   const killSwitchOn = overview?.kill_switch_enabled === true;
+  const blockMergingOn = overview?.block_merging_enabled === true;
 
   return (
     <div>
@@ -68,6 +76,34 @@ export default function Settings() {
               className="shrink-0 rounded-md bg-status-critical px-3 py-1.5 text-sm font-medium text-white hover:brightness-110"
             >
               Engage kill switch
+            </button>
+          )}
+        </div>
+
+        <div className="mt-4 flex items-center justify-between gap-4 border-b border-neutral-100 pb-4 dark:border-neutral-800">
+          <div>
+            <div className="font-medium">Block merging</div>
+            <p className="text-sm text-neutral-500 dark:text-neutral-400">
+              {overview?.block_merging_enabled === null
+                ? "Relay admin API unreachable — state unknown."
+                : blockMergingOn
+                  ? "Enabled. The relay is connected to the merge builder."
+                  : "Disabled. The relay is not dialing the merge builder."}
+            </p>
+          </div>
+          {blockMergingOn ? (
+            <button
+              onClick={() => setPending("disable-block-merging")}
+              className="shrink-0 rounded-md bg-status-critical px-3 py-1.5 text-sm font-medium text-white hover:brightness-110"
+            >
+              Disable block merging
+            </button>
+          ) : (
+            <button
+              onClick={() => setPending("enable-block-merging")}
+              className="shrink-0 rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
+            >
+              Enable block merging
             </button>
           )}
         </div>
@@ -113,6 +149,32 @@ export default function Settings() {
           onCancel={() => setPending(null)}
         >
           The relay will resume accepting bids.
+        </ConfirmDialog>
+      )}
+      {pending === "disable-block-merging" && (
+        <ConfirmDialog
+          title="Disable block merging"
+          confirmLabel="Disable"
+          destructive
+          typeToConfirm="disable"
+          pending={mutation.isPending}
+          onConfirm={() => mutation.mutate(pending)}
+          onCancel={() => setPending(null)}
+        >
+          The relay will disconnect from the merge builder and stop dialing it. Re-enabling
+          requires this action again.
+        </ConfirmDialog>
+      )}
+      {pending === "enable-block-merging" && (
+        <ConfirmDialog
+          title="Enable block merging"
+          confirmLabel="Enable"
+          pending={mutation.isPending}
+          onConfirm={() => mutation.mutate(pending)}
+          onCancel={() => setPending(null)}
+        >
+          The relay will resume dialing the merge builder. Only do this after confirming the
+          reason block merging was disabled is resolved.
         </ConfirmDialog>
       )}
       {pending === "disable-adjustments" && (

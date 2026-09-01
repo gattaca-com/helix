@@ -37,10 +37,11 @@ RUN apt-get update && apt-get install -y \
 COPY --from=builder /app/target/release/helix-builder ./
 
 # 9876  merging TCP (relay connections)
+# 8552  SSZ block validation (simulation role)
 # 8551  authrpc / Engine API (beacon node)
 # 8545  http json-rpc
 # 30303 devp2p tcp+udp
 # 9090  prometheus metrics
-EXPOSE 9876 8551 8545 30303/tcp 30303/udp 9090
+EXPOSE 9876 8552 8551 8545 30303/tcp 30303/udp 9090
 
 ENTRYPOINT ["/app/helix-builder"]

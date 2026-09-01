@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use alloy_primitives::B256;
 use helix_types::{
-    BidTrace, BlobsBundle, BlsSignatureBytes, ExecutionPayload, ExecutionRequests,
+    BidTrace, BlobsBundle, BlsSignatureBytes, ExecutionPayload, ExecutionRequests, ForkName,
     SignedBidSubmission,
 };
 use ssz_derive::{Decode, Encode};
@@ -90,6 +90,11 @@ pub enum BlockSimError {
 
     #[error("hydration miss: simulator cache does not have required transactions/blobs")]
     HydrationMiss,
+
+    /// Not the builder's fault -- helix's own simulator client has no validation RPC method for
+    /// this fork yet. See gattaca-com/helix#518.
+    #[error("no validation RPC method for fork {0}")]
+    UnsupportedFork(ForkName),
 }
 
 impl BlockSimError {
@@ -106,6 +111,7 @@ impl BlockSimError {
             BlockSimError::Timeout => true,
             BlockSimError::RpcError => true,
             BlockSimError::NoSimulatorAvailable => true,
+            BlockSimError::UnsupportedFork(_) => true,
             _ => false,
         }
     }
@@ -141,6 +147,21 @@ pub struct SszValidationRequest {
     pub inclusion_list: InclusionListWithMetadata,
     pub decoder_params: Option<SubmissionDecoderParams>,
     pub signed_bid_submission: Vec<u8>,
+}
+
+/// Merged-block counterpart of [`SszValidationRequest`], carrying the extra
+/// `base_payment_tx_index` a merged-block-only validation endpoint uses to recognise the
+/// base block's own payment tx directly, instead of scanning every tx in the block -- see
+/// `BlockMergeResponse::base_payment_tx_index`.
+#[derive(Debug, Clone, Encode, Decode)]
+pub struct SszMergedValidationRequest {
+    pub apply_blacklist: bool,
+    pub registered_gas_limit: u64,
+    pub parent_beacon_block_root: B256,
+    pub inclusion_list: InclusionListWithMetadata,
+    pub decoder_params: Option<SubmissionDecoderParams>,
+    pub signed_bid_submission: Vec<u8>,
+    pub base_payment_tx_index: u64,
 }
 
 // TODO: refactor this in a SignedBidSubmission + extra fields
@@ -180,6 +201,15 @@ impl JsonValidationRequest {
             inclusion_list,
         }
     }
+}
+
+/// Merged-block counterpart of [`JsonValidationRequest`], carrying the extra
+/// `base_payment_tx_index` -- see [`SszMergedValidationRequest`].
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MergedJsonValidationRequest {
+    #[serde(flatten)]
+    pub base: JsonValidationRequest,
+    pub base_payment_tx_index: u64,
 }
 
 #[cfg(test)]

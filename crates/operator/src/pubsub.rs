@@ -6,8 +6,8 @@ use helix_types::{BuilderCollateral, OperatorMessage};
 use libp2p::{
     PeerId, SwarmBuilder,
     allow_block_list::{self, AllowedPeers},
-    floodsub::{self, Event, FloodsubMessage},
     futures::StreamExt,
+    gossipsub::{self, Event, IdentTopic, MessageAcceptance, MessageAuthenticity, ValidationMode},
     identity::Keypair,
     ping,
     swarm::{NetworkBehaviour, SwarmEvent},
@@ -17,11 +17,33 @@ use ssz::{Decode, Encode};
 use super::{Operator, OperatorError};
 use crate::utils::{PromotionState, PromotionStates};
 
+const MAX_OPERATOR_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
+
 #[derive(NetworkBehaviour)]
 struct NetBehaviour {
     allow_list: allow_block_list::Behaviour<AllowedPeers>,
-    floodsub: floodsub::Behaviour,
+    gossipsub: gossipsub::Behaviour,
     ping: ping::Behaviour,
+}
+
+fn publish_operator_message(
+    behaviour: &mut gossipsub::Behaviour,
+    topic: &IdentTopic,
+    data: Vec<u8>,
+) {
+    let message_size = data.len();
+    if let Err(error) = behaviour.publish(topic.clone(), data) {
+        tracing::warn!(?error, message_size, "failed to publish operator message");
+    }
+}
+
+fn operator_gossipsub_config() -> Result<gossipsub::Config, gossipsub::ConfigBuilderError> {
+    gossipsub::ConfigBuilder::default()
+        .flood_publish(true)
+        .validate_messages()
+        .validation_mode(ValidationMode::Strict)
+        .max_transmit_size(MAX_OPERATOR_MESSAGE_SIZE)
+        .build()
 }
 
 fn record_builder_collateral(
@@ -47,8 +69,11 @@ pub(super) async fn run_operator_connection(
     incoming: Sender<(Operator, OperatorMessage)>,
     mode: OperatorP2pMode,
 ) -> Result<(), OperatorError> {
-    let floodsub_topic = floodsub::Topic::new("operator");
-    let local_peer_id = PeerId::from_public_key(&keypair.public());
+    let operator_topic = IdentTopic::new("operator");
+    let gossipsub_config = operator_gossipsub_config()?;
+    let gossipsub =
+        gossipsub::Behaviour::new(MessageAuthenticity::Signed(keypair.clone()), gossipsub_config)
+            .map_err(OperatorError::GossipsubBehaviourError)?;
 
     let mut allow_list = allow_block_list::Behaviour::default();
     for op in &operators {
@@ -59,17 +84,13 @@ pub(super) async fn run_operator_connection(
         .with_tokio()
         .with_quic()
         .with_behaviour(|_key| {
-            Ok(NetBehaviour {
-                allow_list,
-                floodsub: floodsub::Behaviour::new(local_peer_id),
-                ping: ping::Behaviour::default(),
-            })
+            Ok(NetBehaviour { allow_list, gossipsub, ping: ping::Behaviour::default() })
         })?
         .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(u64::MAX)))
         .build();
 
     // Subscribe to operator topic.
-    swarm.behaviour_mut().floodsub.subscribe(floodsub_topic.clone());
+    swarm.behaviour_mut().gossipsub.subscribe(&operator_topic)?;
 
     // Listen for incoming connections.
     swarm.listen_on(format!("/ip4/0.0.0.0/udp/{quic_port}/quic-v1").parse()?)?;
@@ -82,7 +103,7 @@ pub(super) async fn run_operator_connection(
 
     for (peer_id, operator) in &peers {
         // Dial other operators.
-        swarm.behaviour_mut().floodsub.add_node_to_partial_view(*peer_id);
+        swarm.behaviour_mut().gossipsub.add_explicit_peer(peer_id);
         if let Err(e) = swarm.dial(operator.multiaddr.clone()) {
             tracing::warn!(?operator, ?e, "failed to dial operator");
         }
@@ -116,20 +137,37 @@ pub(super) async fn run_operator_connection(
                         _ => true,
                     };
                     if transmit && connected_peers > 0 {
-                        swarm.behaviour_mut().floodsub.publish(floodsub_topic.clone(), msg.as_ssz_bytes());
+                        publish_operator_message(
+                            &mut swarm.behaviour_mut().gossipsub,
+                            &operator_topic,
+                            msg.as_ssz_bytes(),
+                        );
                     }
                 }
                 Err(_) => break, // channel closed
             },
             event = swarm.select_next_some() => match event {
                 SwarmEvent::Behaviour(b_event) => match b_event {
-                    NetBehaviourEvent::Floodsub(f_event) => match f_event {
-                        Event::Message(msg) => {
-                            let FloodsubMessage { source, data, .. } = msg;
+                    NetBehaviourEvent::Gossipsub(g_event) => match g_event {
+                        Event::Message { propagation_source, message_id, message } => {
+                            // Operator messages are pushed directly to every subscribed peer. Mark
+                            // them as ignored by gossipsub after local delivery so they are never
+                            // forwarded to another peer.
+                            let _ = swarm.behaviour_mut().gossipsub.report_message_validation_result(
+                                &message_id,
+                                &propagation_source,
+                                MessageAcceptance::Ignore,
+                            );
+
+                            let Some(source) = message.source else {
+                                tracing::warn!(?propagation_source, "received operator message without a source");
+                                let _ = swarm.disconnect_peer_id(propagation_source);
+                                continue;
+                            };
 
                             match peers.get(&source) {
                                 Some(operator) => {
-                                    let operator_msg = match OperatorMessage::from_ssz_bytes(&data) {
+                                    let operator_msg = match OperatorMessage::from_ssz_bytes(&message.data) {
                                         Ok(msg) => msg,
                                         Err(e) => {
                                             tracing::error!(?e, operator=operator.name, "failed to decode operator message");
@@ -153,13 +191,13 @@ pub(super) async fn run_operator_connection(
                                     }
                                 }
                                 None => {
-                                    tracing::warn!(?source, "received operator message from unknown peer");
-                                    let _ = swarm.disconnect_peer_id(source);
+                                    tracing::warn!(?source, ?propagation_source, "received operator message from unknown peer");
+                                    let _ = swarm.disconnect_peer_id(propagation_source);
                                 }
                             }
                         }
                         Event::Subscribed { peer_id, topic } => {
-                            if peers.contains_key(&peer_id) && topic == floodsub_topic {
+                            if peers.contains_key(&peer_id) && topic == operator_topic.hash() {
                                 // Send current demotion and collateral state.
                                 for state in demotions.iter() {
                                     let msg = match state {
@@ -170,10 +208,18 @@ pub(super) async fn run_operator_connection(
                                             OperatorMessage::Promotion(promotion.clone()).as_ssz_bytes()
                                         }
                                     };
-                                    swarm.behaviour_mut().floodsub.publish(floodsub_topic.clone(), msg);
+                                    publish_operator_message(
+                                        &mut swarm.behaviour_mut().gossipsub,
+                                        &operator_topic,
+                                        msg,
+                                    );
                                 }
                                 for (_, collateral) in &builder_collateral {
-                                    swarm.behaviour_mut().floodsub.publish(floodsub_topic.clone(), OperatorMessage::Collateral(collateral.clone()).as_ssz_bytes());
+                                    publish_operator_message(
+                                        &mut swarm.behaviour_mut().gossipsub,
+                                        &operator_topic,
+                                        OperatorMessage::Collateral(collateral.clone()).as_ssz_bytes(),
+                                    );
                                 }
                             } else {
                                 let _ = swarm.disconnect_peer_id(peer_id);
@@ -206,6 +252,16 @@ mod tests {
     use helix_types::BlsPublicKeyBytes;
 
     use super::*;
+
+    #[test]
+    fn gossipsub_is_configured_for_direct_16_mib_messages() {
+        let config = operator_gossipsub_config().unwrap();
+
+        assert_eq!(config.max_transmit_size(), MAX_OPERATOR_MESSAGE_SIZE);
+        assert!(config.flood_publish());
+        assert!(config.validate_messages());
+        assert!(matches!(config.validation_mode(), ValidationMode::Strict));
+    }
 
     #[test]
     fn first_builder_collateral_message_is_recorded_for_publish_and_replay() {

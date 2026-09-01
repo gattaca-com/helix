@@ -19,7 +19,10 @@ use alloy_rpc_types::{
 use async_trait::async_trait;
 use dashmap::DashSet;
 use helix_common::{
-    PAYMENT_FORWARDER, PAYMENT_FORWARDER_CODE_HASH, api::builder_api::InclusionListWithMetadata,
+    PAYMENT_FORWARDER, PAYMENT_FORWARDER_CODE_HASH,
+    api::builder_api::InclusionListWithMetadata,
+    blacklist::{changed_disallow_hash, parse_disallow_list},
+    payment::multisend_paid_amount,
     payment_forwarder_recipient,
 };
 use jsonrpsee::{core::RpcResult, proc_macros::rpc, types::ErrorObject};
@@ -51,7 +54,6 @@ use reth_tasks::TaskExecutor;
 use revm::{Database, database::State};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
-use sha2::{Digest, Sha256};
 use tokio::{
     spawn,
     sync::{RwLock, oneshot},
@@ -122,7 +124,7 @@ impl ValidationApi {
                 match client.get(&ep).send().await {
                     Ok(resp) if resp.status().is_success() => {
                         if let Ok(list) = resp.json::<Vec<String>>().await {
-                            let parsed = ValidationApi::parse_disallow_list(list);
+                            let parsed = parse_disallow_list(list);
                             dash.clear();
                             for addr in parsed {
                                 dash.insert(addr);
@@ -153,17 +155,6 @@ impl ValidationApi {
         Self { inner }
     }
 
-    /// Parses a blacklist payload into the addresses to disallow.
-    fn parse_disallow_list(list: Vec<String>) -> Vec<Address> {
-        let mut addrs = Vec::new();
-        for hex in list {
-            if let Ok(addr) = hex.strip_prefix("0x").unwrap_or(&hex).parse::<Address>() {
-                addrs.push(addr);
-            }
-        }
-        addrs
-    }
-
     /// Returns the cached reads for the given head hash.
     pub(crate) async fn cached_reads(&self, head: B256) -> CachedReads {
         let cache = self.inner.cached_state.read().await;
@@ -182,7 +173,10 @@ impl ValidationApi {
 }
 
 impl ValidationApi {
-    /// Validates the given block and a [`BidTrace`] against it.
+    /// Validates the given block and a [`BidTrace`] against it. `base_payment_tx_index` is
+    /// `Some` only for the merged-block-only validation endpoint, and switches the payment
+    /// check from `ensure_payment` (regular submissions, single trailing tx) to
+    /// `ensure_merged_payment` (a merged block's base payment tx plus its distribution tx).
     pub async fn validate_message_against_block(
         &self,
         block: RecoveredBlock<Block>,
@@ -190,6 +184,7 @@ impl ValidationApi {
         _registered_gas_limit: u64,
         apply_blacklist: bool,
         inclusion_list: Option<InclusionListWithMetadata>,
+        base_payment_tx_index: Option<usize>,
     ) -> Result<(), ValidationApiError> {
         self.validate_message_against_header(block.sealed_header(), &message)?;
 
@@ -234,7 +229,10 @@ impl ValidationApi {
 
         self.consensus.validate_block_post_execution(&block, &output, None, None)?;
 
-        self.ensure_payment(&block, &output, &message)?;
+        match base_payment_tx_index {
+            Some(ix) => self.ensure_merged_payment(&block, &output, &message, ix)?,
+            None => self.ensure_payment(&block, &output, &message)?,
+        }
 
         let state_root =
             state_provider.state_root(state_provider.hashed_post_state(&output.state))?;
@@ -472,9 +470,13 @@ impl ValidationApi {
 
     /// Ensures that the proposer has received [`BidTrace::value`] for this block.
     ///
-    /// Firstly attempts to verify the payment by checking the state changes, otherwise falls back
-    /// to checking the latest block transaction, which may pay the recipient directly or through
-    /// the [`PAYMENT_FORWARDER`].
+    /// Firstly attempts to verify the payment by checking the state changes, otherwise falls
+    /// back to requiring the last transaction in the block to pay it directly. Shared by every
+    /// externally-submitted builder block (v4/v5) -- regular submissions always pay in a single
+    /// trailing transaction, so this deliberately doesn't scan the rest of the block. A merged
+    /// block's payment can legitimately span two transactions (see
+    /// crates/builder/src/engine/session.rs); that's handled by `ensure_merged_payment`, on the
+    /// merged-block-only validation endpoint, not here.
     fn ensure_payment(
         &self,
         block: &SealedBlock<Block>,
@@ -553,6 +555,122 @@ impl ValidationApi {
         Ok(())
     }
 
+    /// Merged-block counterpart of `ensure_payment`, for the merged-block-only validation
+    /// endpoint. A merged block's payment is legitimately split across exactly two
+    /// transactions: the base block's own payment tx (kept at `base_payment_tx_index`, paying
+    /// `base_value`) and a newly appended distribution tx at the very end of the block (paying
+    /// the incremental `proposer_added_value`) -- see crates/builder/src/engine/session.rs.
+    /// Checking only these two positions (as opposed to `ensure_payment`'s regular-submission
+    /// single-last-tx check, or scanning every tx in the block) is safe here because
+    /// `base_payment_tx_index` is derived and trusted upstream, at the relay
+    /// (`BlockMergeResponse::base_payment_tx_index`) -- if it's wrong, this fails closed (the
+    /// payment isn't found), it never lets an underpaid block through.
+    fn ensure_merged_payment(
+        &self,
+        block: &SealedBlock<Block>,
+        output: &BlockExecutionOutput<Receipt>,
+        message: &BidTrace,
+        base_payment_tx_index: usize,
+    ) -> Result<(), ValidationApiError> {
+        let (mut balance_before, balance_after) = if let Some(acc) =
+            output.state.state.get(&message.proposer_fee_recipient)
+        {
+            let balance_before = acc.original_info.as_ref().map(|i| i.balance).unwrap_or_default();
+            let balance_after = acc.info.as_ref().map(|i| i.balance).unwrap_or_default();
+
+            (balance_before, balance_after)
+        } else {
+            (U256::ZERO, U256::ZERO)
+        };
+
+        if let Some(withdrawals) = block.body().withdrawals() {
+            for withdrawal in withdrawals {
+                if withdrawal.address == message.proposer_fee_recipient {
+                    balance_before += withdrawal.amount_wei();
+                }
+            }
+        }
+
+        if balance_after >= balance_before + message.value {
+            return Ok(());
+        }
+
+        let Some(last_ix) = block.body().transactions().count().checked_sub(1) else {
+            return Err(ValidationApiError::ProposerPayment);
+        };
+
+        let mut total =
+            self.recognized_payment_at(block, output, message.proposer_fee_recipient, last_ix);
+        if base_payment_tx_index != last_ix {
+            total += self.recognized_payment_at(
+                block,
+                output,
+                message.proposer_fee_recipient,
+                base_payment_tx_index,
+            );
+        }
+
+        if total >= message.value {
+            return Ok(());
+        }
+
+        Err(ValidationApiError::ProposerPayment)
+    }
+
+    /// The recognized payment to `recipient` from the transaction at `ix`: a direct transfer,
+    /// one routed through the [`PAYMENT_FORWARDER`], or a batched entry in a Gnosis Safe
+    /// `execTransaction` -> `multiSend` delegatecall (the merge-builder payment engine's
+    /// mechanism, see crates/builder/src/engine/payment.rs). Zero for an out-of-range index, an
+    /// unsuccessful receipt, or a transaction that fails the same anti-MEV-extraction checks
+    /// (chain id, zero priority fee) the payment-recognition checks above apply -- never an
+    /// error, since a single unrecognized/invalid position shouldn't itself fail validation.
+    fn recognized_payment_at(
+        &self,
+        block: &SealedBlock<Block>,
+        output: &BlockExecutionOutput<Receipt>,
+        recipient: Address,
+        ix: usize,
+    ) -> U256 {
+        let Some((receipt, tx)) = output.receipts.get(ix).zip(block.body().transactions().nth(ix))
+        else {
+            return U256::ZERO;
+        };
+        if !receipt.status() {
+            return U256::ZERO;
+        }
+
+        let paid_directly = tx.to() == Some(recipient) && tx.input().is_empty();
+        let paid_via_forwarder = tx.to() == Some(PAYMENT_FORWARDER) &&
+            payment_forwarder_recipient(tx.input()) == Some(recipient) &&
+            self.provider
+                .latest()
+                .and_then(|state| state.basic_account(&PAYMENT_FORWARDER))
+                .is_ok_and(|account| {
+                    account.is_some_and(|account| {
+                        account.bytecode_hash == Some(PAYMENT_FORWARDER_CODE_HASH)
+                    })
+                });
+        let contributed = if paid_directly || paid_via_forwarder {
+            tx.value()
+        } else {
+            multisend_paid_amount(tx.input(), recipient)
+        };
+        if contributed.is_zero() {
+            return U256::ZERO;
+        }
+
+        if tx.chain_id() != Some(self.evm_config.chain_spec().chain().id()) {
+            return U256::ZERO;
+        }
+        if let Some(block_base_fee) = block.header().base_fee_per_gas() &&
+            tx.effective_tip_per_gas(block_base_fee).unwrap_or_default() != 0
+        {
+            return U256::ZERO;
+        }
+
+        contributed
+    }
+
     /// Validates the given [`BlobsBundleV1`] and returns versioned hashes for blobs.
     pub fn validate_blobs_bundle(
         &self,
@@ -624,6 +742,7 @@ impl ValidationApi {
             request.base.registered_gas_limit,
             request.apply_blacklist,
             request.inclusion_list,
+            None,
         )
         .await
     }
@@ -632,6 +751,28 @@ impl ValidationApi {
     async fn _validate_builder_submission_v5(
         &self,
         request: ExtendedValidationRequestV5,
+    ) -> Result<(), ValidationApiError> {
+        self._validate_builder_submission_v5_inner(request, None).await
+    }
+
+    /// Core logic for validating a merged block through the merged-block-only endpoint: the
+    /// same v5 pipeline, but with `base_payment_tx_index` passed through to
+    /// `ensure_merged_payment` instead of the regular submission path's `ensure_payment`.
+    async fn _validate_merged_builder_submission_v5(
+        &self,
+        request: ExtendedMergedValidationRequestV5,
+    ) -> Result<(), ValidationApiError> {
+        self._validate_builder_submission_v5_inner(
+            request.base,
+            Some(request.base_payment_tx_index as usize),
+        )
+        .await
+    }
+
+    async fn _validate_builder_submission_v5_inner(
+        &self,
+        request: ExtendedValidationRequestV5,
+        base_payment_tx_index: Option<usize>,
     ) -> Result<(), ValidationApiError> {
         let block = self.payload_validator.ensure_well_formed_payload(ExecutionData {
             payload: ExecutionPayload::V3(request.base.request.execution_payload),
@@ -666,6 +807,7 @@ impl ValidationApi {
             request.base.registered_gas_limit,
             request.apply_blacklist,
             request.inclusion_list,
+            base_payment_tx_index,
         )
         .await
     }
@@ -759,6 +901,26 @@ impl BlockSubmissionValidationApiServer for ValidationApi {
 
         rx.await.map_err(|_| internal_rpc_err("Internal blocking task error"))?
     }
+
+    /// Validates a merged block. Relay-internal only -- never reachable by an externally
+    /// submitted builder block -- so it can recognise the base block's payment tx by index
+    /// instead of requiring it to be the last transaction.
+    async fn validate_merged_builder_submission_v5(
+        &self,
+        request: ExtendedMergedValidationRequestV5,
+    ) -> RpcResult<()> {
+        let this = self.clone();
+        let (tx, rx) = oneshot::channel();
+
+        self.task_spawner.spawn_blocking_task(Box::pin(async move {
+            let result = Self::_validate_merged_builder_submission_v5(&this, request)
+                .await
+                .map_err(ErrorObject::from);
+            let _ = tx.send(result);
+        }));
+
+        rx.await.map_err(|_| internal_rpc_err("Internal blocking task error"))?
+    }
 }
 
 /// Result of [`ValidationApi::execute_block`].
@@ -831,28 +993,6 @@ pub(crate) struct ValidationMetrics {
     pub(crate) disallow_size: Gauge,
 }
 
-/// Fingerprints the disallow list so operators can confirm every node enforces the same one.
-///
-/// Entries are sorted first because `DashSet` iteration order is not stable. Mirrors reth's
-/// `hash_disallow_list` so the digests are comparable against reth-based builders.
-fn hash_disallow_list(disallow: &DashSet<Address>) -> String {
-    let mut sorted: Vec<Address> = disallow.iter().map(|addr| *addr).collect();
-    sorted.sort_unstable();
-
-    let mut hasher = Sha256::new();
-    for addr in &sorted {
-        hasher.update(addr.as_slice());
-    }
-
-    format!("{:x}", hasher.finalize())
-}
-
-/// Returns the disallow list's digest, or `None` when it still matches `previous`.
-fn changed_disallow_hash(disallow: &DashSet<Address>, previous: Option<&str>) -> Option<String> {
-    let hash = hash_disallow_list(disallow);
-    (previous != Some(hash.as_str())).then_some(hash)
-}
-
 #[serde_as]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtendedValidationRequestV4 {
@@ -875,6 +1015,19 @@ pub struct ExtendedValidationRequestV5 {
 
     #[serde(default)]
     pub apply_blacklist: bool,
+}
+
+/// Merged-block counterpart of [`ExtendedValidationRequestV5`], carrying the extra
+/// `base_payment_tx_index` the merged-block-only validation endpoint uses to recognise the
+/// base block's own payment tx directly -- see
+/// `helix_common::simulator::SszMergedValidationRequest`.
+#[serde_as]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExtendedMergedValidationRequestV5 {
+    #[serde(flatten)]
+    pub base: ExtendedValidationRequestV5,
+
+    pub base_payment_tx_index: u64,
 }
 
 /// Block validation rpc interface.
@@ -914,57 +1067,11 @@ pub trait BlockSubmissionValidationApi {
         &self,
         request: ExtendedValidationRequestV5,
     ) -> jsonrpsee::core::RpcResult<()>;
-}
 
-#[cfg(test)]
-mod blacklist_tests {
-    use alloy_primitives::address;
-
-    use super::*;
-
-    #[test]
-    fn loads_an_address_list() {
-        let parsed = ValidationApi::parse_disallow_list(vec![
-            "0x8589427373D6D84E98730D7795D8f6f8731FDA16".into(),
-            "722122dF12D4e14e13Ac3b6895a86e84145b6967".into(),
-            "0xdd4c48c0b24039969fc16d1cdf626eab821d3384".into(),
-        ]);
-
-        assert_eq!(parsed.len(), 3, "every entry must load");
-        assert!(parsed.contains(&address!("0x8589427373D6D84E98730D7795D8f6f8731FDA16")));
-    }
-
-    const ADDR_A: Address = address!("0x722122dF12D4e14e13Ac3b6895a86e84145b6967");
-    const ADDR_B: Address = address!("0x8589427373D6D84E98730D7795D8f6f8731FDA16");
-
-    fn disallow_set(addrs: &[Address]) -> DashSet<Address> {
-        let set = DashSet::new();
-        for addr in addrs {
-            set.insert(*addr);
-        }
-        set
-    }
-
-    #[test]
-    fn an_unchanged_list_reports_no_change() {
-        let previous = disallow_set(&[ADDR_A, ADDR_B]);
-        let current = disallow_set(&[ADDR_B, ADDR_A]);
-
-        let hash = changed_disallow_hash(&previous, None).expect("a first list is always new");
-
-        assert_eq!(changed_disallow_hash(&current, Some(&hash)), None);
-    }
-
-    #[test]
-    fn an_amended_list_reports_a_new_hash() {
-        let previous = disallow_set(&[ADDR_A]);
-        let current = disallow_set(&[ADDR_A, ADDR_B]);
-
-        let superseded =
-            changed_disallow_hash(&previous, None).expect("a first list is always new");
-
-        let in_force =
-            changed_disallow_hash(&current, Some(&superseded)).expect("the digest must change");
-        assert_ne!(in_force, superseded);
-    }
+    /// A request to validate a merged block. Relay-internal only.
+    #[method(name = "validateMergedBuilderSubmissionV5")]
+    async fn validate_merged_builder_submission_v5(
+        &self,
+        request: ExtendedMergedValidationRequestV5,
+    ) -> jsonrpsee::core::RpcResult<()>;
 }

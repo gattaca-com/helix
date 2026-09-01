@@ -114,7 +114,7 @@ impl<B: BidAdjustor> Context<B> {
             api_key: None,
         };
 
-        let block_merger = BlockMerger::new(0, chain_info.clone(), cache.clone(), config.clone());
+        let block_merger = BlockMerger::new(0, cache.clone(), config.clone());
 
         let slot_context = SlotContext {
             bid_slot: Slot::new(0),

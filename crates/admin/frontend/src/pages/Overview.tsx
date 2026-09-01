@@ -78,6 +78,13 @@ export default function Overview() {
           unknown={data.kill_switch_enabled === null}
         />
         <StatusTile
+          label="Block merging"
+          ok={data.block_merging_enabled !== false}
+          okText="Enabled"
+          badText="Disabled"
+          unknown={data.block_merging_enabled === null}
+        />
+        <StatusTile
           label="Bid adjustments"
           ok={data.adjustments_enabled}
           okText="Enabled"
