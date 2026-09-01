@@ -27,6 +27,3 @@ extra_data: "helix-builder"
 
 # Points into the slot, in milliseconds, at which to build and submit.
 submit_offsets_ms: [500, 2000]
-
-# Validate our own block before submitting it.
-self_validate: true
