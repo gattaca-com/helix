@@ -7,7 +7,6 @@ rust-version.workspace = true
 version.workspace = true
 
 [features]
-# Compiles in the flux-profiler `#[timed]` frames; armed at runtime by `enable_flux_profiler`.
 profile = ["dep:flux-profiler", "helix-common/profile", "helix-types/profile"]
 # Exposes block-merging internals for benches/unbundling.rs.
 bench-internals = []

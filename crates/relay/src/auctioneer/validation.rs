@@ -67,11 +67,7 @@ impl<B: BidAdjustor> Context<B> {
         }
 
         // checks internal consistency of the payload
-        match payload.validate() {
-            // Local blocks routinely bid zero; nothing pays a real proposer.
-            Err(BlockValidationError::ZeroValueBlock) if is_local_dev() => {}
-            other => other?,
-        }
+        payload.validate()?;
 
         if payload_attributes.timestamp != payload.timestamp() {
             return Err(BlockValidationError::IncorrectTimestamp {

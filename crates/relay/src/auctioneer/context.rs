@@ -99,13 +99,12 @@ impl<B: BidAdjustor> Context<B> {
         alert_manager: Arc<AlertManager>,
         operator_api: Option<Arc<OperatorPubSub>>,
     ) -> Self {
-        // Local dev trusts every builder: ephemeral local keys can't be listed
-        // in config, and there are no simulators to fall back to.
-        let trust_unknown = is_local_dev();
+        // Local dev builders have random keys, so none is ever in config.
+        let local_dev = is_local_dev();
         let unknown_builder_info = BuilderInfo {
-            collateral: if trust_unknown { U256::MAX } else { U256::ZERO },
-            is_optimistic: trust_unknown,
-            is_optimistic_for_regional_filtering: trust_unknown,
+            collateral: if local_dev { U256::MAX } else { U256::ZERO },
+            is_optimistic: local_dev,
+            is_optimistic_for_regional_filtering: local_dev,
             builder_id: None,
             builder_ids: None,
             api_key: None,

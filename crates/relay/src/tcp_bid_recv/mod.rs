@@ -209,8 +209,6 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                     match RegistrationMsg::from_ssz_bytes(payload) {
                         Ok(msg) => {
                             let api_key = Uuid::from_bytes(msg.api_key).to_string();
-                            // Local dev: builder keys are ephemeral, so a known
-                            // api key admits any pubkey.
                             if self
                                 .api_key_cache
                                 .get(&api_key)
