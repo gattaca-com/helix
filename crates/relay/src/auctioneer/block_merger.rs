@@ -5,7 +5,6 @@ use std::{
 };
 
 use alloy_primitives::{Address, B256, U256};
-use flux_profiler::timed;
 use helix_common::{
     RelayConfig,
     local_cache::LocalCache,
@@ -65,7 +64,7 @@ impl BlockMerger {
         self.flagged_payment_tx_only_blocks.clear();
     }
 
-    #[timed]
+    #[cfg_attr(feature = "profile", flux_profiler::timed)]
     pub fn get_header(
         &mut self,
         original_bid: &PayloadEntry,
@@ -164,7 +163,7 @@ impl BlockMerger {
         Some(entry.bid.clone())
     }
 
-    #[timed]
+    #[cfg_attr(feature = "profile", flux_profiler::timed)]
     pub fn prepare_merged_payload_for_storage(
         &mut self,
         response: BlockMergeResponse,

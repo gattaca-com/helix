@@ -389,6 +389,10 @@ impl PostgresDatabaseService {
     }
 
     fn start_check_flag_task(&mut self) {
+        // Local dev has no DB to poll the flag from.
+        if helix_common::is_local_dev() {
+            return;
+        }
         let svc_clone = self.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(DB_CHECK_INTERVAL);

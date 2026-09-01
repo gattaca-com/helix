@@ -7,6 +7,8 @@ rust-version.workspace = true
 version.workspace = true
 
 [features]
+# Compiles in the flux-profiler `#[timed]` frames; armed at runtime by `enable_flux_profiler`.
+profile = ["dep:flux-profiler", "helix-common/profile", "helix-types/profile"]
 # Exposes block-merging internals for benches/unbundling.rs.
 bench-internals = []
 
@@ -33,7 +35,7 @@ flate2.workspace = true
 flux.workspace = true
 flux-network.workspace = true
 flux-utils.workspace = true
-flux-profiler.workspace = true
+flux-profiler = { workspace = true, optional = true }
 futures.workspace = true
 helix-common.workspace = true
 helix-data-api.workspace = true

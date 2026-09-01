@@ -17,7 +17,6 @@ use std::{
 
 use alloy_primitives::B256;
 use flux::tile::Tile;
-use flux_profiler::timed;
 use flux_utils::SharedVector;
 pub use handle::{AuctioneerHandle, GetPayloadKind};
 use helix_common::{
@@ -27,7 +26,8 @@ use helix_common::{
     chain_info::ChainInfo,
     local_cache::LocalCache,
     metrics::{STATE_TRANSITION_COUNT, STATE_TRANSITION_LATENCY, WORKER_QUEUE_LEN, WORKER_UTIL},
-    record_submission_step,
+    record_submission_step, record_submission_step_ns,
+    utils::utcnow_ns,
 };
 use helix_database::handle::DbHandle;
 use helix_operator::OperatorPubSub;
@@ -244,7 +244,7 @@ impl State {
             .observe(step_dur.as_nanos() as f64 / 1000.);
     }
 
-    #[timed]
+    #[cfg_attr(feature = "profile", flux_profiler::timed)]
     fn _step<B: BidAdjustor>(
         &mut self,
         event: Event,
@@ -392,6 +392,10 @@ impl State {
             // submission
             (State::Sorting(slot_data), Event::Submission { submission_data, decoded_ix }) => {
                 record_submission_step("loop_recv", submission_data.sent_at.elapsed());
+                let loop_ns = utcnow_ns();
+                let trace = &submission_data.submission_data.trace;
+                record_submission_step_ns("recv_loop", trace.receive_ns.0, loop_ns);
+                record_submission_step_ns("decoded_loop", trace.decoded_ns.0, loop_ns);
 
                 let _guard = submission_data.span.enter();
                 trace!("received in auctioneer");
@@ -627,7 +631,7 @@ impl State {
         }
     }
 
-    #[timed]
+    #[cfg_attr(feature = "profile", flux_profiler::timed)]
     fn process_slot_data<B: BidAdjustor>(
         bid_slot: Slot,
         mut payload_attributes_map: FxHashMap<B256, PayloadAttributesUpdate>,

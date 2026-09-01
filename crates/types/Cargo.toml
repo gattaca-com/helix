@@ -17,7 +17,7 @@ ethereum_serde_utils.workspace = true
 helix-tcp-types.workspace = true
 ethereum_ssz.workspace = true
 ethereum_ssz_derive.workspace = true
-flux-profiler.workspace = true
+flux-profiler = { workspace = true, optional = true }
 hex.workspace = true
 lh-bls.workspace = true
 lh-eth2 = { workspace = true, features = ["events"] }
@@ -53,3 +53,6 @@ name = "execution_payload"
 [[bench]]
 harness = false
 name = "signed_bid_submission"
+
+[features]
+profile = ["dep:flux-profiler"]

@@ -173,8 +173,15 @@ async fn run(
 
     HelixSpine::remove_all_files();
 
+    #[cfg(feature = "profile")]
     if config.enable_flux_profiler {
         flux_profiler::enable_profiler("helix");
+    }
+    #[cfg(not(feature = "profile"))]
+    if config.enable_flux_profiler {
+        tracing::warn!(
+            "enable_flux_profiler is set but the relay was built without the `profile` feature"
+        );
     }
 
     let spine = if let Some(spine_config) = spine_config {
@@ -324,16 +331,13 @@ async fn run(
             attach_tile(
                 block_submission_tcp_listener,
                 spine,
-                TileConfig::new(
-                    config.cores.tcp_bid_submissions_tile,
-                    flux::utils::ThreadPriority::High,
-                ),
+                TileConfig::new(config.cores.tcp_bid_submissions_tile, ThreadPriority::OSDefault),
             );
 
             attach_tile(
                 TopBidTile::new(web_socket_recv),
                 spine,
-                TileConfig::new(config.cores.top_bid, flux::utils::ThreadPriority::High),
+                TileConfig::new(config.cores.top_bid, ThreadPriority::OSDefault),
             );
 
             let sim_requests =

@@ -23,7 +23,7 @@ ethereum_ssz_derive.workspace = true
 eyre.workspace = true
 flate2.workspace = true
 flux.workspace = true
-flux-profiler.workspace = true
+flux-profiler = { workspace = true, optional = true }
 flux-utils.workspace = true
 futures.workspace = true
 helix-types.workspace = true
@@ -69,3 +69,6 @@ http-body-util = "0.1"
 [dev-dependencies]
 httpmock.workspace = true
 mockito.workspace = true
+
+[features]
+profile = ["dep:flux-profiler", "helix-types/profile"]

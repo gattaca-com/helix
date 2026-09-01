@@ -13,7 +13,9 @@ use flux_network::{
     tcp::{PollEvent, SendBehavior, TcpConnector, TcpTelemetry},
 };
 use flux_utils::{DCachePtr, SharedVector};
-use helix_common::{SubmissionTrace, metrics::SUB_CLIENT_TO_SERVER_LATENCY, utils::utcnow_ns};
+use helix_common::{
+    SubmissionTrace, is_local_dev, metrics::SUB_CLIENT_TO_SERVER_LATENCY, utils::utcnow_ns,
+};
 use helix_tcp_types::BID_SUB_HEADER_SIZE;
 use helix_types::BlsPublicKeyBytes;
 use ssz::{Decode, Encode};
@@ -207,10 +209,13 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                     match RegistrationMsg::from_ssz_bytes(payload) {
                         Ok(msg) => {
                             let api_key = Uuid::from_bytes(msg.api_key).to_string();
+                            // Local dev: builder keys are ephemeral, so a known
+                            // api key admits any pubkey.
                             if self
                                 .api_key_cache
                                 .get(&api_key)
-                                .is_some_and(|p| p.value().contains(&msg.builder_pubkey))
+                                .is_some_and(|p| p.value().contains(&msg.builder_pubkey)) ||
+                                (is_local_dev() && self.api_key_cache.contains_key(&api_key))
                             {
                                 self.registered.insert(token, msg.builder_pubkey);
                                 self.stats.registration_ok += 1;

@@ -9,12 +9,12 @@ use std::{
 
 use alloy_primitives::{B256, U256};
 use flux::spine::{SpineProducer, SpineProducers};
-use flux_profiler::timed;
 use flux_utils::SharedVector;
 use helix_common::{
     BuilderInfo, RelayConfig,
     alerts::{AlertManager, format_demotion_alert},
     chain_info::ChainInfo,
+    is_local_dev,
     local_cache::LocalCache,
     metrics::{CACHE_SIZE, SimulatorMetrics},
     spawn_tracked,
@@ -99,10 +99,13 @@ impl<B: BidAdjustor> Context<B> {
         alert_manager: Arc<AlertManager>,
         operator_api: Option<Arc<OperatorPubSub>>,
     ) -> Self {
+        // Local dev trusts every builder: ephemeral local keys can't be listed
+        // in config, and there are no simulators to fall back to.
+        let trust_unknown = is_local_dev();
         let unknown_builder_info = BuilderInfo {
-            collateral: U256::ZERO,
-            is_optimistic: false,
-            is_optimistic_for_regional_filtering: false,
+            collateral: if trust_unknown { U256::MAX } else { U256::ZERO },
+            is_optimistic: trust_unknown,
+            is_optimistic_for_regional_filtering: trust_unknown,
             builder_id: None,
             builder_ids: None,
             api_key: None,
@@ -213,7 +216,7 @@ impl<B: BidAdjustor> Context<B> {
         }
     }
 
-    #[timed]
+    #[cfg_attr(feature = "profile", flux_profiler::timed)]
     pub fn on_new_slot(&mut self, bid_slot: Slot, producers: &mut HelixSpineProducers) {
         self.bid_slot = bid_slot;
         if let Some(pending) = self.pending_payload.take() {

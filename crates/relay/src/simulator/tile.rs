@@ -13,7 +13,6 @@ use flux::{
     tile::{Tile, TileName},
     timing::Nanos,
 };
-use flux_profiler::timed;
 use flux_utils::SharedVector;
 use helix_common::{
     SimulatorConfig, SubmissionTrace,
@@ -214,7 +213,7 @@ impl SimulatorTile {
         self.accept_optimistic.store(new, Ordering::Relaxed);
     }
 
-    #[timed]
+    #[cfg_attr(feature = "profile", flux_profiler::timed)]
     fn handle_sim_request(
         &mut self,
         req: crate::simulator::ValidationRequest,
@@ -255,7 +254,7 @@ impl SimulatorTile {
         }
     }
 
-    #[timed]
+    #[cfg_attr(feature = "profile", flux_profiler::timed)]
     fn handle_merge_sim_request(
         &mut self,
         req: MergedValidationRequest,
@@ -320,7 +319,7 @@ impl SimulatorTile {
         }
     }
 
-    #[timed]
+    #[cfg_attr(feature = "profile", flux_profiler::timed)]
     fn spawn_sim(&mut self, id: usize, req: ValidationRequest) {
         let Some(decoded_data) = self.decoded.get(req.decoded_ix) else {
             error!(ix = req.decoded_ix, "decoded submission not found in ring");
@@ -492,7 +491,7 @@ impl SimulatorTile {
         });
     }
 
-    #[timed]
+    #[cfg_attr(feature = "profile", flux_profiler::timed)]
     fn spawn_merge_sim(&mut self, id: usize, req: MergedValidationRequest) {
         let Some(response) = self.merged_blocks.get(req.merged_block_ix) else {
             error!(ix = req.merged_block_ix, "merged block not found in ring");
@@ -612,7 +611,7 @@ impl SimulatorTile {
     /// Selection priority:
     /// 1. Any SSZ-capable sim, least pending (binary protocol)
     /// 2. Any sim, least pending (JSON-RPC fallback)
-    #[timed]
+    #[cfg_attr(feature = "profile", flux_profiler::timed)]
     fn select_simulator(&self) -> Option<usize> {
         self.ssz_sim_indices
             .iter()

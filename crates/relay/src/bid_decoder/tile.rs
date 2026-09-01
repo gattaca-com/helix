@@ -7,7 +7,6 @@ use flux::{
     tile::Tile,
     timing::{InternalMessage, Nanos},
 };
-use flux_profiler::timed;
 use flux_utils::SharedVector;
 use helix_common::{
     RelayConfig, SubmissionTrace,
@@ -15,7 +14,8 @@ use helix_common::{
     chain_info::ChainInfo,
     decoder::{SubmissionDecoder, SubmissionDecoderParams},
     local_cache::LocalCache,
-    record_submission_step,
+    record_submission_step, record_submission_step_ns,
+    utils::utcnow_ns,
 };
 use helix_types::{
     BidAdjustmentData, BlockMergingData, BlsPublicKeyBytes, MergeType, SignedBidSubmission,
@@ -249,7 +249,7 @@ impl DecoderTile {
         builder_id = tracing::field::Empty,
         block_hash = tracing::field::Empty,
     ))]
-    #[timed]
+    #[cfg_attr(feature = "profile", flux_profiler::timed)]
     fn handle_block_submission(
         cache: &LocalCache,
         chain_info: &ChainInfo,
@@ -264,6 +264,7 @@ impl DecoderTile {
     ) -> Result<(SubmissionData, tracing::Span), BuilderApiError> {
         tracing::Span::current().record("id", tracing::field::display(header.id));
         record_submission_step("worker_recv", sent_at.elapsed());
+        record_submission_step_ns("recv_worker", trace.receive_ns.0, utcnow_ns());
         trace!("received by worker");
         let (
             submission,
@@ -325,7 +326,7 @@ impl DecoderTile {
     }
 
     #[allow(clippy::too_many_arguments, clippy::type_complexity)]
-    #[timed]
+    #[cfg_attr(feature = "profile", flux_profiler::timed)]
     fn try_handle_block_submission(
         cache: &LocalCache,
         chain_info: &ChainInfo,
@@ -366,6 +367,7 @@ impl DecoderTile {
             decoder.decode(payload, buffer)?;
 
         trace.decoded_ns = Nanos::now();
+        record_submission_step_ns("recv_decoded", trace.receive_ns.0, trace.decoded_ns.0);
 
         let builder_pubkey = *submission.builder_pubkey();
         let skip_sigverify = if let Some(expected_pubkey) = expected_pubkey {
@@ -456,7 +458,7 @@ fn error_category(err: &BuilderApiError) -> &'static str {
     }
 }
 
-#[timed]
+#[cfg_attr(feature = "profile", flux_profiler::timed)]
 fn verify_and_validate(
     submission: &mut SignedBidSubmission,
     skip_sigverify: bool,

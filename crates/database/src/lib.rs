@@ -86,6 +86,11 @@ pub async fn start_db_service(
                 }
             }
         });
+    } else {
+        // Local dev reads nothing from the DB: api keys and builder infos come
+        // straight from config, and gated routes treat validators as loaded.
+        local_cache.update_builder_infos(&config.builders, false);
+        known_validators_loaded.store(true, Ordering::Relaxed);
     }
 
     postgres_db.start_processors(db_request_receiver, db_batch_request_receiver).await;
