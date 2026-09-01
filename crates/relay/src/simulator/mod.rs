@@ -451,45 +451,47 @@ impl Simulators {
         let submission_ref = req.submission_ref;
 
         let sim = &mut self.simulators[id];
-        let dispatch = if let Some(url) = &sim.client.ssz_url {
-            SimDispatch::Ssz {
-                to_send: sim.client.client.post(format!("{url}/validate")),
+        let fork = submission.fork_name();
+        let dispatch = match &sim.client.ssz_url {
+            Some(url) => sim.client.ssz_request_builder(fork).map(|to_send| SimDispatch::Ssz {
+                to_send,
                 ssz_url: url.clone(),
                 http: sim.client.client.clone(),
-            }
-        } else {
-            let fork = submission.fork_name();
-            let Some((builder, method)) = sim.client.sim_request_builder(fork) else {
-                warn!(%fork, "no validation RPC method for fork, dropping submission");
-                sim.pending += 1;
-                let result = SimResult::Validate((
-                    id,
-                    Some(SimulationResultInner {
-                        submission_ref: req.submission_ref,
-                        optimistic_version: req.optimistic_version(),
-                        bid: None,
-                        result: Err(BlockSimError::UnsupportedFork(fork)),
-                        submission_id: req.submission_id,
-                        block_hash: *submission.block_hash(),
-                        txs: Vec::new(),
-                        retried: false,
-                    }),
-                ));
-                let started = sim_started_event(
-                    req.submission_id,
-                    *submission.block_hash(),
-                    false,
-                    req.is_top_bid,
-                );
-                let _ = self.task_tx.send(SimulatorsEvent::TaskDone {
-                    id,
-                    error: None,
-                    result: Box::new(result),
-                    elapsed: None,
-                });
-                return (*submission.block_hash() != B256::ZERO).then_some(started);
-            };
-            SimDispatch::Json { to_send: builder, method: method.to_owned() }
+            }),
+            None => sim
+                .client
+                .sim_request_builder(fork)
+                .map(|(to_send, method)| SimDispatch::Json { to_send, method: method.to_owned() }),
+        };
+        let Some(dispatch) = dispatch else {
+            warn!(%fork, "no validation method for fork, dropping submission");
+            sim.pending += 1;
+            let result = SimResult::Validate((
+                id,
+                Some(SimulationResultInner {
+                    submission_ref: req.submission_ref,
+                    optimistic_version: req.optimistic_version(),
+                    bid: None,
+                    result: Err(BlockSimError::UnsupportedFork(fork)),
+                    submission_id: req.submission_id,
+                    block_hash: *submission.block_hash(),
+                    txs: Vec::new(),
+                    retried: false,
+                }),
+            ));
+            let started = sim_started_event(
+                req.submission_id,
+                *submission.block_hash(),
+                false,
+                req.is_top_bid,
+            );
+            let _ = self.task_tx.send(SimulatorsEvent::TaskDone {
+                id,
+                error: None,
+                result: Box::new(result),
+                elapsed: None,
+            });
+            return (*submission.block_hash() != B256::ZERO).then_some(started);
         };
         sim.pending += 1;
 
