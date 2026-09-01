@@ -15,7 +15,7 @@ use helix_common::{
     decoder::{DecoderError, SubmissionDecoder, SubmissionDecoderParams},
     simulator::{SszMergedValidationRequest, SszValidationRequest},
 };
-use helix_types::Submission;
+use helix_types::{ForkName, Submission};
 use ssz::Decode;
 use tokio::{net::TcpListener, sync::Semaphore, time};
 use tracing::{error, info, warn};
@@ -55,6 +55,21 @@ pub async fn run(validator: BlockValidator, addr: SocketAddr, max_concurrent: us
     }
 }
 
+/// Forks this validator understands. A submission from any other fork is
+/// refused rather than validated under the wrong rules.
+fn supported_fork(params: &Option<SubmissionDecoderParams>) -> bool {
+    // No params means raw Fulu-shaped SSZ bytes.
+    params.as_ref().is_none_or(|params| matches!(params.fork_name, ForkName::Fulu))
+}
+
+/// 501, not 400: the relay maps a 400 body to `BlockValidationFailed`, which
+/// demotes the builder. This is helix's own limitation, not the builder's.
+fn unsupported_fork(params: &Option<SubmissionDecoderParams>) -> Response {
+    let fork = params.as_ref().map(|params| params.fork_name);
+    warn!(?fork, "refusing a submission from an unsupported fork");
+    (StatusCode::NOT_IMPLEMENTED, format!("unsupported fork: {fork:?}")).into_response()
+}
+
 /// A dehydrated submission needs transactions this simulator does not cache.
 /// The relay answers a 424 by retrying with full SSZ bytes.
 fn decode_submission(
@@ -79,6 +94,9 @@ async fn validate(State(state): State<ServerState>, body: axum::body::Bytes) -> 
         Ok(request) => request,
         Err(err) => return bad_request(format!("{err:?}")),
     };
+    if !supported_fork(&request.decoder_params) {
+        return unsupported_fork(&request.decoder_params);
+    }
     let submission = match decode_submission(request.decoder_params, &request.signed_bid_submission)
     {
         Ok(Some(submission)) => submission,
@@ -104,6 +122,9 @@ async fn validate_merged(State(state): State<ServerState>, body: axum::body::Byt
         Ok(request) => request,
         Err(err) => return bad_request(format!("{err:?}")),
     };
+    if !supported_fork(&request.decoder_params) {
+        return unsupported_fork(&request.decoder_params);
+    }
     let submission = match decode_submission(request.decoder_params, &request.signed_bid_submission)
     {
         Ok(Some(submission)) => submission,
