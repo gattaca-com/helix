@@ -18,6 +18,7 @@ bytes.workspace = true
 clap = { workspace = true, features = ["env"] }
 core_affinity.workspace = true
 crossbeam-channel.workspace = true
+dashmap.workspace = true
 ethereum_ssz.workspace = true
 ethrex-blockchain.workspace = true
 ethrex-common.workspace = true
@@ -34,7 +35,14 @@ flux.workspace = true
 hex.workspace = true
 flux-network.workspace = true
 flux-utils.workspace = true
+axum.workspace = true
+helix-common.workspace = true
 helix-tcp-types.workspace = true
+helix-types.workspace = true
+reqwest.workspace = true
+reqwest-eventsource.workspace = true
+futures.workspace = true
+num_cpus.workspace = true
 rand.workspace = true
 rayon.workspace = true
 rustc-hash.workspace = true
@@ -52,3 +60,4 @@ uuid = { workspace = true, features = ["serde"] }
 zstd.workspace = true
 
 [dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

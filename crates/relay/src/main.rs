@@ -186,6 +186,7 @@ async fn run(
 
     let alert_manager = Arc::new(AlertManager::from_relay_config(&config));
     let failsafe_triggered = Arc::new(AtomicBool::new(false));
+    let block_merging_enabled = Arc::new(AtomicBool::new(config.block_merging_config.is_enabled));
     let (gossip_sender, gossip_receiver) = tokio::sync::mpsc::channel(10_000);
 
     let operator_api = config.operator_config.as_ref().map(|operator_config| {
@@ -215,7 +216,12 @@ async fn run(
     });
 
     spine.start(None, Some(termination_grace_period), |spine| {
-        start_admin_service(local_cache.clone(), db.clone(), expect_env_var(ADMIN_TOKEN_ENV_VAR));
+        start_admin_service(
+            local_cache.clone(),
+            db.clone(),
+            expect_env_var(ADMIN_TOKEN_ENV_VAR),
+            block_merging_enabled.clone(),
+        );
 
         let auctioneer_handle = AuctioneerHandle::new(event_tx.clone());
         let registrations_handle = RegWorkerHandle::new(reg_worker_tx);
@@ -335,20 +341,20 @@ async fn run(
                 Arc::new(SharedVector::<SimRequest>::with_capacity(MAX_SUBMISSIONS_PER_SLOT));
             let sim_results =
                 Arc::new(SharedVector::<SimResult>::with_capacity(MAX_SUBMISSIONS_PER_SLOT));
+            let merged_blocks = Arc::new(SharedVector::<BlockMergeResponse>::with_capacity(1024));
 
             let (accept_optimistic, failsafe_triggered, sim_tile) = SimulatorTile::create(
                 config.simulators.clone(),
                 sim_requests.clone(),
                 sim_results.clone(),
                 decoded.clone(),
+                merged_blocks.clone(),
                 chain_info.as_ref().clone(),
                 failsafe_triggered,
             );
 
             let sim_core = config.cores.simulator;
             attach_tile(sim_tile, spine, TileConfig::new(sim_core, ThreadPriority::OSDefault));
-
-            let merged_blocks = Arc::new(SharedVector::<BlockMergeResponse>::with_capacity(1024));
 
             if config.block_merging_config.is_enabled &&
                 let Some(merging_tcp) = config.block_merging_config.tcp.clone()
@@ -359,7 +365,10 @@ async fn run(
                     decoded.clone(),
                     slot_events.clone(),
                     merged_blocks.clone(),
+                    sim_requests.clone(),
+                    sim_results.clone(),
                     chain_info.as_ref().clone(),
+                    block_merging_enabled.clone(),
                 );
                 attach_tile(
                     merging_tile,

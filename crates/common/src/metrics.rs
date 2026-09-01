@@ -449,6 +449,12 @@ lazy_static! {
         &RELAY_METRICS_REGISTRY
     )
     .unwrap();
+    pub static ref GET_PAYLOAD_V1_RESPONSE_WITHHELD: IntCounter = register_int_counter_with_registry!(
+        "get_payload_v1_response_withheld_total",
+        "Count of V1 getPayload responses withheld due to the response-safety buffer",
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
 
     //////////////// GET HEADER ////////////////
     pub static ref HEADER_TIMEOUT_FETCH: IntCounter = register_int_counter_with_registry!(

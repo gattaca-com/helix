@@ -1,8 +1,5 @@
 use alloy_primitives::{Address, U256};
-use helix_common::{
-    SimulatorConfig,
-    simulator::{BlockSimError, JsonValidationRequest, SszValidationRequest},
-};
+use helix_common::{SimulatorConfig, simulator::BlockSimError};
 use helix_types::ForkName;
 use reqwest::{
     RequestBuilder,
@@ -36,6 +33,9 @@ pub struct SimulatorClient {
     pub config: SimulatorConfig,
     pub sim_method_v4: String,
     pub sim_method_v5: String,
+    /// Relay-internal merged-block validation method; never reachable by an externally
+    /// submitted builder block. See `helix_common::simulator::MergedJsonValidationRequest`.
+    pub sim_method_merged_v5: String,
     /// If set, use SSZ binary endpoint instead of JSON-RPC for simulations
     pub ssz_url: Option<String>,
 }
@@ -44,8 +44,10 @@ impl SimulatorClient {
     pub fn new(client: reqwest::Client, config: SimulatorConfig) -> Self {
         let sim_method_v4 = format!("{}_validateBuilderSubmissionV4", config.namespace);
         let sim_method_v5 = format!("{}_validateBuilderSubmissionV5", config.namespace);
+        let sim_method_merged_v5 =
+            format!("{}_validateMergedBuilderSubmissionV5", config.namespace);
         let ssz_url = config.ssz_url.clone();
-        Self { client, config, sim_method_v4, sim_method_v5, ssz_url }
+        Self { client, config, sim_method_v4, sim_method_v5, sim_method_merged_v5, ssz_url }
     }
 
     pub fn endpoint(&self) -> &str {
@@ -56,13 +58,32 @@ impl SimulatorClient {
         self.ssz_url.as_ref().map(|url| self.client.post(format!("{url}/validate")))
     }
 
-    pub fn sim_request_builder(&self, fork: ForkName) -> (RequestBuilder, &str) {
-        let method = if fork == ForkName::Fulu { &self.sim_method_v5 } else { &self.sim_method_v4 };
-        (self.client.post(&self.config.url), method)
+    /// Relay-internal merged-block SSZ route; see `sim_method_merged_v5`.
+    pub fn ssz_merged_request_builder(&self) -> Option<RequestBuilder> {
+        self.ssz_url.as_ref().map(|url| self.client.post(format!("{url}/validate_merged")))
+    }
+
+    /// Returns `None` for a fork this client has no validation RPC method for yet, rather than
+    /// silently mis-routing it to a method shaped for a different fork.
+    pub fn sim_request_builder(&self, fork: ForkName) -> Option<(RequestBuilder, &str)> {
+        let method = match fork {
+            ForkName::Fulu => &self.sim_method_v5,
+            ForkName::Bellatrix | ForkName::Capella | ForkName::Deneb | ForkName::Electra => {
+                &self.sim_method_v4
+            }
+            ForkName::Base | ForkName::Altair | ForkName::Gloas | ForkName::Heze => return None,
+        };
+        Some((self.client.post(&self.config.url), method))
+    }
+
+    /// Merged-block counterpart of `sim_request_builder`: only V5 applies (the network is long
+    /// past the forks V4 covers), so this doesn't need a fork parameter.
+    pub fn merged_sim_request_builder(&self) -> (RequestBuilder, &str) {
+        (self.client.post(&self.config.url), &self.sim_method_merged_v5)
     }
 
     pub async fn do_json_sim_request(
-        request: &JsonValidationRequest,
+        request: &impl serde::Serialize,
         is_top_bid: bool,
         sim_method: &str,
         to_send: RequestBuilder,
@@ -99,7 +120,7 @@ impl SimulatorClient {
     }
 
     pub async fn do_sim_request(
-        ssz_req: &SszValidationRequest,
+        ssz_req: &impl Encode,
         is_top_bid: bool,
         to_send: RequestBuilder,
     ) -> Result<(), BlockSimError> {
@@ -179,6 +200,37 @@ impl SimulatorClient {
 mod test {
     use alloy_primitives::hex::FromHex;
     use helix_common::SimulatorConfig;
+    use helix_types::ForkName;
+
+    use super::SimulatorClient;
+
+    fn sim_client() -> SimulatorClient {
+        SimulatorClient::new(reqwest::Client::new(), SimulatorConfig {
+            url: "http://localhost:8545".into(),
+            namespace: "relay".into(),
+            max_concurrent_tasks: 1,
+            ssz_url: None,
+        })
+    }
+
+    #[test]
+    fn routes_fulu_to_v5() {
+        let client = sim_client();
+        let (_, method) = client.sim_request_builder(ForkName::Fulu).unwrap();
+        assert!(method.ends_with("V5"));
+    }
+
+    #[test]
+    fn routes_electra_to_v4() {
+        let client = sim_client();
+        let (_, method) = client.sim_request_builder(ForkName::Electra).unwrap();
+        assert!(method.ends_with("V4"));
+    }
+
+    #[test]
+    fn gloas_has_no_validation_method_yet() {
+        assert!(sim_client().sim_request_builder(ForkName::Gloas).is_none());
+    }
 
     #[tokio::test]
     async fn balance_request() {

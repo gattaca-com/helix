@@ -43,17 +43,18 @@ pub async fn overview(
     let adjustments_enabled = db.check_adjustments_enabled().await?;
     let builders_pending_promotion = db.count_builders_pending_promotion().await?;
 
-    let kill_switch_enabled = match relay.status().await {
-        Ok(status) => Some(status.kill_switch_enabled),
+    let (kill_switch_enabled, block_merging_enabled) = match relay.status().await {
+        Ok(status) => (Some(status.kill_switch_enabled), Some(status.block_merging_enabled)),
         Err(err) => {
-            warn!(%err, "relay admin API unreachable, omitting kill switch state");
-            None
+            warn!(%err, "relay admin API unreachable, omitting kill switch/block merging state");
+            (None, None)
         }
     };
 
     Ok(Json(OverviewResponse {
         adjustments_enabled,
         kill_switch_enabled,
+        block_merging_enabled,
         builders_pending_promotion,
     }))
 }
@@ -191,6 +192,22 @@ pub async fn disable_kill_switch(
 ) -> Result<impl IntoResponse, AdminApiError> {
     relay.set_kill_switch(false).await?;
     info!("kill switch disabled via admin website");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn enable_block_merging(
+    Extension(relay): Extension<RelayAdminClient>,
+) -> Result<impl IntoResponse, AdminApiError> {
+    relay.set_block_merging(true).await?;
+    info!("block merging enabled via admin website");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn disable_block_merging(
+    Extension(relay): Extension<RelayAdminClient>,
+) -> Result<impl IntoResponse, AdminApiError> {
+    relay.set_block_merging(false).await?;
+    info!("block merging disabled via admin website");
     Ok(StatusCode::NO_CONTENT)
 }
 

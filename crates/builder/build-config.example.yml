@@ -1,0 +1,29 @@
+# helix-builder building configuration (--build.config)
+#
+# Needs two keys in the environment:
+#   BUILDER_BLS_KEY     signs the submission; register this pubkey with the relay
+#   BUILDER_PAYOUT_KEY  pays the proposer; fund this address
+
+# Relay base URL. Serves proposer duties and accepts block submissions.
+relay_url: "http://localhost:4040"
+
+# Sent as X-Api-Key on every submission.
+api_key: "00000000-0000-0000-0000-000000000001"
+
+# Beacon node base URL. Its payload_attributes SSE topic drives building.
+beacon_url: "http://localhost:3500"
+
+# Added to every bid, so an idle chain still produces a non-zero one. The relay
+# rejects a zero-value block. Must exceed the payout's own gas
+# (payout_gas_reserve * base fee) or the slot is skipped. Set to 0 to bid only
+# what the block really earns.
+subsidy_wei: 1000000000000000
+
+# Gas held back from the fill for the trailing payout transaction. A contract
+# fee recipient that needs more than this makes the payout fail.
+payout_gas_reserve: 21000
+
+extra_data: "helix-builder"
+
+# Points into the slot, in milliseconds, at which to build and submit.
+submit_offsets_ms: [500, 2000]

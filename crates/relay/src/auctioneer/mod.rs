@@ -152,7 +152,7 @@ impl<B: BidAdjustor> Tile<HelixSpine> for Auctioneer<B> {
                 tracing::error!(?msg, "sim outbound payload not found");
                 return;
             };
-            let SimResult::Validate(sim_result) = payload.as_ref();
+            let SimResult::Validate(sim_result) = payload.as_ref() else { return };
             let event = Event::SimResult(sim_result.clone());
             self.state.step(event, &mut self.ctx, &mut self.tel, producers);
         });

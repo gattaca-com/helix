@@ -6,7 +6,8 @@ use tracing::warn;
 pub use uuid::Uuid;
 
 use crate::{
-    Filtering, PreferencesHeader, SignedValidatorRegistrationEntry, ValidatorPreferences,
+    Filtering, HeaderStreamConfig, PreferencesHeader, SignedValidatorRegistrationEntry,
+    ValidatorPreferences,
     api::{HEADER_FORWARDED_FOR, HEADER_TIMEOUT_MS, proposer_api::GetHeaderParams},
 };
 
@@ -63,8 +64,9 @@ pub trait ApiProvider: Send + Sync + Clone + 'static {
         _params: &GetHeaderParams,
         _headers: &HeaderMap,
         _registered: &ValidatorPreferences,
+        config: &HeaderStreamConfig,
     ) -> Result<(), &'static str> {
-        Err("header stream not available")
+        if config.admit_all { Ok(()) } else { Err("header stream not available") }
     }
 }
 

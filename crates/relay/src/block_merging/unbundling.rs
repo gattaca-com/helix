@@ -31,7 +31,7 @@ impl OrderTxs {
     }
 
     #[cfg(test)]
-    fn new(hashes: Vec<B256>, droppable: impl IntoIterator<Item = usize>) -> Self {
+    pub(crate) fn new(hashes: Vec<B256>, droppable: impl IntoIterator<Item = usize>) -> Self {
         Self { hashes, droppable: droppable.into_iter().collect() }
     }
 }

@@ -8,7 +8,7 @@ use helix_common::{
     beacon::types::BroadcastValidation,
     chain_info::ChainInfo,
     decoder::{Encoding, HEADER_SSZ},
-    metrics::BEACON_BLOCK_PUBLISH_FAILURES,
+    metrics::{BEACON_BLOCK_PUBLISH_FAILURES, GET_PAYLOAD_V1_RESPONSE_WITHHELD},
     spawn_tracked,
     utils::{extract_request_id, utcnow_ms, utcnow_ns},
 };
@@ -344,22 +344,24 @@ impl<A: Api> ProposerApi<A> {
         trace.payload_fetched = utcnow_ns();
 
         // Handle early/late requests
-        if let Err(err) =
-            self.await_and_validate_slot_start_time(head_slot + 1, trace.receive).await
-        {
-            warn!(error = %err, "get_payload was sent too late");
+        let slot_timing =
+            match self.await_and_validate_slot_start_time(head_slot + 1, trace.receive).await {
+                Ok(slot_timing) => slot_timing,
+                Err(err) => {
+                    warn!(error = %err, "get_payload was sent too late");
 
-            self.db.save_too_late_get_payload(
-                (head_slot + 1).into(),
-                proposer_public_key,
-                block_hash,
-                trace.receive,
-                trace.payload_fetched,
-            );
+                    self.db.save_too_late_get_payload(
+                        (head_slot + 1).into(),
+                        proposer_public_key,
+                        block_hash,
+                        trace.receive,
+                        trace.payload_fetched,
+                    );
 
-            let _ = dedup_tx.send(Arc::new(None));
-            return Err(err);
-        }
+                    let _ = dedup_tx.send(Arc::new(None));
+                    return Err(err);
+                }
+            };
 
         self.gossip_payload(
             to_publish.signed_block.slot(),
@@ -462,6 +464,13 @@ impl<A: Api> ProposerApi<A> {
             if remaining_sleep_ms > 0 {
                 sleep(Duration::from_millis(remaining_sleep_ms)).await;
             }
+
+            if let SlotTiming::WithinResponseBuffer(err) = slot_timing {
+                warn!(error = %err, "get_payload landed in the V1 response-safety buffer, withholding payload");
+                GET_PAYLOAD_V1_RESPONSE_WITHHELD.inc();
+                let _ = dedup_tx.send(Arc::new(None));
+                return Err(err);
+            }
         }
 
         // Notify dedup waiters with the successful response.
@@ -476,7 +485,7 @@ impl<A: Api> ProposerApi<A> {
         &self,
         slot: Slot,
         request_time_ns: u64,
-    ) -> Result<(), ProposerApiError> {
+    ) -> Result<SlotTiming, ProposerApiError> {
         let Some((since_slot_start, until_slot_start)) =
             calculate_slot_time_info(&self.chain_info, slot, request_time_ns)
         else {
@@ -491,15 +500,16 @@ impl<A: Api> ProposerApi<A> {
         if let Some(until_slot_start) = until_slot_start {
             info!("waiting until slot start t=0: {} ms", until_slot_start.as_millis());
             sleep(until_slot_start).await;
-        } else if let Some(since_slot_start) = since_slot_start &&
-            since_slot_start.as_millis() > GET_PAYLOAD_REQUEST_CUTOFF_MS as u128
-        {
-            return Err(ProposerApiError::GetPayloadRequestTooLate {
-                cutoff: GET_PAYLOAD_REQUEST_CUTOFF_MS as u64,
-                request_time: since_slot_start.as_millis() as u64,
-            });
+            return Ok(SlotTiming::OnTime);
         }
-        Ok(())
+
+        let Some(since_slot_start) = since_slot_start else { return Ok(SlotTiming::OnTime) };
+
+        evaluate_response_buffer(
+            since_slot_start.as_millis() as u64,
+            GET_PAYLOAD_REQUEST_CUTOFF_MS as u64,
+            self.relay_config.get_payload_v1_response_buffer_ms,
+        )
     }
 
     async fn save_delivered_payload_info(
@@ -565,6 +575,30 @@ impl<A: Api> ProposerApi<A> {
     }
 }
 
+enum SlotTiming {
+    OnTime,
+    WithinResponseBuffer(ProposerApiError),
+}
+
+fn evaluate_response_buffer(
+    since_slot_start_ms: u64,
+    cutoff_ms: u64,
+    buffer_ms: u64,
+) -> Result<SlotTiming, ProposerApiError> {
+    let too_late = || ProposerApiError::GetPayloadRequestTooLate {
+        cutoff: cutoff_ms,
+        request_time: since_slot_start_ms,
+    };
+
+    if since_slot_start_ms > cutoff_ms {
+        return Err(too_late());
+    }
+    if since_slot_start_ms > cutoff_ms.saturating_sub(buffer_ms) {
+        return Ok(SlotTiming::WithinResponseBuffer(too_late()));
+    }
+    Ok(SlotTiming::OnTime)
+}
+
 /// Calculates the time information for a given slot.
 fn calculate_slot_time_info(
     chain_info: &ChainInfo,
@@ -584,4 +618,52 @@ pub(super) fn fork_name_from_header(headers: &HeaderMap) -> Result<Option<ForkNa
         .get(CONSENSUS_VERSION_HEADER)
         .map(|fork_name| fork_name.to_str().map_err(|e| e.to_string()).and_then(ForkName::from_str))
         .transpose()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const CUTOFF: u64 = GET_PAYLOAD_REQUEST_CUTOFF_MS as u64;
+    const BUFFER: u64 = 800;
+
+    #[test]
+    fn safely_inside_window_returns_payload() {
+        assert!(matches!(evaluate_response_buffer(0, CUTOFF, BUFFER), Ok(SlotTiming::OnTime)));
+        assert!(matches!(
+            evaluate_response_buffer(CUTOFF - BUFFER - 1, CUTOFF, BUFFER),
+            Ok(SlotTiming::OnTime)
+        ));
+    }
+
+    #[test]
+    fn buffer_boundary_withholds_payload() {
+        // just inside the buffer
+        assert!(matches!(
+            evaluate_response_buffer(CUTOFF - BUFFER + 1, CUTOFF, BUFFER),
+            Ok(SlotTiming::WithinResponseBuffer(ProposerApiError::GetPayloadRequestTooLate { .. }))
+        ));
+        // exactly at the outer cutoff — still withheld, not outright rejected
+        assert!(matches!(
+            evaluate_response_buffer(CUTOFF, CUTOFF, BUFFER),
+            Ok(SlotTiming::WithinResponseBuffer(ProposerApiError::GetPayloadRequestTooLate { .. }))
+        ));
+    }
+
+    #[test]
+    fn past_cutoff_is_rejected_outright() {
+        assert!(matches!(
+            evaluate_response_buffer(CUTOFF + 1, CUTOFF, BUFFER),
+            Err(ProposerApiError::GetPayloadRequestTooLate { .. })
+        ));
+    }
+
+    #[test]
+    fn zero_buffer_is_a_no_op() {
+        assert!(matches!(evaluate_response_buffer(CUTOFF, CUTOFF, 0), Ok(SlotTiming::OnTime)));
+        assert!(matches!(
+            evaluate_response_buffer(CUTOFF + 1, CUTOFF, 0),
+            Err(ProposerApiError::GetPayloadRequestTooLate { .. })
+        ));
+    }
 }
