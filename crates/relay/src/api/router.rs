@@ -12,7 +12,10 @@ use axum::{
     routing::{any, get, post},
 };
 use helix_common::{Route, RouterConfig, utils::extract_request_id};
-use hyper::{HeaderMap, Uri};
+use hyper::{
+    HeaderMap, Uri,
+    header::{CONTENT_LENGTH, USER_AGENT},
+};
 use tower::{BoxError, ServiceBuilder, timeout::TimeoutLayer};
 use tower_governor::{
     GovernorLayer, governor::GovernorConfigBuilder, key_extractor::SmartIpKeyExtractor,
@@ -143,7 +146,18 @@ pub fn build_router<A: Api>(
             .layer(PropagateRequestIdLayer::x_request_id()) // propagate request id
             .layer(HandleErrorLayer::new(|uri: Uri, headers: HeaderMap, e: BoxError| async move {
                 let request_id = extract_request_id(&headers);
-                warn!(uri = %uri.path(), %request_id, "request timed out {:?}", e);
+                // Deliberately not the API key: it identifies the builder but is a
+                // credential. `user_agent` and body size are the non-secret proxies.
+                let header =
+                    |name| headers.get(name).and_then(|v| v.to_str().ok()).unwrap_or("unknown");
+                warn!(
+                    uri = %uri.path(),
+                    %request_id,
+                    content_length = header(CONTENT_LENGTH),
+                    user_agent = header(USER_AGENT),
+                    "request timed out {:?}",
+                    e
+                );
                 StatusCode::REQUEST_TIMEOUT
             })) // timeout
             .layer(TimeoutLayer::new(API_REQUEST_TIMEOUT)),

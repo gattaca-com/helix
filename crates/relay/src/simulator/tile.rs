@@ -344,7 +344,16 @@ impl SimulatorTile {
                 match self.hydration_cache.hydrate(d, self.chain_info.max_blobs_per_block()) {
                     Ok(h) => (h.submission, h.tx_root),
                     Err(e) => {
-                        error!(%e, "hydration failed in sim tile");
+                        // Read the identity off the original rather than the clone
+                        // `hydrate` consumed, so the hit path pays nothing for it.
+                        let sub = &decoded_data.submission_data.submission;
+                        error!(
+                            %e,
+                            builder_pubkey = %sub.builder_pubkey(),
+                            slot = sub.bid_slot(),
+                            block_hash = %sub.block_hash(),
+                            "hydration failed in sim tile"
+                        );
                         let sim = &mut self.simulators[id];
                         sim.pending += 1;
                         let result_ix = self
