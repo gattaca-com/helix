@@ -88,6 +88,15 @@ fn main() -> eyre::Result<()> {
         let keys = building_keys.expect("the building role loads its keys");
         let chain_id = node.store.get_chain_config().chain_id;
 
+        // The builder domain must come from the network's own spec. A wrong
+        // genesis fork version makes the relay drop every bid, silently.
+        let signing = runtime.block_on(building::signing_context(&building_config.beacon_url))?;
+        info!(
+            chain = %signing.chain_info.name,
+            builder_domain = %signing.chain_info.builder_domain,
+            "Resolved the builder signing domain",
+        );
+
         let (contexts, rx) = tokio::sync::mpsc::channel(4);
         runtime.spawn(building::watch_slots(building_config.clone(), contexts));
         runtime.spawn(building::build_blocks(
@@ -95,6 +104,7 @@ fn main() -> eyre::Result<()> {
             node.store.clone(),
             node.blockchain.clone(),
             keys.payout,
+            signing,
             chain_id,
             rx,
         ));
