@@ -204,3 +204,75 @@ fn an_unchanged_list_reports_no_new_digest() {
         "an unchanged list must report nothing"
     );
 }
+
+/// Decoder params naming a fork, with everything else at its default.
+fn params_for(fork: helix_types::ForkName) -> helix_common::decoder::SubmissionDecoderParams {
+    helix_common::decoder::SubmissionDecoderParams {
+        compression: Default::default(),
+        encoding: helix_common::decoder::Encoding::Ssz,
+        merge_type: Default::default(),
+        is_dehydrated: false,
+        with_mergeable_data: false,
+        with_adjustments: false,
+        mark_all_txs_mergeable: false,
+        fork_name: fork,
+    }
+}
+
+#[tokio::test]
+async fn a_gloas_validation_request_is_refused() {
+    let fixture = Fixture::new().await;
+    let built = fixture.build_on(fixture.genesis_hash, fixture.genesis_timestamp + 12, 0);
+    let mut request = fixture.ssz_request(&built, true);
+    request.decoder_params = Some(params_for(helix_types::ForkName::Gloas));
+
+    let (status, body) = post(&fixture, "/validate", request.as_ssz_bytes()).await;
+
+    assert_eq!(
+        status,
+        StatusCode::NOT_IMPLEMENTED,
+        "a Gloas block must not be validated under Fulu rules: {body}",
+    );
+}
+
+#[tokio::test]
+async fn a_merged_gloas_request_is_refused() {
+    let fixture = Fixture::new().await;
+    let built = fixture.build_on(fixture.genesis_hash, fixture.genesis_timestamp + 12, 0);
+    let base = fixture.ssz_request(&built, true);
+    let request = SszMergedValidationRequest {
+        apply_blacklist: base.apply_blacklist,
+        registered_gas_limit: base.registered_gas_limit,
+        parent_beacon_block_root: base.parent_beacon_block_root,
+        inclusion_list: base.inclusion_list,
+        decoder_params: Some(params_for(helix_types::ForkName::Gloas)),
+        signed_bid_submission: base.signed_bid_submission,
+        base_payment_tx_index: 0,
+    };
+
+    let (status, body) = post(&fixture, "/validate_merged", request.as_ssz_bytes()).await;
+
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "the merged route has the same hole: {body}");
+}
+
+#[tokio::test]
+async fn a_fulu_request_is_still_validated() {
+    let fixture = Fixture::new().await;
+    let built = fixture.build_on(fixture.genesis_hash, fixture.genesis_timestamp + 12, 0);
+    let mut request = fixture.ssz_request(&built, true);
+    request.decoder_params = Some(params_for(helix_types::ForkName::Fulu));
+
+    let (status, body) = post(&fixture, "/validate", request.as_ssz_bytes()).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+#[test]
+fn refusing_an_unsupported_fork_cannot_demote_a_builder() {
+    // `SimulatorClient::ssz_request` maps 400 to `BlockValidationFailed`, which
+    // demotes, and everything else to `RpcError`, which does not. Refusing a
+    // fork is helix's own limitation, so it must not cost a builder its
+    // optimistic status.
+    assert_ne!(StatusCode::NOT_IMPLEMENTED, StatusCode::BAD_REQUEST);
+    assert!(!helix_common::simulator::BlockSimError::RpcError.is_demotable());
+}

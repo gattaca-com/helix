@@ -360,35 +360,39 @@ impl SimulatorTile {
         let submission_ref = decoded_data.submission_data.submission_ref;
 
         let sim = &mut self.simulators[id];
-        let dispatch = if let Some(url) = &sim.client.ssz_url {
-            SimDispatch::Ssz {
-                to_send: sim.client.client.post(format!("{url}/validate")),
+        // Both dispatch kinds gate on the fork. The SSZ and JSON validators are
+        // different implementations, so they have separate fork lists.
+        let fork = submission.fork_name();
+        let dispatch = match &sim.client.ssz_url {
+            Some(url) => sim.client.ssz_request_builder(fork).map(|to_send| SimDispatch::Ssz {
+                to_send,
                 ssz_url: url.clone(),
                 http: sim.client.client.clone(),
-            }
-        } else {
-            let fork = submission.fork_name();
-            let Some((builder, method)) = sim.client.sim_request_builder(fork) else {
-                warn!(%fork, "no validation RPC method for fork, dropping submission");
-                sim.pending += 1;
-                let result_ix = self.sim_results.push(SimResult::Validate((
-                    id,
-                    Some(SimulationResultInner {
-                        submission_ref: req.submission_ref,
-                        optimistic_version: req.optimistic_version(),
-                        bid: None,
-                        result: Err(BlockSimError::UnsupportedFork(fork)),
-                    }),
-                )));
-                let _ = self.task_tx.try_send(SimTileInternalEvent::TaskDone {
-                    id,
-                    paused_until: None,
-                    result_ix,
-                    elapsed: None,
-                });
-                return;
-            };
-            SimDispatch::Json { to_send: builder, method: method.to_owned() }
+            }),
+            None => sim
+                .client
+                .sim_request_builder(fork)
+                .map(|(to_send, method)| SimDispatch::Json { to_send, method: method.to_owned() }),
+        };
+        let Some(dispatch) = dispatch else {
+            warn!(%fork, "no validation method for fork, dropping submission");
+            sim.pending += 1;
+            let result_ix = self.sim_results.push(SimResult::Validate((
+                id,
+                Some(SimulationResultInner {
+                    submission_ref: req.submission_ref,
+                    optimistic_version: req.optimistic_version(),
+                    bid: None,
+                    result: Err(BlockSimError::UnsupportedFork(fork)),
+                }),
+            )));
+            let _ = self.task_tx.try_send(SimTileInternalEvent::TaskDone {
+                id,
+                paused_until: None,
+                result_ix,
+                elapsed: None,
+            });
+            return;
         };
         sim.pending += 1;
 

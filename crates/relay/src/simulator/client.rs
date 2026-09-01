@@ -54,8 +54,18 @@ impl SimulatorClient {
         &self.config.url
     }
 
-    pub fn ssz_request_builder(&self) -> Option<RequestBuilder> {
+    /// `None` for a fork the SSZ validator cannot handle, mirroring
+    /// [`Self::sim_request_builder`]. The two dispatch kinds have separate fork
+    /// lists: an SSZ validator is a different implementation from the JSON one.
+    pub fn ssz_request_builder(&self, fork: ForkName) -> Option<RequestBuilder> {
+        if !Self::ssz_supports(fork) {
+            return None;
+        }
         self.ssz_url.as_ref().map(|url| self.client.post(format!("{url}/validate")))
+    }
+
+    fn ssz_supports(fork: ForkName) -> bool {
+        matches!(fork, ForkName::Fulu)
     }
 
     /// Relay-internal merged-block SSZ route; see `sim_method_merged_v5`.
@@ -230,6 +240,28 @@ mod test {
     #[test]
     fn gloas_has_no_validation_method_yet() {
         assert!(sim_client().sim_request_builder(ForkName::Gloas).is_none());
+    }
+
+    fn ssz_client() -> super::SimulatorClient {
+        super::SimulatorClient::new(reqwest::Client::new(), SimulatorConfig {
+            url: "http://localhost:8545".into(),
+            namespace: "relay".into(),
+            max_concurrent_tasks: 1,
+            ssz_url: Some("http://localhost:8552".into()),
+        })
+    }
+
+    #[test]
+    fn ssz_request_builder_routes_fulu() {
+        assert!(ssz_client().ssz_request_builder(ForkName::Fulu).is_some());
+    }
+
+    #[test]
+    fn ssz_request_builder_refuses_gloas() {
+        assert!(
+            ssz_client().ssz_request_builder(ForkName::Gloas).is_none(),
+            "the SSZ path short-circuited above the fork gate #517 added",
+        );
     }
 
     #[tokio::test]
