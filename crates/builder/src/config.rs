@@ -157,11 +157,6 @@ pub struct BuildingConfig {
     /// Points into the slot, in milliseconds, at which to build and submit.
     #[serde(default = "default_submit_offsets_ms")]
     pub submit_offsets_ms: Vec<u64>,
-    /// Validate our own block before submitting it.
-    // Read once the slot loop exists.
-    #[allow(dead_code)]
-    #[serde(default = "default_true")]
-    pub self_validate: bool,
 }
 
 impl BuildingConfig {
@@ -447,7 +442,6 @@ mod building_config_tests {
         assert_eq!(config.payout_gas_reserve, 21_000);
         assert_eq!(config.extra_data, "helix-builder");
         assert_eq!(config.submit_offsets_ms, vec![500, 2000]);
-        assert!(config.self_validate);
     }
 
     #[test]
@@ -462,7 +456,6 @@ mod building_config_tests {
         assert_eq!(config.payout_gas_reserve, 21_000);
         assert_eq!(config.extra_data, "helix-builder");
         assert_eq!(config.submit_offsets_ms, vec![500, 2000]);
-        assert!(config.self_validate);
     }
 
     #[test]
