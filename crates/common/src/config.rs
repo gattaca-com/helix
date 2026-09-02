@@ -298,6 +298,12 @@ impl BlockMergingConfig {
             tcp.builder_collaterals.iter().any(|c| c.builder_coinbase == builder_coinbase)
         })
     }
+
+    /// Auto-opts collateralized builders into append-only merging, only while merged headers
+    /// are not served.
+    pub fn treat_as_append_only(&self, builder_coinbase: Address) -> bool {
+        !self.serve_merged_headers && self.is_builder_collateralized(builder_coinbase)
+    }
 }
 
 /// Mirrors `RelayConfigV1` fields; kept local so helix-common does not depend
@@ -911,5 +917,39 @@ mod tests {
 
         assert!(config.is_builder_collateralized(coinbase));
         assert!(!config.is_builder_collateralized(other));
+    }
+
+    #[test]
+    fn test_treat_as_append_only_only_when_merged_headers_are_not_served() {
+        let coinbase = Address::repeat_byte(1);
+        let other = Address::repeat_byte(2);
+
+        let mut config = BlockMergingConfig {
+            tcp: Some(BlockMergingTcpConfig {
+                builder: MergingBuilderEndpoint {
+                    addr: "127.0.0.1:1234".parse().unwrap(),
+                    api_key: String::new(),
+                },
+                relay_fee_recipient: Address::ZERO,
+                multisend_contract: Address::ZERO,
+                relay_bps: 0,
+                merged_builder_bps: 0,
+                winning_builder_bps: 0,
+                distribution_gas_limit: 140_000,
+                builder_collaterals: vec![MergingBuilderCollateral {
+                    builder_coinbase: coinbase,
+                    collateral_safe: Address::ZERO,
+                }],
+            }),
+            serve_merged_headers: false,
+            ..Default::default()
+        };
+
+        assert!(config.treat_as_append_only(coinbase));
+        assert!(!config.treat_as_append_only(other));
+
+        config.serve_merged_headers = true;
+        assert!(!config.treat_as_append_only(coinbase));
+        assert!(!config.treat_as_append_only(other));
     }
 }

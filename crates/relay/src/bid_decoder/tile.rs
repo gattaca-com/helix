@@ -296,13 +296,11 @@ impl DecoderTile {
         // builder — no need to do that work here on the submission hot path.
         let merging_data =
             if config.block_merging_config.is_enabled && header.merge_type != MergeType::Pause {
-                // A builder with a collateral entry has opted into merging and can be treated as an
-                // append-only base block even when its submission carries no merge
-                // annotation of its own.
+                // Dry run only: unannotated collateralized submissions count as append-only.
                 merging_data.or_else(|| {
                     config
                         .block_merging_config
-                        .is_builder_collateralized(submission.fee_recipient())
+                        .treat_as_append_only(submission.fee_recipient())
                         .then(|| BlockMergingData::append_only(submission.fee_recipient()))
                 })
             } else {
