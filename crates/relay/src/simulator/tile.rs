@@ -35,6 +35,7 @@ use helix_types::{
     BidTrace, BlsPublicKeyBytes, BlsSignatureBytes, SignedBidSubmission, SimHydrationCache,
     Submission,
 };
+use rustc_hash::FxHashMap;
 use ssz::Encode as _;
 use tracing::{debug, error, info, warn};
 
@@ -347,13 +348,19 @@ impl SimulatorTile {
                         // Read the identity off the original rather than the clone
                         // `hydrate` consumed, so the hit path pays nothing for it.
                         let sub = &decoded_data.submission_data.submission;
+                        let builder_pubkey = *sub.builder_pubkey();
                         error!(
                             %e,
-                            builder_pubkey = %sub.builder_pubkey(),
+                            %builder_pubkey,
                             slot = sub.bid_slot(),
                             block_hash = %sub.block_hash(),
                             "hydration failed in sim tile"
                         );
+                        *self
+                            .local_telemetry
+                            .hydration_failures
+                            .entry(builder_pubkey)
+                            .or_default() += 1;
                         let sim = &mut self.simulators[id];
                         sim.pending += 1;
                         let result_ix = self
@@ -679,8 +686,16 @@ impl SimulatorTile {
             .collect();
         self.sim_slot_stats.fill(SimSlotStats::default());
 
+        let mut by_builder: Vec<_> = tel.hydration_failures.iter().collect();
+        by_builder.sort_unstable_by_key(|(_, n)| std::cmp::Reverse(**n));
+        let hydration_failures: Vec<String> =
+            by_builder.iter().take(5).map(|(k, n)| format!("{k}={n}")).collect();
+        let hydration_failures_total: u32 = tel.hydration_failures.values().sum();
+
         info!(
             bid_slot = self.last_bid_slot,
+            hydration_failures_total,
+            ?hydration_failures,
             sims_reqs = tel.sims_reqs,
             sims_sent_immediately = tel.sims_sent_immediately,
             queued = tel.queued,
@@ -748,6 +763,9 @@ struct LocalTelemetry {
     /// builder -> sims_reqs_dropped, or still resident at slot end ->
     /// `queue_left`, read live from the queues rather than stored here).
     sims_sent_from_queue: usize,
+    /// Hydration misses this slot, per builder: which builder's dehydrated
+    /// submissions the sim tile could not rebuild. See gattaca-com/helix#563.
+    hydration_failures: FxHashMap<BlsPublicKeyBytes, u32>,
 }
 
 pub type ValidationResult = (usize, Option<SimulationResultInner>);
@@ -978,14 +996,17 @@ fn ssz_merged_request(
 #[cfg(test)]
 mod tests {
     use alloy_primitives::{Address, U256};
+    use helix_common::decoder::{Encoding, SubmissionDecoderParams};
+    use helix_tcp_types::{Compression, MergeType};
     use helix_types::{
-        BlobWithMetadata, BlobsBundle, ExecutionPayload, ExecutionRequests, MergedBlockTrace,
-        TestRandom, dehydrated_submission_with_txs_for_test, full_tx_for_test, tx_cache_key,
-        tx_hash_ref_for_test,
+        BlobWithMetadata, BlobsBundle, ExecutionPayload, ExecutionRequests, ForkName,
+        MergedBlockTrace, SubmissionVersion, TestRandom, dehydrated_submission_with_txs_for_test,
+        full_tx_for_test, tx_cache_key, tx_hash_ref_for_test,
     };
     use rand::{SeedableRng, rngs::SmallRng};
 
     use super::*;
+    use crate::{SubmissionRef, auctioneer::SubmissionData};
 
     fn merge_response(
         payload: ExecutionPayload,
@@ -1058,6 +1079,80 @@ mod tests {
             .collect();
         tile.sim_slot_stats = vec![SimSlotStats::default(); tile.simulators.len()];
         tile
+    }
+
+    /// A decoded submission that carries only a hash reference, so hydration
+    /// against an empty cache must miss.
+    fn unhydratable_submission(builder: BlsPublicKeyBytes) -> SubmissionDataWithSpan {
+        let tx = full_tx_for_test(1);
+        let mut dehydrated =
+            dehydrated_submission_with_txs_for_test(vec![tx_hash_ref_for_test(tx_cache_key(&tx))]);
+        dehydrated.set_builder_pubkey_for_test(builder);
+        let submission_data = SubmissionData {
+            submission_ref: SubmissionRef::Internal,
+            submission: Submission::Dehydrated(dehydrated),
+            merging_data: None,
+            bid_adjustment_data: None,
+            version: SubmissionVersion::new(0, None),
+            withdrawals_root: B256::ZERO,
+            trace: SubmissionTrace::default(),
+            decoder_params: SubmissionDecoderParams {
+                compression: Compression::None,
+                encoding: Encoding::Ssz,
+                merge_type: MergeType::default(),
+                is_dehydrated: true,
+                with_mergeable_data: false,
+                with_adjustments: false,
+                mark_all_txs_mergeable: false,
+                fork_name: ForkName::Deneb,
+            },
+            is_pessimistic: false,
+        };
+        SubmissionDataWithSpan { submission_data, span: tracing::Span::none(), sent_at: Nanos(0) }
+    }
+
+    fn validation_request(decoded_ix: usize) -> ValidationRequest {
+        ValidationRequest {
+            is_top_bid: false,
+            is_optimistic: false,
+            apply_blacklist: false,
+            registered_gas_limit: 30_000_000,
+            parent_beacon_block_root: B256::ZERO,
+            inclusion_list: InclusionListWithMetadata::default(),
+            decoded_ix,
+            receive_ns: 0,
+            submission_ref: SubmissionRef::Internal,
+        }
+    }
+
+    /// gattaca-com/helix#563: a hydration miss must be attributable to a builder
+    /// without grepping, so the per-slot stats name who is failing.
+    #[test]
+    fn hydration_failures_are_counted_per_builder() {
+        let mut tile = test_tile_with_sims(&[(true, true, 0)]);
+        let alice = BlsPublicKeyBytes::from([1u8; 48]);
+        let bob = BlsPublicKeyBytes::from([2u8; 48]);
+
+        for builder in [alice, alice, bob] {
+            let ix = tile.decoded.push(unhydratable_submission(builder));
+            tile.spawn_sim(0, validation_request(ix));
+        }
+
+        assert_eq!(tile.local_telemetry.hydration_failures.get(&alice), Some(&2));
+        assert_eq!(tile.local_telemetry.hydration_failures.get(&bob), Some(&1));
+    }
+
+    /// The counter is per slot, so `report` must leave it empty for the next one.
+    #[test]
+    fn hydration_failure_counts_reset_each_slot() {
+        let mut tile = test_tile_with_sims(&[(true, true, 0)]);
+        let ix = tile.decoded.push(unhydratable_submission(BlsPublicKeyBytes::from([3u8; 48])));
+        tile.spawn_sim(0, validation_request(ix));
+        assert_eq!(tile.local_telemetry.hydration_failures.len(), 1);
+
+        tile.report();
+
+        assert!(tile.local_telemetry.hydration_failures.is_empty());
     }
 
     /// gattaca-com/helix#551: selection follows pending count, not a pubkey hash.
