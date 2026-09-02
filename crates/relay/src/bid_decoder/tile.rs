@@ -66,9 +66,7 @@ pub struct DecoderTile {
 
 #[derive(Clone, Copy)]
 pub enum Lane {
-    /// `to_decode` and `to_decode_tcp_only`.
     All,
-    /// `to_decode_tcp_only`.
     TcpOnly,
 }
 
