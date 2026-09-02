@@ -72,7 +72,7 @@ pub(super) fn build_signed_bid(
 ) -> Result<SignedExecutionPayloadBid, ProposerApiError> {
     let slot = Slot::new(params.slot);
 
-    let payload = entry.execution_payload().to_lighthouse_gloas_payload(slot).map_err(|err| {
+    let payload = entry.execution_payload().to_lighthouse_gloas_payload(slot, &entry.block_access_list()).map_err(|err| {
         warn!(%err, block_hash =% entry.block_hash(), "failed to convert held payload to Gloas shape for bid");
         ProposerApiError::InternalServerError
     })?;
@@ -226,6 +226,51 @@ mod tests {
     fn bid_identity(builder_index: u64) -> GloasBuilderIdentity {
         helix_common::utils::install_default_crypto_provider();
         GloasBuilderIdentity { builder_index, keypair: helix_types::BlsKeypair::random() }
+    }
+
+    /// A submission entry carrying a block access list, as Gloas requires.
+    fn gloas_submission_entry(block_access_list: Vec<u8>) -> PayloadEntry {
+        use helix_types::{BlockAccessListBytes, SignedBidSubmission, TestRandomSeed};
+
+        let mut submission = SignedBidSubmission::test_random();
+        submission.blobs_bundle = Default::default();
+
+        PayloadEntry::new_submission(
+            submission,
+            B256::ZERO,
+            None,
+            None,
+            Some(BlockAccessListBytes(block_access_list.into())),
+            helix_types::SubmissionVersion::new(0, None),
+            Default::default(),
+            None,
+        )
+    }
+
+    #[test]
+    fn the_stored_payload_keeps_the_block_access_list_for_the_bid() {
+        let entry = gloas_submission_entry(vec![5u8; 96]);
+
+        let bal = entry.block_access_list();
+
+        assert_eq!(bal.to_vec(), vec![5u8; 96], "the bid's payload would be invalid without it");
+
+        // And it reaches the converted Gloas payload.
+        let payload = entry
+            .execution_payload()
+            .to_lighthouse_gloas_payload(Slot::new(1), &bal)
+            .expect("conversion must succeed");
+        assert_eq!(payload.block_access_list.len(), 96);
+    }
+
+    #[test]
+    fn a_gossip_entry_has_no_block_access_list() {
+        let entry = payload_entry(B256::repeat_byte(0x11), 1);
+
+        assert!(
+            entry.block_access_list().is_empty(),
+            "a gossiped payload carries none, so Gloas cannot be served from one",
+        );
     }
 
     #[test]

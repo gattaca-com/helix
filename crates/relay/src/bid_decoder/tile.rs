@@ -18,8 +18,8 @@ use helix_common::{
     utils::utcnow_ns,
 };
 use helix_types::{
-    BidAdjustmentData, BlockMergingDataV2, BlsPublicKeyBytes, MergeType, SignedBidSubmission,
-    Submission, SubmissionVersion,
+    BidAdjustmentData, BlockAccessListBytes, BlockMergingDataV2, BlsPublicKeyBytes, MergeType,
+    SignedBidSubmission, Submission, SubmissionVersion,
 };
 use rustc_hash::FxHashMap;
 use tracing::{info, trace, warn};
@@ -254,6 +254,7 @@ impl DecoderTile {
             version,
             merging_data,
             bid_adjustment_data,
+            block_access_list,
             decoder_params,
         ) = Self::try_handle_block_submission(
             cache,
@@ -302,6 +303,7 @@ impl DecoderTile {
             version,
             merging_data,
             bid_adjustment_data,
+            block_access_list,
             withdrawals_root,
             trace,
             decoder_params,
@@ -329,6 +331,7 @@ impl DecoderTile {
             SubmissionVersion,
             Option<BlockMergingDataV2>,
             Option<BidAdjustmentData>,
+            Option<BlockAccessListBytes>,
             SubmissionDecoderParams,
         ),
         BuilderApiError,
@@ -353,7 +356,7 @@ impl DecoderTile {
         };
 
         let mut decoder = SubmissionDecoder::new(&decoder_params);
-        let (mut submission, merging_data, bid_adjustment_data) =
+        let (mut submission, merging_data, bid_adjustment_data, block_access_list) =
             decoder.decode(payload, buffer)?;
 
         trace.decoded_ns = Nanos::now();
@@ -400,6 +403,7 @@ impl DecoderTile {
             version,
             merging_data,
             bid_adjustment_data,
+            block_access_list,
             decoder_params,
         ))
     }
