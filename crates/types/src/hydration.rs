@@ -712,6 +712,15 @@ pub fn tx_hash_ref_for_test(key: u64) -> Transaction {
     Transaction(key.to_le_bytes().to_vec().into())
 }
 
+impl DehydratedBidSubmission {
+    /// Overrides the builder, so a test can make two submissions share one.
+    pub fn set_builder_pubkey_for_test(&mut self, pubkey: BlsPublicKeyBytes) {
+        match self {
+            DehydratedBidSubmission::Fulu(s) => s.message.builder_pubkey = pubkey,
+        }
+    }
+}
+
 /// A dehydrated submission whose payload holds exactly `txs` and no blobs.
 pub fn dehydrated_submission_with_txs_for_test(txs: Vec<Transaction>) -> DehydratedBidSubmission {
     let (dehydrated, _) =

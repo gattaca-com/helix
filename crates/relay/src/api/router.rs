@@ -12,7 +12,10 @@ use axum::{
     routing::{any, get, post},
 };
 use helix_common::{Route, RouterConfig, utils::extract_request_id};
-use hyper::{HeaderMap, Uri};
+use hyper::{
+    HeaderMap, Uri,
+    header::{CONTENT_LENGTH, HeaderName},
+};
 use tower::{BoxError, ServiceBuilder, timeout::TimeoutLayer};
 use tower_governor::{
     GovernorLayer, governor::GovernorConfigBuilder, key_extractor::SmartIpKeyExtractor,
@@ -35,6 +38,10 @@ use crate::{
 pub struct Terminating(pub Arc<AtomicBool>);
 #[derive(Clone)]
 pub struct KnownValidatorsLoaded(pub Arc<AtomicBool>);
+
+/// The relay sits behind a load balancer, so the socket peer is the balancer;
+/// this header carries the actual caller.
+const X_FORWARDED_FOR: HeaderName = HeaderName::from_static("x-forwarded-for");
 
 pub fn build_router<A: Api>(
     router_config: &mut RouterConfig,
@@ -143,7 +150,20 @@ pub fn build_router<A: Api>(
             .layer(PropagateRequestIdLayer::x_request_id()) // propagate request id
             .layer(HandleErrorLayer::new(|uri: Uri, headers: HeaderMap, e: BoxError| async move {
                 let request_id = extract_request_id(&headers);
-                warn!(uri = %uri.path(), %request_id, "request timed out {:?}", e);
+                // The builder pubkey isn't knowable here: it lives in the signed body,
+                // which the bid decoder tile parses, and a timeout means the body was
+                // never read. Body size and source address are what identify the
+                // caller at this layer. Not the API key -- it's a credential.
+                let header =
+                    |name| headers.get(name).and_then(|v| v.to_str().ok()).unwrap_or("unknown");
+                warn!(
+                    uri = %uri.path(),
+                    %request_id,
+                    content_length = header(CONTENT_LENGTH),
+                    source_ip = header(X_FORWARDED_FOR),
+                    "request timed out {:?}",
+                    e
+                );
                 StatusCode::REQUEST_TIMEOUT
             })) // timeout
             .layer(TimeoutLayer::new(API_REQUEST_TIMEOUT)),
