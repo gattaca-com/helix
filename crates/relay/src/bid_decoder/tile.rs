@@ -64,13 +64,10 @@ pub struct DecoderTile {
     lane: Lane,
 }
 
-/// Which queues this decoder consumes.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy)]
 pub enum Lane {
     /// `to_decode` and `to_decode_tcp_only`.
     All,
-    /// `to_decode`.
-    Shared,
     /// `to_decode_tcp_only`.
     TcpOnly,
 }
@@ -98,20 +95,19 @@ impl Tile<HelixSpine> for DecoderTile {
     fn loop_body(&mut self, adapter: &mut flux::spine::SpineAdapter<HelixSpine>) {
         adapter.consume(|msg: SlotMsg, _| self.on_slot_msg(msg));
 
-        if self.lane != Lane::Shared {
-            self.consume::<NewTcpBidSubmission>(adapter);
-        }
-        if self.lane != Lane::TcpOnly {
-            self.consume::<NewBidSubmission>(adapter);
+        match self.lane {
+            Lane::All => {
+                self.consume::<NewTcpBidSubmission>(adapter);
+                self.consume::<NewBidSubmission>(adapter);
+            }
+            Lane::TcpOnly => self.consume::<NewTcpBidSubmission>(adapter),
         }
     }
 
     fn try_init(&mut self, adapter: &mut flux::spine::SpineAdapter<HelixSpine>) -> bool {
-        if self.lane != Lane::TcpOnly {
+        adapter.set_collaborative_group_dcache::<NewTcpBidSubmission>("decoder_tcp_only");
+        if let Lane::All = self.lane {
             adapter.set_collaborative_group_dcache::<NewBidSubmission>("decoder");
-        }
-        if self.lane != Lane::Shared {
-            adapter.set_collaborative_group_dcache::<NewTcpBidSubmission>("decoder_tcp_only");
         }
         true
     }
