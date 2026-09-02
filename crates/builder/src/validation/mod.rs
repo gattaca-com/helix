@@ -16,7 +16,10 @@ use dashmap::DashSet;
 use ethrex_blockchain::{BlockchainType, new_evm, vm::StoreVmDatabase};
 use ethrex_common::{
     Address as EAddress, U256 as EU256,
-    types::{AccountUpdate, Block, BlockHeader, ELASTICITY_MULTIPLIER, Receipt},
+    types::{
+        AccountUpdate, BlobsBundle, Block, BlockHeader, CELLS_PER_EXT_BLOB, ELASTICITY_MULTIPLIER,
+        Receipt, Transaction,
+    },
     validation::{
         validate_block_pre_execution, validate_gas_used, validate_receipts_root_and_logs_bloom,
         validate_requests_hash,
@@ -88,9 +91,11 @@ impl BlockValidator {
         message: &BidTrace,
         parent_beacon_block_root: B256,
         requests: &ExecutionRequestsV4,
+        blobs: &BlobsBundle,
         apply_blacklist: bool,
     ) -> Result<ExecutedBlock, ValidationError> {
         let prepared = self.prepare(payload, message, parent_beacon_block_root, requests)?;
+        self.validate_blobs_bundle(&prepared.block, blobs)?;
         let executed = self.execute(prepared)?;
         if apply_blacklist {
             self.ensure_not_blacklisted(&executed, message)?;
@@ -107,16 +112,64 @@ impl BlockValidator {
         message: &BidTrace,
         parent_beacon_block_root: B256,
         requests: &ExecutionRequestsV4,
+        blobs: &BlobsBundle,
         apply_blacklist: bool,
         base_payment_tx_index: u64,
     ) -> Result<ExecutedBlock, ValidationError> {
         let prepared = self.prepare(payload, message, parent_beacon_block_root, requests)?;
+        self.validate_blobs_bundle(&prepared.block, blobs)?;
         let executed = self.execute(prepared)?;
         if apply_blacklist {
             self.ensure_not_blacklisted(&executed, message)?;
         }
         self.ensure_merged_payment(&executed, message, base_payment_tx_index as usize)?;
         Ok(executed)
+    }
+
+    /// The submission carries one bundle for the whole block, so the block's
+    /// blob hashes must match its commitments in order. ethrex's own
+    /// `BlobsBundle::validate` is per transaction and does not fit that shape.
+    fn validate_blobs_bundle(
+        &self,
+        block: &Block,
+        blobs: &BlobsBundle,
+    ) -> Result<(), ValidationError> {
+        let versioned_hashes: Vec<_> = block
+            .body
+            .transactions
+            .iter()
+            .filter_map(|tx| match tx {
+                Transaction::EIP4844Transaction(tx) => Some(tx.blob_versioned_hashes.clone()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+
+        if versioned_hashes.is_empty() && blobs.is_empty() {
+            return Ok(());
+        }
+
+        if blobs.blobs.len() != blobs.commitments.len() ||
+            blobs.blobs.len() * CELLS_PER_EXT_BLOB != blobs.proofs.len()
+        {
+            return Err(ValidationError::InvalidBlobsBundle);
+        }
+
+        blobs
+            .validate_blob_commitment_hashes(&versioned_hashes)
+            .map_err(|_| ValidationError::InvalidBlobsBundle)?;
+
+        let valid = ethrex_crypto::kzg::verify_cell_kzg_proof_batch(
+            &blobs.blobs,
+            &blobs.commitments,
+            &blobs.proofs,
+        )
+        .map_err(|_| ValidationError::InvalidBlobsBundle)?;
+        if !valid {
+            return Err(ValidationError::InvalidBlobsBundle);
+        }
+
+        Ok(())
     }
 
     /// Rejects a block that interacts with a listed address. Interaction means
