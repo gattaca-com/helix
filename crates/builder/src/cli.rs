@@ -25,6 +25,10 @@ pub struct BuilderCli {
     /// Path to the simulation YAML config. Activates the simulation role.
     #[arg(long = "sim.config", env = "HELIX_BUILDER_SIM_CONFIG")]
     pub sim_config: Option<PathBuf>,
+
+    /// Path to the building YAML config. Activates the building role.
+    #[arg(long = "build.config", env = "HELIX_BUILDER_BUILD_CONFIG")]
+    pub build_config: Option<PathBuf>,
 }
 
 /// Embedded-ethrex node options. Flag and env names match the upstream `ethrex`
