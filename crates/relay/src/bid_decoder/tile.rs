@@ -98,9 +98,14 @@ impl Tile<HelixSpine> for DecoderTile {
     }
 
     fn try_init(&mut self, adapter: &mut flux::spine::SpineAdapter<HelixSpine>) -> bool {
-        adapter.set_collaborative_group_dcache::<NewTcpBidSubmission>("decoder_tcp_only");
-        if let Lane::All = self.lane {
-            adapter.set_collaborative_group_dcache::<NewBidSubmission>("decoder");
+        match self.lane {
+            Lane::All => {
+                adapter.set_collaborative_group_dcache::<NewTcpBidSubmission>("decoder_tcp_only");
+                adapter.set_collaborative_group_dcache::<NewBidSubmission>("decoder");
+            }
+            Lane::TcpOnly => {
+                adapter.set_collaborative_group_dcache::<NewTcpBidSubmission>("decoder_tcp_only")
+            }
         }
         true
     }
@@ -119,72 +124,75 @@ impl DecoderTile {
         <HelixSpine as flux::spine::FluxSpine>::Consumers: AsMut<SpineDCacheConsumer<T>>,
     {
         adapter.consume_with_dcache_collaborative_internal_message(
-            |new_bid: &InternalMessage<T>, dcache_payload| {
-                let bid = new_bid.bid();
+            |msg: &InternalMessage<T>, dcache_payload| {
+                let new_bid = msg.bid();
                 // dcache bypass: the dcache slot can be mutated between publish and
                 // consume, read the stable staged copy when one is present.
                 let bytes;
-                let payload = if let Some(b) = self.http_submissions.get(bid.http_submission_ix) {
+                let payload = if let Some(b) = self.http_submissions.get(new_bid.http_submission_ix)
+                {
                     bytes = b;
-                    &bytes[bid.payload_offset..]
+                    &bytes[new_bid.payload_offset..]
                 } else {
-                    &dcache_payload[bid.payload_offset..]
+                    &dcache_payload[new_bid.payload_offset..]
                 };
-                let sent_at = new_bid.tracking_timestamp().publish_t();
+                let sent_at = msg.tracking_timestamp().publish_t();
                 DecoderTile::handle_block_submission(
                     &self.cache,
                     &self.chain_info,
                     &self.config,
-                    &bid.submission_ref,
-                    &bid.header,
+                    &new_bid.submission_ref,
+                    &new_bid.header,
                     payload,
                     &mut self.buffer.borrow_mut(),
-                    bid.trace,
+                    new_bid.trace,
                     sent_at,
-                    bid.expected_pubkey(),
+                    new_bid.expected_pubkey(),
                 )
             },
             |res, producers| match res {
-                DCacheRead::Ok((new_bid, result)) => {
+                DCacheRead::Ok((msg, result)) => {
+                    let new_bid = msg.bid();
                     self.record_decode_result(&result);
-                    let sent_at = new_bid.tracking_timestamp().publish_t();
+                    let sent_at = msg.tracking_timestamp().publish_t();
                     Self::handle_result(
                         &self.decoded,
                         &self.future_results,
                         result,
                         sent_at,
-                        new_bid.bid().submission_ref,
+                        new_bid.submission_ref,
                         producers,
                     );
                 }
-                DCacheRead::NoRef(new_bid) => {
-                    let bid = new_bid.bid();
-                    let Some(payload) = self.http_submissions.get(bid.http_submission_ix) else {
+                DCacheRead::NoRef(msg) => {
+                    let new_bid = msg.bid();
+                    let Some(payload) = self.http_submissions.get(new_bid.http_submission_ix)
+                    else {
                         tracing::error!(
                             "failed to find the payload for bid submission with id = {}",
-                            bid.header.id
+                            new_bid.header.id
                         );
                         self.record_decode_result(&Err(BuilderApiError::InternalError));
                         return send_submission_result(
                             producers,
                             &self.future_results,
-                            bid.submission_ref,
+                            new_bid.submission_ref,
                             Err(BuilderApiError::InternalError),
                         );
                     };
 
-                    let sent_at = new_bid.tracking_timestamp().publish_t();
+                    let sent_at = msg.tracking_timestamp().publish_t();
                     let result = DecoderTile::handle_block_submission(
                         &self.cache,
                         &self.chain_info,
                         &self.config,
-                        &bid.submission_ref,
-                        &bid.header,
+                        &new_bid.submission_ref,
+                        &new_bid.header,
                         &payload,
                         &mut self.buffer.borrow_mut(),
-                        bid.trace,
+                        new_bid.trace,
                         sent_at,
-                        bid.expected_pubkey(),
+                        new_bid.expected_pubkey(),
                     );
                     self.record_decode_result(&result);
                     Self::handle_result(
@@ -192,20 +200,21 @@ impl DecoderTile {
                         &self.future_results,
                         result,
                         sent_at,
-                        bid.submission_ref,
+                        new_bid.submission_ref,
                         producers,
                     );
                 }
-                DCacheRead::Lost(new_bid) => {
+                DCacheRead::Lost(msg) => {
+                    let new_bid = msg.bid();
                     tracing::error!(
                         "dcache read failed for bid submission with id {}",
-                        new_bid.bid().header.id
+                        new_bid.header.id
                     );
                     self.record_decode_result(&Err(BuilderApiError::InternalError));
                     send_submission_result(
                         producers,
                         &self.future_results,
-                        new_bid.bid().submission_ref,
+                        new_bid.submission_ref,
                         Err(BuilderApiError::InternalError),
                     );
                 }
