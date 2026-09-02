@@ -139,7 +139,6 @@ impl<B: BidAdjustor> Tile<HelixSpine> for Auctioneer<B> {
             self.state.step(event, &mut self.ctx, &mut self.tel, &mut adapter.producers);
         }
 
-        // TCP lane first so it never waits behind a burst of HTTP full blocks.
         adapter.consume(|s: DecodedTcpSubmission, producers| self.on_decoded(s.ix, producers));
         adapter.consume(|s: DecodedSubmission, producers| self.on_decoded(s.ix, producers));
 

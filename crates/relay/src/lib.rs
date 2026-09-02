@@ -34,7 +34,7 @@ pub use crate::{
         Auctioneer, AuctioneerHandle, BidSorter, Context, Event, PayloadEntry, SimulatorClient,
         SimulatorTile, SlotData, SubmissionPayload, SubmissionRef, ValidationRequest,
     },
-    bid_decoder::{DecoderTile, Lanes, SubmissionDataWithSpan},
+    bid_decoder::{DecoderTile, Lane, SubmissionDataWithSpan},
     block_merging::BlockMergingTile,
     data_gatherer::DataGatherer,
     gossip::{BroadcastPayloadParams, GossipedMessage},

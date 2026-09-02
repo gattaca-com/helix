@@ -61,14 +61,18 @@ pub struct DecoderTile {
     slot_events: Arc<SharedVector<SlotUpdate>>,
     bid_slot: u64,
     stats: RefCell<DecodeStats>,
-    lanes: Lanes,
+    lane: Lane,
 }
 
-/// Queues this decoder consumes: `to_decode` and/or `to_decode_tcp_only`.
-#[derive(Clone, Copy)]
-pub struct Lanes {
-    pub shared: bool,
-    pub tcp_only: bool,
+/// Which queues this decoder consumes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Lane {
+    /// `to_decode` and `to_decode_tcp_only`.
+    All,
+    /// `to_decode`.
+    Shared,
+    /// `to_decode_tcp_only`.
+    TcpOnly,
 }
 
 pub trait SubmissionMsg: 'static + Copy {
@@ -94,19 +98,19 @@ impl Tile<HelixSpine> for DecoderTile {
     fn loop_body(&mut self, adapter: &mut flux::spine::SpineAdapter<HelixSpine>) {
         adapter.consume(|msg: SlotMsg, _| self.on_slot_msg(msg));
 
-        if self.lanes.tcp_only {
+        if self.lane != Lane::Shared {
             self.consume::<NewTcpBidSubmission>(adapter);
         }
-        if self.lanes.shared {
+        if self.lane != Lane::TcpOnly {
             self.consume::<NewBidSubmission>(adapter);
         }
     }
 
     fn try_init(&mut self, adapter: &mut flux::spine::SpineAdapter<HelixSpine>) -> bool {
-        if self.lanes.shared {
+        if self.lane != Lane::TcpOnly {
             adapter.set_collaborative_group_dcache::<NewBidSubmission>("decoder");
         }
-        if self.lanes.tcp_only {
+        if self.lane != Lane::Shared {
             adapter.set_collaborative_group_dcache::<NewTcpBidSubmission>("decoder_tcp_only");
         }
         true
@@ -236,7 +240,7 @@ impl DecoderTile {
         http_submissions: Arc<SharedVector<Bytes>>,
         slot_events: Arc<SharedVector<SlotUpdate>>,
         core: usize,
-        lanes: Lanes,
+        lane: Lane,
     ) -> Self {
         Self {
             chain_info,
@@ -249,7 +253,7 @@ impl DecoderTile {
             core,
             slot_events,
             bid_slot: 0,
-            lanes,
+            lane,
             stats: RefCell::new(DecodeStats::default()),
         }
     }

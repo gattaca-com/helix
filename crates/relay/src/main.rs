@@ -31,7 +31,7 @@ use helix_relay::{
     Api, Auctioneer, AuctioneerHandle, BidSorter, BidSubmissionTcpListener, BlockMergeResponse,
     BlockMergingTile, BroadcastPayloadParams, DataGatherer, DbHandle, DecoderTile,
     DefaultBidAdjustor, FutureBidSubmissionResult, GossipedMessage, HelixSpine, HelixSpineConfig,
-    HousekeeperTile, Lanes, NewTcpBidSubmission, RegWorkerHandle, RegistrationTile,
+    HousekeeperTile, Lane, NewTcpBidSubmission, RegWorkerHandle, RegistrationTile,
     RelayNetworkManager, SimRequest, SimResult, SimulatorTile, SlotUpdate, SubmissionDataWithSpan,
     TopBidTile, spawn_tokio_monitoring, start_admin_service, start_api_service, start_db_service,
 };
@@ -298,10 +298,9 @@ async fn run(
             }
 
             let tcp_lane = &config.cores.decoder_tcp_only;
-            let shared = Lanes { shared: true, tcp_only: tcp_lane.is_empty() };
-            let tcp_only = Lanes { shared: false, tcp_only: true };
+            let shared = if tcp_lane.is_empty() { Lane::All } else { Lane::Shared };
             let decoders = config.cores.decoder.iter().map(|c| (*c, shared));
-            for (core, lanes) in decoders.chain(tcp_lane.iter().map(|c| (*c, tcp_only))) {
+            for (core, lane) in decoders.chain(tcp_lane.iter().map(|c| (*c, Lane::TcpOnly))) {
                 let decoder_tile = DecoderTile::new(
                     local_cache.as_ref().clone(),
                     chain_info.as_ref().clone(),
@@ -311,7 +310,7 @@ async fn run(
                     http_submissions.clone(),
                     slot_events.clone(),
                     core,
-                    lanes,
+                    lane,
                 );
                 attach_tile(decoder_tile, spine, TileConfig::new(core, ThreadPriority::OSDefault));
             }
