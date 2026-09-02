@@ -79,7 +79,7 @@ fn decode_submission(
     match params {
         Some(params) => {
             let mut buf = Vec::new();
-            let (submission, _, _) = SubmissionDecoder::new(&params).decode(bytes, &mut buf)?;
+            let (submission, _, _, _) = SubmissionDecoder::new(&params).decode(bytes, &mut buf)?;
             match submission {
                 Submission::Full(submission) => Ok(Some(submission.into())),
                 Submission::Dehydrated(_) => Ok(None),

@@ -48,7 +48,7 @@ fn decode_submission(
         Some(decode_params) => {
             let mut buf = vec![];
             let mut decoder = SubmissionDecoder::new(&decode_params);
-            let (submission, _, _) = decoder.decode(signed_bid_submission, &mut buf)?;
+            let (submission, _, _, _) = decoder.decode(signed_bid_submission, &mut buf)?;
             match submission {
                 Submission::Full(s) => Ok(s.into()),
                 Submission::Dehydrated(_) => {

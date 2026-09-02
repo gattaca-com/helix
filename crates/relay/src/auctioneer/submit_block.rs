@@ -120,6 +120,7 @@ impl<B: BidAdjustor> Context<B> {
             payload_attributes.withdrawals_root,
             maybe_tx_root,
             submission_data.bid_adjustment_data,
+            submission_data.block_access_list,
             submission_data.version,
             submission_data.trace,
             payload_attributes.parent_beacon_block_root,

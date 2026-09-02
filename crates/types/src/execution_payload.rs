@@ -157,11 +157,13 @@ impl ExecutionPayload {
     }
 
     /// Converts to the real, progressive-list Gloas execution payload shape used on-chain.
-    /// `block_access_list` is left empty -- TODO(gloas): populate once EIP-7928 block-access-list
-    /// tracking exists.
+    ///
+    /// `block_access_list` is the opaque EIP-7928 list the builder submitted: only
+    /// an execution client can produce it, so it travels on the submission.
     pub fn to_lighthouse_gloas_payload(
         &self,
         slot: lh_types::Slot,
+        block_access_list: &crate::fields::BlockAccessListBytes,
     ) -> Result<lh_types::ExecutionPayloadGloas<MainnetEthSpec>, SszError> {
         Ok(lh_types::ExecutionPayloadGloas {
             parent_hash: self.parent_hash.into(),
@@ -181,7 +183,7 @@ impl ExecutionPayload {
             withdrawals: self.withdrawals.iter().cloned().collect(),
             blob_gas_used: self.blob_gas_used,
             excess_blob_gas: self.excess_blob_gas,
-            block_access_list: Default::default(),
+            block_access_list: block_access_list.iter().copied().collect(),
             slot_number: slot,
         })
     }
@@ -371,11 +373,38 @@ mod tests {
     }
 
     #[test]
+    fn the_gloas_payload_carries_the_submitted_block_access_list() {
+        let payload = ExecutionPayload::test_random();
+        let bal = crate::fields::BlockAccessListBytes(vec![9u8; 128].into());
+
+        let gloas = payload.to_lighthouse_gloas_payload(lh_types::Slot::new(1), &bal).unwrap();
+
+        // Before this it was always empty, which made the envelope invalid.
+        assert_eq!(gloas.block_access_list.len(), 128);
+        assert_eq!(gloas.block_access_list.to_vec(), bal.to_vec());
+    }
+
+    #[test]
+    fn an_empty_block_access_list_still_converts() {
+        let payload = ExecutionPayload::test_random();
+
+        let gloas = payload
+            .to_lighthouse_gloas_payload(
+                lh_types::Slot::new(1),
+                &crate::fields::BlockAccessListBytes::default(),
+            )
+            .unwrap();
+
+        assert!(gloas.block_access_list.is_empty());
+    }
+
+    #[test]
     fn to_lighthouse_gloas_payload_preserves_fields() {
         let our_payload = ExecutionPayload::test_random();
         let slot = lh_types::Slot::new(42);
 
-        let gloas = our_payload.to_lighthouse_gloas_payload(slot).unwrap();
+        let bal = crate::fields::BlockAccessListBytes(vec![1u8, 2, 3].into());
+        let gloas = our_payload.to_lighthouse_gloas_payload(slot, &bal).unwrap();
 
         assert_eq!(gloas.parent_hash.0, our_payload.parent_hash);
         assert_eq!(gloas.block_hash.0, our_payload.block_hash);
@@ -391,7 +420,6 @@ mod tests {
         assert_eq!(gloas.blob_gas_used, our_payload.blob_gas_used);
         assert_eq!(gloas.excess_blob_gas, our_payload.excess_blob_gas);
         assert_eq!(gloas.slot_number, slot);
-        assert!(gloas.block_access_list.is_empty());
 
         assert_eq!(gloas.transactions.len(), our_payload.transactions.len());
         for (converted, original) in
