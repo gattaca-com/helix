@@ -16,6 +16,7 @@ use ethrex_common::types::ELASTICITY_MULTIPLIER;
 use ethrex_config::networks::Network;
 use ethrex_storage::{EngineType, Store};
 use helix_tcp_types::merging::{
+    builder_to_relay::RejectCode,
     control::{BuilderCollateral, RelayConfigV1},
     order::{MergeOrderRef, TxOrderRef},
     relay_to_builder::{MergeableBlockV1, RevokeOrderV1, SlotStartV1},
@@ -302,6 +303,16 @@ impl Fixture {
             relay_config: None,
             slot: None,
         };
+        (engine, output_rx)
+    }
+
+    /// A direct-drive engine with a small per-slot order budget.
+    fn direct_engine_with_order_cap(
+        &self,
+        max_orders_per_slot: usize,
+    ) -> (MergeEngine, crossbeam_channel::Receiver<EngineOutput>) {
+        let (mut engine, output_rx) = self.direct_engine(Duration::ZERO);
+        engine.config.max_orders_per_slot = max_orders_per_slot;
         (engine, output_rx)
     }
 }
@@ -668,4 +679,58 @@ async fn throttled_emission_is_retried() {
         first.proposer_value
     );
     assert_eq!(second.included_order_ids.len(), 2);
+}
+
+/// A repeat announcement of a pooled order must not consume the per-slot budget.
+#[tokio::test(flavor = "multi_thread")]
+async fn repeat_announcements_do_not_consume_the_order_budget() {
+    let fixture = Fixture::new().await;
+    let (base_msg, _base_block_hash) = fixture.build_base(U256::from(ETH));
+
+    // One order, re-announced in six blocks with distinct block hashes.
+    let donors: Vec<MergeableBlockV1> =
+        (0u8..6).map(|i| fixture.donor(&base_msg, 3, U256::from(ETH / 5), 0xd0 + i)).collect();
+
+    let (mut engine, output_rx) = fixture.direct_engine_with_order_cap(3);
+    engine.handle_event(EngineEvent::RelayConfig(fixture.relay_config.clone()));
+    engine.handle_event(EngineEvent::SlotStart(fixture.slot_start()));
+    for (i, donor) in donors.iter().enumerate() {
+        engine.handle_event(mergeable_event(donor, i as u64 + 1));
+    }
+
+    assert!(output_rx.try_recv().is_err(), "a repeat order must not trip the per-slot cap");
+    let state = engine.slot.as_ref().unwrap();
+    assert_eq!(state.blocks.len(), donors.len(), "every resubmission must be pooled");
+    assert_eq!(state.orders.len(), 1, "the six announcements are one distinct order");
+}
+
+/// The per-slot budget still binds on distinct orders.
+#[tokio::test(flavor = "multi_thread")]
+async fn distinct_orders_still_hit_the_per_slot_cap() {
+    let fixture = Fixture::new().await;
+    let (base_msg, _base_block_hash) = fixture.build_base(U256::from(ETH));
+
+    // Four distinct orders against a budget of three.
+    let donors: Vec<MergeableBlockV1> = (0u8..4)
+        .map(|i| fixture.donor(&base_msg, 3, U256::from(ETH / 5 + u128::from(i)), 0xd0 + i))
+        .collect();
+
+    let (mut engine, output_rx) = fixture.direct_engine_with_order_cap(3);
+    engine.handle_event(EngineEvent::RelayConfig(fixture.relay_config.clone()));
+    engine.handle_event(EngineEvent::SlotStart(fixture.slot_start()));
+    for (i, donor) in donors.iter().enumerate() {
+        engine.handle_event(mergeable_event(donor, i as u64 + 1));
+    }
+
+    match output_rx.try_recv().expect("the fourth distinct order must be rejected") {
+        EngineOutput::Reject { msg, .. } => assert_eq!(msg.code, RejectCode::LimitExceeded),
+        EngineOutput::Merged { .. } => panic!("expected a reject, got a merged block"),
+    }
+    let state = engine.slot.as_ref().unwrap();
+    assert_eq!(state.orders.len(), 3, "the pool must stop at the cap");
+    assert_eq!(
+        state.blocks.len(),
+        donors.len(),
+        "a block whose orders hit the cap is still stored as a base candidate"
+    );
 }

@@ -521,9 +521,6 @@ impl MergeEngine {
         if msg.merge_orders.len() > MAX_ORDERS_PER_BLOCK {
             return Err(fail(MergeError::LimitExceeded("max orders per block".into())));
         }
-        if state.orders_admitted + msg.merge_orders.len() > self.config.max_orders_per_slot {
-            return Err(fail(MergeError::LimitExceeded("max orders per slot".into())));
-        }
         for order in &msg.merge_orders {
             order
                 .validate(tx_bytes.len())
@@ -537,10 +534,10 @@ impl MergeEngine {
             .map_err(|err| fail(MergeError::InvalidOrder(err)))?;
         let txs = Arc::new(decoded);
 
-        // Extract the order pool entries.
+        // Budget counts distinct pooled orders, as the relay's `orders_sent` does.
+        let mut pool_full = false;
         for order_ref in &msg.merge_orders {
             let prepared = prepare_order(&msg, order_ref, &txs, block_hash);
-            state.orders_admitted += 1;
             match state.order_ids.get(&prepared.order_id) {
                 Some(&existing_ix) => {
                     // Duplicate order: attribution goes to the highest-value
@@ -551,6 +548,10 @@ impl MergeEngine {
                     }
                 }
                 None => {
+                    if state.orders.len() >= self.config.max_orders_per_slot {
+                        pool_full = true;
+                        break;
+                    }
                     state.order_ids.insert(prepared.order_id, state.orders.len());
                     state.orders.push(prepared);
                 }
@@ -567,6 +568,7 @@ impl MergeEngine {
             "mergeable block pooled"
         );
 
+        let slot = state.slot;
         state.blocks.insert(block_hash, PreparedBlock {
             block_hash,
             builder_pubkey: msg.builder_pubkey,
@@ -576,6 +578,20 @@ impl MergeEngine {
             txs,
             recv_ns,
         });
+
+        // Dropped orders still leave a usable base candidate, so keep the block.
+        if pool_full {
+            let err = MergeError::LimitExceeded("max orders per slot".into());
+            if let Some((code, subject)) = err.reject(Some(block_hash)) {
+                let _ = self.out.send(EngineOutput::reject(
+                    self.generation,
+                    slot,
+                    code,
+                    subject,
+                    err.to_string(),
+                ));
+            }
+        }
         Ok(())
     }
 }

@@ -118,8 +118,6 @@ pub struct SlotState {
     /// order_id -> index into `orders` (dedup; attribution goes to the
     /// highest-value source block).
     pub order_ids: FxHashMap<B256, usize>,
-    /// Total orders admitted this slot (enforces `max_orders_per_slot`).
-    pub orders_admitted: usize,
     /// Sender-recovery cache: incremental submissions share most txs.
     pub recovery_cache: FxHashMap<B256, ethrex_common::Address>,
     /// Decoded txs already seen whole on this connection this slot, keyed by
@@ -172,7 +170,6 @@ impl SlotState {
             blocks: FxHashMap::default(),
             orders: Vec::new(),
             order_ids: FxHashMap::default(),
-            orders_admitted: 0,
             recovery_cache: FxHashMap::default(),
             tx_cache: FxHashMap::default(),
             session: None,
