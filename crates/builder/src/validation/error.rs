@@ -22,4 +22,14 @@ pub enum ValidationError {
     BlockTooOld,
     #[error("store error: {0}")]
     Store(String),
+    #[error("invalid block: {0}")]
+    PreExecution(String),
+    #[error("execution failed: {0}")]
+    Execution(String),
+    #[error("invalid block: {0}")]
+    PostExecution(String),
+    #[error("block state root mismatch: got {got}, expected {expected}")]
+    StateRootMismatch { got: B256, expected: B256 },
+    #[error("parent state is not available")]
+    MissingParentState,
 }
