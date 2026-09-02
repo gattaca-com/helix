@@ -297,9 +297,9 @@ async fn run(
                 );
             }
 
-            let tcp_lane = &config.cores.tcp_decoder;
-            let shared = Lanes { http: true, tcp: tcp_lane.is_empty() };
-            let tcp_only = Lanes { http: false, tcp: true };
+            let tcp_lane = &config.cores.decoder_tcp_only;
+            let shared = Lanes { shared: true, tcp_only: tcp_lane.is_empty() };
+            let tcp_only = Lanes { shared: false, tcp_only: true };
             let decoders = config.cores.decoder.iter().map(|c| (*c, shared));
             for (core, lanes) in decoders.chain(tcp_lane.iter().map(|c| (*c, tcp_only))) {
                 let decoder_tile = DecoderTile::new(

@@ -64,14 +64,11 @@ pub struct DecoderTile {
     lanes: Lanes,
 }
 
-/// Which submission queues this decoder serves. An HTTP full block costs
-/// ~0.8ms on the core (BLS verify dominates); a registered TCP submission
-/// ~0.1ms (verify skipped). A decoder with `http: false` never has an HTTP
-/// item in flight, so TCP bids never wait on one.
+/// Queues this decoder consumes: `to_decode` and/or `to_decode_tcp_only`.
 #[derive(Clone, Copy)]
 pub struct Lanes {
-    pub http: bool,
-    pub tcp: bool,
+    pub shared: bool,
+    pub tcp_only: bool,
 }
 
 pub trait SubmissionMsg: 'static + Copy {
@@ -97,20 +94,20 @@ impl Tile<HelixSpine> for DecoderTile {
     fn loop_body(&mut self, adapter: &mut flux::spine::SpineAdapter<HelixSpine>) {
         adapter.consume(|msg: SlotMsg, _| self.on_slot_msg(msg));
 
-        if self.lanes.tcp {
+        if self.lanes.tcp_only {
             self.consume::<NewTcpBidSubmission>(adapter);
         }
-        if self.lanes.http {
+        if self.lanes.shared {
             self.consume::<NewBidSubmission>(adapter);
         }
     }
 
     fn try_init(&mut self, adapter: &mut flux::spine::SpineAdapter<HelixSpine>) -> bool {
-        if self.lanes.http {
+        if self.lanes.shared {
             adapter.set_collaborative_group_dcache::<NewBidSubmission>("decoder");
         }
-        if self.lanes.tcp {
-            adapter.set_collaborative_group_dcache::<NewTcpBidSubmission>("decoder_tcp");
+        if self.lanes.tcp_only {
+            adapter.set_collaborative_group_dcache::<NewTcpBidSubmission>("decoder_tcp_only");
         }
         true
     }

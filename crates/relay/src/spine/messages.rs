@@ -29,8 +29,8 @@ pub struct NewBidSubmission {
     pub http_submission_ix: usize,
 }
 
-/// `NewBidSubmission` from a registered TCP builder. Separate queue so it can
-/// be served by decoders that never pick up HTTP work (see `bid_decoder::Lanes`).
+/// `NewBidSubmission` published to `to_decode_tcp_only`, consumed only by
+/// `cores.decoder_tcp_only` decoders when any are configured.
 #[derive(Debug, Clone, Copy)]
 #[repr(transparent)]
 pub struct NewTcpBidSubmission(pub NewBidSubmission);
@@ -93,7 +93,8 @@ pub struct DecodedSubmission {
     pub ix: usize,
 }
 
-/// `DecodedSubmission` from the TCP lane; the auctioneer serves it before `DecodedSubmission`.
+/// `DecodedSubmission` via `decoded_tcp_only`; the auctioneer consumes it before
+/// `DecodedSubmission`.
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct DecodedTcpSubmission {

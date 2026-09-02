@@ -13,7 +13,7 @@ pub struct HelixSpine {
     pub to_decode: SpineQueue<messages::NewBidSubmission>,
 
     #[queue(size(2usize.pow(7)), mtu(3 * 1024 * 1024))]
-    pub to_decode_tcp: SpineQueue<messages::NewTcpBidSubmission>,
+    pub to_decode_tcp_only: SpineQueue<messages::NewTcpBidSubmission>,
 
     #[queue(size(2usize.pow(16)))]
     pub bid_submission_result: SpineQueue<messages::SubmissionResultWithRef>,
@@ -22,7 +22,7 @@ pub struct HelixSpine {
     pub decoded: SpineQueue<messages::DecodedSubmission>,
 
     #[queue(size(2usize.pow(16)))]
-    pub decoded_tcp: SpineQueue<messages::DecodedTcpSubmission>,
+    pub decoded_tcp_only: SpineQueue<messages::DecodedTcpSubmission>,
 
     /// Auctioneer → SimulatorTile.
     #[queue(size(2usize.pow(16)))]
