@@ -20,9 +20,6 @@ pub struct HelixSpine {
     #[queue(size(2usize.pow(16)))]
     pub decoded: SpineQueue<messages::DecodedSubmission>,
 
-    #[queue(size(2usize.pow(16)))]
-    pub decoded_tcp_only: SpineQueue<messages::DecodedTcpSubmission>,
-
     /// Auctioneer → SimulatorTile.
     #[queue(size(2usize.pow(16)))]
     pub to_sim: SpineQueue<messages::ToSimMsg>,

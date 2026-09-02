@@ -35,9 +35,7 @@ use crate::{
     housekeeper::SlotUpdate,
     spine::{
         HelixSpineProducers,
-        messages::{
-            DecodedSubmission, DecodedTcpSubmission, NewBidSubmission, NewTcpBidSubmission, SlotMsg,
-        },
+        messages::{DecodedSubmission, NewBidSubmission, NewTcpBidSubmission, SlotMsg},
     },
 };
 
@@ -71,19 +69,16 @@ pub enum Lane {
 }
 
 pub trait SubmissionMsg: 'static + Copy {
-    const TCP: bool;
     fn bid(&self) -> &NewBidSubmission;
 }
 
 impl SubmissionMsg for NewBidSubmission {
-    const TCP: bool = false;
     fn bid(&self) -> &NewBidSubmission {
         self
     }
 }
 
 impl SubmissionMsg for NewTcpBidSubmission {
-    const TCP: bool = true;
     fn bid(&self) -> &NewBidSubmission {
         &self.0
     }
@@ -159,7 +154,6 @@ impl DecoderTile {
                         result,
                         sent_at,
                         new_bid.bid().submission_ref,
-                        T::TCP,
                         producers,
                     );
                 }
@@ -199,7 +193,6 @@ impl DecoderTile {
                         result,
                         sent_at,
                         bid.submission_ref,
-                        T::TCP,
                         producers,
                     );
                 }
@@ -472,7 +465,6 @@ impl DecoderTile {
         result: Result<(SubmissionData, tracing::Span), BuilderApiError>,
         sent_at: Nanos,
         submission_ref: SubmissionRef,
-        tcp: bool,
         producers: &mut HelixSpineProducers,
     ) {
         match result {
@@ -482,11 +474,7 @@ impl DecoderTile {
                     span,
                     sent_at,
                 });
-                if tcp {
-                    producers.produce(DecodedTcpSubmission { ix });
-                } else {
-                    producers.produce(DecodedSubmission { ix });
-                }
+                producers.produce(DecodedSubmission { ix });
             }
             Err(e) => {
                 send_submission_result(producers, future_results, submission_ref, Err(e));

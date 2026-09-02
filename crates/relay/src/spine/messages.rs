@@ -91,12 +91,6 @@ pub struct DecodedSubmission {
     pub ix: usize,
 }
 
-#[derive(Debug, Clone, Copy)]
-#[repr(C)]
-pub struct DecodedTcpSubmission {
-    pub ix: usize,
-}
-
 /// Auctioneer → SimulatorTile: spine signal for a new sim/merge request or slot transition.
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
