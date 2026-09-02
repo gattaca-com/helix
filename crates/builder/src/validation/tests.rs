@@ -18,7 +18,7 @@ use tokio::sync::watch;
 
 use crate::{
     engine::convert::{
-        b256, block_to_payload_v3, eaddr, h256, payload_v3_to_block, requests_to_v4,
+        b256, block_to_payload_v3, eaddr, eblobs, h256, payload_v3_to_block, requests_to_v4,
     },
     node::HeadInfo,
     testing::{
@@ -35,7 +35,7 @@ fn empty_bundle() -> ethrex_common::types::BlobsBundle {
     ethrex_common::types::BlobsBundle::default()
 }
 
-struct Built {
+pub(crate) struct Built {
     payload: ExecutionPayloadV3,
     requests: ExecutionRequestsV4,
 }
@@ -46,25 +46,25 @@ impl Built {
     }
 }
 
-struct Fixture {
+pub(crate) struct Fixture {
     store: Store,
     blockchain: Arc<Blockchain>,
-    genesis_hash: H256,
-    genesis_timestamp: u64,
-    chain_id: u64,
+    pub(crate) genesis_hash: H256,
+    pub(crate) genesis_timestamp: u64,
+    pub(crate) chain_id: u64,
     gas_limit: u64,
-    signers: Vec<alloy_signer_local::PrivateKeySigner>,
-    proposer: Address,
+    pub(crate) signers: Vec<alloy_signer_local::PrivateKeySigner>,
+    pub(crate) proposer: Address,
     head: watch::Sender<HeadInfo>,
     disallow: Arc<DashSet<Address>>,
 }
 
 impl Fixture {
-    async fn new() -> Self {
+    pub(crate) async fn new() -> Self {
         Self::with_genesis(|_| {}).await
     }
 
-    async fn with_forwarder() -> Self {
+    pub(crate) async fn with_forwarder() -> Self {
         Self::with_genesis(deploy_payment_forwarder).await
     }
 
@@ -83,7 +83,7 @@ impl Fixture {
         fixture.disallow(listed)
     }
 
-    fn disallow(self, listed: &[Address]) -> Self {
+    pub(crate) fn disallow(self, listed: &[Address]) -> Self {
         for address in listed {
             self.disallow.insert(*address);
         }
@@ -121,7 +121,7 @@ impl Fixture {
         }
     }
 
-    fn validator(&self) -> BlockValidator {
+    pub(crate) fn validator(&self) -> BlockValidator {
         BlockValidator::new(
             self.store.clone(),
             self.head.subscribe(),
@@ -131,7 +131,7 @@ impl Fixture {
     }
 
     /// Builds a valid block on `parent`, paying `self.proposer` in its last tx.
-    fn build_on(&self, parent: H256, timestamp: u64, nonce: u64) -> Built {
+    pub(crate) fn build_on(&self, parent: H256, timestamp: u64, nonce: u64) -> Built {
         let builder = &self.signers[0];
         let txs = vec![signed_transfer(
             builder,
@@ -147,7 +147,7 @@ impl Fixture {
 
     /// The proposer spends, so its whole-block balance delta falls short of the
     /// bid value and the payment must be recognised from a transaction.
-    fn proposer_spend(&self, nonce: u64) -> Vec<u8> {
+    pub(crate) fn proposer_spend(&self, nonce: u64) -> Vec<u8> {
         signed_transfer(
             &self.signers[3],
             self.chain_id,
@@ -159,7 +159,7 @@ impl Fixture {
         )
     }
 
-    fn build_block(
+    pub(crate) fn build_block(
         &self,
         parent: H256,
         timestamp: u64,
@@ -213,7 +213,7 @@ impl Fixture {
         parent
     }
 
-    fn signed_call(
+    pub(crate) fn signed_call(
         &self,
         signer: &alloy_signer_local::PrivateKeySigner,
         nonce: u64,
@@ -261,7 +261,7 @@ impl Fixture {
         ))
     }
 
-    fn bid_trace(&self, built: &Built) -> BidTrace {
+    pub(crate) fn bid_trace(&self, built: &Built) -> BidTrace {
         let header = &built.payload.payload_inner.payload_inner;
         let block = payload_v3_to_block(&built.payload, B256::ZERO, &built.requests)
             .expect("the fixture builds a convertible payload");
@@ -1368,4 +1368,75 @@ async fn a_bundle_for_a_block_with_no_blob_txs_is_rejected() {
         .expect_err("a bundle for a blobless block must be rejected");
 
     assert!(matches!(error, ValidationError::InvalidBlobsBundle), "{error}");
+}
+
+/// The alloy bundle the wire format carries, mirroring [`blob_bundle`].
+pub(crate) fn blob_bundle_v2(count: usize) -> alloy_rpc_types::engine::BlobsBundleV2 {
+    let bundle = blob_bundle(count);
+    alloy_rpc_types::engine::BlobsBundleV2 {
+        blobs: bundle.blobs.iter().map(|blob| alloy_primitives::FixedBytes(*blob)).collect(),
+        commitments: bundle
+            .commitments
+            .iter()
+            .map(|c| alloy_primitives::FixedBytes(*c).into())
+            .collect(),
+        proofs: bundle.proofs.iter().map(|p| alloy_primitives::FixedBytes(*p).into()).collect(),
+    }
+}
+
+impl Fixture {
+    /// A block carrying one blob tx per blob in `bundle`.
+    pub(crate) fn blob_block(&self, bundle: &alloy_rpc_types::engine::BlobsBundleV2) -> Built {
+        let hashes: Vec<B256> =
+            eblobs(bundle).generate_versioned_hashes().iter().map(|h| b256(*h)).collect();
+        let txs = vec![signed_blob_transfer(
+            &self.signers[1],
+            self.chain_id,
+            0,
+            Address::repeat_byte(0x66),
+            hashes,
+        )];
+        self.build_block(self.genesis_hash, self.genesis_timestamp + 12, txs, Vec::new())
+    }
+
+    pub(crate) fn submission(
+        &self,
+        built: &Built,
+    ) -> alloy_rpc_types::beacon::relay::SignedBidSubmissionV5 {
+        alloy_rpc_types::beacon::relay::SignedBidSubmissionV5 {
+            message: self.bid_trace(built),
+            execution_payload: built.payload.clone(),
+            blobs_bundle: Default::default(),
+            execution_requests: built.requests.clone(),
+            signature: Default::default(),
+        }
+    }
+
+    /// SSZ bytes of the submission in the shape the relay sends when it has no
+    /// decoder params: a bare `SignedBidSubmissionV5`.
+    pub(crate) fn encode_submission(
+        &self,
+        submission: alloy_rpc_types::beacon::relay::SignedBidSubmissionV5,
+    ) -> Vec<u8> {
+        ssz::Encode::as_ssz_bytes(&submission)
+    }
+
+    pub(crate) fn ssz_request(
+        &self,
+        built: &Built,
+        pays: bool,
+    ) -> helix_common::simulator::SszValidationRequest {
+        let mut submission = self.submission(built);
+        if !pays {
+            submission.message.value = U256::ZERO;
+        }
+        helix_common::simulator::SszValidationRequest {
+            apply_blacklist: false,
+            registered_gas_limit: 0,
+            parent_beacon_block_root: B256::ZERO,
+            inclusion_list: Default::default(),
+            decoder_params: None,
+            signed_bid_submission: self.encode_submission(submission),
+        }
+    }
 }

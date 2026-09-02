@@ -1,9 +1,9 @@
-// Reached from main once the servers land in step 9 of #527.
-#![allow(dead_code)]
-
 pub mod error;
+pub mod server;
 #[cfg(test)]
-mod tests;
+mod server_tests;
+#[cfg(test)]
+pub(crate) mod tests;
 
 use std::sync::Arc;
 
