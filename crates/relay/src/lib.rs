@@ -34,7 +34,7 @@ pub use crate::{
         Auctioneer, AuctioneerHandle, BidSorter, Context, Event, PayloadEntry, SimulatorClient,
         SimulatorTile, SlotData, SubmissionPayload, SubmissionRef, ValidationRequest,
     },
-    bid_decoder::{DecoderTile, SubmissionDataWithSpan},
+    bid_decoder::{DecoderTile, Lanes, SubmissionDataWithSpan},
     block_merging::BlockMergingTile,
     data_gatherer::DataGatherer,
     gossip::{BroadcastPayloadParams, GossipedMessage},
@@ -44,7 +44,7 @@ pub use crate::{
     simulator::{BlockMergeResponse, SimRequest, SimResult},
     spine::{
         HelixSpine, HelixSpineConfig,
-        messages::{NewBidSubmission, SlotMsg},
+        messages::{NewBidSubmission, NewTcpBidSubmission, SlotMsg},
     },
     tcp_bid_recv::{
         BidSubmissionFlags, BidSubmissionHeader, BidSubmissionResponse, BidSubmissionTcpListener,

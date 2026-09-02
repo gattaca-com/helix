@@ -7,14 +7,22 @@ use flux::{communication::ShmemData, spine::SpineQueue, spine_derive::from_spine
 pub struct HelixSpine {
     pub tile_info: ShmemData<TileInfo>,
 
-    #[queue(size(2usize.pow(10)), mtu(1024))]
+    // dcache capacity is `(size + 1) * mtu` rounded up to a power of two and a
+    // payload must fit in `mtu`; a full block with blobs exceeds 2 MB.
+    #[queue(size(2usize.pow(7)), mtu(3 * 1024 * 1024))]
     pub to_decode: SpineQueue<messages::NewBidSubmission>,
+
+    #[queue(size(2usize.pow(7)), mtu(3 * 1024 * 1024))]
+    pub to_decode_tcp: SpineQueue<messages::NewTcpBidSubmission>,
 
     #[queue(size(2usize.pow(16)))]
     pub bid_submission_result: SpineQueue<messages::SubmissionResultWithRef>,
 
     #[queue(size(2usize.pow(16)))]
     pub decoded: SpineQueue<messages::DecodedSubmission>,
+
+    #[queue(size(2usize.pow(16)))]
+    pub decoded_tcp: SpineQueue<messages::DecodedTcpSubmission>,
 
     /// Auctioneer → SimulatorTile.
     #[queue(size(2usize.pow(16)))]

@@ -46,7 +46,7 @@ use crate::{
     simulator::{SimRequest, SimResult},
     spine::{
         HelixSpineProducers,
-        messages::{DecodedSubmission, FromSimMsg, MergedBlockMsg, SlotMsg},
+        messages::{DecodedSubmission, DecodedTcpSubmission, FromSimMsg, MergedBlockMsg, SlotMsg},
     },
 };
 pub use crate::{
@@ -70,6 +70,18 @@ pub struct Auctioneer<B: BidAdjustor> {
 }
 
 impl<B: BidAdjustor> Auctioneer<B> {
+    fn on_decoded(&mut self, decoded_ix: usize, producers: &mut HelixSpineProducers) {
+        match self.ctx.decoded.get(decoded_ix) {
+            Some(submission_data) => {
+                let event = Event::Submission { submission_data, decoded_ix };
+                self.state.step(event, &mut self.ctx, &mut self.tel, producers);
+            }
+            None => {
+                tracing::error!(decoded_ix, "no submission found");
+            }
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         chain_info: ChainInfo,
@@ -126,17 +138,9 @@ impl<B: BidAdjustor> Tile<HelixSpine> for Auctioneer<B> {
             self.state.step(event, &mut self.ctx, &mut self.tel, &mut adapter.producers);
         }
 
-        adapter.consume(|submission: DecodedSubmission, producers| {
-            match self.ctx.decoded.get(submission.ix) {
-                Some(submission_data) => {
-                    let event = Event::Submission { submission_data, decoded_ix: submission.ix };
-                    self.state.step(event, &mut self.ctx, &mut self.tel, producers);
-                }
-                None => {
-                    tracing::error!(?submission, "no submission found");
-                }
-            }
-        });
+        // TCP lane first so it never waits behind a burst of HTTP full blocks.
+        adapter.consume(|s: DecodedTcpSubmission, producers| self.on_decoded(s.ix, producers));
+        adapter.consume(|s: DecodedSubmission, producers| self.on_decoded(s.ix, producers));
 
         adapter.consume(|msg: FromSimMsg, producers| {
             let Some(payload) = self.sim_results.get(msg.ix) else {

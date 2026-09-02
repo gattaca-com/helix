@@ -29,6 +29,12 @@ pub struct NewBidSubmission {
     pub http_submission_ix: usize,
 }
 
+/// `NewBidSubmission` from a registered TCP builder. Separate queue so it can
+/// be served by decoders that never pick up HTTP work (see `bid_decoder::Lanes`).
+#[derive(Debug, Clone, Copy)]
+#[repr(transparent)]
+pub struct NewTcpBidSubmission(pub NewBidSubmission);
+
 impl NewBidSubmission {
     pub fn expected_pubkey(&self) -> Option<&BlsPublicKeyBytes> {
         self.has_expected_pubkey.then_some(&self.expected_pubkey)
@@ -84,6 +90,13 @@ impl SubmissionResultWithRef {
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct DecodedSubmission {
+    pub ix: usize,
+}
+
+/// `DecodedSubmission` from the TCP lane; the auctioneer serves it before `DecodedSubmission`.
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+pub struct DecodedTcpSubmission {
     pub ix: usize,
 }
 

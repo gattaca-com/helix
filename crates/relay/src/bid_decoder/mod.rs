@@ -1,5 +1,5 @@
 use flux::timing::Nanos;
-pub use tile::DecoderTile;
+pub use tile::{DecoderTile, Lanes};
 
 use crate::auctioneer::SubmissionData;
 

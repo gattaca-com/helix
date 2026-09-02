@@ -25,7 +25,7 @@ use uuid::Uuid;
 use crate::{
     HelixSpine,
     auctioneer::{InternalBidSubmissionHeader, SubmissionRef},
-    spine::messages::{NewBidSubmission, SubmissionResultWithRef},
+    spine::messages::{NewBidSubmission, NewTcpBidSubmission, SubmissionResultWithRef},
 };
 
 pub mod types;
@@ -196,7 +196,7 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                     let http_submission_ix =
                         self.http_submissions.push(Bytes::copy_from_slice(payload));
 
-                    Some(NewBidSubmission {
+                    Some(NewTcpBidSubmission(NewBidSubmission {
                         payload_offset: BID_SUB_HEADER_SIZE,
                         header: InternalBidSubmissionHeader::from_tcp_header(id, header),
                         submission_ref,
@@ -204,7 +204,7 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                         expected_pubkey: *expected_pubkey,
                         has_expected_pubkey: true,
                         http_submission_ix,
-                    })
+                    }))
                 } else {
                     match RegistrationMsg::from_ssz_bytes(payload) {
                         Ok(msg) => {

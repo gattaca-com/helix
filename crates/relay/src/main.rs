@@ -31,9 +31,9 @@ use helix_relay::{
     Api, Auctioneer, AuctioneerHandle, BidSorter, BidSubmissionTcpListener, BlockMergeResponse,
     BlockMergingTile, BroadcastPayloadParams, DataGatherer, DbHandle, DecoderTile,
     DefaultBidAdjustor, FutureBidSubmissionResult, GossipedMessage, HelixSpine, HelixSpineConfig,
-    HousekeeperTile, NewBidSubmission, RegWorkerHandle, RegistrationTile, RelayNetworkManager,
-    SimRequest, SimResult, SimulatorTile, SlotUpdate, SubmissionDataWithSpan, TopBidTile,
-    spawn_tokio_monitoring, start_admin_service, start_api_service, start_db_service,
+    HousekeeperTile, Lanes, NewTcpBidSubmission, RegWorkerHandle, RegistrationTile,
+    RelayNetworkManager, SimRequest, SimResult, SimulatorTile, SlotUpdate, SubmissionDataWithSpan,
+    TopBidTile, spawn_tokio_monitoring, start_admin_service, start_api_service, start_db_service,
 };
 use helix_types::BlsKeypair;
 use helix_website::WebsiteService;
@@ -305,7 +305,11 @@ async fn run(
                 );
             }
 
-            for core in &config.cores.decoder {
+            let tcp_lane = &config.cores.tcp_decoder;
+            let shared = Lanes { http: true, tcp: tcp_lane.is_empty() };
+            let tcp_only = Lanes { http: false, tcp: true };
+            let decoders = config.cores.decoder.iter().map(|c| (*c, shared));
+            for (core, lanes) in decoders.chain(tcp_lane.iter().map(|c| (*c, tcp_only))) {
                 let decoder_tile = DecoderTile::new(
                     local_cache.as_ref().clone(),
                     chain_info.as_ref().clone(),
@@ -314,9 +318,10 @@ async fn run(
                     decoded.clone(),
                     http_submissions.clone(),
                     slot_events.clone(),
-                    *core,
+                    core,
+                    lanes,
                 );
-                attach_tile(decoder_tile, spine, TileConfig::new(*core, ThreadPriority::OSDefault));
+                attach_tile(decoder_tile, spine, TileConfig::new(core, ThreadPriority::OSDefault));
             }
 
             let sock_addr =
@@ -325,7 +330,7 @@ async fn run(
                 sock_addr,
                 local_cache.api_key_cache.clone(),
                 config.tcp_max_connections,
-                spine.spine.dcache_ptr_for::<NewBidSubmission>(),
+                spine.spine.dcache_ptr_for::<NewTcpBidSubmission>(),
                 http_submissions.clone(),
             );
             attach_tile(
