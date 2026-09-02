@@ -12,15 +12,19 @@ use tracing::Level;
 #[derive(Parser)]
 #[command(
     name = "helix-builder",
-    about = "Helix block-merging builder: embedded ethrex node + relay-facing merging TCP server"
+    about = "Helix embedded ethrex node, running the block-merging role, the block-simulation role, or both"
 )]
 pub struct BuilderCli {
     #[command(flatten)]
     pub node: NodeOptions,
 
-    /// Path to the merging YAML config (listen address, relay api keys, limits)
+    /// Path to the merging YAML config. Activates the merging role.
     #[arg(long = "merging.config", env = "HELIX_BUILDER_MERGING_CONFIG")]
-    pub merging_config: PathBuf,
+    pub merging_config: Option<PathBuf>,
+
+    /// Path to the simulation YAML config. Activates the simulation role.
+    #[arg(long = "sim.config", env = "HELIX_BUILDER_SIM_CONFIG")]
+    pub sim_config: Option<PathBuf>,
 }
 
 /// Embedded-ethrex node options. Flag and env names match the upstream `ethrex`
