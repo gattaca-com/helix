@@ -18,7 +18,10 @@ impl<B: BidAdjustor> Context<B> {
         res_tx: oneshot::Sender<Option<HeldGloasPayload>>,
     ) {
         let held = self.payloads.get(&block_hash).and_then(|entry| {
-            let payload = match entry.execution_payload().to_lighthouse_gloas_payload(slot) {
+            let payload = match entry
+                .execution_payload()
+                .to_lighthouse_gloas_payload(slot, &entry.block_access_list())
+            {
                 Ok(payload) => payload,
                 Err(err) => {
                     warn!(%block_hash, %err, "failed to convert held payload to Gloas shape");

@@ -1226,6 +1226,7 @@ mod tests {
         signed.blobs_bundle = Arc::new(Default::default());
         let submission_data = SubmissionData {
             submission_id: Uuid::nil(),
+            block_access_list: None,
             submission_ref: SubmissionRef::default(),
             submission: Submission::Full(signed),
             merging_data: Some(BlockMergingDataV2 {

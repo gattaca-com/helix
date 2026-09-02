@@ -85,6 +85,23 @@ ssz_bytes_wrapper! {
     max  = <MainnetEthSpec as EthSpec>::MaxBytesPerTransaction;
 }
 
+ssz_bytes_wrapper! {
+    /// The opaque encoded EIP-7928 block access list, as the builder produced
+    /// it. Gloas's own `BlockAccessList` is a `ProgressiveVariableList<u8>`,
+    /// so nothing here mirrors its structure.
+    pub struct BlockAccessListBytes;
+    max  = <MainnetEthSpec as EthSpec>::MaxBytesPerTransaction;
+}
+
+impl TestRandom for BlockAccessListBytes {
+    fn random_for_test(rng: &mut impl rand::RngCore) -> Self {
+        let n = rng.random_range(0..=1000) as usize;
+        let mut bytes = vec![0u8; n];
+        rng.fill_bytes(&mut bytes);
+        Self(bytes.into())
+    }
+}
+
 impl TestRandom for Transaction {
     fn random_for_test(rng: &mut impl rand::RngCore) -> Self {
         let n = rng.random_range(0..=1000) as usize;
