@@ -173,15 +173,8 @@ async fn run(
 
     HelixSpine::remove_all_files();
 
-    #[cfg(feature = "profile")]
     if config.enable_flux_profiler {
         flux_profiler::enable_profiler("helix");
-    }
-    #[cfg(not(feature = "profile"))]
-    if config.enable_flux_profiler {
-        tracing::warn!(
-            "enable_flux_profiler is set but the relay was built without the `profile` feature"
-        );
     }
 
     let spine = if let Some(spine_config) = spine_config {
@@ -284,11 +277,10 @@ async fn run(
             }
         }
 
-        attach_tile(
-            housekeeper_tile,
-            spine,
-            TileConfig::background(config.cores.housekeeper, None),
-        );
+        attach_tile(housekeeper_tile, spine, match config.cores.housekeeper {
+            Some(core) => TileConfig::new(core, ThreadPriority::OSDefault),
+            None => TileConfig::background(None, Some(flux::timing::Duration::from_millis(20))),
+        });
 
         if config.is_submission_instance {
             if config.clickhouse.is_some() || config.s3_config.is_some() {
