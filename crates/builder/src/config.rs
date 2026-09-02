@@ -241,7 +241,7 @@ fn check_http_url(field: &str, raw: &str) -> eyre::Result<()> {
 }
 
 fn default_subsidy_wei() -> u128 {
-    1_000_000_000
+    1_000_000_000_000_000
 }
 fn default_payout_gas_reserve() -> u64 {
     TX_GAS_COST
@@ -443,7 +443,7 @@ mod building_config_tests {
 
         assert_eq!(config.relay_url, "http://localhost:4040");
         assert_eq!(config.beacon_url, "http://localhost:3500");
-        assert_eq!(config.subsidy_wei, 1_000_000_000);
+        assert_eq!(config.subsidy_wei, 1_000_000_000_000_000);
         assert_eq!(config.payout_gas_reserve, 21_000);
         assert_eq!(config.extra_data, "helix-builder");
         assert_eq!(config.submit_offsets_ms, vec![500, 2000]);
@@ -455,7 +455,10 @@ mod building_config_tests {
         let config: BuildingConfig = serde_yaml::from_str(MINIMAL_BUILDING_YAML).unwrap();
         config.validate().unwrap();
 
-        assert_eq!(config.subsidy_wei, 1_000_000_000, "an idle chain still gets a non-zero bid");
+        assert_eq!(
+            config.subsidy_wei, 1_000_000_000_000_000,
+            "an idle chain still gets a non-zero bid"
+        );
         assert_eq!(config.payout_gas_reserve, 21_000);
         assert_eq!(config.extra_data, "helix-builder");
         assert_eq!(config.submit_offsets_ms, vec![500, 2000]);
