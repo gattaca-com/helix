@@ -15,6 +15,7 @@ use helix_common::{
     BuilderInfo, RelayConfig,
     alerts::{AlertManager, format_demotion_alert},
     chain_info::ChainInfo,
+    is_local_dev,
     local_cache::LocalCache,
     metrics::{CACHE_SIZE, SimulatorMetrics},
     spawn_tracked,
@@ -99,10 +100,12 @@ impl<B: BidAdjustor> Context<B> {
         alert_manager: Arc<AlertManager>,
         operator_api: Option<Arc<OperatorPubSub>>,
     ) -> Self {
+        // Local dev builders have random keys, so none is ever in config.
+        let local_dev = is_local_dev();
         let unknown_builder_info = BuilderInfo {
-            collateral: U256::ZERO,
-            is_optimistic: false,
-            is_optimistic_for_regional_filtering: false,
+            collateral: if local_dev { U256::MAX } else { U256::ZERO },
+            is_optimistic: local_dev,
+            is_optimistic_for_regional_filtering: local_dev,
             builder_id: None,
             builder_ids: None,
             api_key: None,

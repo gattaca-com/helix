@@ -27,7 +27,8 @@ use helix_common::{
     chain_info::ChainInfo,
     local_cache::LocalCache,
     metrics::{STATE_TRANSITION_COUNT, STATE_TRANSITION_LATENCY, WORKER_QUEUE_LEN, WORKER_UTIL},
-    record_submission_step,
+    record_submission_step, record_submission_step_ns,
+    utils::utcnow_ns,
 };
 use helix_database::handle::DbHandle;
 use helix_operator::OperatorPubSub;
@@ -392,6 +393,10 @@ impl State {
             // submission
             (State::Sorting(slot_data), Event::Submission { submission_data, decoded_ix }) => {
                 record_submission_step("loop_recv", submission_data.sent_at.elapsed());
+                let loop_ns = utcnow_ns();
+                let trace = &submission_data.submission_data.trace;
+                record_submission_step_ns("recv_loop", trace.receive_ns.0, loop_ns);
+                record_submission_step_ns("decoded_loop", trace.decoded_ns.0, loop_ns);
 
                 let _guard = submission_data.span.enter();
                 trace!("received in auctioneer");

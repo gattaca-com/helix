@@ -6777,12 +6777,24 @@ dependencies = [
 name = "helix-test-harness"
 version = "0.0.1"
 dependencies = [
+ "alloy-consensus",
+ "alloy-primitives",
+ "alloy-rpc-types",
  "axum 0.8.9",
+ "clap",
+ "ethereum_ssz",
+ "flux-network",
+ "helix-common",
+ "helix-tcp-types",
+ "helix-types",
+ "rand 0.9.5",
  "reqwest 0.13.4",
  "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber 0.3.23",
+ "url",
+ "uuid 1.24.1",
 ]
 
 [[package]]

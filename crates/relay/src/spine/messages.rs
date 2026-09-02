@@ -29,6 +29,10 @@ pub struct NewBidSubmission {
     pub http_submission_ix: usize,
 }
 
+#[derive(Debug, Clone, Copy)]
+#[repr(transparent)]
+pub struct NewTcpBidSubmission(pub NewBidSubmission);
+
 impl NewBidSubmission {
     pub fn expected_pubkey(&self) -> Option<&BlsPublicKeyBytes> {
         self.has_expected_pubkey.then_some(&self.expected_pubkey)

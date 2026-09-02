@@ -1,6 +1,6 @@
 use alloy_primitives::B256;
 use flux_profiler::timed;
-use helix_common::{BuilderInfo, PayloadAttributesUpdate};
+use helix_common::{BuilderInfo, PayloadAttributesUpdate, is_local_dev};
 use helix_types::{BlockValidationError, BlsPublicKeyBytes, Submission, SubmissionVersion};
 
 use crate::auctioneer::{
@@ -78,7 +78,8 @@ impl<B: BidAdjustor> Context<B> {
         }
 
         let registration = &slot_data.registration_data.entry.registration.message;
-        if registration.fee_recipient != *payload.proposer_fee_recipient() {
+        // Local dev fabricates registrations without the real fee recipient.
+        if !is_local_dev() && registration.fee_recipient != *payload.proposer_fee_recipient() {
             return Err(BlockValidationError::FeeRecipientMismatch {
                 got: *payload.proposer_fee_recipient(),
                 expected: registration.fee_recipient,

@@ -13,7 +13,9 @@ use flux_network::{
     tcp::{PollEvent, SendBehavior, TcpConnector, TcpTelemetry},
 };
 use flux_utils::{DCachePtr, SharedVector};
-use helix_common::{SubmissionTrace, metrics::SUB_CLIENT_TO_SERVER_LATENCY, utils::utcnow_ns};
+use helix_common::{
+    SubmissionTrace, is_local_dev, metrics::SUB_CLIENT_TO_SERVER_LATENCY, utils::utcnow_ns,
+};
 use helix_tcp_types::BID_SUB_HEADER_SIZE;
 use helix_types::BlsPublicKeyBytes;
 use ssz::{Decode, Encode};
@@ -23,7 +25,7 @@ use uuid::Uuid;
 use crate::{
     HelixSpine,
     auctioneer::{InternalBidSubmissionHeader, SubmissionRef},
-    spine::messages::{NewBidSubmission, SubmissionResultWithRef},
+    spine::messages::{NewBidSubmission, NewTcpBidSubmission, SubmissionResultWithRef},
 };
 
 pub mod types;
@@ -194,7 +196,7 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                     let http_submission_ix =
                         self.http_submissions.push(Bytes::copy_from_slice(payload));
 
-                    Some(NewBidSubmission {
+                    Some(NewTcpBidSubmission(NewBidSubmission {
                         payload_offset: BID_SUB_HEADER_SIZE,
                         header: InternalBidSubmissionHeader::from_tcp_header(id, header),
                         submission_ref,
@@ -202,7 +204,7 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                         expected_pubkey: *expected_pubkey,
                         has_expected_pubkey: true,
                         http_submission_ix,
-                    })
+                    }))
                 } else {
                     match RegistrationMsg::from_ssz_bytes(payload) {
                         Ok(msg) => {
@@ -210,7 +212,8 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                             if self
                                 .api_key_cache
                                 .get(&api_key)
-                                .is_some_and(|p| p.value().contains(&msg.builder_pubkey))
+                                .is_some_and(|p| p.value().contains(&msg.builder_pubkey)) ||
+                                (is_local_dev() && self.api_key_cache.contains_key(&api_key))
                             {
                                 self.registered.insert(token, msg.builder_pubkey);
                                 self.stats.registration_ok += 1;

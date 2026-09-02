@@ -8,6 +8,18 @@ version.workspace = true
 publish = false
 
 [dependencies]
+alloy-consensus.workspace = true
+alloy-primitives.workspace = true
+alloy-rpc-types.workspace = true
+clap.workspace = true
+ethereum_ssz.workspace = true
+flux-network.workspace = true
+helix-common.workspace = true
+helix-tcp-types.workspace = true
+helix-types.workspace = true
+rand.workspace = true
+url.workspace = true
+uuid.workspace = true
 axum.workspace = true
 # no TLS: proxy is plain-http only, keeps musl builds free of C deps (aws-lc-sys)
 reqwest = { version = "0.13.2", default-features = false, features = ["json"] }

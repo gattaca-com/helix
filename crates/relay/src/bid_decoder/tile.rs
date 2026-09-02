@@ -3,7 +3,7 @@ use std::{cell::RefCell, sync::Arc};
 use alloy_primitives::B256;
 use bytes::Bytes;
 use flux::{
-    spine::{DCacheRead, SpineProducers},
+    spine::{DCacheRead, SpineDCacheConsumer, SpineProducers},
     tile::Tile,
     timing::{InternalMessage, Nanos},
 };
@@ -15,7 +15,8 @@ use helix_common::{
     chain_info::ChainInfo,
     decoder::{SubmissionDecoder, SubmissionDecoderParams},
     local_cache::LocalCache,
-    record_submission_step,
+    record_submission_step, record_submission_step_ns,
+    utils::utcnow_ns,
 };
 use helix_types::{
     BidAdjustmentData, BlockMergingData, BlsPublicKeyBytes, MergeType, SignedBidSubmission,
@@ -34,7 +35,7 @@ use crate::{
     housekeeper::SlotUpdate,
     spine::{
         HelixSpineProducers,
-        messages::{DecodedSubmission, NewBidSubmission, SlotMsg},
+        messages::{DecodedSubmission, NewBidSubmission, NewTcpBidSubmission, SlotMsg},
     },
 };
 
@@ -58,14 +59,73 @@ pub struct DecoderTile {
     slot_events: Arc<SharedVector<SlotUpdate>>,
     bid_slot: u64,
     stats: RefCell<DecodeStats>,
+    lane: Lane,
+}
+
+#[derive(Clone, Copy)]
+pub enum Lane {
+    All,
+    TcpOnly,
+}
+
+pub trait SubmissionMsg: 'static + Copy {
+    fn bid(&self) -> &NewBidSubmission;
+}
+
+impl SubmissionMsg for NewBidSubmission {
+    fn bid(&self) -> &NewBidSubmission {
+        self
+    }
+}
+
+impl SubmissionMsg for NewTcpBidSubmission {
+    fn bid(&self) -> &NewBidSubmission {
+        &self.0
+    }
 }
 
 impl Tile<HelixSpine> for DecoderTile {
     fn loop_body(&mut self, adapter: &mut flux::spine::SpineAdapter<HelixSpine>) {
         adapter.consume(|msg: SlotMsg, _| self.on_slot_msg(msg));
 
+        match self.lane {
+            Lane::All => {
+                self.consume::<NewTcpBidSubmission>(adapter);
+                self.consume::<NewBidSubmission>(adapter);
+            }
+            Lane::TcpOnly => self.consume::<NewTcpBidSubmission>(adapter),
+        }
+    }
+
+    fn try_init(&mut self, adapter: &mut flux::spine::SpineAdapter<HelixSpine>) -> bool {
+        match self.lane {
+            Lane::All => {
+                adapter.set_collaborative_group_dcache::<NewTcpBidSubmission>("decoder_tcp_only");
+                adapter.set_collaborative_group_dcache::<NewBidSubmission>("decoder");
+            }
+            Lane::TcpOnly => {
+                adapter.set_collaborative_group_dcache::<NewTcpBidSubmission>("decoder_tcp_only")
+            }
+        }
+        true
+    }
+
+    fn name(&self) -> flux::tile::TileName {
+        let mut name = flux_utils::short_typename::<Self>();
+        name.push_str_truncate(self.core.to_string().as_str());
+        name
+    }
+}
+
+impl DecoderTile {
+    fn consume<T>(&mut self, adapter: &mut flux::spine::SpineAdapter<HelixSpine>)
+    where
+        T: SubmissionMsg,
+        <HelixSpine as flux::spine::FluxSpine>::Consumers: AsMut<SpineDCacheConsumer<T>>,
+    {
         adapter.consume_with_dcache_collaborative_internal_message(
-            |new_bid: &InternalMessage<NewBidSubmission>, dcache_payload| {
+            |msg: &InternalMessage<T>, dcache_payload| {
+                let new_bid = msg.bid();
                 // dcache bypass: the dcache slot can be mutated between publish and
                 // consume, read the stable staged copy when one is present.
                 let bytes;
@@ -76,7 +136,7 @@ impl Tile<HelixSpine> for DecoderTile {
                 } else {
                     &dcache_payload[new_bid.payload_offset..]
                 };
-                let sent_at = new_bid.tracking_timestamp().publish_t();
+                let sent_at = msg.tracking_timestamp().publish_t();
                 DecoderTile::handle_block_submission(
                     &self.cache,
                     &self.chain_info,
@@ -91,9 +151,10 @@ impl Tile<HelixSpine> for DecoderTile {
                 )
             },
             |res, producers| match res {
-                DCacheRead::Ok((new_bid, result)) => {
+                DCacheRead::Ok((msg, result)) => {
+                    let new_bid = msg.bid();
                     self.record_decode_result(&result);
-                    let sent_at = new_bid.tracking_timestamp().publish_t();
+                    let sent_at = msg.tracking_timestamp().publish_t();
                     Self::handle_result(
                         &self.decoded,
                         &self.future_results,
@@ -103,7 +164,8 @@ impl Tile<HelixSpine> for DecoderTile {
                         producers,
                     );
                 }
-                DCacheRead::NoRef(new_bid) => {
+                DCacheRead::NoRef(msg) => {
+                    let new_bid = msg.bid();
                     let Some(payload) = self.http_submissions.get(new_bid.http_submission_ix)
                     else {
                         tracing::error!(
@@ -119,7 +181,7 @@ impl Tile<HelixSpine> for DecoderTile {
                         );
                     };
 
-                    let sent_at = new_bid.tracking_timestamp().publish_t();
+                    let sent_at = msg.tracking_timestamp().publish_t();
                     let result = DecoderTile::handle_block_submission(
                         &self.cache,
                         &self.chain_info,
@@ -142,7 +204,8 @@ impl Tile<HelixSpine> for DecoderTile {
                         producers,
                     );
                 }
-                DCacheRead::Lost(new_bid) => {
+                DCacheRead::Lost(msg) => {
+                    let new_bid = msg.bid();
                     tracing::error!(
                         "dcache read failed for bid submission with id {}",
                         new_bid.header.id
@@ -163,19 +226,6 @@ impl Tile<HelixSpine> for DecoderTile {
         );
     }
 
-    fn try_init(&mut self, adapter: &mut flux::spine::SpineAdapter<HelixSpine>) -> bool {
-        adapter.set_collaborative_group_dcache::<NewBidSubmission>("decoder");
-        true
-    }
-
-    fn name(&self) -> flux::tile::TileName {
-        let mut name = flux_utils::short_typename::<Self>();
-        name.push_str_truncate(self.core.to_string().as_str());
-        name
-    }
-}
-
-impl DecoderTile {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         cache: LocalCache,
@@ -186,6 +236,7 @@ impl DecoderTile {
         http_submissions: Arc<SharedVector<Bytes>>,
         slot_events: Arc<SharedVector<SlotUpdate>>,
         core: usize,
+        lane: Lane,
     ) -> Self {
         Self {
             chain_info,
@@ -198,6 +249,7 @@ impl DecoderTile {
             core,
             slot_events,
             bid_slot: 0,
+            lane,
             stats: RefCell::new(DecodeStats::default()),
         }
     }
@@ -264,6 +316,7 @@ impl DecoderTile {
     ) -> Result<(SubmissionData, tracing::Span), BuilderApiError> {
         tracing::Span::current().record("id", tracing::field::display(header.id));
         record_submission_step("worker_recv", sent_at.elapsed());
+        record_submission_step_ns("recv_worker", trace.receive_ns.0, utcnow_ns());
         trace!("received by worker");
         let (
             submission,
@@ -364,6 +417,7 @@ impl DecoderTile {
             decoder.decode(payload, buffer)?;
 
         trace.decoded_ns = Nanos::now();
+        record_submission_step_ns("recv_decoded", trace.receive_ns.0, trace.decoded_ns.0);
 
         let builder_pubkey = *submission.builder_pubkey();
         let skip_sigverify = if let Some(expected_pubkey) = expected_pubkey {

@@ -2,13 +2,17 @@ use std::{collections::HashMap, sync::Arc};
 
 use helix_common::{
     ProposerDuty, SignedValidatorRegistrationEntry,
-    api::builder_api::BuilderGetValidatorsResponseEntry,
+    api::{
+        builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
+    },
     beacon::{MultiBeaconClient, types::BeaconResponse},
     http::client::{HttpClient, PendingResponse},
+    is_local_dev,
     local_cache::LocalCache,
+    validator_preferences::ValidatorPreferences,
 };
 use helix_database::handle::DbHandle;
-use helix_types::BlsPublicKeyBytes;
+use helix_types::{BlsPublicKeyBytes, SignedValidatorRegistration, ValidatorRegistration};
 use tracing::{error, info};
 use url::Url;
 
@@ -87,13 +91,36 @@ fn _build_formatted_duties(
     proposer_duties
         .iter()
         .filter_map(|duty| {
-            registrations.get(&duty.pubkey).map(|reg| BuilderGetValidatorsResponseEntry {
+            let entry = match registrations.get(&duty.pubkey) {
+                Some(reg) => reg.registration_info.clone(),
+                None if is_local_dev() => local_dev_registration_info(duty),
+                None => return None,
+            };
+            Some(BuilderGetValidatorsResponseEntry {
                 slot: duty.slot,
                 validator_index: duty.validator_index,
-                entry: reg.registration_info.clone(),
+                entry,
             })
         })
         .collect()
+}
+
+/// Local dev runs against a live beacon chain with no real registrations, so
+/// every duty gets an unsigned stand-in; validation skips the fee-recipient
+/// check for these (`is_local_dev` in `validate_submission_data`).
+fn local_dev_registration_info(duty: &ProposerDuty) -> ValidatorRegistrationInfo {
+    ValidatorRegistrationInfo {
+        registration: SignedValidatorRegistration {
+            message: ValidatorRegistration {
+                fee_recipient: Default::default(),
+                gas_limit: 60_000_000,
+                timestamp: 0,
+                pubkey: duty.pubkey,
+            },
+            signature: Default::default(),
+        },
+        preferences: ValidatorPreferences::default(),
+    }
 }
 
 pub fn process_duties(

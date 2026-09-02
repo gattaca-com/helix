@@ -31,9 +31,9 @@ use helix_relay::{
     Api, Auctioneer, AuctioneerHandle, BidSorter, BidSubmissionTcpListener, BlockMergeResponse,
     BlockMergingTile, BroadcastPayloadParams, DataGatherer, DbHandle, DecoderTile,
     DefaultBidAdjustor, FutureBidSubmissionResult, GossipedMessage, HelixSpine, HelixSpineConfig,
-    HousekeeperTile, NewBidSubmission, RegWorkerHandle, RegistrationTile, RelayNetworkManager,
-    SimRequest, SimResult, SimulatorTile, SlotUpdate, SubmissionDataWithSpan, TopBidTile,
-    spawn_tokio_monitoring, start_admin_service, start_api_service, start_db_service,
+    HousekeeperTile, Lane, NewTcpBidSubmission, RegWorkerHandle, RegistrationTile,
+    RelayNetworkManager, SimRequest, SimResult, SimulatorTile, SlotUpdate, SubmissionDataWithSpan,
+    TopBidTile, spawn_tokio_monitoring, start_admin_service, start_api_service, start_db_service,
 };
 use helix_types::BlsKeypair;
 use helix_website::WebsiteService;
@@ -277,11 +277,10 @@ async fn run(
             }
         }
 
-        attach_tile(
-            housekeeper_tile,
-            spine,
-            TileConfig::background(config.cores.housekeeper, None),
-        );
+        attach_tile(housekeeper_tile, spine, match config.cores.housekeeper {
+            Some(core) => TileConfig::new(core, ThreadPriority::OSDefault),
+            None => TileConfig::background(None, Some(flux::timing::Duration::from_millis(20))),
+        });
 
         if config.is_submission_instance {
             if config.clickhouse.is_some() || config.s3_config.is_some() {
@@ -298,7 +297,9 @@ async fn run(
                 );
             }
 
-            for core in &config.cores.decoder {
+            let tcp_lane = &config.cores.decoder_tcp_only;
+            let decoders = config.cores.decoder.iter().map(|c| (*c, Lane::All));
+            for (core, lane) in decoders.chain(tcp_lane.iter().map(|c| (*c, Lane::TcpOnly))) {
                 let decoder_tile = DecoderTile::new(
                     local_cache.as_ref().clone(),
                     chain_info.as_ref().clone(),
@@ -307,9 +308,10 @@ async fn run(
                     decoded.clone(),
                     http_submissions.clone(),
                     slot_events.clone(),
-                    *core,
+                    core,
+                    lane,
                 );
-                attach_tile(decoder_tile, spine, TileConfig::new(*core, ThreadPriority::OSDefault));
+                attach_tile(decoder_tile, spine, TileConfig::new(core, ThreadPriority::OSDefault));
             }
 
             let sock_addr =
@@ -318,22 +320,19 @@ async fn run(
                 sock_addr,
                 local_cache.api_key_cache.clone(),
                 config.tcp_max_connections,
-                spine.spine.dcache_ptr_for::<NewBidSubmission>(),
+                spine.spine.dcache_ptr_for::<NewTcpBidSubmission>(),
                 http_submissions.clone(),
             );
             attach_tile(
                 block_submission_tcp_listener,
                 spine,
-                TileConfig::new(
-                    config.cores.tcp_bid_submissions_tile,
-                    flux::utils::ThreadPriority::High,
-                ),
+                TileConfig::new(config.cores.tcp_bid_submissions_tile, ThreadPriority::OSDefault),
             );
 
             attach_tile(
                 TopBidTile::new(web_socket_recv),
                 spine,
-                TileConfig::new(config.cores.top_bid, flux::utils::ThreadPriority::High),
+                TileConfig::new(config.cores.top_bid, ThreadPriority::OSDefault),
             );
 
             let sim_requests =

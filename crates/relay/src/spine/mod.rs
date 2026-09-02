@@ -7,8 +7,12 @@ use flux::{communication::ShmemData, spine::SpineQueue, spine_derive::from_spine
 pub struct HelixSpine {
     pub tile_info: ShmemData<TileInfo>,
 
-    #[queue(size(2usize.pow(10)), mtu(1024))]
+    // 6 MiB max payload, 128 in flight: 1 GiB dcache.
+    #[queue(size(2usize.pow(7)), mtu(6 * 1024 * 1024))]
     pub to_decode: SpineQueue<messages::NewBidSubmission>,
+
+    #[queue(size(2usize.pow(7)), mtu(6 * 1024 * 1024))]
+    pub to_decode_tcp_only: SpineQueue<messages::NewTcpBidSubmission>,
 
     #[queue(size(2usize.pow(16)))]
     pub bid_submission_result: SpineQueue<messages::SubmissionResultWithRef>,

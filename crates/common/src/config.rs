@@ -120,6 +120,7 @@ impl RelayConfig {
                 reg_workers: vec![],
                 tcp_bid_submissions_tile: 2,
                 decoder: vec![4],
+                decoder_tcp_only: vec![],
                 simulator: 5,
                 top_bid: 1,
                 data_gatherer: 3,
@@ -177,6 +178,8 @@ pub struct CoresConfig {
     pub reg_workers: Vec<usize>,
     pub tcp_bid_submissions_tile: usize,
     pub decoder: Vec<usize>,
+    #[serde(default)]
+    pub decoder_tcp_only: Vec<usize>,
     #[serde(default)]
     pub simulator: usize,
     #[serde(default)]
