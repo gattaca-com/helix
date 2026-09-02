@@ -5,6 +5,7 @@ use alloy_rpc_types::{
     beacon::{relay::BidTrace, requests::ExecutionRequestsV4},
     engine::ExecutionPayloadV3,
 };
+use dashmap::DashSet;
 use ethrex_blockchain::{
     Blockchain, BlockchainOptions, BlockchainType,
     fork_choice::apply_fork_choice,
@@ -21,8 +22,8 @@ use crate::{
     },
     node::HeadInfo,
     testing::{
-        ETH, GWEI, deploy_payment_forwarder, dev_genesis_store_with, funded_signers,
-        signed_transfer, signed_unprotected_transfer,
+        ETH, GWEI, deploy_balance_probe, deploy_payment_forwarder, dev_genesis_store_with,
+        funded_signers, signed_transfer, signed_unprotected_transfer,
     },
     validation::{BlockValidator, error::ValidationError},
 };
@@ -50,6 +51,7 @@ struct Fixture {
     signers: Vec<alloy_signer_local::PrivateKeySigner>,
     proposer: Address,
     head: watch::Sender<HeadInfo>,
+    disallow: Arc<DashSet<Address>>,
 }
 
 impl Fixture {
@@ -59,6 +61,28 @@ impl Fixture {
 
     async fn with_forwarder() -> Self {
         Self::with_genesis(deploy_payment_forwarder).await
+    }
+
+    async fn with_disallowed(listed: &[Address]) -> Self {
+        let fixture = Self::with_genesis(|_| {}).await;
+        fixture.disallow(listed)
+    }
+
+    async fn with_forwarder_and_disallowed(listed: &[Address]) -> Self {
+        let fixture = Self::with_genesis(deploy_payment_forwarder).await;
+        fixture.disallow(listed)
+    }
+
+    async fn with_probe_and_disallowed(listed: &[Address]) -> Self {
+        let fixture = Self::with_genesis(|genesis| deploy_balance_probe(genesis, PROBE)).await;
+        fixture.disallow(listed)
+    }
+
+    fn disallow(self, listed: &[Address]) -> Self {
+        for address in listed {
+            self.disallow.insert(*address);
+        }
+        self
     }
 
     async fn with_genesis(edit: impl FnOnce(&mut ethrex_common::types::Genesis)) -> Self {
@@ -88,11 +112,17 @@ impl Fixture {
             gas_limit: genesis_block.header.gas_limit,
             proposer: signers[3].address(),
             signers,
+            disallow: Arc::new(DashSet::new()),
         }
     }
 
     fn validator(&self) -> BlockValidator {
-        BlockValidator::new(self.store.clone(), self.head.subscribe(), WINDOW)
+        BlockValidator::new(
+            self.store.clone(),
+            self.head.subscribe(),
+            WINDOW,
+            self.disallow.clone(),
+        )
     }
 
     /// Builds a valid block on `parent`, paying `self.proposer` in its last tx.
@@ -198,6 +228,27 @@ impl Fixture {
             value,
             access_list: Default::default(),
             input: input.into(),
+        };
+        let signature = signer.sign_hash_sync(&tx.signature_hash()).unwrap();
+        alloy_eips::eip2718::Encodable2718::encoded_2718(&alloy_consensus::TxEnvelope::from(
+            tx.into_signed(signature),
+        ))
+    }
+
+    /// Deploys empty code, so the created account exists in state.
+    fn signed_create(&self, signer: &alloy_signer_local::PrivateKeySigner, nonce: u64) -> Vec<u8> {
+        use alloy_consensus::SignableTransaction;
+        use alloy_signer::SignerSync;
+        let tx = alloy_consensus::TxEip1559 {
+            chain_id: self.chain_id,
+            nonce,
+            gas_limit: 100_000,
+            max_fee_per_gas: 100 * GWEI,
+            max_priority_fee_per_gas: 0,
+            to: alloy_primitives::TxKind::Create,
+            value: U256::ZERO,
+            access_list: Default::default(),
+            input: alloy_primitives::hex!("60006000f3").into(),
         };
         let signature = signer.sign_hash_sync(&tx.signature_hash()).unwrap();
         alloy_eips::eip2718::Encodable2718::encoded_2718(&alloy_consensus::TxEnvelope::from(
@@ -428,7 +479,7 @@ async fn a_valid_block_passes_execution() {
 
     let executed = fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests)
+        .validate(&built.payload, &message, B256::ZERO, &built.requests, false)
         .expect("a block the fixture built must validate");
 
     assert_eq!(executed.receipts.len(), 1);
@@ -445,7 +496,7 @@ async fn validating_a_block_does_not_store_it() {
 
     fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests)
+        .validate(&built.payload, &message, B256::ZERO, &built.requests, false)
         .expect("a block the fixture built must validate");
 
     assert_eq!(fixture.store.get_latest_block_number().await.unwrap(), 0);
@@ -464,7 +515,7 @@ async fn a_tampered_state_root_is_rejected() {
 
     let error = fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests)
+        .validate(&built.payload, &message, B256::ZERO, &built.requests, false)
         .expect_err("a wrong state root must be rejected");
 
     assert!(matches!(error, ValidationError::StateRootMismatch { .. }), "{error}");
@@ -479,7 +530,7 @@ async fn a_tampered_gas_used_is_rejected() {
 
     let error = fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests)
+        .validate(&built.payload, &message, B256::ZERO, &built.requests, false)
         .expect_err("a wrong gas used must be rejected");
 
     assert!(matches!(error, ValidationError::PostExecution(_)), "{error}");
@@ -494,7 +545,7 @@ async fn a_tampered_receipts_root_is_rejected() {
 
     let error = fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests)
+        .validate(&built.payload, &message, B256::ZERO, &built.requests, false)
         .expect_err("a wrong receipts root must be rejected");
 
     assert!(matches!(error, ValidationError::PostExecution(_)), "{error}");
@@ -512,7 +563,7 @@ async fn execution_requests_that_the_block_did_not_produce_are_rejected() {
 
     let error = fixture
         .validator()
-        .validate(&tampered.payload, &message, B256::ZERO, &tampered.requests)
+        .validate(&tampered.payload, &message, B256::ZERO, &tampered.requests, false)
         .expect_err("unproduced requests must be rejected");
 
     assert!(matches!(error, ValidationError::PostExecution(_)), "{error}");
@@ -529,7 +580,7 @@ async fn a_tampered_base_fee_is_rejected_before_execution() {
 
     let error = fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests)
+        .validate(&built.payload, &message, B256::ZERO, &built.requests, false)
         .expect_err("a wrong base fee must be rejected");
 
     assert!(matches!(error, ValidationError::PreExecution(_)), "{error}");
@@ -553,7 +604,7 @@ async fn a_block_with_an_unexecutable_transaction_is_rejected() {
 
     let error = fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests)
+        .validate(&built.payload, &message, B256::ZERO, &built.requests, false)
         .expect_err("an unexecutable transaction must be rejected");
 
     assert!(matches!(error, ValidationError::Execution(_)), "{error}");
@@ -592,7 +643,7 @@ async fn a_payment_by_balance_delta_is_accepted() {
 
     fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests)
+        .validate(&built.payload, &message, B256::ZERO, &built.requests, false)
         .expect("a balance delta covering the bid must be accepted");
 }
 
@@ -619,7 +670,7 @@ async fn a_trailing_direct_transfer_is_accepted() {
 
     fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests)
+        .validate(&built.payload, &message, B256::ZERO, &built.requests, false)
         .expect("a trailing direct transfer must be accepted");
 }
 
@@ -646,7 +697,7 @@ async fn an_underpaid_block_is_rejected() {
 
     let error = fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests)
+        .validate(&built.payload, &message, B256::ZERO, &built.requests, false)
         .expect_err("paying less than the bid must be rejected");
 
     assert!(matches!(error, ValidationError::ProposerPayment), "{error}");
@@ -677,7 +728,7 @@ async fn a_payment_tx_with_a_priority_fee_is_rejected() {
 
     let error = fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests)
+        .validate(&built.payload, &message, B256::ZERO, &built.requests, false)
         .expect_err("a tipping payment tx must be rejected");
 
     assert!(matches!(error, ValidationError::ProposerPayment), "{error}");
@@ -700,7 +751,7 @@ async fn an_unprotected_payment_tx_is_rejected() {
 
     let error = fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests)
+        .validate(&built.payload, &message, B256::ZERO, &built.requests, false)
         .expect_err("an unprotected payment tx must be rejected");
 
     assert!(matches!(error, ValidationError::ProposerPayment), "{error}");
@@ -729,7 +780,7 @@ async fn a_withdrawal_does_not_pay_the_bid() {
 
     let error = fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests)
+        .validate(&built.payload, &message, B256::ZERO, &built.requests, false)
         .expect_err("a withdrawal must not count as the bid payment");
 
     assert!(matches!(error, ValidationError::ProposerPayment), "{error}");
@@ -762,7 +813,7 @@ async fn a_payment_through_the_forwarder_is_accepted() {
 
     fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests)
+        .validate(&built.payload, &message, B256::ZERO, &built.requests, false)
         .expect("a forwarder payment must be accepted where the forwarder is deployed");
 }
 
@@ -789,7 +840,7 @@ async fn a_forwarder_payment_is_rejected_where_the_forwarder_is_absent() {
 
     let error = fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests)
+        .validate(&built.payload, &message, B256::ZERO, &built.requests, false)
         .expect_err("an undeployed forwarder must not be trusted");
 
     assert!(matches!(error, ValidationError::ProposerPayment), "{error}");
@@ -818,7 +869,7 @@ async fn a_reverted_payment_tx_is_rejected() {
 
     let error = fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests)
+        .validate(&built.payload, &message, B256::ZERO, &built.requests, false)
         .expect_err("a reverted payment must be rejected");
 
     assert!(matches!(error, ValidationError::ProposerPayment), "{error}");
@@ -869,7 +920,7 @@ async fn a_merged_payment_split_across_two_txs_is_accepted() {
 
     fixture
         .validator()
-        .validate_merged(&built.payload, &message, B256::ZERO, &built.requests, 1)
+        .validate_merged(&built.payload, &message, B256::ZERO, &built.requests, false, 1)
         .expect("both payment positions must count");
 }
 
@@ -917,7 +968,7 @@ async fn a_merged_payment_with_a_wrong_base_index_is_rejected() {
 
     let error = fixture
         .validator()
-        .validate_merged(&built.payload, &message, B256::ZERO, &built.requests, 2)
+        .validate_merged(&built.payload, &message, B256::ZERO, &built.requests, false, 2)
         .expect_err("a wrong base payment index must fail closed");
 
     assert!(matches!(error, ValidationError::ProposerPayment), "{error}");
@@ -958,8 +1009,203 @@ async fn a_split_payment_is_not_accepted_on_the_regular_path() {
 
     let error = fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests)
+        .validate(&built.payload, &message, B256::ZERO, &built.requests, false)
         .expect_err("the regular path must not sum two positions");
 
     assert!(matches!(error, ValidationError::ProposerPayment), "{error}");
+}
+
+const LISTED: Address = Address::repeat_byte(0x9a);
+const PROBE: Address = Address::repeat_byte(0x9b);
+
+#[tokio::test]
+async fn a_blacklisted_sender_is_rejected() {
+    let fixture = Fixture::new().await;
+    let sender = fixture.signers[1].address();
+    let fixture = fixture.disallow(&[sender]);
+    let txs = vec![signed_transfer(
+        &fixture.signers[1],
+        fixture.chain_id,
+        0,
+        Address::repeat_byte(0x66),
+        U256::from(1),
+        100 * GWEI,
+        0,
+    )];
+    let built =
+        fixture.build_block(fixture.genesis_hash, fixture.genesis_timestamp + 12, txs, Vec::new());
+    let message = fixture.bid_trace(&built);
+
+    let error = fixture
+        .validator()
+        .validate(&built.payload, &message, B256::ZERO, &built.requests, true)
+        .expect_err("a listed sender must be rejected");
+
+    assert!(matches!(error, ValidationError::Blacklist(_)), "{error}");
+}
+
+#[tokio::test]
+async fn a_blacklisted_recipient_is_rejected() {
+    let fixture = Fixture::with_disallowed(&[LISTED]).await;
+    let txs = vec![signed_transfer(
+        &fixture.signers[1],
+        fixture.chain_id,
+        0,
+        LISTED,
+        U256::from(1),
+        100 * GWEI,
+        0,
+    )];
+    let built =
+        fixture.build_block(fixture.genesis_hash, fixture.genesis_timestamp + 12, txs, Vec::new());
+    let message = fixture.bid_trace(&built);
+
+    let error = fixture
+        .validator()
+        .validate(&built.payload, &message, B256::ZERO, &built.requests, true)
+        .expect_err("a listed recipient must be rejected");
+
+    assert!(matches!(error, ValidationError::Blacklist(_)), "{error}");
+}
+
+#[tokio::test]
+async fn a_blacklisted_coinbase_is_rejected() {
+    let fixture = Fixture::new().await;
+    let coinbase = fixture.signers[0].address();
+    let fixture = fixture.disallow(&[coinbase]);
+    let txs = vec![signed_transfer(
+        &fixture.signers[1],
+        fixture.chain_id,
+        0,
+        Address::repeat_byte(0x66),
+        U256::from(1),
+        100 * GWEI,
+        0,
+    )];
+    let built =
+        fixture.build_block(fixture.genesis_hash, fixture.genesis_timestamp + 12, txs, Vec::new());
+    let message = fixture.bid_trace(&built);
+
+    let error = fixture
+        .validator()
+        .validate(&built.payload, &message, B256::ZERO, &built.requests, true)
+        .expect_err("a listed coinbase must be rejected");
+
+    assert!(matches!(error, ValidationError::Blacklist(_)), "{error}");
+}
+
+#[tokio::test]
+async fn a_blacklisted_proposer_fee_recipient_is_rejected() {
+    let fixture = Fixture::with_disallowed(&[Address::repeat_byte(0x9c)]).await;
+    let built = fixture.build_on(fixture.genesis_hash, fixture.genesis_timestamp + 12, 0);
+    let mut message = fixture.bid_trace(&built);
+    message.proposer_fee_recipient = Address::repeat_byte(0x9c);
+
+    let error = fixture
+        .validator()
+        .validate(&built.payload, &message, B256::ZERO, &built.requests, true)
+        .expect_err("a listed fee recipient must be rejected");
+
+    assert!(matches!(error, ValidationError::Blacklist(_)), "{error}");
+}
+
+/// The listed address is never a transaction's `to`: the forwarder sends it the
+/// value internally. Only the state change reveals it.
+#[tokio::test]
+async fn a_blacklisted_internal_value_target_is_rejected() {
+    let fixture = Fixture::with_forwarder_and_disallowed(&[LISTED]).await;
+    let timestamp = fixture.genesis_timestamp + 12;
+    let txs = vec![fixture.signed_call(
+        &fixture.signers[1],
+        0,
+        helix_common::PAYMENT_FORWARDER,
+        U256::from(GWEI),
+        forwarder_calldata(timestamp, LISTED),
+    )];
+    let built = fixture.build_block(fixture.genesis_hash, timestamp, txs, Vec::new());
+    let message = fixture.bid_trace(&built);
+
+    let error = fixture
+        .validator()
+        .validate(&built.payload, &message, B256::ZERO, &built.requests, true)
+        .expect_err("a listed internal value target must be rejected");
+
+    assert!(matches!(error, ValidationError::Blacklist(_)), "{error}");
+}
+
+#[tokio::test]
+async fn a_blacklisted_created_account_is_rejected() {
+    let fixture = Fixture::new().await;
+    let created = fixture.signers[1].address().create(0);
+    let fixture = fixture.disallow(&[created]);
+    let txs = vec![fixture.signed_create(&fixture.signers[1], 0)];
+    let built =
+        fixture.build_block(fixture.genesis_hash, fixture.genesis_timestamp + 12, txs, Vec::new());
+    let message = fixture.bid_trace(&built);
+
+    let error = fixture
+        .validator()
+        .validate(&built.payload, &message, B256::ZERO, &built.requests, true)
+        .expect_err("a listed created account must be rejected");
+
+    assert!(matches!(error, ValidationError::Blacklist(_)), "{error}");
+}
+
+/// Reading an account is not interacting with it. The reth simulator rejects
+/// this block; this one does not.
+#[tokio::test]
+async fn an_account_that_is_only_read_is_not_blacklisted() {
+    let fixture = Fixture::with_probe_and_disallowed(&[LISTED]).await;
+    let mut calldata = [0u8; 32];
+    calldata[12..].copy_from_slice(LISTED.as_slice());
+    let txs =
+        vec![fixture.signed_call(&fixture.signers[1], 0, PROBE, U256::ZERO, calldata.to_vec())];
+    let built =
+        fixture.build_block(fixture.genesis_hash, fixture.genesis_timestamp + 12, txs, Vec::new());
+    let mut message = fixture.bid_trace(&built);
+    message.value = U256::ZERO;
+
+    let executed = fixture
+        .validator()
+        .validate(&built.payload, &message, B256::ZERO, &built.requests, true)
+        .expect("a read alone must not reject the block");
+
+    assert!(executed.receipts[0].succeeded, "the probe must have run for this to prove anything");
+}
+
+#[tokio::test]
+async fn a_block_touching_no_listed_account_passes() {
+    let fixture = Fixture::with_disallowed(&[LISTED]).await;
+    let built = fixture.build_on(fixture.genesis_hash, fixture.genesis_timestamp + 12, 0);
+    let message = fixture.bid_trace(&built);
+
+    fixture
+        .validator()
+        .validate(&built.payload, &message, B256::ZERO, &built.requests, true)
+        .expect("a block touching nothing listed must pass");
+}
+
+/// Filtering is a per-proposer preference, so a non-filtering proposer's block
+/// is validated without it.
+#[tokio::test]
+async fn a_non_filtering_proposer_bypasses_the_blacklist() {
+    let fixture = Fixture::with_disallowed(&[LISTED]).await;
+    let txs = vec![signed_transfer(
+        &fixture.signers[1],
+        fixture.chain_id,
+        0,
+        LISTED,
+        U256::from(1),
+        100 * GWEI,
+        0,
+    )];
+    let built =
+        fixture.build_block(fixture.genesis_hash, fixture.genesis_timestamp + 12, txs, Vec::new());
+    let mut message = fixture.bid_trace(&built);
+    message.value = U256::ZERO;
+
+    fixture
+        .validator()
+        .validate(&built.payload, &message, B256::ZERO, &built.requests, false)
+        .expect("apply_blacklist = false must skip the check");
 }

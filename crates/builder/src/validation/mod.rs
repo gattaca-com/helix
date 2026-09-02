@@ -5,11 +5,14 @@ pub mod error;
 #[cfg(test)]
 mod tests;
 
+use std::sync::Arc;
+
 use alloy_primitives::B256;
 use alloy_rpc_types::{
     beacon::{relay::BidTrace, requests::ExecutionRequestsV4},
     engine::ExecutionPayloadV3,
 };
+use dashmap::DashSet;
 use ethrex_blockchain::{BlockchainType, new_evm, vm::StoreVmDatabase};
 use ethrex_common::{
     Address as EAddress, U256 as EU256,
@@ -29,7 +32,7 @@ use helix_common::{
 use tokio::sync::watch;
 
 use crate::{
-    engine::convert::{b256, eaddr, eu256, h256, payload_v3_to_block},
+    engine::convert::{aaddr, b256, eaddr, eu256, h256, payload_v3_to_block},
     node::HeadInfo,
     validation::error::ValidationError,
 };
@@ -53,11 +56,17 @@ pub struct BlockValidator {
     store: Store,
     head: watch::Receiver<HeadInfo>,
     validation_window: u64,
+    disallow: Arc<DashSet<alloy_primitives::Address>>,
 }
 
 impl BlockValidator {
-    pub fn new(store: Store, head: watch::Receiver<HeadInfo>, validation_window: u64) -> Self {
-        Self { store, head, validation_window }
+    pub fn new(
+        store: Store,
+        head: watch::Receiver<HeadInfo>,
+        validation_window: u64,
+        disallow: Arc<DashSet<alloy_primitives::Address>>,
+    ) -> Self {
+        Self { store, head, validation_window, disallow }
     }
 
     pub fn prepare(
@@ -79,9 +88,13 @@ impl BlockValidator {
         message: &BidTrace,
         parent_beacon_block_root: B256,
         requests: &ExecutionRequestsV4,
+        apply_blacklist: bool,
     ) -> Result<ExecutedBlock, ValidationError> {
         let prepared = self.prepare(payload, message, parent_beacon_block_root, requests)?;
         let executed = self.execute(prepared)?;
+        if apply_blacklist {
+            self.ensure_not_blacklisted(&executed, message)?;
+        }
         self.ensure_payment(&executed, message)?;
         Ok(executed)
     }
@@ -94,12 +107,58 @@ impl BlockValidator {
         message: &BidTrace,
         parent_beacon_block_root: B256,
         requests: &ExecutionRequestsV4,
+        apply_blacklist: bool,
         base_payment_tx_index: u64,
     ) -> Result<ExecutedBlock, ValidationError> {
         let prepared = self.prepare(payload, message, parent_beacon_block_root, requests)?;
         let executed = self.execute(prepared)?;
+        if apply_blacklist {
+            self.ensure_not_blacklisted(&executed, message)?;
+        }
         self.ensure_merged_payment(&executed, message, base_payment_tx_index as usize)?;
         Ok(executed)
+    }
+
+    /// Rejects a block that interacts with a listed address. Interaction means
+    /// effect: a state change, or a transaction addressed to it. Reading an
+    /// account is not interaction, which is where this parts company with the
+    /// reth simulator.
+    fn ensure_not_blacklisted(
+        &self,
+        executed: &ExecutedBlock,
+        message: &BidTrace,
+    ) -> Result<(), ValidationError> {
+        if self.disallow.is_empty() {
+            return Ok(());
+        }
+
+        // Neither is guaranteed to change state: a block with no priority fees
+        // leaves the coinbase untouched, and an unpaid recipient stays absent.
+        for address in [aaddr(executed.block.header.coinbase), message.proposer_fee_recipient] {
+            if self.disallow.contains(&address) {
+                return Err(ValidationError::Blacklist(address));
+            }
+        }
+
+        // A call that changes nothing leaves no account update behind.
+        for tx in &executed.block.body.transactions {
+            if let ethrex_common::types::TxKind::Call(to) = tx.to() {
+                let to = aaddr(to);
+                if self.disallow.contains(&to) {
+                    return Err(ValidationError::Blacklist(to));
+                }
+            }
+        }
+
+        // Senders, created accounts, value recipients and storage writes.
+        for update in &executed.account_updates {
+            let address = aaddr(update.address);
+            if self.disallow.contains(&address) {
+                return Err(ValidationError::Blacklist(address));
+            }
+        }
+
+        Ok(())
     }
 
     /// Executes against the parent state and checks the header against what
