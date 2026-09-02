@@ -6473,6 +6473,7 @@ dependencies = [
  "flux",
  "flux-network",
  "flux-utils",
+ "helix-common",
  "helix-tcp-types",
  "hex",
  "num_cpus",
