@@ -12,6 +12,7 @@ use alloy_rpc_types::{
 };
 use ethrex_blockchain::{BlockchainType, new_evm, vm::StoreVmDatabase};
 use ethrex_common::{
+    Address as EAddress, U256 as EU256,
     types::{AccountUpdate, Block, BlockHeader, ELASTICITY_MULTIPLIER, Receipt},
     validation::{
         validate_block_pre_execution, validate_gas_used, validate_receipts_root_and_logs_bloom,
@@ -20,10 +21,15 @@ use ethrex_common::{
 };
 use ethrex_crypto::NativeCrypto;
 use ethrex_storage::Store;
+use ethrex_vm::VmDatabase;
+use helix_common::{
+    PAYMENT_FORWARDER, PAYMENT_FORWARDER_CODE_HASH, payment::multisend_paid_amount,
+    payment_forwarder_recipient,
+};
 use tokio::sync::watch;
 
 use crate::{
-    engine::convert::{b256, payload_v3_to_block},
+    engine::convert::{b256, eaddr, eu256, h256, payload_v3_to_block},
     node::HeadInfo,
     validation::error::ValidationError,
 };
@@ -37,6 +43,7 @@ pub struct PreparedBlock {
 #[derive(Debug)]
 pub struct ExecutedBlock {
     pub block: Block,
+    pub parent_header: BlockHeader,
     pub receipts: Vec<Receipt>,
     pub account_updates: Vec<AccountUpdate>,
 }
@@ -74,7 +81,25 @@ impl BlockValidator {
         requests: &ExecutionRequestsV4,
     ) -> Result<ExecutedBlock, ValidationError> {
         let prepared = self.prepare(payload, message, parent_beacon_block_root, requests)?;
-        self.execute(prepared)
+        let executed = self.execute(prepared)?;
+        self.ensure_payment(&executed, message)?;
+        Ok(executed)
+    }
+
+    /// Relay-internal merged-block path. A merged block's payment is split
+    /// across the base block's own payment tx and the appended distribution tx.
+    pub fn validate_merged(
+        &self,
+        payload: &ExecutionPayloadV3,
+        message: &BidTrace,
+        parent_beacon_block_root: B256,
+        requests: &ExecutionRequestsV4,
+        base_payment_tx_index: u64,
+    ) -> Result<ExecutedBlock, ValidationError> {
+        let prepared = self.prepare(payload, message, parent_beacon_block_root, requests)?;
+        let executed = self.execute(prepared)?;
+        self.ensure_merged_payment(&executed, message, base_payment_tx_index as usize)?;
+        Ok(executed)
     }
 
     /// Executes against the parent state and checks the header against what
@@ -86,6 +111,7 @@ impl BlockValidator {
         validate_block_pre_execution(&block, &parent_header, &chain_config, ELASTICITY_MULTIPLIER)
             .map_err(|e| ValidationError::PreExecution(e.to_string()))?;
 
+        let parent_header_for_reads = parent_header.clone();
         let vm_db = StoreVmDatabase::new(self.store.clone(), parent_header)
             .map_err(|e| ValidationError::Execution(e.to_string()))?;
         let mut vm = new_evm(&BlockchainType::L1, vm_db)
@@ -117,7 +143,171 @@ impl BlockValidator {
             });
         }
 
-        Ok(ExecutedBlock { block, receipts: result.receipts, account_updates })
+        Ok(ExecutedBlock {
+            block,
+            parent_header: parent_header_for_reads,
+            receipts: result.receipts,
+            account_updates,
+        })
+    }
+
+    /// The balance delta is the ground truth. It falls short when the proposer
+    /// also spends, and then the last transaction must be a payment.
+    fn ensure_payment(
+        &self,
+        executed: &ExecutedBlock,
+        message: &BidTrace,
+    ) -> Result<(), ValidationError> {
+        if self.paid_by_balance(executed, message)? {
+            return Ok(());
+        }
+
+        let last_ix = executed
+            .block
+            .body
+            .transactions
+            .len()
+            .checked_sub(1)
+            .ok_or(ValidationError::ProposerPayment)?;
+
+        let paid = self.recognized_payment_at(executed, message.proposer_fee_recipient, last_ix)?;
+        // The regular path is a single trailing payment for exactly the bid.
+        if paid != eu256(message.value) {
+            return Err(ValidationError::ProposerPayment);
+        }
+        Ok(())
+    }
+
+    /// Merged counterpart of [`Self::ensure_payment`]. `base_payment_tx_index`
+    /// comes from the relay; a wrong one finds no payment and fails closed.
+    fn ensure_merged_payment(
+        &self,
+        executed: &ExecutedBlock,
+        message: &BidTrace,
+        base_payment_tx_index: usize,
+    ) -> Result<(), ValidationError> {
+        if self.paid_by_balance(executed, message)? {
+            return Ok(());
+        }
+
+        let last_ix = executed
+            .block
+            .body
+            .transactions
+            .len()
+            .checked_sub(1)
+            .ok_or(ValidationError::ProposerPayment)?;
+
+        let recipient = message.proposer_fee_recipient;
+        let mut total = self.recognized_payment_at(executed, recipient, last_ix)?;
+        if base_payment_tx_index != last_ix {
+            total += self.recognized_payment_at(executed, recipient, base_payment_tx_index)?;
+        }
+
+        if total >= eu256(message.value) {
+            return Ok(());
+        }
+        Err(ValidationError::ProposerPayment)
+    }
+
+    /// Withdrawals are consensus-layer income, so they count against the rise
+    /// rather than towards it.
+    fn paid_by_balance(
+        &self,
+        executed: &ExecutedBlock,
+        message: &BidTrace,
+    ) -> Result<bool, ValidationError> {
+        let recipient = eaddr(message.proposer_fee_recipient);
+        let mut before = self.balance_at_parent(&executed.parent_header, recipient)?;
+        let after = executed
+            .account_updates
+            .iter()
+            .find(|update| update.address == recipient)
+            .and_then(|update| update.info.as_ref().map(|info| info.balance))
+            .unwrap_or(before);
+
+        for withdrawal in executed.block.body.withdrawals.iter().flatten() {
+            if withdrawal.address == recipient {
+                before += EU256::from(withdrawal.amount) * EU256::from(1_000_000_000u64);
+            }
+        }
+
+        Ok(after >= before + eu256(message.value))
+    }
+
+    fn balance_at_parent(
+        &self,
+        parent_header: &BlockHeader,
+        address: EAddress,
+    ) -> Result<EU256, ValidationError> {
+        let db = StoreVmDatabase::new(self.store.clone(), parent_header.clone())
+            .map_err(|e| ValidationError::Store(e.to_string()))?;
+        Ok(db
+            .get_account_state(address)
+            .map_err(|e| ValidationError::Store(e.to_string()))?
+            .map(|account| account.balance)
+            .unwrap_or_default())
+    }
+
+    /// What the transaction at `ix` pays `recipient`. Zero rather than an error
+    /// for anything unrecognised: one bad position must not fail the block.
+    fn recognized_payment_at(
+        &self,
+        executed: &ExecutedBlock,
+        recipient: alloy_primitives::Address,
+        ix: usize,
+    ) -> Result<EU256, ValidationError> {
+        let (Some(tx), Some(receipt)) =
+            (executed.block.body.transactions.get(ix), executed.receipts.get(ix))
+        else {
+            return Ok(EU256::zero());
+        };
+        if !receipt.succeeded {
+            return Ok(EU256::zero());
+        }
+
+        let to = match tx.to() {
+            ethrex_common::types::TxKind::Call(to) => Some(to),
+            ethrex_common::types::TxKind::Create => None,
+        };
+        let paid_directly = to == Some(eaddr(recipient)) && tx.data().is_empty();
+        let paid_via_forwarder = to == Some(eaddr(PAYMENT_FORWARDER)) &&
+            payment_forwarder_recipient(tx.data()) == Some(recipient) &&
+            self.forwarder_is_deployed(&executed.parent_header)?;
+
+        let contributed = if paid_directly || paid_via_forwarder {
+            tx.value()
+        } else {
+            eu256(multisend_paid_amount(tx.data(), recipient))
+        };
+        if contributed.is_zero() {
+            return Ok(EU256::zero());
+        }
+
+        // A legacy transaction with no chain id is replayable on another chain.
+        if tx.chain_id() != Some(self.store.get_chain_config().chain_id) {
+            return Ok(EU256::zero());
+        }
+        if !tx
+            .effective_gas_tip(executed.block.header.base_fee_per_gas)
+            .unwrap_or_default()
+            .is_zero()
+        {
+            return Ok(EU256::zero());
+        }
+
+        Ok(contributed)
+    }
+
+    /// A value call to an address with no code succeeds and keeps the value, so
+    /// the forwarder shape only pays where its runtime is present.
+    fn forwarder_is_deployed(&self, parent_header: &BlockHeader) -> Result<bool, ValidationError> {
+        let db = StoreVmDatabase::new(self.store.clone(), parent_header.clone())
+            .map_err(|e| ValidationError::Store(e.to_string()))?;
+        Ok(db
+            .get_account_state(eaddr(PAYMENT_FORWARDER))
+            .map_err(|e| ValidationError::Store(e.to_string()))?
+            .is_some_and(|account| account.code_hash == h256(PAYMENT_FORWARDER_CODE_HASH)))
     }
 
     fn to_block(

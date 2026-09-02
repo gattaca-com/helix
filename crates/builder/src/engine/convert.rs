@@ -40,6 +40,10 @@ pub fn au256(v: EU256) -> AU256 {
     AU256::from_be_bytes(v.to_big_endian())
 }
 
+pub fn eu256(v: AU256) -> EU256 {
+    EU256::from_big_endian(&v.to_be_bytes::<32>())
+}
+
 pub fn ewithdrawal(w: &alloy_eips::eip4895::Withdrawal) -> Withdrawal {
     Withdrawal {
         index: w.index,

@@ -5,7 +5,7 @@ use alloy_eips::eip2718::Encodable2718;
 use alloy_primitives::{Address, U256};
 use alloy_signer::SignerSync;
 use alloy_signer_local::PrivateKeySigner;
-use ethrex_common::types::Genesis;
+use ethrex_common::types::{Genesis, GenesisAccount};
 use ethrex_config::networks::Network;
 use ethrex_storage::{EngineType, Store};
 
@@ -65,10 +65,48 @@ pub fn signed_transfer(
 }
 
 pub async fn dev_genesis_store() -> (Store, Genesis) {
-    let genesis = Network::LocalDevnet.get_genesis().unwrap();
+    dev_genesis_store_with(|_| {}).await
+}
+
+/// `edit` may add allocations before the genesis state root is computed.
+pub async fn dev_genesis_store_with(edit: impl FnOnce(&mut Genesis)) -> (Store, Genesis) {
+    let mut genesis = Network::LocalDevnet.get_genesis().unwrap();
+    edit(&mut genesis);
     let mut store = Store::new("memory", EngineType::InMemory).unwrap();
     store.add_initial_state(genesis.clone()).await.unwrap();
     (store, genesis)
+}
+
+/// The `PaymentForwarder` runtime, from contracts/README.md.
+pub fn deploy_payment_forwarder(genesis: &mut Genesis) {
+    genesis.alloc.insert(eaddr(helix_common::PAYMENT_FORWARDER), GenesisAccount {
+        code: hex::decode("5f358060e01c4218600f5760401cff5b5f5ffd00").unwrap().into(),
+        storage: Default::default(),
+        balance: ethrex_common::U256::zero(),
+        nonce: 0,
+    });
+}
+
+/// A legacy transaction with no chain id, which EIP-155 replay protection does
+/// not cover.
+pub fn signed_unprotected_transfer(
+    signer: &PrivateKeySigner,
+    nonce: u64,
+    to: Address,
+    value: U256,
+    gas_price: u128,
+) -> Vec<u8> {
+    let tx = alloy_consensus::TxLegacy {
+        chain_id: None,
+        nonce,
+        gas_price,
+        gas_limit: 21_000,
+        to: to.into(),
+        value,
+        input: Default::default(),
+    };
+    let signature = signer.sign_hash_sync(&tx.signature_hash()).unwrap();
+    alloy_consensus::TxEnvelope::from(tx.into_signed(signature)).encoded_2718()
 }
 
 pub fn funded_signers(genesis: &Genesis, count: usize) -> Vec<PrivateKeySigner> {
