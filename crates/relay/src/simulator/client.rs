@@ -65,7 +65,7 @@ impl SimulatorClient {
     }
 
     fn ssz_supports(fork: ForkName) -> bool {
-        matches!(fork, ForkName::Fulu)
+        matches!(fork, ForkName::Fulu | ForkName::Gloas)
     }
 
     /// Relay-internal merged-block SSZ route; see `sim_method_merged_v5`.
@@ -257,9 +257,14 @@ mod test {
     }
 
     #[test]
-    fn ssz_request_builder_refuses_gloas() {
+    fn ssz_request_builder_routes_gloas() {
+        assert!(ssz_client().ssz_request_builder(ForkName::Gloas).is_some());
+    }
+
+    #[test]
+    fn ssz_request_builder_refuses_an_unscheduled_fork() {
         assert!(
-            ssz_client().ssz_request_builder(ForkName::Gloas).is_none(),
+            ssz_client().ssz_request_builder(ForkName::Heze).is_none(),
             "the SSZ path short-circuited above the fork gate #517 added",
         );
     }

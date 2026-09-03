@@ -766,6 +766,19 @@ impl TestRandom for SignedBidSubmissionGloas {
 }
 
 impl SignedBidSubmissionGloas {
+    /// Inverse of [`Self::split`], for re-encoding a hydrated submission on the
+    /// way to an SSZ simulator.
+    pub fn join(submission: SignedBidSubmission, block_access_list: BlockAccessListBytes) -> Self {
+        Self {
+            message: submission.message,
+            execution_payload: submission.execution_payload,
+            blobs_bundle: submission.blobs_bundle,
+            execution_requests: submission.execution_requests,
+            signature: submission.signature,
+            block_access_list,
+        }
+    }
+
     pub fn split(self) -> (SignedBidSubmission, BlockAccessListBytes) {
         (
             SignedBidSubmission {

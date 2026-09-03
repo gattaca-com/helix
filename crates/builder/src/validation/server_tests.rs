@@ -220,19 +220,28 @@ fn params_for(fork: helix_types::ForkName) -> helix_common::decoder::SubmissionD
 }
 
 #[tokio::test]
-async fn a_gloas_validation_request_is_refused() {
-    let fixture = Fixture::new().await;
+async fn a_gloas_validation_request_is_accepted() {
+    let fixture = Fixture::amsterdam().await;
     let built = fixture.build_on(fixture.genesis_hash, fixture.genesis_timestamp + 12, 0);
-    let mut request = fixture.ssz_request(&built, true);
-    request.decoder_params = Some(params_for(helix_types::ForkName::Gloas));
+    let request = fixture.gloas_ssz_request(&built);
 
     let (status, body) = post(&fixture, "/validate", request.as_ssz_bytes()).await;
 
-    assert_eq!(
-        status,
-        StatusCode::NOT_IMPLEMENTED,
-        "a Gloas block must not be validated under Fulu rules: {body}",
-    );
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+/// The fork gate stays shut for a fork with no wire shape here, so a later fork
+/// cannot be validated under Gloas rules.
+#[tokio::test]
+async fn an_unscheduled_fork_is_still_refused() {
+    let fixture = Fixture::new().await;
+    let built = fixture.build_on(fixture.genesis_hash, fixture.genesis_timestamp + 12, 0);
+    let mut request = fixture.ssz_request(&built, true);
+    request.decoder_params = Some(params_for(helix_types::ForkName::Heze));
+
+    let (status, body) = post(&fixture, "/validate", request.as_ssz_bytes()).await;
+
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{body}");
 }
 
 #[tokio::test]
@@ -252,7 +261,11 @@ async fn a_merged_gloas_request_is_refused() {
 
     let (status, body) = post(&fixture, "/validate_merged", request.as_ssz_bytes()).await;
 
-    assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "the merged route has the same hole: {body}");
+    assert_eq!(
+        status,
+        StatusCode::NOT_IMPLEMENTED,
+        "the merged route has no Gloas shape until step 5: {body}",
+    );
 }
 
 #[tokio::test]

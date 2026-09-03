@@ -21,8 +21,8 @@ use ethrex_common::{
         Receipt, Transaction,
     },
     validation::{
-        validate_block_pre_execution, validate_gas_used, validate_receipts_root_and_logs_bloom,
-        validate_requests_hash,
+        validate_block_access_list_hash, validate_block_pre_execution, validate_gas_used,
+        validate_receipts_root_and_logs_bloom, validate_requests_hash,
     },
 };
 use ethrex_crypto::NativeCrypto;
@@ -35,7 +35,7 @@ use helix_common::{
 use tokio::sync::watch;
 
 use crate::{
-    engine::convert::{aaddr, b256, eaddr, eu256, h256, payload_v3_to_block},
+    engine::convert::{Amsterdam, aaddr, b256, eaddr, eu256, h256, payload_v3_to_block},
     node::HeadInfo,
     validation::error::ValidationError,
 };
@@ -78,13 +78,17 @@ impl BlockValidator {
         message: &BidTrace,
         parent_beacon_block_root: B256,
         requests: &ExecutionRequestsV4,
+        amsterdam: Option<Amsterdam<'_>>,
     ) -> Result<PreparedBlock, ValidationError> {
-        let block = self.to_block(payload, parent_beacon_block_root, requests)?;
+        let block = self.to_block(payload, parent_beacon_block_root, requests, amsterdam)?;
         self.validate_message_against_header(&block, message)?;
         let parent_header = self.parent_header(&block.header)?;
         Ok(PreparedBlock { block, parent_header })
     }
 
+    // A request struct would read better at nine fields. That refactor touches
+    // every caller, so it is not this change's job.
+    #[allow(clippy::too_many_arguments)]
     pub fn validate(
         &self,
         payload: &ExecutionPayloadV3,
@@ -93,8 +97,10 @@ impl BlockValidator {
         requests: &ExecutionRequestsV4,
         blobs: &BlobsBundle,
         apply_blacklist: bool,
+        amsterdam: Option<Amsterdam<'_>>,
     ) -> Result<ExecutedBlock, ValidationError> {
-        let prepared = self.prepare(payload, message, parent_beacon_block_root, requests)?;
+        let prepared =
+            self.prepare(payload, message, parent_beacon_block_root, requests, amsterdam)?;
         self.validate_blobs_bundle(&prepared.block, blobs)?;
         let executed = self.execute(prepared)?;
         if apply_blacklist {
@@ -106,6 +112,7 @@ impl BlockValidator {
 
     /// Relay-internal merged-block path. A merged block's payment is split
     /// across the base block's own payment tx and the appended distribution tx.
+    #[allow(clippy::too_many_arguments)]
     pub fn validate_merged(
         &self,
         payload: &ExecutionPayloadV3,
@@ -115,8 +122,10 @@ impl BlockValidator {
         blobs: &BlobsBundle,
         apply_blacklist: bool,
         base_payment_tx_index: u64,
+        amsterdam: Option<Amsterdam<'_>>,
     ) -> Result<ExecutedBlock, ValidationError> {
-        let prepared = self.prepare(payload, message, parent_beacon_block_root, requests)?;
+        let prepared =
+            self.prepare(payload, message, parent_beacon_block_root, requests, amsterdam)?;
         self.validate_blobs_bundle(&prepared.block, blobs)?;
         let executed = self.execute(prepared)?;
         if apply_blacklist {
@@ -229,7 +238,7 @@ impl BlockValidator {
         let mut vm = new_evm(&BlockchainType::L1, vm_db)
             .map_err(|e| ValidationError::Execution(e.to_string()))?;
 
-        let (result, _bal) =
+        let (result, bal) =
             vm.execute_block(&block).map_err(|e| ValidationError::Execution(e.to_string()))?;
 
         validate_gas_used(result.block_gas_used, &block.header)
@@ -238,6 +247,23 @@ impl BlockValidator {
             .map_err(|e| ValidationError::PostExecution(e.to_string()))?;
         validate_requests_hash(&block.header, &chain_config, &result.requests)
             .map_err(|e| ValidationError::PostExecution(e.to_string()))?;
+
+        // The header commits to the list the builder submitted, so this compares
+        // that list against what execution produced. ethrex skips the check when
+        // the VM returns no list; a relay simulator must fail closed instead.
+        if chain_config.is_amsterdam_activated(block.header.timestamp) {
+            let bal = bal.ok_or_else(|| {
+                ValidationError::PostExecution("no block access list from execution".to_string())
+            })?;
+            validate_block_access_list_hash(
+                &block.header,
+                &chain_config,
+                &bal,
+                block.body.transactions.len(),
+                &NativeCrypto,
+            )
+            .map_err(|e| ValidationError::PostExecution(e.to_string()))?;
+        }
 
         let account_updates =
             vm.get_state_transitions().map_err(|e| ValidationError::Execution(e.to_string()))?;
@@ -427,8 +453,9 @@ impl BlockValidator {
         payload: &ExecutionPayloadV3,
         parent_beacon_block_root: B256,
         requests: &ExecutionRequestsV4,
+        amsterdam: Option<Amsterdam<'_>>,
     ) -> Result<Block, ValidationError> {
-        payload_v3_to_block(payload, parent_beacon_block_root, requests)
+        payload_v3_to_block(payload, parent_beacon_block_root, requests, amsterdam)
     }
 
     /// The relay serves the trace's fields, so a trace that misdescribes a valid

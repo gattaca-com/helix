@@ -38,4 +38,6 @@ pub enum ValidationError {
     Blacklist(Address),
     #[error("invalid blobs bundle")]
     InvalidBlobsBundle,
+    #[error("submission carries an empty block access list")]
+    EmptyBlockAccessList,
 }

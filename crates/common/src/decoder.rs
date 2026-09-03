@@ -182,6 +182,23 @@ pub struct SubmissionDecoderParams {
     pub fork_name: ForkName,
 }
 
+impl SubmissionDecoderParams {
+    /// Uncompressed SSZ bytes of the fork's plain submission shape, with no
+    /// sidecars. This is what the relay re-encodes for an SSZ simulator.
+    pub fn plain(fork_name: ForkName) -> Self {
+        Self {
+            compression: Compression::None,
+            encoding: Encoding::Ssz,
+            merge_type: MergeType::None,
+            is_dehydrated: false,
+            with_mergeable_data: false,
+            with_adjustments: false,
+            mark_all_txs_mergeable: false,
+            fork_name,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct SubmissionDecoder {
     compression: Compression,
@@ -286,6 +303,12 @@ impl SubmissionDecoder {
 
     #[timed]
     fn decode_dehydrated(&mut self, body: &[u8]) -> Result<DecodedParts, DecoderError> {
+        // Every shape below is Fulu's, which has no block access list. Decoding
+        // a Gloas submission into one would drop it and simulate a block the
+        // builder never committed to.
+        if self.fork_name == ForkName::Gloas {
+            return Err(DecoderError::UnsupportedCombination("dehydrated Gloas"));
+        }
         if self.merge_type == MergeType::Mergeable {
             if self.with_adjustments {
                 let sub: DehydratedBidSubmissionFuluWithAdjustmentsAndMergingData =
@@ -342,6 +365,11 @@ impl SubmissionDecoder {
 
     #[timed]
     fn decode_merge(&mut self, body: &[u8]) -> Result<DecodedParts, DecoderError> {
+        // Gloas merging data comes with the merge builder's own step; until then
+        // these Fulu shapes would drop the block access list.
+        if self.fork_name == ForkName::Gloas {
+            return Err(DecoderError::UnsupportedCombination("Gloas with merging data"));
+        }
         let (submission, merging_data, bid_adjustment) = if self.with_adjustments {
             let sub: SignedBidSubmissionWithAdjustmentsAndMergingData = self._decode(body)?;
             let (submission, adjustment_data, merging_data) = sub.split();
@@ -367,7 +395,6 @@ impl SubmissionDecoder {
             MergeType::None => Some(merging_data),
             MergeType::Pause => None,
         };
-        // Gloas merging data comes with the merge builder's own step.
         Ok((Submission::Full(submission), merging_data, bid_adjustment, None))
     }
 
@@ -560,19 +587,6 @@ mod tests {
     }
 
     /// Plain SSZ params for `fork`, nothing else enabled.
-    fn plain_params(fork: ForkName) -> SubmissionDecoderParams {
-        SubmissionDecoderParams {
-            compression: Compression::None,
-            encoding: Encoding::Ssz,
-            merge_type: MergeType::None,
-            is_dehydrated: false,
-            with_mergeable_data: false,
-            with_adjustments: false,
-            mark_all_txs_mergeable: false,
-            fork_name: fork,
-        }
-    }
-
     #[test]
     fn the_decoder_selects_the_gloas_shape_by_fork() {
         let mut submission = SignedBidSubmissionGloas::test_random();
@@ -580,7 +594,7 @@ mod tests {
         submission.block_access_list = BlockAccessListBytes(vec![3u8; 32].into());
         let body = submission.as_ssz_bytes();
 
-        let params = plain_params(ForkName::Gloas);
+        let params = SubmissionDecoderParams::plain(ForkName::Gloas);
         let mut buf = Vec::new();
         let (_, _, _, block_access_list) = SubmissionDecoder::new(&params)
             .decode(&body, &mut buf)
@@ -598,7 +612,7 @@ mod tests {
         submission.blobs_bundle = Default::default();
         let body = submission.as_ssz_bytes();
 
-        let params = plain_params(ForkName::Fulu);
+        let params = SubmissionDecoderParams::plain(ForkName::Fulu);
         let mut buf = Vec::new();
         let (_, _, _, block_access_list) = SubmissionDecoder::new(&params)
             .decode(&body, &mut buf)
@@ -613,7 +627,7 @@ mod tests {
         submission.blobs_bundle = Default::default();
         let body = submission.as_ssz_bytes();
 
-        let mut params = plain_params(ForkName::Gloas);
+        let mut params = SubmissionDecoderParams::plain(ForkName::Gloas);
         params.with_adjustments = true;
         let mut buf = Vec::new();
         let err = SubmissionDecoder::new(&params)
@@ -624,6 +638,31 @@ mod tests {
             matches!(err, DecoderError::UnsupportedCombination(_)),
             "refused explicitly, not decoded into the wrong shape: {err}",
         );
+    }
+
+    /// Both wire shapes below are Fulu's, with no room for a block access list.
+    #[test]
+    fn gloas_with_the_other_submission_types_is_refused() {
+        let mut submission = SignedBidSubmissionGloas::test_random();
+        submission.blobs_bundle = Default::default();
+        let body = submission.as_ssz_bytes();
+
+        for adjust in [
+            |params: &mut SubmissionDecoderParams| params.is_dehydrated = true,
+            |params: &mut SubmissionDecoderParams| params.with_mergeable_data = true,
+        ] {
+            let mut params = SubmissionDecoderParams::plain(ForkName::Gloas);
+            adjust(&mut params);
+            let mut buf = Vec::new();
+            let err = SubmissionDecoder::new(&params)
+                .decode(&body, &mut buf)
+                .expect_err("the combination has no wire shape");
+
+            assert!(
+                matches!(err, DecoderError::UnsupportedCombination(_)),
+                "refused explicitly, not decoded into a shape that drops the list: {err}",
+            );
+        }
     }
 
     #[test]
