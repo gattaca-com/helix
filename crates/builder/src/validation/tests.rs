@@ -12,24 +12,30 @@ use ethrex_blockchain::{
     payload::{BuildPayloadArgs, create_payload},
 };
 use ethrex_common::{H256, types::ELASTICITY_MULTIPLIER};
+use ethrex_rlp::encode::RLPEncode;
 use ethrex_storage::Store;
 use helix_common::simulator::BlockSimError;
 use tokio::sync::watch;
 
 use crate::{
     engine::convert::{
-        b256, block_to_payload_v3, eaddr, eblobs, h256, payload_v3_to_block, requests_to_v4,
+        Amsterdam, b256, block_to_payload_v3, eaddr, eblobs, h256, payload_v3_to_block,
+        requests_to_v4,
     },
     node::HeadInfo,
     testing::{
-        ETH, GWEI, blob_bundle, deploy_balance_probe, deploy_payment_forwarder,
-        dev_genesis_store_with, funded_signers, signed_blob_transfer, signed_transfer,
-        signed_unprotected_transfer,
+        ETH, GWEI, blob_bundle, deploy_amsterdam_predeploys, deploy_balance_probe,
+        deploy_payment_forwarder, dev_genesis_store_with, funded_signers, signed_blob_transfer,
+        signed_transfer, signed_unprotected_transfer,
     },
     validation::{BlockValidator, error::ValidationError},
 };
 
 const WINDOW: u64 = 3;
+
+/// The proposal slot every fixture block is built for. Amsterdam puts it in the
+/// header, so the bid trace and the header have to agree on it.
+const SLOT: u64 = 1;
 
 fn empty_bundle() -> ethrex_common::types::BlobsBundle {
     ethrex_common::types::BlobsBundle::default()
@@ -38,11 +44,21 @@ fn empty_bundle() -> ethrex_common::types::BlobsBundle {
 pub(crate) struct Built {
     payload: ExecutionPayloadV3,
     requests: ExecutionRequestsV4,
+    /// The encoded EIP-7928 list, as a Gloas submission would carry it. `None`
+    /// before Amsterdam, which is what every pre-Gloas test wants.
+    pub(crate) block_access_list: Option<Vec<u8>>,
+    slot: u64,
 }
 
 impl Built {
     fn block_hash(&self) -> B256 {
         self.payload.payload_inner.payload_inner.block_hash
+    }
+
+    pub(crate) fn amsterdam(&self) -> Option<Amsterdam<'_>> {
+        self.block_access_list
+            .as_deref()
+            .map(|block_access_list| Amsterdam { block_access_list, slot: self.slot })
     }
 }
 
@@ -57,11 +73,22 @@ pub(crate) struct Fixture {
     pub(crate) proposer: Address,
     head: watch::Sender<HeadInfo>,
     disallow: Arc<DashSet<Address>>,
+    is_amsterdam: bool,
 }
 
 impl Fixture {
     pub(crate) async fn new() -> Self {
         Self::with_genesis(|_| {}).await
+    }
+
+    /// Amsterdam from genesis, so every block this fixture builds carries a
+    /// block access list and a slot number.
+    pub(crate) async fn amsterdam() -> Self {
+        Self::with_genesis(|genesis| {
+            genesis.config.amsterdam_time = Some(0);
+            deploy_amsterdam_predeploys(genesis);
+        })
+        .await
     }
 
     pub(crate) async fn with_forwarder() -> Self {
@@ -118,6 +145,7 @@ impl Fixture {
             proposer: signers[3].address(),
             signers,
             disallow: Arc::new(DashSet::new()),
+            is_amsterdam: genesis.config.is_amsterdam_activated(genesis_block.header.timestamp),
         }
     }
 
@@ -174,7 +202,7 @@ impl Fixture {
             random: H256::zero(),
             withdrawals: Some(withdrawals),
             beacon_root: Some(H256::zero()),
-            slot_number: None,
+            slot_number: self.is_amsterdam.then_some(SLOT),
             version: 3,
             elasticity_multiplier: ELASTICITY_MULTIPLIER,
             gas_ceil: self.gas_limit,
@@ -189,6 +217,8 @@ impl Fixture {
         Built {
             payload: block_to_payload_v3(&built.payload),
             requests: requests_to_v4(&built.requests).unwrap(),
+            block_access_list: built.block_access_list.as_ref().map(|bal| bal.encode_to_vec()),
+            slot: SLOT,
         }
     }
 
@@ -201,7 +231,7 @@ impl Fixture {
             let built = self.build_on(parent, timestamp, i as u64);
             let block = self
                 .validator()
-                .to_block(&built.payload, B256::ZERO, &built.requests)
+                .to_block(&built.payload, B256::ZERO, &built.requests, built.amsterdam())
                 .expect("the fixture builds a convertible block");
             parent = block.hash();
             let number = block.header.number;
@@ -263,10 +293,11 @@ impl Fixture {
 
     pub(crate) fn bid_trace(&self, built: &Built) -> BidTrace {
         let header = &built.payload.payload_inner.payload_inner;
-        let block = payload_v3_to_block(&built.payload, B256::ZERO, &built.requests)
-            .expect("the fixture builds a convertible payload");
+        let block =
+            payload_v3_to_block(&built.payload, B256::ZERO, &built.requests, built.amsterdam())
+                .expect("the fixture builds a convertible payload");
         BidTrace {
-            slot: 1,
+            slot: built.slot,
             parent_hash: header.parent_hash,
             block_hash: b256(block.hash()),
             builder_pubkey: Default::default(),
@@ -287,7 +318,7 @@ async fn a_valid_submission_prepares_its_block() {
 
     let prepared = fixture
         .validator()
-        .prepare(&built.payload, &message, B256::ZERO, &built.requests)
+        .prepare(&built.payload, &message, B256::ZERO, &built.requests, built.amsterdam())
         .expect("a block the fixture built must prepare");
 
     assert_eq!(b256(prepared.block.hash()), built.block_hash());
@@ -303,7 +334,7 @@ async fn the_payload_round_trips_to_the_same_block_hash() {
 
     let block = fixture
         .validator()
-        .to_block(&built.payload, B256::ZERO, &built.requests)
+        .to_block(&built.payload, B256::ZERO, &built.requests, built.amsterdam())
         .expect("a block the fixture built must convert");
 
     assert_eq!(b256(block.hash()), built.block_hash());
@@ -318,7 +349,7 @@ async fn a_bid_trace_with_the_wrong_block_hash_is_rejected() {
 
     let error = fixture
         .validator()
-        .prepare(&built.payload, &message, B256::ZERO, &built.requests)
+        .prepare(&built.payload, &message, B256::ZERO, &built.requests, built.amsterdam())
         .expect_err("a mismatched block hash must be rejected");
 
     assert!(matches!(error, ValidationError::BlockHashMismatch { .. }), "{error}");
@@ -333,7 +364,7 @@ async fn a_bid_trace_with_the_wrong_parent_hash_is_rejected() {
 
     let error = fixture
         .validator()
-        .prepare(&built.payload, &message, B256::ZERO, &built.requests)
+        .prepare(&built.payload, &message, B256::ZERO, &built.requests, built.amsterdam())
         .expect_err("a mismatched parent hash must be rejected");
 
     assert!(matches!(error, ValidationError::ParentHashMismatch { .. }), "{error}");
@@ -348,7 +379,7 @@ async fn a_bid_trace_with_the_wrong_gas_limit_is_rejected() {
 
     let error = fixture
         .validator()
-        .prepare(&built.payload, &message, B256::ZERO, &built.requests)
+        .prepare(&built.payload, &message, B256::ZERO, &built.requests, built.amsterdam())
         .expect_err("a mismatched gas limit must be rejected");
 
     assert!(matches!(error, ValidationError::GasLimitMismatch { .. }), "{error}");
@@ -363,7 +394,7 @@ async fn a_bid_trace_with_the_wrong_gas_used_is_rejected() {
 
     let error = fixture
         .validator()
-        .prepare(&built.payload, &message, B256::ZERO, &built.requests)
+        .prepare(&built.payload, &message, B256::ZERO, &built.requests, built.amsterdam())
         .expect_err("a mismatched gas used must be rejected");
 
     assert!(matches!(error, ValidationError::GasUsedMismatch { .. }), "{error}");
@@ -380,7 +411,7 @@ async fn a_tampered_payload_fails_the_block_hash_check() {
 
     let error = fixture
         .validator()
-        .prepare(&built.payload, &message, B256::ZERO, &built.requests)
+        .prepare(&built.payload, &message, B256::ZERO, &built.requests, built.amsterdam())
         .expect_err("an edited payload must be rejected");
 
     assert!(matches!(error, ValidationError::BlockHashMismatch { .. }), "{error}");
@@ -395,7 +426,7 @@ async fn an_undecodable_transaction_is_rejected() {
 
     let error = fixture
         .validator()
-        .prepare(&built.payload, &message, B256::ZERO, &built.requests)
+        .prepare(&built.payload, &message, B256::ZERO, &built.requests, built.amsterdam())
         .expect_err("an undecodable transaction must be rejected");
 
     assert!(matches!(error, ValidationError::DecodeTransaction(_)), "{error}");
@@ -409,12 +440,17 @@ async fn an_unknown_parent_is_rejected() {
     let mut payload = built.payload.clone();
     payload.payload_inner.payload_inner.parent_hash = B256::repeat_byte(0xcc);
     message.parent_hash = B256::repeat_byte(0xcc);
-    message.block_hash =
-        b256(fixture.validator().to_block(&payload, B256::ZERO, &built.requests).unwrap().hash());
+    message.block_hash = b256(
+        fixture
+            .validator()
+            .to_block(&payload, B256::ZERO, &built.requests, built.amsterdam())
+            .unwrap()
+            .hash(),
+    );
 
     let error = fixture
         .validator()
-        .prepare(&payload, &message, B256::ZERO, &built.requests)
+        .prepare(&payload, &message, B256::ZERO, &built.requests, built.amsterdam())
         .expect_err("an unknown parent must be rejected");
 
     assert!(matches!(error, ValidationError::MissingParentBlock), "{error}");
@@ -430,7 +466,7 @@ async fn a_parent_inside_the_validation_window_is_accepted() {
 
     fixture
         .validator()
-        .prepare(&built.payload, &message, B256::ZERO, &built.requests)
+        .prepare(&built.payload, &message, B256::ZERO, &built.requests, built.amsterdam())
         .expect("a block built on the head must prepare");
 }
 
@@ -445,7 +481,7 @@ async fn a_parent_outside_the_validation_window_is_rejected() {
 
     let error = fixture
         .validator()
-        .prepare(&built.payload, &message, B256::ZERO, &built.requests)
+        .prepare(&built.payload, &message, B256::ZERO, &built.requests, built.amsterdam())
         .expect_err("a parent outside the window must be rejected");
 
     assert!(matches!(error, ValidationError::BlockTooOld), "{error}");
@@ -484,7 +520,15 @@ async fn a_valid_block_passes_execution() {
 
     let executed = fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests, &empty_bundle(), false)
+        .validate(
+            &built.payload,
+            &message,
+            B256::ZERO,
+            &built.requests,
+            &empty_bundle(),
+            false,
+            built.amsterdam(),
+        )
         .expect("a block the fixture built must validate");
 
     assert_eq!(executed.receipts.len(), 1);
@@ -501,7 +545,15 @@ async fn validating_a_block_does_not_store_it() {
 
     fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests, &empty_bundle(), false)
+        .validate(
+            &built.payload,
+            &message,
+            B256::ZERO,
+            &built.requests,
+            &empty_bundle(),
+            false,
+            built.amsterdam(),
+        )
         .expect("a block the fixture built must validate");
 
     assert_eq!(fixture.store.get_latest_block_number().await.unwrap(), 0);
@@ -520,7 +572,15 @@ async fn a_tampered_state_root_is_rejected() {
 
     let error = fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests, &empty_bundle(), false)
+        .validate(
+            &built.payload,
+            &message,
+            B256::ZERO,
+            &built.requests,
+            &empty_bundle(),
+            false,
+            built.amsterdam(),
+        )
         .expect_err("a wrong state root must be rejected");
 
     assert!(matches!(error, ValidationError::StateRootMismatch { .. }), "{error}");
@@ -535,7 +595,15 @@ async fn a_tampered_gas_used_is_rejected() {
 
     let error = fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests, &empty_bundle(), false)
+        .validate(
+            &built.payload,
+            &message,
+            B256::ZERO,
+            &built.requests,
+            &empty_bundle(),
+            false,
+            built.amsterdam(),
+        )
         .expect_err("a wrong gas used must be rejected");
 
     assert!(matches!(error, ValidationError::PostExecution(_)), "{error}");
@@ -550,7 +618,15 @@ async fn a_tampered_receipts_root_is_rejected() {
 
     let error = fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests, &empty_bundle(), false)
+        .validate(
+            &built.payload,
+            &message,
+            B256::ZERO,
+            &built.requests,
+            &empty_bundle(),
+            false,
+            built.amsterdam(),
+        )
         .expect_err("a wrong receipts root must be rejected");
 
     assert!(matches!(error, ValidationError::PostExecution(_)), "{error}");
@@ -563,7 +639,7 @@ async fn execution_requests_that_the_block_did_not_produce_are_rejected() {
     let fixture = Fixture::new().await;
     let built = fixture.build_on(fixture.genesis_hash, fixture.genesis_timestamp + 12, 0);
     let requests = withdrawal_request();
-    let tampered = Built { payload: built.payload.clone(), requests };
+    let tampered = Built { payload: built.payload.clone(), requests, ..built };
     let message = fixture.bid_trace(&tampered);
 
     let error = fixture
@@ -575,6 +651,7 @@ async fn execution_requests_that_the_block_did_not_produce_are_rejected() {
             &tampered.requests,
             &empty_bundle(),
             false,
+            tampered.amsterdam(),
         )
         .expect_err("unproduced requests must be rejected");
 
@@ -592,7 +669,15 @@ async fn a_tampered_base_fee_is_rejected_before_execution() {
 
     let error = fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests, &empty_bundle(), false)
+        .validate(
+            &built.payload,
+            &message,
+            B256::ZERO,
+            &built.requests,
+            &empty_bundle(),
+            false,
+            built.amsterdam(),
+        )
         .expect_err("a wrong base fee must be rejected");
 
     assert!(matches!(error, ValidationError::PreExecution(_)), "{error}");
@@ -616,7 +701,15 @@ async fn a_block_with_an_unexecutable_transaction_is_rejected() {
 
     let error = fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests, &empty_bundle(), false)
+        .validate(
+            &built.payload,
+            &message,
+            B256::ZERO,
+            &built.requests,
+            &empty_bundle(),
+            false,
+            built.amsterdam(),
+        )
         .expect_err("an unexecutable transaction must be rejected");
 
     assert!(matches!(error, ValidationError::Execution(_)), "{error}");
@@ -655,7 +748,15 @@ async fn a_payment_by_balance_delta_is_accepted() {
 
     fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests, &empty_bundle(), false)
+        .validate(
+            &built.payload,
+            &message,
+            B256::ZERO,
+            &built.requests,
+            &empty_bundle(),
+            false,
+            built.amsterdam(),
+        )
         .expect("a balance delta covering the bid must be accepted");
 }
 
@@ -682,7 +783,15 @@ async fn a_trailing_direct_transfer_is_accepted() {
 
     fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests, &empty_bundle(), false)
+        .validate(
+            &built.payload,
+            &message,
+            B256::ZERO,
+            &built.requests,
+            &empty_bundle(),
+            false,
+            built.amsterdam(),
+        )
         .expect("a trailing direct transfer must be accepted");
 }
 
@@ -709,7 +818,15 @@ async fn an_underpaid_block_is_rejected() {
 
     let error = fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests, &empty_bundle(), false)
+        .validate(
+            &built.payload,
+            &message,
+            B256::ZERO,
+            &built.requests,
+            &empty_bundle(),
+            false,
+            built.amsterdam(),
+        )
         .expect_err("paying less than the bid must be rejected");
 
     assert!(matches!(error, ValidationError::ProposerPayment), "{error}");
@@ -740,7 +857,15 @@ async fn a_payment_tx_with_a_priority_fee_is_rejected() {
 
     let error = fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests, &empty_bundle(), false)
+        .validate(
+            &built.payload,
+            &message,
+            B256::ZERO,
+            &built.requests,
+            &empty_bundle(),
+            false,
+            built.amsterdam(),
+        )
         .expect_err("a tipping payment tx must be rejected");
 
     assert!(matches!(error, ValidationError::ProposerPayment), "{error}");
@@ -763,7 +888,15 @@ async fn an_unprotected_payment_tx_is_rejected() {
 
     let error = fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests, &empty_bundle(), false)
+        .validate(
+            &built.payload,
+            &message,
+            B256::ZERO,
+            &built.requests,
+            &empty_bundle(),
+            false,
+            built.amsterdam(),
+        )
         .expect_err("an unprotected payment tx must be rejected");
 
     assert!(matches!(error, ValidationError::ProposerPayment), "{error}");
@@ -792,7 +925,15 @@ async fn a_withdrawal_does_not_pay_the_bid() {
 
     let error = fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests, &empty_bundle(), false)
+        .validate(
+            &built.payload,
+            &message,
+            B256::ZERO,
+            &built.requests,
+            &empty_bundle(),
+            false,
+            built.amsterdam(),
+        )
         .expect_err("a withdrawal must not count as the bid payment");
 
     assert!(matches!(error, ValidationError::ProposerPayment), "{error}");
@@ -825,7 +966,15 @@ async fn a_payment_through_the_forwarder_is_accepted() {
 
     fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests, &empty_bundle(), false)
+        .validate(
+            &built.payload,
+            &message,
+            B256::ZERO,
+            &built.requests,
+            &empty_bundle(),
+            false,
+            built.amsterdam(),
+        )
         .expect("a forwarder payment must be accepted where the forwarder is deployed");
 }
 
@@ -852,7 +1001,15 @@ async fn a_forwarder_payment_is_rejected_where_the_forwarder_is_absent() {
 
     let error = fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests, &empty_bundle(), false)
+        .validate(
+            &built.payload,
+            &message,
+            B256::ZERO,
+            &built.requests,
+            &empty_bundle(),
+            false,
+            built.amsterdam(),
+        )
         .expect_err("an undeployed forwarder must not be trusted");
 
     assert!(matches!(error, ValidationError::ProposerPayment), "{error}");
@@ -881,7 +1038,15 @@ async fn a_reverted_payment_tx_is_rejected() {
 
     let error = fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests, &empty_bundle(), false)
+        .validate(
+            &built.payload,
+            &message,
+            B256::ZERO,
+            &built.requests,
+            &empty_bundle(),
+            false,
+            built.amsterdam(),
+        )
         .expect_err("a reverted payment must be rejected");
 
     assert!(matches!(error, ValidationError::ProposerPayment), "{error}");
@@ -940,6 +1105,7 @@ async fn a_merged_payment_split_across_two_txs_is_accepted() {
             &empty_bundle(),
             false,
             1,
+            built.amsterdam(),
         )
         .expect("both payment positions must count");
 }
@@ -996,6 +1162,7 @@ async fn a_merged_payment_with_a_wrong_base_index_is_rejected() {
             &empty_bundle(),
             false,
             2,
+            built.amsterdam(),
         )
         .expect_err("a wrong base payment index must fail closed");
 
@@ -1037,7 +1204,15 @@ async fn a_split_payment_is_not_accepted_on_the_regular_path() {
 
     let error = fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests, &empty_bundle(), false)
+        .validate(
+            &built.payload,
+            &message,
+            B256::ZERO,
+            &built.requests,
+            &empty_bundle(),
+            false,
+            built.amsterdam(),
+        )
         .expect_err("the regular path must not sum two positions");
 
     assert!(matches!(error, ValidationError::ProposerPayment), "{error}");
@@ -1066,7 +1241,15 @@ async fn a_blacklisted_sender_is_rejected() {
 
     let error = fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests, &empty_bundle(), true)
+        .validate(
+            &built.payload,
+            &message,
+            B256::ZERO,
+            &built.requests,
+            &empty_bundle(),
+            true,
+            built.amsterdam(),
+        )
         .expect_err("a listed sender must be rejected");
 
     assert!(matches!(error, ValidationError::Blacklist(_)), "{error}");
@@ -1090,7 +1273,15 @@ async fn a_blacklisted_recipient_is_rejected() {
 
     let error = fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests, &empty_bundle(), true)
+        .validate(
+            &built.payload,
+            &message,
+            B256::ZERO,
+            &built.requests,
+            &empty_bundle(),
+            true,
+            built.amsterdam(),
+        )
         .expect_err("a listed recipient must be rejected");
 
     assert!(matches!(error, ValidationError::Blacklist(_)), "{error}");
@@ -1116,7 +1307,15 @@ async fn a_blacklisted_coinbase_is_rejected() {
 
     let error = fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests, &empty_bundle(), true)
+        .validate(
+            &built.payload,
+            &message,
+            B256::ZERO,
+            &built.requests,
+            &empty_bundle(),
+            true,
+            built.amsterdam(),
+        )
         .expect_err("a listed coinbase must be rejected");
 
     assert!(matches!(error, ValidationError::Blacklist(_)), "{error}");
@@ -1131,7 +1330,15 @@ async fn a_blacklisted_proposer_fee_recipient_is_rejected() {
 
     let error = fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests, &empty_bundle(), true)
+        .validate(
+            &built.payload,
+            &message,
+            B256::ZERO,
+            &built.requests,
+            &empty_bundle(),
+            true,
+            built.amsterdam(),
+        )
         .expect_err("a listed fee recipient must be rejected");
 
     assert!(matches!(error, ValidationError::Blacklist(_)), "{error}");
@@ -1155,7 +1362,15 @@ async fn a_blacklisted_internal_value_target_is_rejected() {
 
     let error = fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests, &empty_bundle(), true)
+        .validate(
+            &built.payload,
+            &message,
+            B256::ZERO,
+            &built.requests,
+            &empty_bundle(),
+            true,
+            built.amsterdam(),
+        )
         .expect_err("a listed internal value target must be rejected");
 
     assert!(matches!(error, ValidationError::Blacklist(_)), "{error}");
@@ -1173,7 +1388,15 @@ async fn a_blacklisted_created_account_is_rejected() {
 
     let error = fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests, &empty_bundle(), true)
+        .validate(
+            &built.payload,
+            &message,
+            B256::ZERO,
+            &built.requests,
+            &empty_bundle(),
+            true,
+            built.amsterdam(),
+        )
         .expect_err("a listed created account must be rejected");
 
     assert!(matches!(error, ValidationError::Blacklist(_)), "{error}");
@@ -1195,7 +1418,15 @@ async fn an_account_that_is_only_read_is_not_blacklisted() {
 
     let executed = fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests, &empty_bundle(), true)
+        .validate(
+            &built.payload,
+            &message,
+            B256::ZERO,
+            &built.requests,
+            &empty_bundle(),
+            true,
+            built.amsterdam(),
+        )
         .expect("a read alone must not reject the block");
 
     assert!(executed.receipts[0].succeeded, "the probe must have run for this to prove anything");
@@ -1209,7 +1440,15 @@ async fn a_block_touching_no_listed_account_passes() {
 
     fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests, &empty_bundle(), true)
+        .validate(
+            &built.payload,
+            &message,
+            B256::ZERO,
+            &built.requests,
+            &empty_bundle(),
+            true,
+            built.amsterdam(),
+        )
         .expect("a block touching nothing listed must pass");
 }
 
@@ -1234,7 +1473,15 @@ async fn a_non_filtering_proposer_bypasses_the_blacklist() {
 
     fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests, &empty_bundle(), false)
+        .validate(
+            &built.payload,
+            &message,
+            B256::ZERO,
+            &built.requests,
+            &empty_bundle(),
+            false,
+            built.amsterdam(),
+        )
         .expect("apply_blacklist = false must skip the check");
 }
 
@@ -1259,7 +1506,15 @@ async fn a_block_with_a_valid_blobs_bundle_passes() {
 
     let executed = fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests, &bundle, false)
+        .validate(
+            &built.payload,
+            &message,
+            B256::ZERO,
+            &built.requests,
+            &bundle,
+            false,
+            built.amsterdam(),
+        )
         .expect("a valid blobs bundle must pass");
 
     assert!(
@@ -1294,7 +1549,15 @@ async fn a_bundle_whose_commitments_do_not_match_the_block_is_rejected() {
 
     let error = fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests, &bundle, false)
+        .validate(
+            &built.payload,
+            &message,
+            B256::ZERO,
+            &built.requests,
+            &bundle,
+            false,
+            built.amsterdam(),
+        )
         .expect_err("commitments not matching the block's hashes must be rejected");
 
     assert!(matches!(error, ValidationError::InvalidBlobsBundle), "{error}");
@@ -1308,7 +1571,15 @@ async fn a_bundle_with_a_wrong_proof_count_is_rejected() {
 
     let error = fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests, &bundle, false)
+        .validate(
+            &built.payload,
+            &message,
+            B256::ZERO,
+            &built.requests,
+            &bundle,
+            false,
+            built.amsterdam(),
+        )
         .expect_err("a short proof list must be rejected");
 
     assert!(matches!(error, ValidationError::InvalidBlobsBundle), "{error}");
@@ -1322,7 +1593,15 @@ async fn a_bundle_with_an_invalid_cell_proof_is_rejected() {
 
     let error = fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests, &bundle, false)
+        .validate(
+            &built.payload,
+            &message,
+            B256::ZERO,
+            &built.requests,
+            &bundle,
+            false,
+            built.amsterdam(),
+        )
         .expect_err("a corrupt cell proof must be rejected");
 
     assert!(matches!(error, ValidationError::InvalidBlobsBundle), "{error}");
@@ -1336,7 +1615,15 @@ async fn a_bundle_carrying_more_blobs_than_the_block_is_rejected() {
 
     let error = fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests, &bundle, false)
+        .validate(
+            &built.payload,
+            &message,
+            B256::ZERO,
+            &built.requests,
+            &bundle,
+            false,
+            built.amsterdam(),
+        )
         .expect_err("a bundle with a spare blob must be rejected");
 
     assert!(matches!(error, ValidationError::InvalidBlobsBundle), "{error}");
@@ -1349,7 +1636,15 @@ async fn a_blob_tx_with_an_empty_bundle_is_rejected() {
 
     let error = fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests, &empty_bundle(), false)
+        .validate(
+            &built.payload,
+            &message,
+            B256::ZERO,
+            &built.requests,
+            &empty_bundle(),
+            false,
+            built.amsterdam(),
+        )
         .expect_err("a blob tx without its blobs must be rejected");
 
     assert!(matches!(error, ValidationError::InvalidBlobsBundle), "{error}");
@@ -1364,7 +1659,15 @@ async fn a_bundle_for_a_block_with_no_blob_txs_is_rejected() {
 
     let error = fixture
         .validator()
-        .validate(&built.payload, &message, B256::ZERO, &built.requests, &blob_bundle(1), false)
+        .validate(
+            &built.payload,
+            &message,
+            B256::ZERO,
+            &built.requests,
+            &blob_bundle(1),
+            false,
+            built.amsterdam(),
+        )
         .expect_err("a bundle for a blobless block must be rejected");
 
     assert!(matches!(error, ValidationError::InvalidBlobsBundle), "{error}");
@@ -1421,6 +1724,31 @@ impl Fixture {
         ssz::Encode::as_ssz_bytes(&submission)
     }
 
+    /// The request shape the relay sends for a Gloas submission: the Gloas
+    /// wire shape, named by its decoder params, with the list inside.
+    pub(crate) fn gloas_ssz_request(
+        &self,
+        built: &Built,
+    ) -> helix_common::simulator::SszValidationRequest {
+        let submission: helix_types::SignedBidSubmission =
+            self.submission(built).try_into().expect("the fixture builds a convertible submission");
+        let bal = built.block_access_list.clone().expect("a Gloas request carries a list");
+        let gloas = helix_types::SignedBidSubmissionGloas::join(
+            submission,
+            helix_types::BlockAccessListBytes(bal.into()),
+        );
+        helix_common::simulator::SszValidationRequest {
+            apply_blacklist: false,
+            registered_gas_limit: 0,
+            parent_beacon_block_root: B256::ZERO,
+            inclusion_list: Default::default(),
+            decoder_params: Some(helix_common::decoder::SubmissionDecoderParams::plain(
+                helix_types::ForkName::Gloas,
+            )),
+            signed_bid_submission: ssz::Encode::as_ssz_bytes(&gloas),
+        }
+    }
+
     pub(crate) fn ssz_request(
         &self,
         built: &Built,
@@ -1439,4 +1767,192 @@ impl Fixture {
             signed_bid_submission: self.encode_submission(submission),
         }
     }
+}
+
+/// Proves the fixture really is on Amsterdam: without the fork the tests below
+/// would silently pass under Fulu rules.
+#[tokio::test]
+async fn an_amsterdam_fixture_builds_a_block_with_a_block_access_list() {
+    let fixture = Fixture::amsterdam().await;
+    let built = fixture.build_on(fixture.genesis_hash, fixture.genesis_timestamp + 12, 0);
+
+    let bal = built.block_access_list.as_deref().expect("Amsterdam builds a block access list");
+    assert!(!bal.is_empty(), "even an idle block touches accounts");
+
+    let block = payload_v3_to_block(&built.payload, B256::ZERO, &built.requests, built.amsterdam())
+        .expect("the fixture builds a convertible payload");
+    assert_eq!(block.header.slot_number, Some(SLOT));
+    assert_eq!(block.header.block_access_list_hash, Some(ethrex_common::utils::keccak(bal)));
+}
+
+#[tokio::test]
+async fn an_amsterdam_payload_round_trips_to_the_same_block_hash() {
+    let fixture = Fixture::amsterdam().await;
+    let built = fixture.build_on(fixture.genesis_hash, fixture.genesis_timestamp + 12, 0);
+
+    let block = fixture
+        .validator()
+        .to_block(&built.payload, B256::ZERO, &built.requests, built.amsterdam())
+        .expect("a block the fixture built must convert");
+
+    assert_eq!(b256(block.hash()), built.block_hash());
+}
+
+#[tokio::test]
+async fn a_valid_amsterdam_block_is_accepted() {
+    let fixture = Fixture::amsterdam().await;
+    let built = fixture.build_on(fixture.genesis_hash, fixture.genesis_timestamp + 12, 0);
+    let message = fixture.bid_trace(&built);
+
+    fixture
+        .validator()
+        .validate(
+            &built.payload,
+            &message,
+            B256::ZERO,
+            &built.requests,
+            &empty_bundle(),
+            false,
+            built.amsterdam(),
+        )
+        .expect("an Amsterdam block the fixture built must validate");
+}
+
+/// The block hash covers the list's hash, so changing a byte breaks the
+/// commitment the builder signed.
+#[tokio::test]
+async fn a_tampered_block_access_list_is_rejected() {
+    let fixture = Fixture::amsterdam().await;
+    let mut built = fixture.build_on(fixture.genesis_hash, fixture.genesis_timestamp + 12, 0);
+    let message = fixture.bid_trace(&built);
+    built.block_access_list.as_mut().expect("Amsterdam builds one")[0] ^= 0xff;
+
+    let error = fixture
+        .validator()
+        .validate(
+            &built.payload,
+            &message,
+            B256::ZERO,
+            &built.requests,
+            &empty_bundle(),
+            false,
+            built.amsterdam(),
+        )
+        .expect_err("a changed block access list must be rejected");
+
+    assert!(matches!(error, ValidationError::BlockHashMismatch { .. }), "{error}");
+}
+
+/// The sharper case: a well-formed list, committed to consistently, that is not
+/// the list execution produces. Only re-running the block catches this.
+#[tokio::test]
+async fn a_block_access_list_that_contradicts_execution_is_rejected() {
+    let fixture = Fixture::amsterdam().await;
+    let mut built = fixture.build_on(fixture.genesis_hash, fixture.genesis_timestamp + 12, 0);
+
+    // Another block's list: valid bytes, wrong block.
+    let other = fixture.build_block(
+        fixture.genesis_hash,
+        fixture.genesis_timestamp + 12,
+        vec![signed_transfer(
+            &fixture.signers[1],
+            fixture.chain_id,
+            0,
+            Address::repeat_byte(0x77),
+            U256::from(GWEI),
+            100 * GWEI,
+            0,
+        )],
+        Vec::new(),
+    );
+    built.block_access_list = other.block_access_list;
+    assert!(built.block_access_list.is_some(), "the substitute list must exist");
+
+    // Commit to the substituted list, so the hash checks all pass and only
+    // execution can tell the difference.
+    let block = payload_v3_to_block(&built.payload, B256::ZERO, &built.requests, built.amsterdam())
+        .expect("the substituted list still converts");
+    let mut message = fixture.bid_trace(&built);
+    message.block_hash = b256(block.hash());
+
+    let error = fixture
+        .validator()
+        .validate(
+            &built.payload,
+            &message,
+            B256::ZERO,
+            &built.requests,
+            &empty_bundle(),
+            false,
+            built.amsterdam(),
+        )
+        .expect_err("a list execution did not produce must be rejected");
+
+    let ValidationError::PostExecution(reason) = &error else {
+        panic!("{error}");
+    };
+    assert!(reason.to_lowercase().contains("access list"), "rejected for another reason: {reason}");
+}
+
+#[tokio::test]
+async fn an_empty_block_access_list_is_rejected() {
+    let fixture = Fixture::amsterdam().await;
+    let mut built = fixture.build_on(fixture.genesis_hash, fixture.genesis_timestamp + 12, 0);
+    let message = fixture.bid_trace(&built);
+    built.block_access_list = Some(Vec::new());
+
+    let error = fixture
+        .validator()
+        .validate(
+            &built.payload,
+            &message,
+            B256::ZERO,
+            &built.requests,
+            &empty_bundle(),
+            false,
+            built.amsterdam(),
+        )
+        .expect_err("an empty block access list must be rejected");
+
+    assert!(matches!(error, ValidationError::EmptyBlockAccessList), "{error}");
+}
+
+/// A Gloas submission whose payload predates Amsterdam, and the reverse. The
+/// header fields are fork-gated, so ethrex's pre-execution checks catch both
+/// without a fork check of our own.
+#[tokio::test]
+async fn a_fork_and_payload_that_disagree_are_rejected() {
+    let amsterdam = Fixture::amsterdam().await;
+    let built = amsterdam.build_on(amsterdam.genesis_hash, amsterdam.genesis_timestamp + 12, 0);
+    let message = amsterdam.bid_trace(&built);
+    let error = amsterdam
+        .validator()
+        .validate(
+            &built.payload,
+            &message,
+            B256::ZERO,
+            &built.requests,
+            &empty_bundle(),
+            false,
+            None,
+        )
+        .expect_err("an Amsterdam block with no list must be rejected");
+    assert!(matches!(error, ValidationError::BlockHashMismatch { .. }), "{error}");
+
+    let fulu = Fixture::new().await;
+    let built = fulu.build_on(fulu.genesis_hash, fulu.genesis_timestamp + 12, 0);
+    let message = fulu.bid_trace(&built);
+    let error = fulu
+        .validator()
+        .validate(
+            &built.payload,
+            &message,
+            B256::ZERO,
+            &built.requests,
+            &empty_bundle(),
+            false,
+            Some(Amsterdam { block_access_list: &[0xc0], slot: SLOT }),
+        )
+        .expect_err("a Fulu block carrying Amsterdam fields must be rejected");
+    assert!(matches!(error, ValidationError::BlockHashMismatch { .. }), "{error}");
 }

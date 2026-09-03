@@ -15,13 +15,13 @@ use helix_common::{
     decoder::{DecoderError, SubmissionDecoder, SubmissionDecoderParams},
     simulator::{SszMergedValidationRequest, SszValidationRequest},
 };
-use helix_types::{ForkName, Submission};
+use helix_types::{BlockAccessListBytes, ForkName, Submission};
 use ssz::Decode;
 use tokio::{net::TcpListener, sync::Semaphore, time};
 use tracing::{error, info, warn};
 
 use crate::{
-    engine::convert::eblobs,
+    engine::convert::{Amsterdam, eblobs},
     validation::{BlockValidator, error::ValidationError},
 };
 
@@ -59,6 +59,13 @@ pub async fn run(validator: BlockValidator, addr: SocketAddr, max_concurrent: us
 /// refused rather than validated under the wrong rules.
 fn supported_fork(params: &Option<SubmissionDecoderParams>) -> bool {
     // No params means raw Fulu-shaped SSZ bytes.
+    params
+        .as_ref()
+        .is_none_or(|params| matches!(params.fork_name, ForkName::Fulu | ForkName::Gloas))
+}
+
+/// The merged route has no Gloas shape yet, so its fork list is shorter.
+fn supported_merged_fork(params: &Option<SubmissionDecoderParams>) -> bool {
     params.as_ref().is_none_or(|params| matches!(params.fork_name, ForkName::Fulu))
 }
 
@@ -70,22 +77,26 @@ fn unsupported_fork(params: &Option<SubmissionDecoderParams>) -> Response {
     (StatusCode::NOT_IMPLEMENTED, format!("unsupported fork: {fork:?}")).into_response()
 }
 
+/// A decoded submission, with the block access list a Gloas one carries.
+type Decoded = (SignedBidSubmissionV5, Option<BlockAccessListBytes>);
+
 /// A dehydrated submission needs transactions this simulator does not cache.
 /// The relay answers a 424 by retrying with full SSZ bytes.
 fn decode_submission(
     params: Option<SubmissionDecoderParams>,
     bytes: &[u8],
-) -> Result<Option<SignedBidSubmissionV5>, DecoderError> {
+) -> Result<Option<Decoded>, DecoderError> {
     match params {
         Some(params) => {
             let mut buf = Vec::new();
-            let (submission, _, _, _) = SubmissionDecoder::new(&params).decode(bytes, &mut buf)?;
+            let (submission, _, _, bal) =
+                SubmissionDecoder::new(&params).decode(bytes, &mut buf)?;
             match submission {
-                Submission::Full(submission) => Ok(Some(submission.into())),
+                Submission::Full(submission) => Ok(Some((submission.into(), bal))),
                 Submission::Dehydrated(_) => Ok(None),
             }
         }
-        None => Ok(Some(SignedBidSubmissionV5::from_ssz_bytes(bytes)?)),
+        None => Ok(Some((SignedBidSubmissionV5::from_ssz_bytes(bytes)?, None))),
     }
 }
 
@@ -97,12 +108,12 @@ async fn validate(State(state): State<ServerState>, body: axum::body::Bytes) -> 
     if !supported_fork(&request.decoder_params) {
         return unsupported_fork(&request.decoder_params);
     }
-    let submission = match decode_submission(request.decoder_params, &request.signed_bid_submission)
-    {
-        Ok(Some(submission)) => submission,
-        Ok(None) => return StatusCode::FAILED_DEPENDENCY.into_response(),
-        Err(err) => return bad_request(err.to_string()),
-    };
+    let (submission, bal) =
+        match decode_submission(request.decoder_params, &request.signed_bid_submission) {
+            Ok(Some(decoded)) => decoded,
+            Ok(None) => return StatusCode::FAILED_DEPENDENCY.into_response(),
+            Err(err) => return bad_request(err.to_string()),
+        };
 
     run_validation(state, move |validator| {
         validator.validate(
@@ -112,9 +123,16 @@ async fn validate(State(state): State<ServerState>, body: axum::body::Bytes) -> 
             &submission.execution_requests,
             &eblobs(&submission.blobs_bundle),
             request.apply_blacklist,
+            amsterdam(bal.as_ref(), submission.message.slot),
         )
     })
     .await
+}
+
+/// A block access list marks the submission as Amsterdam, and the slot number
+/// the header needs is the one the trace already carries.
+fn amsterdam(block_access_list: Option<&BlockAccessListBytes>, slot: u64) -> Option<Amsterdam<'_>> {
+    block_access_list.map(|bal| Amsterdam { block_access_list: &bal.0, slot })
 }
 
 async fn validate_merged(State(state): State<ServerState>, body: axum::body::Bytes) -> Response {
@@ -122,15 +140,15 @@ async fn validate_merged(State(state): State<ServerState>, body: axum::body::Byt
         Ok(request) => request,
         Err(err) => return bad_request(format!("{err:?}")),
     };
-    if !supported_fork(&request.decoder_params) {
+    if !supported_merged_fork(&request.decoder_params) {
         return unsupported_fork(&request.decoder_params);
     }
-    let submission = match decode_submission(request.decoder_params, &request.signed_bid_submission)
-    {
-        Ok(Some(submission)) => submission,
-        Ok(None) => return StatusCode::FAILED_DEPENDENCY.into_response(),
-        Err(err) => return bad_request(err.to_string()),
-    };
+    let (submission, _) =
+        match decode_submission(request.decoder_params, &request.signed_bid_submission) {
+            Ok(Some(decoded)) => decoded,
+            Ok(None) => return StatusCode::FAILED_DEPENDENCY.into_response(),
+            Err(err) => return bad_request(err.to_string()),
+        };
 
     run_validation(state, move |validator| {
         validator.validate_merged(
@@ -141,6 +159,7 @@ async fn validate_merged(State(state): State<ServerState>, body: axum::body::Byt
             &eblobs(&submission.blobs_bundle),
             request.apply_blacklist,
             request.base_payment_tx_index,
+            None,
         )
     })
     .await
