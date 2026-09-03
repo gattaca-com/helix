@@ -2909,6 +2909,7 @@ impl PostgresDatabaseService {
             was_top_builder: Option<bool>,
             top_bid: Option<PostgresNumeric>,
             inserted_at: SystemTime,
+            region_id: i16,
         }
 
         let mut structured_blocks = Vec::with_capacity(merged_blocks.len());
@@ -2941,11 +2942,12 @@ impl PostgresDatabaseService {
                 was_top_builder: block.trace.was_top_builder,
                 top_bid: block.trace.top_bid.map(PostgresNumeric::from),
                 inserted_at: SystemTime::now(),
+                region_id: self.region,
             });
         }
 
         // Flatten into SQL params
-        const FIELD_COUNT: usize = 24;
+        const FIELD_COUNT: usize = 25;
         let mut params: Vec<&(dyn ToSql + Sync)> =
             Vec::with_capacity(structured_blocks.len() * FIELD_COUNT);
         for block in &structured_blocks {
@@ -2973,6 +2975,7 @@ impl PostgresDatabaseService {
             params.push(&block.was_top_builder);
             params.push(&block.top_bid);
             params.push(&block.inserted_at);
+            params.push(&block.region_id);
         }
 
         let mut sql = String::from(
@@ -3000,7 +3003,8 @@ impl PostgresDatabaseService {
                 header_served_time_ns,
                 was_top_builder,
                 top_bid,
-                inserted_at
+                inserted_at,
+                region_id
             ) VALUES ",
         );
 
