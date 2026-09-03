@@ -127,6 +127,7 @@ impl<B: BidAdjustor> Context<B> {
                 .unwrap_or_default(),
             inclusion_list: slot_data.il.clone().unwrap_or_default(),
             submission: submission.clone(),
+            block_access_list: block_access_list.clone(),
             tx_root: maybe_tx_root,
             version,
             trace,

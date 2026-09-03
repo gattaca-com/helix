@@ -10,6 +10,7 @@ use helix_common::{
     SimulatorConfig, SubmissionTrace,
     api::builder_api::InclusionListWithMetadata,
     bid_submission::OptimisticVersion,
+    decoder::SubmissionDecoderParams,
     metrics::SimulatorMetrics,
     record_submission_step,
     simulator::{
@@ -21,8 +22,9 @@ use helix_common::{
     validator_preferences::{Filtering, ValidatorPreferences},
 };
 use helix_types::{
-    BidTrace, BlobsBundle, BlsPublicKeyBytes, BlsSignatureBytes, BuilderInclusionResult,
-    ExecutionPayload, ExecutionRequests, MergedBlockTrace, SignedBidSubmission, SubmissionVersion,
+    BidTrace, BlobsBundle, BlockAccessListBytes, BlsPublicKeyBytes, BlsSignatureBytes,
+    BuilderInclusionResult, ExecutionPayload, ExecutionRequests, ForkName, MergedBlockTrace,
+    SignedBidSubmission, SignedBidSubmissionGloas, SubmissionVersion,
 };
 use rustc_hash::FxHashMap;
 use ssz::Encode as _;
@@ -71,6 +73,7 @@ pub struct ValidationRequest {
     pub parent_beacon_block_root: B256,
     pub inclusion_list: InclusionListWithMetadata,
     pub submission: SignedBidSubmission,
+    pub block_access_list: Option<BlockAccessListBytes>,
     pub tx_root: Option<B256>,
     pub version: SubmissionVersion,
     pub trace: SubmissionTrace,
@@ -1305,23 +1308,36 @@ fn create_ssz_request(
         req.parent_beacon_block_root,
         req.inclusion_list.clone(),
         submission,
+        req.block_access_list.clone(),
     )
 }
 
+/// A hydrated submission is re-encoded here, so a Gloas one has to go in its own
+/// shape: `SignedBidSubmission` has nowhere to put the block access list. The
+/// decoder params name that shape, because nothing else on the wire does.
+#[allow(clippy::too_many_arguments)]
 fn ssz_request(
     apply_blacklist: bool,
     registered_gas_limit: u64,
     parent_beacon_block_root: B256,
     inclusion_list: InclusionListWithMetadata,
     submission: &SignedBidSubmission,
+    block_access_list: Option<BlockAccessListBytes>,
 ) -> SszValidationRequest {
+    let (decoder_params, signed_bid_submission) = match block_access_list {
+        Some(bal) => (
+            Some(SubmissionDecoderParams::plain(ForkName::Gloas)),
+            SignedBidSubmissionGloas::join(submission.clone(), bal).as_ssz_bytes(),
+        ),
+        None => (None, submission.as_ssz_bytes()),
+    };
     SszValidationRequest {
         apply_blacklist,
         registered_gas_limit,
         parent_beacon_block_root,
         inclusion_list,
-        decoder_params: None,
-        signed_bid_submission: submission.as_ssz_bytes(),
+        decoder_params,
+        signed_bid_submission,
     }
 }
 
@@ -1342,5 +1358,44 @@ fn ssz_merged_request(
         decoder_params: None,
         signed_bid_submission: submission.as_ssz_bytes(),
         base_payment_tx_index,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use helix_types::TestRandomSeed;
+
+    use super::*;
+
+    /// The SSZ path re-encodes the submission, so this is where a Gloas one
+    /// would lose its block access list.
+    #[test]
+    fn a_gloas_ssz_request_carries_the_block_access_list() {
+        let mut submission = SignedBidSubmission::test_random();
+        submission.blobs_bundle = Default::default();
+        let bal = BlockAccessListBytes(vec![7u8; 48].into());
+
+        let request =
+            ssz_request(false, 0, B256::ZERO, Default::default(), &submission, Some(bal.clone()));
+
+        let params = request.decoder_params.expect("a Gloas request names its shape");
+        assert_eq!(params.fork_name, ForkName::Gloas);
+        let mut buf = Vec::new();
+        let (_, _, _, decoded) = helix_common::decoder::SubmissionDecoder::new(&params)
+            .decode(&request.signed_bid_submission, &mut buf)
+            .expect("the simulator must be able to decode what the relay sends");
+        assert_eq!(decoded.expect("the list must survive the re-encode"), bal);
+    }
+
+    /// Every other fork keeps the bare shape, so no simulator sees a new one.
+    #[test]
+    fn a_non_gloas_ssz_request_is_unchanged() {
+        let mut submission = SignedBidSubmission::test_random();
+        submission.blobs_bundle = Default::default();
+
+        let request = ssz_request(false, 0, B256::ZERO, Default::default(), &submission, None);
+
+        assert!(request.decoder_params.is_none());
+        assert_eq!(request.signed_bid_submission, submission.as_ssz_bytes());
     }
 }

@@ -39,6 +39,8 @@ pub enum ValidationError {
     Blacklist(Address),
     #[error("invalid blobs bundle")]
     InvalidBlobsBundle,
+    #[error("submission carries an empty block access list")]
+    EmptyBlockAccessList,
 }
 
 impl ValidationError {
@@ -61,6 +63,7 @@ impl ValidationError {
             ValidationError::ProposerPayment => "proposer_payment",
             ValidationError::Blacklist(_) => "blacklist",
             ValidationError::InvalidBlobsBundle => "invalid_blobs_bundle",
+            ValidationError::EmptyBlockAccessList => "empty_block_access_list",
         }
     }
 }
