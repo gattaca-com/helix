@@ -14,6 +14,10 @@ clippy:
 test:
   cargo test --workspace --all-features
 
+# Tests that need a real postgres (just local-postgres). Not run by `just test` or CI.
+test-integration:
+  cargo test --workspace --all-features -- --ignored
+
 admin-frontend-build:
   cd crates/admin/frontend && npm ci && npm run build
 
