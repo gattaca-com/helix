@@ -2,8 +2,7 @@
 //! `getExecutionPayloadBid` and `submitBuilderPreferences` requests, and to carry a
 //! proposer's per-builder payment preferences.
 //!
-//! See <https://github.com/ethereum/builder-specs/pull/165>. Not yet part of any merged
-//! spec, so field shapes may still change.
+//! See <https://github.com/ethereum/builder-specs/blob/main/specs/gloas/validator.md#new-containers>.
 
 use alloy_primitives::B256;
 use lh_types::SignedRoot;
@@ -23,7 +22,7 @@ crate::ssz_bytes_wrapper! {
 /// Authenticates a `getExecutionPayloadBid` or `submitBuilderPreferences` request. Signed
 /// under `DOMAIN_REQUEST_AUTH`, distinct from the in-protocol `DOMAIN_BEACON_BUILDER`.
 #[derive(PartialEq, Debug, Serialize, Deserialize, Clone, Encode, Decode, TreeHash)]
-pub struct RequestAuth {
+pub struct BuilderRequestAuth {
     /// Opaque authentication data agreed with the builder out of band.
     pub data: RequestAuthData,
     /// The proposal slot this request is authorized for.
@@ -31,17 +30,17 @@ pub struct RequestAuth {
     pub slot: u64,
 }
 
-impl SignedRoot for RequestAuth {}
+impl SignedRoot for BuilderRequestAuth {}
 
 #[derive(PartialEq, Debug, Serialize, Deserialize, Clone, Encode, Decode)]
-pub struct SignedRequestAuth {
-    pub message: RequestAuth,
+pub struct SignedBuilderRequestAuth {
+    pub message: BuilderRequestAuth,
     pub signature: BlsSignatureBytes,
 }
 
-impl SignedRequestAuth {
+impl SignedBuilderRequestAuth {
     /// `pubkey` is resolved from the `proposer_pubkey` path parameter, not carried inside
-    /// `RequestAuth` itself. `domain` is `ChainInfo::request_auth_domain`.
+    /// `BuilderRequestAuth` itself. `domain` is `ChainInfo::request_auth_domain`.
     pub fn verify_signature(
         &self,
         pubkey: &BlsPublicKeyBytes,
@@ -72,7 +71,7 @@ pub struct BuilderPreferences {
 #[derive(PartialEq, Debug, Serialize, Deserialize, Clone, Encode, Decode)]
 pub struct BuilderPreferencesRequest {
     pub preferences: BuilderPreferences,
-    pub auth: SignedRequestAuth,
+    pub auth: SignedBuilderRequestAuth,
 }
 
 #[cfg(test)]
@@ -82,8 +81,8 @@ mod tests {
     use super::*;
     use crate::BlsKeypair;
 
-    fn sample_request_auth() -> RequestAuth {
-        RequestAuth { data: RequestAuthData(vec![1, 2, 3, 4].into()), slot: 123 }
+    fn sample_request_auth() -> BuilderRequestAuth {
+        BuilderRequestAuth { data: RequestAuthData(vec![1, 2, 3, 4].into()), slot: 123 }
     }
 
     #[test]
@@ -97,14 +96,14 @@ mod tests {
     fn request_auth_ssz_round_trip() {
         let auth = sample_request_auth();
         let bytes = auth.as_ssz_bytes();
-        assert_eq!(auth, RequestAuth::from_ssz_bytes(&bytes).unwrap());
+        assert_eq!(auth, BuilderRequestAuth::from_ssz_bytes(&bytes).unwrap());
     }
 
     #[test]
     fn builder_preferences_request_json_round_trip() {
         let request = BuilderPreferencesRequest {
             preferences: BuilderPreferences { max_execution_payment: 42 },
-            auth: SignedRequestAuth {
+            auth: SignedBuilderRequestAuth {
                 message: sample_request_auth(),
                 signature: BlsSignatureBytes::default(),
             },
@@ -121,7 +120,7 @@ mod tests {
         let root = message.signing_root(domain);
         let signature = keypair.sk.sign(root);
 
-        let signed = SignedRequestAuth { message, signature: signature.serialize().into() };
+        let signed = SignedBuilderRequestAuth { message, signature: signature.serialize().into() };
         let pubkey: BlsPublicKeyBytes = keypair.pk.serialize().into();
 
         signed.verify_signature(&pubkey, domain).expect("valid signature should verify");

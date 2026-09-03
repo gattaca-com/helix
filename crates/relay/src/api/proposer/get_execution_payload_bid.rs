@@ -9,7 +9,7 @@ use helix_common::{
     decoder::Encoding,
     utils::extract_request_id,
 };
-use helix_types::{ForkName, SignedRequestAuth};
+use helix_types::{ForkName, SignedBuilderRequestAuth};
 use hyper::StatusCode;
 use ssz::Decode;
 use tracing::info;
@@ -19,11 +19,8 @@ use crate::api::{Api, proposer::error::ProposerApiError};
 
 impl<A: Api> ProposerApi<A> {
     /// Serves a `SignedExecutionPayloadBid` for the given slot/parent_hash/parent_root to a
-    /// Gloas (ePBS) proposer.
-    ///
-    /// Not yet wired to the auctioneer: this only validates the request per
-    /// <https://github.com/ethereum/builder-specs/pull/165> and always answers with the
-    /// spec's "no bid available" response.
+    /// Gloas (ePBS) proposer, per
+    /// <https://github.com/ethereum/builder-specs/blob/main/specs/gloas/builder.md#per-request-validator-inputs>.
     #[tracing::instrument(skip_all, err(level = tracing::Level::TRACE), fields(id =% extract_request_id(&headers), slot = params.slot))]
     pub async fn get_execution_payload_bid(
         Extension(proposer_api): Extension<Arc<ProposerApi<A>>>,
@@ -42,10 +39,11 @@ impl<A: Api> ProposerApi<A> {
             return Err(ProposerApiError::MissingTimingHeaders);
         }
 
-        let signed_request_auth: SignedRequestAuth = match Encoding::from_content_type(&headers) {
-            Encoding::Json => serde_json::from_slice(&body)?,
-            Encoding::Ssz => SignedRequestAuth::from_ssz_bytes(&body)?,
-        };
+        let signed_request_auth: SignedBuilderRequestAuth =
+            match Encoding::from_content_type(&headers) {
+                Encoding::Json => serde_json::from_slice(&body)?,
+                Encoding::Ssz => SignedBuilderRequestAuth::from_ssz_bytes(&body)?,
+            };
 
         if signed_request_auth.message.slot != params.slot {
             return Err(ProposerApiError::RequestAuthSlotMismatch {
@@ -67,8 +65,8 @@ impl<A: Api> ProposerApi<A> {
         );
 
         // TODO(gloas): fetch/build the SignedExecutionPayloadBid from the auctioneer, honoring
-        // any stored max_execution_payment preference. Not wired in yet -- always reports "no
-        // bid available", which is a valid response per spec.
+        // any stored max_execution_payment preference. Until then, "no bid available" is a
+        // valid response per spec.
         Ok(StatusCode::NO_CONTENT)
     }
 }

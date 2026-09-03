@@ -13,11 +13,8 @@ use super::{ProposerApi, get_payload::fork_name_from_header};
 use crate::api::{Api, proposer::error::ProposerApiError};
 
 impl<A: Api> ProposerApi<A> {
-    /// Accepts a proposer's Gloas (ePBS) `BuilderPreferencesRequest`.
-    ///
-    /// Not yet wired in: this only validates the request per
-    /// <https://github.com/ethereum/builder-specs/pull/165>; preferences are not yet stored
-    /// or enforced when serving bids.
+    /// Accepts a proposer's Gloas (ePBS) `BuilderPreferencesRequest`, per
+    /// <https://github.com/ethereum/builder-specs/blob/main/specs/gloas/builder.md#builder-preferences>.
     #[tracing::instrument(skip_all, err(level = tracing::Level::TRACE), fields(id =% extract_request_id(&headers)))]
     pub async fn submit_builder_preferences(
         Extension(proposer_api): Extension<Arc<ProposerApi<A>>>,
@@ -44,11 +41,11 @@ impl<A: Api> ProposerApi<A> {
             proposer_pubkey = ?params.proposer_pubkey,
             slot = request.auth.message.slot,
             max_execution_payment = request.preferences.max_execution_payment,
-            "validated submitBuilderPreferences request (not yet persisted -- storage not wired in)"
+            "validated submitBuilderPreferences request (not yet persisted)"
         );
 
         // TODO(gloas): reject stale slots, store preferences per proposer per slot, and honor
-        // max_execution_payment when serving bids. Not wired in yet.
+        // max_execution_payment when serving bids.
         Ok(StatusCode::ACCEPTED)
     }
 }
