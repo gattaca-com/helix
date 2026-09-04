@@ -51,6 +51,9 @@ ethrex-common = { git = "https://github.com/lambdaclass/ethrex", rev = "b4d56778
 ethrex-config = { git = "https://github.com/lambdaclass/ethrex", rev = "b4d5677812fdf58cb3e439c77906dda4d9b6f91a" }
 # default features minus `aws-lc-rs` (see note above); P-256 verify uses the portable fallback
 ethrex-crypto = { git = "https://github.com/lambdaclass/ethrex", rev = "b4d5677812fdf58cb3e439c77906dda4d9b6f91a", default-features = false, features = ["std", "kzg-rs", "secp256k1", "blst", "c-kzg"] }
+# Only for the EIP-8037 state-gas constants the payout reserve needs; already in
+# the tree via ethrex-vm.
+ethrex-levm = { git = "https://github.com/lambdaclass/ethrex", rev = "b4d5677812fdf58cb3e439c77906dda4d9b6f91a", default-features = false, features = ["secp256k1", "c-kzg"] }
 ethrex-metrics = { git = "https://github.com/lambdaclass/ethrex", rev = "b4d5677812fdf58cb3e439c77906dda4d9b6f91a" }
 ethrex-p2p = { git = "https://github.com/lambdaclass/ethrex", rev = "b4d5677812fdf58cb3e439c77906dda4d9b6f91a", features = ["c-kzg", "rocksdb", "metrics"] }
 ethrex-rlp = { git = "https://github.com/lambdaclass/ethrex", rev = "b4d5677812fdf58cb3e439c77906dda4d9b6f91a" }
