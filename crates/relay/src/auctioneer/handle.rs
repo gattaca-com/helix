@@ -2,7 +2,11 @@ use std::sync::Arc;
 
 use dashmap::DashMap;
 use futures::{FutureExt, future::Shared};
-use helix_common::{GetPayloadTrace, api::proposer_api::GetHeaderParams, chain_info::ChainInfo};
+use helix_common::{
+    GetPayloadTrace,
+    api::proposer_api::{GetExecutionPayloadBidParams, GetHeaderParams},
+    chain_info::ChainInfo,
+};
 use helix_types::{
     BlsPublicKey, BlsPublicKeyBytes, ExecPayload, GetPayloadResponse, SigError,
     SignedBlindedBeaconBlock,
@@ -12,7 +16,7 @@ use tracing::trace;
 
 use crate::{
     api::proposer::{ProposerApiError, get_payload::ProposerApiVersion},
-    auctioneer::types::{Event, GetHeaderResult, GetPayloadResult},
+    auctioneer::types::{Event, GetExecutionPayloadBidResult, GetHeaderResult, GetPayloadResult},
     gossip::BroadcastPayloadParams,
 };
 
@@ -60,6 +64,22 @@ impl AuctioneerHandle {
                 res_tx: tx,
                 span: tracing::Span::current(),
                 is_mev_boost,
+            })
+            .map_err(|_| ChannelFull)?;
+        Ok(rx)
+    }
+
+    pub fn get_execution_payload_bid(
+        &self,
+        params: GetExecutionPayloadBidParams,
+    ) -> Result<oneshot::Receiver<GetExecutionPayloadBidResult>, ChannelFull> {
+        let (tx, rx) = oneshot::channel();
+        trace!("sending to auctioneer");
+        self.auctioneer
+            .try_send(Event::GetExecutionPayloadBid {
+                params,
+                res_tx: tx,
+                span: tracing::Span::current(),
             })
             .map_err(|_| ChannelFull)?;
         Ok(rx)
