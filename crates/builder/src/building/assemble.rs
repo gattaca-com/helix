@@ -15,6 +15,7 @@ use ethrex_common::{
     },
 };
 use ethrex_crypto::native::NativeCrypto;
+use ethrex_rlp::encode::RLPEncode;
 use ethrex_storage::Store;
 use thiserror::Error;
 
@@ -37,6 +38,8 @@ pub enum BuildError {
     PayoutReverted,
     #[error("the payout recipient is the builder itself")]
     PayoutToSelf,
+    #[error("an Amsterdam block was built without a block access list")]
+    MissingBlockAccessList,
     #[error("build failed: {0}")]
     Internal(String),
 }
@@ -53,6 +56,9 @@ pub struct BuiltBlock {
     /// The changed accounts, for checking the payment the way the relay does.
     #[allow(dead_code)]
     pub account_updates: Vec<AccountUpdate>,
+    /// The encoded EIP-7928 list, from Amsterdam onwards. The header commits to
+    /// these exact bytes, so the submission has to carry them unchanged.
+    pub block_access_list: Option<Vec<u8>>,
     /// Paid to the proposer by the trailing transaction, and the value the
     /// `BidTrace` claims.
     pub value: U256,
@@ -83,6 +89,10 @@ pub fn build(
         return Err(BuildError::MissingParent);
     }
 
+    // EIP-7843 puts the proposal slot in the header, and only from Amsterdam:
+    // setting it earlier would change every pre-Amsterdam block hash.
+    let is_amsterdam = store.get_chain_config().is_amsterdam_activated(slot.timestamp);
+
     let args = BuildPayloadArgs {
         parent: h256(slot.parent_hash),
         timestamp: slot.timestamp,
@@ -90,7 +100,7 @@ pub fn build(
         random: h256(slot.prev_randao),
         withdrawals: Some(slot.withdrawals.iter().map(ewithdrawal_lh).collect()),
         beacon_root: Some(h256(slot.parent_beacon_block_root)),
-        slot_number: None,
+        slot_number: is_amsterdam.then_some(slot.slot),
         version: 3,
         elasticity_multiplier: ELASTICITY_MULTIPLIER,
         // `create_payload` runs this through `calc_gas_limit`, which applies
@@ -107,16 +117,20 @@ pub fn build(
         .map_err(|e| BuildError::Internal(format!("system operations: {e}")))?;
 
     // `fill_transactions` spends every last drop of `remaining_gas`, so hold
-    // the payout's share back and restore it once the fill is done.
-    let reserve = config.payout_gas_reserve.min(ctx.remaining_gas);
+    // the payout's share back and restore it once the fill is done. The reserve
+    // is sized before the fill and the transaction after it, so a recipient the
+    // fill creates is not charged for twice.
+    let reserve = payout_gas_limit(config, is_amsterdam, recipient_exists(&mut ctx, slot)?)
+        .min(ctx.remaining_gas);
     ctx.remaining_gas -= reserve;
     blockchain
         .fill_transactions(&mut ctx)
         .map_err(|e| BuildError::Internal(format!("fill transactions: {e}")))?;
     ctx.remaining_gas += reserve;
 
+    let payout_gas = payout_gas_limit(config, is_amsterdam, recipient_exists(&mut ctx, slot)?);
     let base_fee = ctx.payload.header.base_fee_per_gas.unwrap_or_default();
-    let payout = payout_value(&ctx, config, base_fee)?;
+    let payout = payout_value(&ctx, config, payout_gas, base_fee)?;
 
     let nonce = ctx
         .vm
@@ -132,7 +146,7 @@ pub fn build(
         .map_err(|e| BuildError::Internal(e.to_string()))?
         .info
         .balance;
-    let gas_cost = EU256::from(config.payout_gas_reserve) * EU256::from(base_fee);
+    let gas_cost = EU256::from(payout_gas) * EU256::from(base_fee);
     if balance < eu256(payout) + gas_cost {
         return Err(BuildError::PayoutUnaffordable);
     }
@@ -143,7 +157,7 @@ pub fn build(
         nonce,
         slot.proposer_fee_recipient,
         payout,
-        config.payout_gas_reserve,
+        payout_gas,
         base_fee as u128,
     )?;
     let sender = payout_tx
@@ -169,22 +183,64 @@ pub fn build(
         .finalize_payload(&mut ctx)
         .map_err(|e| BuildError::Internal(format!("finalize: {e}")))?;
 
+    // `finalize_payload` hashed this into the header, so the submission has to
+    // carry the same encoding rather than re-deriving one.
+    let block_access_list = ctx.block_access_list.as_ref().map(|bal| bal.encode_to_vec());
+    if is_amsterdam && block_access_list.is_none() {
+        return Err(BuildError::MissingBlockAccessList);
+    }
+
     Ok(BuiltBlock {
         block: ctx.payload,
         blobs_bundle: ctx.blobs_bundle,
         requests: ctx.requests.unwrap_or_default(),
         account_updates: ctx.account_updates,
+        block_access_list,
         value: payout,
     })
+}
+
+/// Whether the payout recipient already has an account, read from in-block
+/// state so a payment earlier in the same block counts.
+fn recipient_exists(ctx: &mut PayloadBuildContext, slot: &SlotContext) -> Result<bool, BuildError> {
+    Ok(ctx
+        .vm
+        .db
+        .get_account(eaddr(slot.proposer_fee_recipient))
+        .map_err(|e| BuildError::Internal(e.to_string()))?
+        .info !=
+        Default::default())
+}
+
+/// The gas the payout transaction needs. `payout_gas_reserve` covers the
+/// transfer; paying an address for the first time also creates it, and from
+/// Amsterdam that costs state gas (EIP-8037). A fee recipient's first payment
+/// is exactly that case, and it is the normal case on a fresh testnet, so the
+/// reserve has to cover it or every block is lost.
+fn payout_gas_limit(config: &BuildingConfig, is_amsterdam: bool, recipient_exists: bool) -> u64 {
+    if is_amsterdam && !recipient_exists {
+        config.payout_gas_reserve + new_account_state_gas()
+    } else {
+        config.payout_gas_reserve
+    }
+}
+
+/// EIP-8037's charge for the state a new account occupies. Read from ethrex so
+/// it cannot drift from the rules the simulator enforces.
+fn new_account_state_gas() -> u64 {
+    use ethrex_levm::gas_cost::{STATE_BYTES_PER_NEW_ACCOUNT, cost_per_state_byte};
+    // `cost_per_state_byte` ignores its argument at this ethrex revision.
+    STATE_BYTES_PER_NEW_ACCOUNT * cost_per_state_byte(0)
 }
 
 /// Tips earned plus the subsidy, less the gas the payout itself will burn.
 fn payout_value(
     ctx: &PayloadBuildContext,
     config: &BuildingConfig,
+    payout_gas: u64,
     base_fee: u64,
 ) -> Result<U256, BuildError> {
-    let gas_cost = EU256::from(config.payout_gas_reserve) * EU256::from(base_fee);
+    let gas_cost = EU256::from(payout_gas) * EU256::from(base_fee);
     let funded = ctx.block_value + EU256::from(config.subsidy_wei);
     let payout = funded.checked_sub(gas_cost).ok_or(BuildError::NoPayout)?;
     if payout.is_zero() {
