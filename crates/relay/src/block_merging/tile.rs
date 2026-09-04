@@ -128,21 +128,16 @@ struct SlotState {
     /// Per-builder map of order_id -> order_hash for their latest_only bundles this
     /// slot, diffed on each new submission to detect revocations.
     latest_only_ids: FxHashMap<BlsPublicKeyBytes, FxHashMap<B256, B256>>,
-    announced: FxHashMap<B256, AnnouncedOrder>,
-    revoked_txs: FxHashMap<B256, RevokedOrder>,
+    revoked: FxHashMap<B256, RevokedOrder>,
     last_receive_ns: FxHashMap<BlsPublicKeyBytes, u64>,
-}
-
-#[derive(Default)]
-struct AnnouncedOrder {
-    txs: Vec<B256>,
-    builders: FxHashSet<BlsPublicKeyBytes>,
 }
 
 struct RevokedOrder {
     order_hash: B256,
     builder_pubkey: BlsPublicKeyBytes,
     revoked_ns: u64,
+    reannounced: u32,
+    reannounced_latest_only: u32,
 }
 
 #[derive(Clone, Copy)]
@@ -202,10 +197,12 @@ struct SlotStats {
     /// Txs sent as a hash reference: already sent whole earlier this slot.
     tx_refs_sent: usize,
     revokes_sent: usize,
-    revokes_with_other_holders: usize,
+    revokes_duplicate: usize,
     revokes_from_stale_submission: usize,
+    revoked_reannounced: usize,
+    revoked_reannounced_latest_only: usize,
     merged_with_revoked_order: usize,
-    revoked_order_reattributed: usize,
+    merged_revoked_orders: usize,
     submissions_out_of_order: usize,
     diff_skipped_with_live_orders: usize,
 }
@@ -344,8 +341,13 @@ fn handle_merged_block(
         value: merged.proposer_value,
         order_ids: merged.included_order_ids.iter().copied().collect(),
     });
-    let included_order_ids: FxHashSet<B256> = merged.included_order_ids.iter().copied().collect();
-    let merged_block_hash = merged.execution_payload.payload_inner.payload_inner.block_hash;
+    report_revoked_inclusions(
+        token,
+        merged.execution_payload.payload_inner.payload_inner.block_hash,
+        &merged.included_order_ids,
+        slot,
+        stats,
+    );
     let Some(response) = merged_block_to_response(merged, blob_sidecars, max_blobs_per_block)
     else {
         stats.merged_blob_missing += 1;
@@ -364,14 +366,6 @@ fn handle_merged_block(
         .map(|tx| *tx_hash_cache.entry(tx.0.clone()).or_insert_with(|| keccak256(tx.as_ref())))
         .filter(|hash| appended.contains(hash))
         .collect();
-    report_revoked_inclusions(
-        token,
-        merged_block_hash,
-        &appended_txs,
-        &included_order_ids,
-        slot,
-        stats,
-    );
     let unbundled = find_unbundled_txs(
         &appended_txs,
         &slot.order_txs,
@@ -394,58 +388,34 @@ fn handle_merged_block(
 fn report_revoked_inclusions(
     token: Token,
     merged_block_hash: B256,
-    appended_txs: &[B256],
-    included_order_ids: &FxHashSet<B256>,
+    included_order_ids: &[B256],
     slot: &SlotState,
     stats: &mut SlotStats,
 ) {
-    if slot.revoked_txs.is_empty() {
+    if slot.revoked.is_empty() {
         return;
     }
-
-    let mut hits: Vec<&RevokedOrder> = Vec::new();
-    for tx in appended_txs {
-        if let Some(revoked) = slot.revoked_txs.get(tx) &&
-            !hits.iter().any(|hit| hit.order_hash == revoked.order_hash)
-        {
-            hits.push(revoked);
-        }
-    }
-    if hits.is_empty() {
-        return;
-    }
-    stats.merged_with_revoked_order += 1;
 
     let now_ns = utcnow_ns();
-    for revoked in hits {
-        let revoked_by_still_attributed =
-            included_order_ids.contains(&order_id(revoked.order_hash, &revoked.builder_pubkey));
-
-        let mut other_holders: Vec<String> = Vec::new();
-        let mut reattributed_to: Vec<String> = Vec::new();
-        if let Some(announced) = slot.announced.get(&revoked.order_hash) {
-            for pubkey in announced.builders.iter().filter(|p| **p != revoked.builder_pubkey) {
-                other_holders.push(pubkey.to_string());
-                if included_order_ids.contains(&order_id(revoked.order_hash, pubkey)) {
-                    reattributed_to.push(pubkey.to_string());
-                }
-            }
-        }
-        if !reattributed_to.is_empty() {
-            stats.revoked_order_reattributed += 1;
-        }
-
+    let mut hits = 0;
+    for id in included_order_ids {
+        let Some(revoked) = slot.revoked.get(id) else { continue };
+        hits += 1;
         warn!(
             ?token,
             %merged_block_hash,
+            order_id = %id,
             order_hash = %revoked.order_hash,
             revoked_by = %revoked.builder_pubkey,
             ms_since_revoke = (now_ns.saturating_sub(revoked.revoked_ns)) as f64 / 1e6,
-            revoked_by_still_attributed,
-            ?reattributed_to,
-            ?other_holders,
+            reannounced = revoked.reannounced,
+            reannounced_latest_only = revoked.reannounced_latest_only,
             "merged block includes a revoked order"
         );
+    }
+    if hits > 0 {
+        stats.merged_with_revoked_order += 1;
+        stats.merged_revoked_orders += hits;
     }
 }
 
@@ -983,14 +953,15 @@ impl BlockMergingTile {
             tx_bytes_sent = stats.tx_bytes_sent,
             tx_refs_sent = stats.tx_refs_sent,
             revokes_sent = stats.revokes_sent,
-            revokes_with_other_holders = stats.revokes_with_other_holders,
+            revokes_duplicate = stats.revokes_duplicate,
             revokes_from_stale_submission = stats.revokes_from_stale_submission,
+            revoked_reannounced = stats.revoked_reannounced,
+            revoked_reannounced_latest_only = stats.revoked_reannounced_latest_only,
             merged_with_revoked_order = stats.merged_with_revoked_order,
-            revoked_order_reattributed = stats.revoked_order_reattributed,
+            merged_revoked_orders = stats.merged_revoked_orders,
             submissions_out_of_order = stats.submissions_out_of_order,
             diff_skipped_with_live_orders = stats.diff_skipped_with_live_orders,
-            revoked_orders = self.slot.revoked_txs.len(),
-            announced_orders = self.slot.announced.len(),
+            revoked_orders = self.slot.revoked.len(),
             "block merging slot stats"
         );
     }
@@ -1190,6 +1161,11 @@ impl BlockMergingTile {
             .collect();
 
         if !is_replay {
+            self.report_reannounced(
+                signed.message.builder_pubkey,
+                &msg.merge_orders,
+                &order_hashes,
+            );
             self.diff_latest_only(
                 signed.message.builder_pubkey,
                 &msg.merge_orders,
@@ -1224,13 +1200,6 @@ impl BlockMergingTile {
             debug!(?token, %block_hash, "skipping mergeable block over builder limits");
             return;
         }
-        for (order, hash) in msg.merge_orders.iter().zip(order_hashes.iter().copied()) {
-            let entry = self.slot.announced.entry(hash).or_default();
-            if entry.txs.is_empty() {
-                entry.txs = OrderTxs::from_ref(order, &tx_hashes).hashes().to_vec();
-            }
-            entry.builders.insert(signed.message.builder_pubkey);
-        }
         self.conn.orders_sent.extend(order_hashes);
         self.slot
             .order_txs
@@ -1245,6 +1214,39 @@ impl BlockMergingTile {
 
     /// Diffs `builder_pubkey`'s latest_only bundles against their previous
     /// submission this slot to detect revocations.
+    fn report_reannounced(
+        &mut self,
+        builder_pubkey: BlsPublicKeyBytes,
+        merge_orders: &[MergeOrderRef],
+        order_hashes: &[B256],
+    ) {
+        if self.slot.revoked.is_empty() {
+            return;
+        }
+        let bid_slot = self.slot.bid_slot;
+        for (order, &order_hash) in merge_orders.iter().zip(order_hashes) {
+            let id = order_id(order_hash, &builder_pubkey);
+            let Some(revoked) = self.slot.revoked.get_mut(&id) else { continue };
+            let latest_only = matches!(order, MergeOrderRef::Bundle(b) if b.latest_only);
+            revoked.reannounced += 1;
+            self.stats.revoked_reannounced += 1;
+            if latest_only {
+                revoked.reannounced_latest_only += 1;
+                self.stats.revoked_reannounced_latest_only += 1;
+            }
+            warn!(
+                bid_slot,
+                %id,
+                %order_hash,
+                %builder_pubkey,
+                latest_only,
+                count = revoked.reannounced,
+                ms_since_revoke = (utcnow_ns().saturating_sub(revoked.revoked_ns)) as f64 / 1e6,
+                "revoked order re-announced"
+            );
+        }
+    }
+
     fn diff_latest_only(
         &mut self,
         builder_pubkey: BlsPublicKeyBytes,
@@ -1276,45 +1278,30 @@ impl BlockMergingTile {
         self.slot.best_merged.retain(|_, floor| !floor.order_ids.contains(&order_id));
         let dropped_floors = floors_before - self.slot.best_merged.len();
 
-        let revoked_ns = utcnow_ns();
-        let (order_txs, other_holders) = match self.slot.announced.get(&order_hash) {
-            Some(announced) => (
-                announced.txs.clone(),
-                announced
-                    .builders
-                    .iter()
-                    .filter(|pubkey| **pubkey != builder_pubkey)
-                    .map(|pubkey| pubkey.to_string())
-                    .collect::<Vec<_>>(),
-            ),
-            None => (Vec::new(), Vec::new()),
-        };
-        for tx in &order_txs {
-            self.slot.revoked_txs.insert(*tx, RevokedOrder {
-                order_hash,
-                builder_pubkey,
-                revoked_ns,
-            });
-        }
+        let prev = self.slot.revoked.insert(order_id, RevokedOrder {
+            order_hash,
+            builder_pubkey,
+            revoked_ns: utcnow_ns(),
+            reannounced: 0,
+            reannounced_latest_only: 0,
+        });
 
         self.stats.revokes_sent += 1;
-        if !other_holders.is_empty() {
-            self.stats.revokes_with_other_holders += 1;
+        if prev.is_some() {
+            self.stats.revokes_duplicate += 1;
         }
 
         let bid_slot = self.slot.bid_slot;
 
         warn!(
             bid_slot,
-            %order_hash,
             %order_id,
+            %order_hash,
             %builder_pubkey,
             stale_submission,
+            duplicate = prev.is_some(),
+            reannounced_before = prev.as_ref().map(|p| p.reannounced).unwrap_or(0),
             dropped_floors,
-            order_tx_count = order_txs.len(),
-            ?order_txs,
-            other_holder_count = other_holders.len(),
-            ?other_holders,
             connection_active = self.conn.active,
             "revoking order"
         );
