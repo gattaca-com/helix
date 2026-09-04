@@ -47,7 +47,10 @@ the relay must reach it through the simulator's `ssz_url`. Differences from
 - The disallow list rejects interaction by effect -- a state change, or a
   transaction addressed to a listed account. `crates/simulator` also rejects a
   block that merely *reads* one, so it rejects strictly more blocks.
-- Only Fulu (V5) and the relay-internal merged method are served.
+- `/validate` serves Fulu and Gloas; `/validate_merged` serves Fulu only,
+  because merging protocol v1 cannot carry an Amsterdam block. A fork with no
+  shape here is refused with `501`, not `400`, so a helix limitation cannot
+  demote a builder.
 
 ## The building role
 
@@ -65,8 +68,13 @@ The block itself is ethrex's own payload machinery, with the builder as the
 coinbase, so tips accrue to the builder and the bid is funded from them:
 
 ```
-payout = tips + subsidy_wei - payout_gas_reserve * base_fee
+payout = tips + subsidy_wei - payout_gas * base_fee
 ```
+
+`payout_gas` is `payout_gas_reserve` (21000 by default), plus EIP-8037's state
+gas for creating the recipient when it has no account yet -- which is the normal
+case the first time a fee recipient is paid. See
+[the Gloas testnet runbook](../../docs/gloas-testnet.md).
 
 The block ends with a plain transfer of `payout` to the proposer's registered
 fee recipient. `subsidy_wei` exists because the relay rejects a zero-value
@@ -81,6 +89,10 @@ genesis, never a compiled-in fork version. It builds at each
 `submit_offsets_ms` point in the slot and submits only when the value beats
 what it already sent for that slot and parent -- a new parent, after a re-org,
 starts a fresh auction.
+
+From Amsterdam the block also carries the EIP-7928 block access list ethrex
+records and the EIP-7843 slot number, and the submission goes out in the Gloas
+shape so the list travels with it.
 
 What it does not do: no bundles or `eth_sendBundle`, no ordering of its own
 (ethrex's tip-sorted fill), no cancellations, no bidding strategy (it always
