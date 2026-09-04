@@ -4,7 +4,7 @@ use alloy_primitives::{Address, B256, U256};
 use alloy_rpc_types::beacon::BlsPublicKey;
 use alloy_signer_local::PrivateKeySigner;
 use helix_tcp_types::merging::control::RelayConfigV1;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::engine::session::{MergeSession, ReplayCheckpoint};
 
@@ -67,6 +67,8 @@ pub struct PreparedBlock {
 /// One mergeable order drawn from a prepared block's `merge_orders`.
 pub struct PreparedOrder {
     pub order_id: B256,
+    pub order_hash: B256,
+    pub latest_only: bool,
     pub origin: Address,
     pub builder_pubkey: BlsPublicKey,
     pub source_block_hash: B256,
@@ -139,25 +141,22 @@ pub struct SlotState {
     /// scratch, this slot.
     pub checkpoint_hits: usize,
     pub checkpoint_misses: usize,
+    pub excluded: FxHashSet<B256>,
+    pub latest_only: FxHashMap<BlsPublicKey, FxHashSet<B256>>,
 }
 
 impl SlotState {
-    /// Removes `order_id` from the pool if `builder_pubkey` still holds its
-    /// current attribution — a higher-value duplicate from another builder
-    /// may have since superseded it, in which case it's left untouched (see
-    /// `ingest_mergeable_block`'s dedup). Returns whether anything changed.
-    pub fn remove_order(&mut self, order_id: B256, builder_pubkey: &BlsPublicKey) -> bool {
-        let Some(&ix) = self.order_ids.get(&order_id) else { return false };
-        if &self.orders[ix].builder_pubkey != builder_pubkey {
-            return false;
+    pub fn update_latest_only(&mut self, pubkey: BlsPublicKey, current: FxHashSet<B256>) {
+        if let Some(previous) = self.latest_only.get(&pubkey) {
+            for dropped in previous.difference(&current) {
+                self.excluded.insert(*dropped);
+            }
         }
-        self.order_ids.remove(&order_id);
-        self.orders.swap_remove(ix);
-        // The element `swap_remove` moved into `ix` needs its index updated.
-        if let Some(moved) = self.orders.get(ix) {
-            self.order_ids.insert(moved.order_id, ix);
-        }
-        true
+        self.latest_only.insert(pubkey, current);
+    }
+
+    pub fn is_excluded(&self, order_hash: &B256) -> bool {
+        self.excluded.contains(order_hash)
     }
 
     pub fn new(msg: &helix_tcp_types::merging::relay_to_builder::SlotStartV1) -> Self {
@@ -178,6 +177,8 @@ impl SlotState {
             replay_checkpoints: FxHashMap::default(),
             checkpoint_hits: 0,
             checkpoint_misses: 0,
+            excluded: FxHashSet::default(),
+            latest_only: FxHashMap::default(),
         }
     }
 }
