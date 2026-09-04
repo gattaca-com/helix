@@ -167,9 +167,11 @@ with `ssz_url` set to this role's `ssz_addr` (see the repo-root
 ## Limitations
 
 - Merging protocol v1 carries `ExecutionPayloadV3`; post-Amsterdam blocks
-  (EIP-7928 block access lists) are rejected as merge bases. The simulation
-  role has the same gap: the payload carries no block-access-list hash, so
-  Amsterdam needs a newer payload version.
+  (EIP-7928 block access lists) are rejected as merge bases, and the merged
+  validation route refuses Gloas for the same reason. The simulation and
+  building roles do handle Amsterdam: the block access list travels beside the
+  payload on a Gloas submission, and the header's list hash and slot number are
+  derived from it.
 - The simulation role serves no JSON-RPC, so a relay without `ssz_url` cannot
   use it.
 - A blob is 128 KiB and crosses the stack several times in a debug build, which
@@ -177,7 +179,9 @@ with `ssz_url` set to this role's `ssz_addr` (see the repo-root
   the simulation and building roles in release.
 - The building role's payout uses a fixed `payout_gas_reserve`, 21000 by
   default. A contract fee recipient needing more makes the payout fail and the
-  slot is skipped.
+  slot is skipped. From Amsterdam the builder adds EIP-8037's state gas for a
+  recipient that does not exist yet (183600 at the pinned ethrex revision),
+  because a fee recipient's first payment creates its account.
 - The building role includes a blob transaction only when its sidecar reached
   the node's mempool over devp2p; it does not rebuild sidecars.
 - The base block's declared `block_hash` is trusted as the pool key; the wire

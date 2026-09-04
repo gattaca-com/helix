@@ -149,7 +149,9 @@ pub struct BuildingConfig {
     #[allow(dead_code)]
     #[serde(default = "default_subsidy_wei")]
     pub subsidy_wei: u128,
-    /// Gas held back from the fill for the trailing payout transaction.
+    /// Gas held back from the fill for the trailing payout transaction. Covers
+    /// the transfer only: from Amsterdam, creating a recipient that does not
+    /// exist yet is charged on top. See `assemble::payout_gas_limit`.
     #[serde(default = "default_payout_gas_reserve")]
     pub payout_gas_reserve: u64,
     #[serde(default = "default_extra_data")]
