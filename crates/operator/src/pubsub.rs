@@ -194,7 +194,9 @@ pub(super) async fn run_operator_connection(
                                         ),
                                         _ => tracing::info!(?operator_msg, operator = operator.name, "new operator message"),
                                     }
-                                    if forward && matches!(mode, OperatorP2pMode::On) {
+
+                                    // Always handle payload messages
+                                    if forward && (matches!(mode, OperatorP2pMode::On) || matches!(operator_msg, OperatorMessage::Payload(_))) {
                                         let _ = incoming.send((operator.clone(), operator_msg)).await;
                                     }
                                 }
