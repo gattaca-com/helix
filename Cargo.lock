@@ -6476,6 +6476,7 @@ dependencies = [
  "helix-tcp-types",
  "hex",
  "rand 0.9.5",
+ "rand_xorshift 0.4.0",
  "rayon",
  "rustc-hash",
  "secp256k1 0.30.0",

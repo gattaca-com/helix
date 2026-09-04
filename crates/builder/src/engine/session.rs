@@ -66,6 +66,7 @@ pub struct MergeStats {
     pub emit_not_improved: u64,
     pub emit_no_revenue: u64,
     pub emit_throttled: u64,
+    pub orders_excluded_skipped: u64,
 }
 
 impl MergeStats {
@@ -424,14 +425,18 @@ impl MergeSession {
     /// Presimulates candidate orders in parallel, then greedily applies them
     /// best-payment-first to the live context. Returns whether the block
     /// changed. Port of `append_greedily_until_gas_limit`.
-    pub fn try_extend(&mut self, orders: &[PreparedOrder]) -> bool {
+    pub fn try_extend(&mut self, orders: &[PreparedOrder], excluded: &FxHashSet<B256>) -> bool {
         self.trace.sim_start_ns = utcnow_ns();
         let header = self.ctx.payload.header.clone();
+
+        self.stats.orders_excluded_skipped =
+            orders.iter().filter(|order| excluded.contains(&order.order_hash)).count() as u64;
 
         let candidates: Vec<usize> = (0..orders.len())
             .filter(|&ix| {
                 let order = &orders[ix];
-                !self.applied_orders.contains(&order.order_id) &&
+                !excluded.contains(&order.order_hash) &&
+                    !self.applied_orders.contains(&order.order_id) &&
                     order.source_block_hash != self.base_block_hash &&
                     simulate::gate_order(
                         order,

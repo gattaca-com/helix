@@ -26,7 +26,7 @@ use helix_tcp_types::merging::{
         MAX_BLOCK_TXS, MAX_ORDERS_PER_BLOCK, MAX_TX_BYTES, MergeOrderRef, OrderMeta,
         bundle_order_hash, is_tx_hash_ref, order_id,
     },
-    relay_to_builder::{MergeableBlockV1, RevokeOrderV1, SlotStartV1},
+    relay_to_builder::{MergeableBlockV1, SlotStartV1},
 };
 use ssz::Decode;
 use tokio::sync::watch;
@@ -70,14 +70,6 @@ pub enum EngineEvent {
         slot: u64,
         block_hash: B256,
         recv_ns: u64,
-        generation: u64,
-    },
-    /// A previously-pooled `latest_only` order was dropped from the
-    /// originating builder's newest submission this slot; the relay tells us
-    /// rather than us inferring it, since only the relay sees every
-    /// submission.
-    RevokeOrder {
-        msg: RevokeOrderV1,
         generation: u64,
     },
 }
@@ -307,37 +299,6 @@ impl MergeEngine {
                 state.pending_activation = Some((block_hash, recv_ns));
                 true
             }
-            EngineEvent::RevokeOrder { msg, generation } => {
-                if generation != self.generation {
-                    return false;
-                }
-                let Some(state) = self.slot.as_mut() else { return false };
-                if msg.slot != state.slot {
-                    return false;
-                }
-                let revoked_id = order_id(msg.order_hash, &msg.builder_pubkey);
-                if !state.remove_order(revoked_id, &msg.builder_pubkey) {
-                    return false;
-                }
-                // A parked session may carry the revoked order forward if
-                // it's later resumed; drop them all rather than tracking
-                // which one(s) actually applied it.
-                for parked in state.parked.drain(..) {
-                    parked.log_stats("revoked_parked_drop");
-                }
-                let Some(session) = state.session.as_ref() else { return false };
-                if !session.has_applied(&revoked_id) {
-                    return false;
-                }
-                warn!(
-                    order_hash = %msg.order_hash,
-                    "live session already applied a just-revoked order, rebuilding"
-                );
-                let base_block_hash = session.base_block_hash;
-                state.session = None;
-                state.pending_activation = Some((base_block_hash, crate::utils::utcnow_ns()));
-                true
-            }
         }
     }
 
@@ -463,10 +424,10 @@ impl MergeEngine {
             }
         }
 
-        let SlotState { slot, proposer_fee_recipient, orders, session, .. } = state;
+        let SlotState { slot, proposer_fee_recipient, orders, session, excluded, .. } = state;
         let Some(session) = session.as_mut() else { return };
 
-        let changed = session.try_extend(orders);
+        let changed = session.try_extend(orders, excluded);
         if !changed && !session.pending_emission && !session.has_pending_revenue() {
             return;
         }
@@ -534,10 +495,24 @@ impl MergeEngine {
             .map_err(|err| fail(MergeError::InvalidOrder(err)))?;
         let txs = Arc::new(decoded);
 
+        let prepared_orders: Vec<PreparedOrder> = msg
+            .merge_orders
+            .iter()
+            .map(|order_ref| prepare_order(&msg, order_ref, &txs, block_hash))
+            .collect();
+
+        state.update_latest_only(
+            msg.builder_pubkey,
+            prepared_orders
+                .iter()
+                .filter(|order| order.latest_only)
+                .map(|order| order.order_hash)
+                .collect(),
+        );
+
         // Budget counts distinct pooled orders, as the relay's `orders_sent` does.
         let mut pool_full = false;
-        for order_ref in &msg.merge_orders {
-            let prepared = prepare_order(&msg, order_ref, &txs, block_hash);
+        for prepared in prepared_orders {
             match state.order_ids.get(&prepared.order_id) {
                 Some(&existing_ix) => {
                     // Duplicate order: attribution goes to the highest-value
@@ -713,6 +688,8 @@ fn prepare_order(
 
     PreparedOrder {
         order_id: meta.order_id(),
+        order_hash,
+        latest_only: matches!(order_ref, MergeOrderRef::Bundle(b) if b.latest_only),
         origin: msg.builder_address,
         builder_pubkey: msg.builder_pubkey,
         source_block_hash: block_hash,
