@@ -90,18 +90,18 @@ pub async fn build_blocks(
                 continue;
             }
 
-            let submission = match submitter.sign(&built, &slot) {
-                Ok(submission) => submission,
+            let bid = match submitter.sign(&built, &slot) {
+                Ok(bid) => bid,
                 Err(e) => {
                     warn!(slot = slot.slot, err = %e, "cannot sign the block");
                     continue;
                 }
             };
 
-            match submitter.submit(&submission).await {
+            match submitter.submit(&bid).await {
                 Ok(()) => info!(
                     slot = slot.slot,
-                    block_hash = %submission.message.block_hash,
+                    block_hash = %bid.message().block_hash,
                     txs = built.block.body.transactions.len(),
                     value = %built.value,
                     "submitted a block",

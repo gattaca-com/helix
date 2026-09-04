@@ -64,10 +64,6 @@ pub fn signed_transfer(
     alloy_consensus::TxEnvelope::from(tx.into_signed(signature)).encoded_2718()
 }
 
-pub async fn dev_genesis_store() -> (Store, Genesis) {
-    dev_genesis_store_with(|_| {}).await
-}
-
 /// `edit` may add allocations before the genesis state root is computed.
 pub async fn dev_genesis_store_with(edit: impl FnOnce(&mut Genesis)) -> (Store, Genesis) {
     let mut genesis = Network::LocalDevnet.get_genesis().unwrap();
