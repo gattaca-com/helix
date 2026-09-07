@@ -435,9 +435,7 @@ impl DecoderTile {
                 verify_and_validate(signed_bid_submission, skip_sigverify, chain_info)?;
             }
             Submission::Dehydrated { .. } => {
-                if !skip_sigverify &&
-                    (header.api_key.is_empty() || !cache.contains_api_key(&header.api_key))
-                {
+                if !skip_sigverify {
                     return Err(BuilderApiError::UntrustedBuilderOnDehydratedPayload);
                 }
             }
