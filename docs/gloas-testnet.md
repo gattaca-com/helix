@@ -45,25 +45,58 @@ config). A submission whose shape cannot carry its block's list is refused
 before it is sent, because sending it would drop the list and every bid would
 die as an unexplained block hash mismatch.
 
-## Execution layer genesis
+## Execution layer
 
-### The EIP-8282 predeploys are mandatory
+### glamsterdam-devnet-8 (`plataberget`)
 
-Amsterdam runs two system contracts — the EIP-8282 builder deposit and builder
+The ethrex pin supports it by name:
+
+```
+--network plataberget
+```
+
+| | |
+| --- | --- |
+| chain id | `7091047534` |
+| Amsterdam activation | timestamp `1787212224` (2026-08-20T07:50:24Z) |
+| network configs | [ethpandaops/glamsterdam-devnets, `network-configs/devnet-8`](https://github.com/ethpandaops/glamsterdam-devnets/tree/master/network-configs/devnet-8) |
+
+An unrecognised `--network` value is **not** an error: ethrex falls back to
+treating it as a path to a genesis file (`Network::GenesisPath`). A misspelling
+therefore fails as a missing file rather than as an unknown network, so check
+the spelling — it is `plataberget`, with an `l`.
+
+### The EIP-8282 predeploys
+
+Amsterdam runs two system contracts, the EIP-8282 builder deposit and builder
 exit predeploys. **Empty code at either address invalidates every Amsterdam
-block**, with `SystemContractCallFailed: ... has no code after deployment`. Both
-must be allocated in genesis:
+block**, with `SystemContractCallFailed: ... has no code after deployment`.
+
+They are Nick's-method addresses, so on a real devnet they are deployed on
+chain by an ordinary transaction before the fork activates — devnet-8's own
+genesis does not allocate them. On a synced node there is nothing to do; if
+Amsterdam blocks are failing, confirm with `eth_getCode` at both addresses
+before looking anywhere else.
+
+**The addresses moved between devnet-7 and devnet-8**, so do not copy them from
+older notes. Read them from the ethrex you are building against —
+`ethrex_vm::system_contracts::{BUILDER_DEPOSIT_CONTRACT_ADDRESS,
+BUILDER_EXIT_CONTRACT_ADDRESS}` — which is what
+`crates/builder/src/testing.rs::deploy_amsterdam_predeploys` does, precisely so
+a pin bump cannot silently invalidate every block. At v26.0.0-rc.3 they are:
 
 | address | contract |
 | --- | --- |
-| `0x0000884d2AA32eAa155F59A2f24eFa73D9008282` | builder deposit |
-| `0x000014574A74c805590AFF9499fc7A690f008282` | builder exit |
+| `0x0000BFF46984E3725691FA540A8C7589300D8282` | builder deposit |
+| `0x000064D678505AD48F8CCB093BC65613800E8282` | builder exit |
 
-Their runtime bytecode is in ethrex's own `fixtures/genesis/l1-bal.json`, and in
-this repo in `crates/builder/src/testing.rs`
-(`deploy_amsterdam_predeploys`), which is what the Amsterdam test fixtures use.
+The runtime bytecode did not change across that move.
 
-### Fork activation
+### A local genesis instead
+
+Only a genesis you build yourself needs the predeploys allocated, because it
+has no pre-fork history in which to deploy them. Activate the fork and allocate
+both contracts:
 
 ```json
 {
@@ -208,9 +241,10 @@ above 204600 for any transfer to an address that does not exist yet.
 5. **`get_payload` and publication complete**, which is the point of the whole
    exercise.
 
-If step 1 fails with a block hash mismatch, suspect the genesis: a missing
-Amsterdam predeploy, or an `amsterdamTime` that disagrees with the CL's Gloas
-epoch.
+If step 1 fails with a block hash mismatch, suspect fork disagreement first: an
+`amsterdamTime` that does not line up with the CL's Gloas epoch. A missing
+EIP-8282 predeploy shows up differently, as `SystemContractCallFailed` during
+execution rather than as a hash mismatch.
 
 ## What is not supported
 

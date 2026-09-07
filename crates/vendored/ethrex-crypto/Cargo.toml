@@ -1,6 +1,6 @@
 [package]
 name = "ethrex-crypto"
-version = "20.0.0"
+version = "26.0.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 description = "Cryptographic primitives and precompile backends for the ethrex Ethereum execution client"

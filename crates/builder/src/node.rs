@@ -112,6 +112,13 @@ pub async fn start(opts: &NodeOptions) -> eyre::Result<NodeHandle> {
     let signer = get_signer(&datadir);
     let (local_p2p_node, network_config) = get_local_p2p_node(opts, &signer);
     let node_record = get_local_node_record(&datadir, &local_p2p_node, &signer);
+    // ethrex v26 threads one live identity through the RPC, discovery and
+    // shutdown paths instead of separate node/record copies.
+    let shared_local_node: ethrex_p2p::types::SharedLocalNode =
+        std::sync::Arc::new(std::sync::RwLock::new(ethrex_p2p::types::LocalNode {
+            node: local_p2p_node.clone(),
+            record: node_record.clone(),
+        }));
 
     let peer_table =
         PeerTableServer::spawn(local_p2p_node.node_id(), opts.target_peers, store.clone());
@@ -143,6 +150,13 @@ pub async fn start(opts: &NodeOptions) -> eyre::Result<NodeHandle> {
         blockchain.clone(),
         store.clone(),
         datadir.clone(),
+        // No historical backfill: the roles need the head and recent state
+        // only, and ethrex forces this off in dev mode for the same reason.
+        ethrex_p2p::sync::BackfillConfig {
+            mode: ethrex_p2p::sync::HistoryChain::Off,
+            tx_index_horizon: 0,
+        },
+        tracker.clone(),
     )
     .await;
 
@@ -161,8 +175,7 @@ pub async fn start(opts: &NodeOptions) -> eyre::Result<NodeHandle> {
         store.clone(),
         blockchain.clone(),
         jwt_secret,
-        local_p2p_node.clone(),
-        node_record.clone(),
+        shared_local_node.clone(),
         syncer,
         peer_handler.clone(),
         client_version(),
@@ -204,11 +217,16 @@ pub async fn start(opts: &NodeOptions) -> eyre::Result<NodeHandle> {
         let discovery_config = DiscoveryConfig {
             discv4_enabled: opts.discv4_enabled,
             discv5_enabled: opts.discv5_enabled,
-            ..Default::default()
+            nat_extip_set: opts.nat_extip.is_some(),
         };
-        ethrex_p2p::start_network(p2p_context, bootnodes, discovery_config)
-            .await
-            .map_err(|e| eyre::eyre!("Network failed to start: {e}"))?;
+        ethrex_p2p::start_network(
+            p2p_context,
+            bootnodes,
+            discovery_config,
+            shared_local_node.clone(),
+        )
+        .await
+        .map_err(|e| eyre::eyre!("Network failed to start: {e}"))?;
         tracker.spawn(ethrex_p2p::periodically_show_peer_stats(
             blockchain.clone(),
             peer_handler.peer_table.clone(),
@@ -285,7 +303,7 @@ async fn spawn_head_watcher(
 }
 
 async fn read_head(store: &Store, blockchain: &Blockchain) -> eyre::Result<HeadInfo> {
-    let number = store.get_latest_block_number().await?;
+    let number = store.get_latest_block_number()?;
     let hash = store
         .get_canonical_block_hash(number)
         .await?
@@ -298,7 +316,7 @@ async fn read_head(store: &Store, blockchain: &Blockchain) -> eyre::Result<HeadI
 /// Re-apply blocks from the last on-disk state root up to the head block,
 /// rebuilding the in-memory trie diff-layers lost across a restart.
 async fn regenerate_head_state(store: &Store, blockchain: &Arc<Blockchain>) -> eyre::Result<()> {
-    let head_block_number = store.get_latest_block_number().await?;
+    let head_block_number = store.get_latest_block_number()?;
     let Some(last_header) = store.get_block_header(head_block_number)? else {
         eyre::bail!("database is empty, genesis block should be present");
     };

@@ -87,23 +87,28 @@ pub fn deploy_payment_forwarder(genesis: &mut Genesis) {
     });
 }
 
-/// The EIP-8282 builder deposit and exit predeploys, from ethrex's
-/// `fixtures/genesis/l1-bal.json`. Empty code at either address invalidates
-/// every Amsterdam block, so an Amsterdam fixture cannot build without them.
+/// The EIP-8282 builder deposit and exit predeploys. Empty code at either
+/// address invalidates every Amsterdam block, so an Amsterdam fixture cannot
+/// build without them.
+///
+/// The addresses come from ethrex rather than a literal: they are Nick's-method
+/// addresses and they moved between devnet-7 and devnet-8, so a hardcoded pair
+/// silently breaks on an ethrex bump. The runtime bytecode is unchanged across
+/// that move and is copied from `fixtures/genesis/l1-bal.json`.
 pub fn deploy_amsterdam_predeploys(genesis: &mut Genesis) {
-    for (address, code) in [
-        ("0000884d2aa32eaa155f59a2f24efa73d9008282", BUILDER_DEPOSIT_CODE),
-        ("000014574a74c805590aff9499fc7a690f008282", BUILDER_EXIT_CODE),
+    use ethrex_vm::system_contracts::{
+        BUILDER_DEPOSIT_CONTRACT_ADDRESS, BUILDER_EXIT_CONTRACT_ADDRESS,
+    };
+    for (contract, code) in [
+        (BUILDER_DEPOSIT_CONTRACT_ADDRESS, BUILDER_DEPOSIT_CODE),
+        (BUILDER_EXIT_CONTRACT_ADDRESS, BUILDER_EXIT_CODE),
     ] {
-        genesis.alloc.insert(
-            ethrex_common::Address::from_slice(&hex::decode(address).unwrap()),
-            GenesisAccount {
-                code: hex::decode(code).unwrap().into(),
-                storage: Default::default(),
-                balance: ethrex_common::U256::zero(),
-                nonce: 0,
-            },
-        );
+        genesis.alloc.insert(contract.address, GenesisAccount {
+            code: hex::decode(code).unwrap().into(),
+            storage: Default::default(),
+            balance: ethrex_common::U256::zero(),
+            nonce: 0,
+        });
     }
 }
 
@@ -181,7 +186,9 @@ pub fn signed_blob_transfer(
         nonce,
         gas_limit: 100_000,
         max_fee_per_gas: 100_000_000_000,
-        max_priority_fee_per_gas: 0,
+        // ethrex v26 rejects a zero-tip transaction from the mempool. The
+        // payout is unaffected: it bypasses the pool via `apply_tx_to_payload`.
+        max_priority_fee_per_gas: 1,
         to,
         value: U256::ZERO,
         access_list: Default::default(),
