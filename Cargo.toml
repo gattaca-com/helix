@@ -46,20 +46,20 @@ ethers = "2.0.14"
 # ethrex-crypto's `aws-lc-rs` feature, whose cc >=1.2.26 requirement conflicts with
 # reth-mdbx-sys's exact `cc = 1.2.15` pin (via helix-simulator). The node is
 # assembled from the library crates instead.
-ethrex-blockchain = { git = "https://github.com/lambdaclass/ethrex", rev = "b4d5677812fdf58cb3e439c77906dda4d9b6f91a", default-features = false, features = ["secp256k1", "c-kzg", "metrics"] }
-ethrex-common = { git = "https://github.com/lambdaclass/ethrex", rev = "b4d5677812fdf58cb3e439c77906dda4d9b6f91a", default-features = false, features = ["secp256k1", "c-kzg"] }
-ethrex-config = { git = "https://github.com/lambdaclass/ethrex", rev = "b4d5677812fdf58cb3e439c77906dda4d9b6f91a" }
+ethrex-blockchain = { git = "https://github.com/lambdaclass/ethrex", rev = "34cf6c6258d3acb06e918e4308a3e571e19dfe05", default-features = false, features = ["secp256k1", "c-kzg", "metrics"] }
+ethrex-common = { git = "https://github.com/lambdaclass/ethrex", rev = "34cf6c6258d3acb06e918e4308a3e571e19dfe05", default-features = false, features = ["secp256k1", "c-kzg"] }
+ethrex-config = { git = "https://github.com/lambdaclass/ethrex", rev = "34cf6c6258d3acb06e918e4308a3e571e19dfe05" }
 # default features minus `aws-lc-rs` (see note above); P-256 verify uses the portable fallback
-ethrex-crypto = { git = "https://github.com/lambdaclass/ethrex", rev = "b4d5677812fdf58cb3e439c77906dda4d9b6f91a", default-features = false, features = ["std", "kzg-rs", "secp256k1", "blst", "c-kzg"] }
+ethrex-crypto = { git = "https://github.com/lambdaclass/ethrex", rev = "34cf6c6258d3acb06e918e4308a3e571e19dfe05", default-features = false, features = ["std", "kzg-rs", "secp256k1", "blst", "c-kzg"] }
 # Only for the EIP-8037 state-gas constants the payout reserve needs; already in
 # the tree via ethrex-vm.
-ethrex-levm = { git = "https://github.com/lambdaclass/ethrex", rev = "b4d5677812fdf58cb3e439c77906dda4d9b6f91a", default-features = false, features = ["secp256k1", "c-kzg"] }
-ethrex-metrics = { git = "https://github.com/lambdaclass/ethrex", rev = "b4d5677812fdf58cb3e439c77906dda4d9b6f91a" }
-ethrex-p2p = { git = "https://github.com/lambdaclass/ethrex", rev = "b4d5677812fdf58cb3e439c77906dda4d9b6f91a", features = ["c-kzg", "rocksdb", "metrics"] }
-ethrex-rlp = { git = "https://github.com/lambdaclass/ethrex", rev = "b4d5677812fdf58cb3e439c77906dda4d9b6f91a" }
-ethrex-rpc = { git = "https://github.com/lambdaclass/ethrex", rev = "b4d5677812fdf58cb3e439c77906dda4d9b6f91a" }
-ethrex-storage = { git = "https://github.com/lambdaclass/ethrex", rev = "b4d5677812fdf58cb3e439c77906dda4d9b6f91a", features = ["rocksdb"] }
-ethrex-vm = { git = "https://github.com/lambdaclass/ethrex", rev = "b4d5677812fdf58cb3e439c77906dda4d9b6f91a", default-features = false, features = ["secp256k1", "c-kzg"] }
+ethrex-levm = { git = "https://github.com/lambdaclass/ethrex", rev = "34cf6c6258d3acb06e918e4308a3e571e19dfe05", default-features = false, features = ["secp256k1", "c-kzg"] }
+ethrex-metrics = { git = "https://github.com/lambdaclass/ethrex", rev = "34cf6c6258d3acb06e918e4308a3e571e19dfe05" }
+ethrex-p2p = { git = "https://github.com/lambdaclass/ethrex", rev = "34cf6c6258d3acb06e918e4308a3e571e19dfe05", features = ["c-kzg", "rocksdb", "metrics"] }
+ethrex-rlp = { git = "https://github.com/lambdaclass/ethrex", rev = "34cf6c6258d3acb06e918e4308a3e571e19dfe05" }
+ethrex-rpc = { git = "https://github.com/lambdaclass/ethrex", rev = "34cf6c6258d3acb06e918e4308a3e571e19dfe05" }
+ethrex-storage = { git = "https://github.com/lambdaclass/ethrex", rev = "34cf6c6258d3acb06e918e4308a3e571e19dfe05", features = ["rocksdb"] }
+ethrex-vm = { git = "https://github.com/lambdaclass/ethrex", rev = "34cf6c6258d3acb06e918e4308a3e571e19dfe05", default-features = false, features = ["secp256k1", "c-kzg"] }
 
 eyre = "0.6.12"
 aws-sdk-s3 = "=1.35.0"

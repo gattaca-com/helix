@@ -59,7 +59,7 @@ pub struct NodeOptions {
     #[arg(
         long = "rocksdb.block-cache-size",
         value_name = "BYTES",
-        default_value_t = ethrex_storage::DEFAULT_ROCKSDB_BLOCK_CACHE_SIZE_BYTES,
+        default_value_t = ethrex_storage::MAX_ROCKSDB_BLOCK_CACHE_SIZE_BYTES,
         help = "RocksDB shared block cache size in bytes.",
         env = "ETHREX_ROCKSDB_BLOCK_CACHE_SIZE",
         help_heading = "Storage options"

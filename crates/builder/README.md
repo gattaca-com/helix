@@ -176,6 +176,10 @@ On the relay side, add a merging builder to
 with `ssz_url` set to this role's `ssz_addr` (see the repo-root
 `config.example.yml`).
 
+The embedded node is ethrex, pinned by rev in the workspace `Cargo.toml`.
+Currently v26.0.0-rc.3, which supports glamsterdam-devnet-8
+(`--network plataberget`).
+
 ## Limitations
 
 - Merging protocol v1 carries `ExecutionPayloadV3`; post-Amsterdam blocks
