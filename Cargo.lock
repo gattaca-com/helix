@@ -6643,7 +6643,6 @@ dependencies = [
  "axum 0.8.9",
  "bincode",
  "bytes",
- "chrono",
  "clickhouse",
  "criterion",
  "crossbeam-channel",

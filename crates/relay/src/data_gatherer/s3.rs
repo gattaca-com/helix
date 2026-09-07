@@ -1,11 +1,11 @@
 use std::future::Future;
 
+use alloy_primitives::B256;
 use aws_sdk_s3::{
     Client,
     config::{BehaviorVersion, Credentials, Region},
     primitives::ByteStream,
 };
-use chrono::Utc;
 use helix_common::{S3Config, expect_env_var};
 use uuid::Uuid;
 
@@ -39,6 +39,7 @@ impl S3Data {
         &self,
         header: InternalBidSubmissionHeader,
         payload: &[u8],
+        key_parts: Option<(u64, B256)>,
     ) -> impl Future<Output = ()> + Send + 'static {
         let id = header.id;
         let header = header.to_bytes();
@@ -55,7 +56,7 @@ impl S3Data {
         let client = self.client.clone();
         let bucket = self.bucket.clone();
         async move {
-            let key = Self::make_key(id);
+            let key = Self::make_key(id, key_parts);
             if let Err(e) = client
                 .put_object()
                 .bucket(bucket)
@@ -69,8 +70,10 @@ impl S3Data {
         }
     }
 
-    fn make_key(id: Uuid) -> String {
-        let now = Utc::now().to_rfc3339();
-        format!("{now}_{id}.bin")
+    fn make_key(id: Uuid, key_parts: Option<(u64, B256)>) -> String {
+        match key_parts {
+            Some((slot, block_hash)) => format!("{slot}_{block_hash}.bin"),
+            None => format!("unkeyed_{id}.bin"),
+        }
     }
 }

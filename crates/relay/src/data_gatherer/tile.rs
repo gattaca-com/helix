@@ -15,7 +15,9 @@ use crate::{
         clickhouse::{BlockInfo, ClickhouseData},
         s3::S3Data,
     },
-    spine::messages::{BidEvent, BidUpdate, DecodedSubmission, NewBidSubmission},
+    spine::messages::{
+        BidEvent, BidUpdate, DecodedSubmission, NewBidSubmission, NewTcpBidSubmission,
+    },
 };
 
 /// Per-slot counters, logged and reset on slot transition.
@@ -90,6 +92,49 @@ impl DataGatherer {
         );
     }
 
+    fn on_new_bid(&mut self, bid: &NewBidSubmission, payload: &[u8], max_slot: &mut u64) {
+        let payload = &payload[bid.payload_offset..];
+        let is_mergeable = matches!(bid.header.merge_type, MergeType::Mergeable);
+
+        let extracted = if let Compression::None = bid.header.compression {
+            let extracted =
+                Self::extract_block_hash_and_pubkey(bid.header.encoding, payload, is_mergeable);
+            if extracted.is_some() {
+                self.stats.extract_ok += 1;
+            } else {
+                self.stats.extract_failed += 1;
+                tracing::error!(
+                    "failed to extract builder_pubkey & block hash from submission with id {}",
+                    bid.header.id
+                );
+            }
+            extracted
+        } else {
+            self.stats.compressed_skipped += 1;
+            None
+        };
+
+        if let Some(s3) = self.s3.as_ref() {
+            self.stats.s3_uploads += 1;
+            let key_parts = extracted.map(|(slot, block_hash, _)| (slot, block_hash));
+            self.rt.spawn(s3.upload_task(bid.header, payload, key_parts));
+        }
+
+        if let Some((slot, block_hash, builder_pubkey)) = extracted {
+            *max_slot = (*max_slot).max(slot);
+            if let Some(ch) = self.ch.as_mut() {
+                ch.insert(block_hash, BlockInfo {
+                    builder_pubkey,
+                    slot,
+                    is_dehydrated: bid.header.flags.is_dehydrated(),
+                    received_ns: bid.trace.receive_ns.0 as i64,
+                    read_body_ns: bid.trace.read_body_ns.0 as i64,
+                    ..Default::default()
+                });
+            }
+        }
+    }
+
     fn extract_block_hash_and_pubkey(
         encoding: Encoding,
         buf: &[u8],
@@ -153,40 +198,15 @@ impl Tile<HelixSpine> for DataGatherer {
         let mut max_slot = self.current_slot;
 
         adapter.consume_with_dcache_internal_message(
-            |bid: &InternalMessage<NewBidSubmission>, payload| {
-                let payload = &payload[bid.payload_offset..];
-                if let Some(s3) = self.s3.as_ref() {
-                    self.stats.s3_uploads += 1;
-                    self.rt.spawn(s3.upload_task(bid.header, payload));
-                }
+            |bid: &InternalMessage<NewTcpBidSubmission>, payload| {
+                self.on_new_bid(&bid.0, payload, &mut max_slot);
+            },
+            |_, _| {},
+        );
 
-                let is_mergeable = matches!(bid.header.merge_type, MergeType::Mergeable);
-                if let Compression::None = bid.header.compression {
-                    if let Some((slot, block_hash, builder_pubkey)) =
-                        Self::extract_block_hash_and_pubkey(bid.header.encoding, payload, is_mergeable)
-                    {
-                        self.stats.extract_ok += 1;
-                        max_slot = max_slot.max(slot);
-                        if let Some(ch) = self.ch.as_mut() {
-                            ch.insert(block_hash, BlockInfo {
-                                builder_pubkey,
-                                slot,
-                                is_dehydrated: bid.header.flags.is_dehydrated(),
-                                received_ns: bid.trace.receive_ns.0 as i64,
-                                read_body_ns: bid.trace.read_body_ns.0 as i64,
-                                ..Default::default()
-                            });
-                        }
-                    } else {
-                        self.stats.extract_failed += 1;
-                        tracing::error!(
-                            "failed to extract builder_pubkey & block hash from submission with id {}",
-                            bid.header.id
-                        );
-                    }
-                } else {
-                    self.stats.compressed_skipped += 1;
-                }
+        adapter.consume_with_dcache_internal_message(
+            |bid: &InternalMessage<NewBidSubmission>, payload| {
+                self.on_new_bid(bid, payload, &mut max_slot);
             },
             |_, _| {},
         );
