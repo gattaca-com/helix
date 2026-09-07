@@ -13,14 +13,14 @@ use helix_common::{
     RelayConfig, SubmissionTrace,
     api::builder_api::MAX_PAYLOAD_LENGTH,
     chain_info::ChainInfo,
-    decoder::{SubmissionDecoder, SubmissionDecoderParams},
+    decoder::{Encoding, SubmissionDecoder, SubmissionDecoderParams},
     local_cache::LocalCache,
     record_submission_step, record_submission_step_ns,
     utils::utcnow_ns,
 };
 use helix_types::{
-    BidAdjustmentData, BlockMergingData, BlsPublicKeyBytes, MergeType, SignedBidSubmission,
-    Submission, SubmissionVersion,
+    BidAdjustmentData, BlockMergingData, BlsPublicKeyBytes, Compression, MergeOrderFlags,
+    MergeType, Order, SignedBidSubmission, Submission, SubmissionVersion,
 };
 use rustc_hash::FxHashMap;
 use tracing::{info, trace};
@@ -45,6 +45,159 @@ use crate::{
 struct DecodeStats {
     decoded_ok: u32,
     decode_errors: FxHashMap<&'static str, u32>,
+    by_builder: FxHashMap<BlsPublicKeyBytes, BuilderDecodeStats>,
+}
+
+/// Per-slot wire options a builder used, counted after the body decoded and
+/// before the block merging dry run rewrites `merging_data`.
+#[derive(Default)]
+struct BuilderDecodeStats {
+    submissions: u32,
+    ssz: u32,
+    json: u32,
+    zstd: u32,
+    gzip: u32,
+    dehydrated: u32,
+    with_api_key: u32,
+    with_adjustments: u32,
+    mergeable: u32,
+    append_only: u32,
+    merge_paused: u32,
+    with_merging_data: u32,
+    allow_appending: u32,
+    merge_orders: u32,
+    bundle_orders: u32,
+    latest_only_orders: u32,
+    tx_orders_can_revert: u32,
+    /// Order shapes that point outside what they can address. `txs` indexes the
+    /// block body; `reverting_txs` and `dropping_txs` index `txs` itself.
+    oob_tx_index: u32,
+    oob_reverting_txs: u32,
+    oob_dropping_txs: u32,
+    /// `reverting_txs` holds the same values as `txs`, so it likely carries
+    /// block indices instead of positions in the bundle.
+    reverting_txs_eq_txs: u32,
+    /// Every position in the bundle may revert.
+    bundles_all_reverting: u32,
+    bundles_empty: u32,
+    /// Dehydrated payloads whose builder pubkey no lane authenticated.
+    dehydrated_unbound: u32,
+}
+
+impl BuilderDecodeStats {
+    fn record_bundle(
+        &mut self,
+        txs: &[usize],
+        reverting_txs: &[usize],
+        dropping_txs: &[usize],
+        num_txs: usize,
+    ) {
+        self.bundle_orders += 1;
+
+        if txs.is_empty() {
+            self.bundles_empty += 1;
+            return;
+        }
+        if txs.iter().any(|&i| i >= num_txs) {
+            self.oob_tx_index += 1;
+        }
+        if reverting_txs.iter().any(|&i| i >= txs.len()) {
+            self.oob_reverting_txs += 1;
+        }
+        if dropping_txs.iter().any(|&i| i >= txs.len()) {
+            self.oob_dropping_txs += 1;
+        }
+        if reverting_txs == txs {
+            self.reverting_txs_eq_txs += 1;
+        }
+        if reverting_txs.len() >= txs.len() && (0..txs.len()).all(|i| reverting_txs.contains(&i)) {
+            self.bundles_all_reverting += 1;
+        }
+    }
+}
+
+impl DecodeStats {
+    fn record_submission(
+        &mut self,
+        builder_pubkey: BlsPublicKeyBytes,
+        header: &InternalBidSubmissionHeader,
+        merging_data: Option<&BlockMergingData>,
+        num_txs: usize,
+        skip_sigverify: bool,
+    ) {
+        let stats = self.by_builder.entry(builder_pubkey).or_default();
+        stats.submissions += 1;
+
+        match header.encoding {
+            Encoding::Ssz => stats.ssz += 1,
+            Encoding::Json => stats.json += 1,
+        }
+
+        match header.compression {
+            Compression::Zstd => stats.zstd += 1,
+            Compression::Gzip => stats.gzip += 1,
+            Compression::None => {}
+        }
+
+        if header.flags.is_dehydrated() {
+            stats.dehydrated += 1;
+            if !skip_sigverify {
+                stats.dehydrated_unbound += 1;
+            }
+        }
+        if !header.api_key.is_empty() {
+            stats.with_api_key += 1;
+        }
+        if header.flags.with_adjustments() {
+            stats.with_adjustments += 1;
+        }
+
+        match header.merge_type {
+            MergeType::Mergeable => stats.mergeable += 1,
+            MergeType::AppendOnly => stats.append_only += 1,
+            MergeType::Pause => stats.merge_paused += 1,
+            MergeType::None => {}
+        }
+
+        let Some(merging_data) = merging_data else { return };
+
+        stats.with_merging_data += 1;
+        if merging_data.allow_appending {
+            stats.allow_appending += 1;
+        }
+        stats.merge_orders = stats
+            .merge_orders
+            .saturating_add(u32::try_from(merging_data.merge_orders.len()).unwrap_or(u32::MAX));
+        for order in &merging_data.merge_orders {
+            match order {
+                Order::Tx(tx) => {
+                    if tx.can_revert {
+                        stats.tx_orders_can_revert += 1;
+                    }
+                    if tx.index >= num_txs {
+                        stats.oob_tx_index += 1;
+                    }
+                }
+                Order::Bundle(bundle) => stats.record_bundle(
+                    &bundle.txs,
+                    &bundle.reverting_txs,
+                    &bundle.dropping_txs,
+                    num_txs,
+                ),
+                Order::BundleV2(bundle) => {
+                    stats.record_bundle(
+                        &bundle.txs,
+                        &bundle.reverting_txs,
+                        &bundle.dropping_txs,
+                        num_txs,
+                    );
+                    if bundle.flags.contains(MergeOrderFlags::LATEST_ONLY) {
+                        stats.latest_only_orders += 1;
+                    }
+                }
+            }
+        }
+    }
 }
 
 pub struct DecoderTile {
@@ -148,6 +301,7 @@ impl DecoderTile {
                     new_bid.trace,
                     sent_at,
                     new_bid.expected_pubkey(),
+                    &self.stats,
                 )
             },
             |res, producers| match res {
@@ -193,6 +347,7 @@ impl DecoderTile {
                         new_bid.trace,
                         sent_at,
                         new_bid.expected_pubkey(),
+                        &self.stats,
                     );
                     self.record_decode_result(&result);
                     Self::handle_result(
@@ -279,6 +434,46 @@ impl DecoderTile {
             ?errors_by_category,
             "bid decoder slot stats"
         );
+
+        let mut by_builder: Vec<_> = stats.by_builder.into_iter().collect();
+        by_builder.sort_unstable_by_key(|(_, s)| std::cmp::Reverse(s.submissions));
+        for (builder_pubkey, s) in by_builder {
+            let builder_id = self
+                .cache
+                .get_builder_info(&builder_pubkey)
+                .and_then(|info| info.builder_id)
+                .unwrap_or_default();
+            info!(
+                bid_slot = self.bid_slot,
+                %builder_pubkey,
+                builder_id,
+                submissions = s.submissions,
+                ssz = s.ssz,
+                json = s.json,
+                zstd = s.zstd,
+                gzip = s.gzip,
+                dehydrated = s.dehydrated,
+                dehydrated_unbound = s.dehydrated_unbound,
+                with_api_key = s.with_api_key,
+                with_adjustments = s.with_adjustments,
+                mergeable = s.mergeable,
+                append_only = s.append_only,
+                merge_paused = s.merge_paused,
+                with_merging_data = s.with_merging_data,
+                allow_appending = s.allow_appending,
+                merge_orders = s.merge_orders,
+                bundle_orders = s.bundle_orders,
+                latest_only_orders = s.latest_only_orders,
+                tx_orders_can_revert = s.tx_orders_can_revert,
+                oob_tx_index = s.oob_tx_index,
+                oob_reverting_txs = s.oob_reverting_txs,
+                oob_dropping_txs = s.oob_dropping_txs,
+                reverting_txs_eq_txs = s.reverting_txs_eq_txs,
+                bundles_all_reverting = s.bundles_all_reverting,
+                bundles_empty = s.bundles_empty,
+                "bid decoder builder stats"
+            );
+        }
     }
 
     fn record_decode_result(
@@ -313,6 +508,7 @@ impl DecoderTile {
         mut trace: SubmissionTrace,
         sent_at: Nanos,
         expected_pubkey: Option<&BlsPublicKeyBytes>,
+        stats: &RefCell<DecodeStats>,
     ) -> Result<(SubmissionData, tracing::Span), BuilderApiError> {
         tracing::Span::current().record("id", tracing::field::display(header.id));
         record_submission_step("worker_recv", sent_at.elapsed());
@@ -334,6 +530,7 @@ impl DecoderTile {
             payload,
             buffer,
             &mut trace,
+            stats,
         )?;
 
         tracing::Span::current().record("slot", tracing::field::display(submission.bid_slot()));
@@ -386,6 +583,7 @@ impl DecoderTile {
         payload: &[u8],
         buffer: &mut Vec<u8>,
         trace: &mut SubmissionTrace,
+        stats: &RefCell<DecodeStats>,
     ) -> Result<
         (
             Submission,
@@ -429,6 +627,14 @@ impl DecoderTile {
         } else {
             !header.api_key.is_empty() && cache.validate_api_key(&header.api_key, &builder_pubkey)
         };
+
+        stats.borrow_mut().record_submission(
+            builder_pubkey,
+            header,
+            merging_data.as_ref(),
+            submission.num_txs(),
+            skip_sigverify,
+        );
 
         match submission {
             Submission::Full(ref mut signed_bid_submission) => {

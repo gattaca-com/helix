@@ -175,6 +175,13 @@ impl Submission {
         }
     }
 
+    pub fn num_txs(&self) -> usize {
+        match self {
+            Submission::Full(s) => s.num_txs(),
+            Submission::Dehydrated(s) => s.num_txs(),
+        }
+    }
+
     pub fn validate(&self) -> Result<(), BlockValidationError> {
         match self {
             Submission::Full(s) => s.validate(),
