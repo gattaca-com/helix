@@ -348,9 +348,6 @@ impl DecoderTile {
 
         let merge_data_denied =
             config.block_merging_config.is_merge_data_denied(submission.builder_pubkey());
-        if merge_data_denied && merging_data.is_some() {
-            trace!("builder is on the merge data denylist, dropping its merge data");
-        }
 
         // Carried through raw (index-based, unexpanded) for `BlockMergingTile`, which
         // resolves tx bytes and caches blob sidecars itself when forwarding to the merge
