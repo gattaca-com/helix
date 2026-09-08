@@ -1,9 +1,8 @@
 # helix-builder simulation configuration (--sim.config)
 
+# SSZ validation server (/validate, /validate_merged). The relay reaches it
+# through its simulator `ssz_url`.
 ssz_addr: "0.0.0.0:8552"
-
-# Must differ from ssz_addr.
-rpc_addr: "0.0.0.0:8553"
 
 blacklist_endpoint: "http://localhost:3520/blacklist"
 
