@@ -36,4 +36,6 @@ pub enum ValidationError {
     ProposerPayment,
     #[error("block accesses blacklisted address: {0}")]
     Blacklist(Address),
+    #[error("invalid blobs bundle")]
+    InvalidBlobsBundle,
 }
