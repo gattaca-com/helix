@@ -79,9 +79,11 @@ impl DataGatherer {
             return;
         }
         let stats = std::mem::take(&mut self.stats);
+        let s3_failed = self.s3.as_ref().map_or(0, S3Data::take_failures);
         info!(
             bid_slot = self.current_slot,
             s3_uploads = stats.s3_uploads,
+            s3_failed,
             extract_ok = stats.extract_ok,
             extract_failed = stats.extract_failed,
             compressed_skipped = stats.compressed_skipped,

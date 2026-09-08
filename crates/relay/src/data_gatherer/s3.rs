@@ -1,9 +1,16 @@
-use std::future::Future;
+use std::{
+    future::Future,
+    sync::{
+        Arc,
+        atomic::{AtomicU32, Ordering},
+    },
+};
 
 use alloy_primitives::B256;
 use aws_sdk_s3::{
     Client,
     config::{BehaviorVersion, Credentials, Region},
+    error::{DisplayErrorContext, ProvideErrorMetadata},
     primitives::ByteStream,
 };
 use helix_common::{S3Config, expect_env_var};
@@ -17,6 +24,7 @@ const ENV_SECRET_ACCESS_KEY: &str = "S3_SECRET_ACCESS_KEY";
 pub struct S3Data {
     client: Client,
     bucket: String,
+    failures: Arc<AtomicU32>,
 }
 
 impl S3Data {
@@ -32,7 +40,12 @@ impl S3Data {
             .build();
         let client = Client::from_conf(sdk_config);
 
-        Self { client, bucket: config.bucket }
+        Self { client, bucket: config.bucket, failures: Arc::default() }
+    }
+
+    /// Failures since the last call. Drained once per slot by the stats log.
+    pub fn take_failures(&self) -> u32 {
+        self.failures.swap(0, Ordering::Relaxed)
     }
 
     pub fn upload_task(
@@ -55,6 +68,7 @@ impl S3Data {
 
         let client = self.client.clone();
         let bucket = self.bucket.clone();
+        let failures = self.failures.clone();
         async move {
             let key = Self::make_key(id, key_parts);
             if let Err(e) = client
@@ -63,9 +77,14 @@ impl S3Data {
                 .key(&key)
                 .body(ByteStream::from(bytes))
                 .send()
-                .await
+                .await &&
+                failures.fetch_add(1, Ordering::Relaxed) == 0
             {
-                tracing::error!(%e, %key, "s3 upload failed");
+                let detail = e
+                    .message()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| DisplayErrorContext(&e).to_string());
+                tracing::error!(code = e.code().unwrap_or("none"), detail, %key, "s3 upload failed");
             }
         }
     }
