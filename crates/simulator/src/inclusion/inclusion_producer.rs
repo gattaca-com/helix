@@ -1,7 +1,4 @@
-use std::{
-    collections::{BTreeSet, HashMap},
-    sync::Arc,
-};
+use std::{collections::BTreeSet, sync::Arc};
 
 use alloy_primitives::{Bytes, TxHash};
 use futures::StreamExt;
@@ -10,6 +7,7 @@ use reth_ethereum::{
     pool::{FullTransactionEvent, PoolTransaction, TransactionPool, ValidPoolTransaction},
     rpc::eth::primitives::TransactionTrait,
 };
+use rustc_hash::FxHashMap;
 use tokio::sync::watch::Sender;
 
 const MAX_LIST_BYTES: usize = 8 * 1024;
@@ -22,7 +20,7 @@ pub async fn inclusion_producer<P: TransactionPool>(
     // Maintain 2 collections - 1 ordered by Inclusion List score, with `TxHash` as value. The other
     // mapping `TxHash` to tx.
     let mut ordered_txs = BTreeSet::new();
-    let mut pending_txs = HashMap::new();
+    let mut pending_txs = FxHashMap::default();
 
     let mut tx_event_listener = pool.all_transactions_event_listener();
 
@@ -60,7 +58,7 @@ fn handle_tx_event<P: TransactionPool>(
     pool: &P,
     event: FullTransactionEvent<P::Transaction>,
     ordered_tx: &mut BTreeSet<OrderedTx>,
-    pending_txs: &mut HashMap<TxHash, Arc<ValidPoolTransaction<P::Transaction>>>,
+    pending_txs: &mut FxHashMap<TxHash, Arc<ValidPoolTransaction<P::Transaction>>>,
 ) {
     match event {
         FullTransactionEvent::Pending(tx_hash) => {
@@ -92,7 +90,7 @@ fn handle_tx_event<P: TransactionPool>(
 
 fn build_inclusion_list<P: TransactionPool>(
     ordered_txs: &mut BTreeSet<OrderedTx>,
-    pending_txs: &mut HashMap<TxHash, Arc<ValidPoolTransaction<P::Transaction>>>,
+    pending_txs: &mut FxHashMap<TxHash, Arc<ValidPoolTransaction<P::Transaction>>>,
     published: &Sender<Option<Vec<Bytes>>>,
 ) {
     tracing::info!("building new inclusion list");

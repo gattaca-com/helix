@@ -1134,7 +1134,6 @@ impl BlockMergingTile {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
 
     use alloy_primitives::{Address, Bloom, U256};
     use alloy_rpc_types::{
@@ -1190,7 +1189,7 @@ mod tests {
         let tx_a = B256::repeat_byte(1);
         let tx_b = B256::repeat_byte(2);
         let tx_c = B256::repeat_byte(3);
-        let builder_inclusions = HashMap::from([
+        let builder_inclusions = FxHashMap::from_iter([
             (Address::repeat_byte(0xa), inclusion(vec![tx_a, tx_b])),
             (Address::repeat_byte(0xb), inclusion(vec![tx_c])),
         ]);
@@ -1202,7 +1201,7 @@ mod tests {
 
     #[test]
     fn appended_tx_hashes_empty_when_nothing_was_appended() {
-        assert!(appended_tx_hashes(&HashMap::new()).is_empty());
+        assert!(appended_tx_hashes(&FxHashMap::default()).is_empty());
     }
 
     // Regression test for a false-positive class: an order sharing a tx hash
@@ -1224,7 +1223,7 @@ mod tests {
         let applied_order = OrderTxs::new(vec![appended_tx], []);
 
         let builder_inclusions =
-            HashMap::from([(Address::repeat_byte(0xa), inclusion(vec![appended_tx]))]);
+            FxHashMap::from_iter([(Address::repeat_byte(0xa), inclusion(vec![appended_tx]))]);
         let appended = appended_tx_hashes(&builder_inclusions);
 
         let full_final_txs = vec![base_tx, appended_tx];

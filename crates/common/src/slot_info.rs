@@ -1,8 +1,9 @@
-use std::{collections::HashMap, ops::Deref, sync::Arc};
+use std::{ops::Deref, sync::Arc};
 
 use alloy_primitives::{B256, Bytes};
 use helix_types::Slot;
 use parking_lot::RwLock;
+use rustc_hash::FxHashMap;
 use tracing::{error, info};
 
 use crate::{
@@ -41,7 +42,7 @@ pub struct SlotDuties {
 pub struct CurrentSlotInfo {
     curr_slot_info: Arc<RwLock<(u64, Option<BuilderGetValidatorsResponseEntry>)>>,
     proposer_duties_response: Arc<RwLock<Option<Bytes>>>,
-    payload_attributes: Arc<RwLock<HashMap<(B256, Slot), PayloadAttributesUpdate>>>,
+    payload_attributes: Arc<RwLock<FxHashMap<(B256, Slot), PayloadAttributesUpdate>>>,
 }
 
 impl Default for CurrentSlotInfo {
@@ -55,7 +56,7 @@ impl CurrentSlotInfo {
         Self {
             curr_slot_info: Arc::new(RwLock::new((0, None))),
             proposer_duties_response: Arc::new(RwLock::new(None)),
-            payload_attributes: Arc::new(RwLock::new(HashMap::new())),
+            payload_attributes: Arc::new(RwLock::new(FxHashMap::default())),
         }
     }
 

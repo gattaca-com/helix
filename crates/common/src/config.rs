@@ -1,15 +1,11 @@
-use std::{
-    collections::{HashMap, HashSet},
-    env,
-    fs::File,
-    path::PathBuf,
-};
+use std::{env, fs::File, path::PathBuf};
 
 use alloy_primitives::Address;
 use clap::Parser;
 use eyre::ensure;
 use helix_types::{BlsKeypair, BlsPublicKey, BlsPublicKeyBytes, BlsSecretKey, Operator};
 use reqwest::Url;
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use teloxide::types::ChatId;
 use tracing::error;
@@ -279,7 +275,11 @@ pub struct BlockMergingConfig {
     /// `serve_merged_headers` is disabled globally. Lets specific builders opt in to merged
     /// headers ahead of a broader rollout, without flipping the safety valve for everyone.
     #[serde(default)]
-    pub serve_merged_headers_allowlist: HashSet<BlsPublicKeyBytes>,
+    pub serve_merged_headers_allowlist: FxHashSet<BlsPublicKeyBytes>,
+    /// Builder pubkeys whose merge data is dropped at decode time. Keeps a builder that submits
+    /// bad merge data out of the merge order pool, without stopping its normal submissions.
+    #[serde(default)]
+    pub merge_data_denylist: FxHashSet<BlsPublicKeyBytes>,
     /// Builder-side merging over TCP. Tile is only spawned if set.
     #[serde(default)]
     pub tcp: Option<BlockMergingTcpConfig>,
@@ -294,6 +294,10 @@ impl BlockMergingConfig {
             "serve_merged_headers must be false when mark_all_txs_mergeable is enabled"
         );
         Ok(())
+    }
+
+    pub fn is_merge_data_denied(&self, builder_pubkey: &BlsPublicKeyBytes) -> bool {
+        self.merge_data_denylist.contains(builder_pubkey)
     }
 
     pub fn is_builder_collateralized(&self, builder_coinbase: Address) -> bool {
@@ -364,7 +368,7 @@ pub struct AlertsConfig {
     pub demotion_chat_id: Option<ChatId>,
     /// Extra demotion channel per builder, keyed by builder_id.
     #[serde(default)]
-    pub builder_demotion_chat_ids: HashMap<String, ChatId>,
+    pub builder_demotion_chat_ids: FxHashMap<String, ChatId>,
     pub relay_url: String,
 }
 
@@ -422,7 +426,8 @@ pub struct RelayNetworkConfig {
 impl RelayNetworkConfig {
     /// Validates config is sane
     pub fn validate(&self) {
-        let mut peer_pubkeys = HashSet::with_capacity(self.peers.len());
+        let mut peer_pubkeys =
+            FxHashSet::with_capacity_and_hasher(self.peers.len(), Default::default());
         for peer in &self.peers {
             peer.validate();
             let pubkey = peer.pubkey;
@@ -565,7 +570,7 @@ impl RouterConfig {
     }
 
     fn contains(&self, route: Route) -> bool {
-        self.enabled_routes.iter().map(|x| x.route).collect::<HashSet<_>>().contains(&route)
+        self.enabled_routes.iter().map(|x| x.route).collect::<FxHashSet<_>>().contains(&route)
     }
 
     fn remove(&mut self, route: &Route) {

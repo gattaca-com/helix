@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -13,7 +12,7 @@ use helix_common::{
     utils::{utcnow_ms, utcnow_ns},
 };
 use helix_types::{BlsPublicKeyBytes, MergedBlock, PayloadAndBlobs, PayloadBidData, Transactions};
-use rustc_hash::{FxBuildHasher, FxHashSet};
+use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use tracing::{debug, error, info, trace, warn};
 
 use crate::auctioneer::{BlockMergeResponse, types::PayloadEntry};
@@ -37,7 +36,7 @@ pub struct BlockMerger {
     curr_bid_slot: u64,
     config: RelayConfig,
     local_cache: LocalCache,
-    best_merged_blocks: HashMap<Address, BestMergedBlock>,
+    best_merged_blocks: FxHashMap<Address, BestMergedBlock>,
     /// Base block hashes for which `get_header` found that the merged bid only differed
     /// from the original in the payment tx (and lost out on value because of it). Checked
     /// again in `prepare_merged_payload_for_storage` so we can log when the same original
@@ -51,7 +50,7 @@ impl BlockMerger {
             curr_bid_slot,
             config,
             local_cache,
-            best_merged_blocks: HashMap::with_capacity(16),
+            best_merged_blocks: FxHashMap::with_capacity_and_hasher(16, Default::default()),
             flagged_payment_tx_only_blocks: FxHashSet::with_capacity_and_hasher(16, FxBuildHasher),
         }
     }

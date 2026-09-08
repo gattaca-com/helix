@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     net::SocketAddr,
     sync::Arc,
     time::{Duration, Instant},
@@ -18,6 +17,7 @@ use helix_common::{
 };
 use helix_tcp_types::BID_SUB_HEADER_SIZE;
 use helix_types::BlsPublicKeyBytes;
+use rustc_hash::FxHashMap;
 use ssz::{Decode, Encode};
 use tracing::info;
 use uuid::Uuid;
@@ -64,7 +64,7 @@ pub struct BidSubmissionTcpListener {
     api_key_cache: Arc<DashMap<String, Vec<BlsPublicKeyBytes>>>,
 
     to_disconnect: Vec<Token>,
-    registered: HashMap<Token, BlsPublicKeyBytes>,
+    registered: FxHashMap<Token, BlsPublicKeyBytes>,
     submission_errors: Vec<SubmissionError>,
 
     // dcache bypass: stage a stable copy of the payload, the dcache slot can be
@@ -99,7 +99,7 @@ impl BidSubmissionTcpListener {
             listener,
             api_key_cache,
             to_disconnect: Vec::with_capacity(max_connections),
-            registered: HashMap::with_capacity(max_connections),
+            registered: FxHashMap::with_capacity_and_hasher(max_connections, Default::default()),
             submission_errors: Vec::with_capacity(max_connections),
             http_submissions,
             stats: Stats::default(),

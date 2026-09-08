@@ -19,6 +19,7 @@ helix-database.workspace = true
 helix-types.workspace = true
 num-format.workspace = true
 parking_lot.workspace = true
+rustc-hash.workspace = true
 serde.workspace = true
 tokio.workspace = true
 tracing.workspace = true

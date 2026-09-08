@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     sync::{Arc, atomic::Ordering},
     time::{Duration, Instant},
 };
@@ -23,6 +22,7 @@ use helix_common::{
     local_cache::LocalCache,
 };
 use helix_types::Slot;
+use rustc_hash::FxHashMap;
 use tracing::{debug, error, info, warn};
 
 use crate::{
@@ -100,7 +100,7 @@ pub struct HousekeeperTile {
     relay_network_api: Arc<RelayNetworkManager>,
     db: DbHandle,
 
-    known_payload_attributes: HashMap<(B256, Slot), PayloadAttributesUpdate>,
+    known_payload_attributes: FxHashMap<(B256, Slot), PayloadAttributesUpdate>,
     duties: Vec<ProposerDuty>,
 
     // In-flight fetch state machines
@@ -172,7 +172,7 @@ impl HousekeeperTile {
             curr_slot_info: curr_slot_info.clone(),
             relay_network_api,
             db,
-            known_payload_attributes: HashMap::new(),
+            known_payload_attributes: FxHashMap::default(),
             duties: Vec::with_capacity(64),
             duties_fetch: None,
             primev_builders_fetch: None,
@@ -530,7 +530,7 @@ fn send_slot_event(
     local_cache: &LocalCache,
     curr_slot_info: &CurrentSlotInfo,
     slot_events: &SharedVector<SlotUpdate>,
-    known_payload_attributes: &HashMap<(B256, Slot), PayloadAttributesUpdate>,
+    known_payload_attributes: &FxHashMap<(B256, Slot), PayloadAttributesUpdate>,
     il: Option<InclusionListWithMetadata>,
     stats: HousekeeperStats,
 ) {

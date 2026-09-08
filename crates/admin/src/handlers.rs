@@ -1,4 +1,4 @@
-use std::{collections::HashSet, sync::Arc};
+use std::sync::Arc;
 
 use alloy_primitives::U256;
 use axum::{
@@ -18,6 +18,7 @@ use helix_database::{
     error::DatabaseError, postgres::postgres_db_service::PostgresDatabaseService,
 };
 use helix_types::BlsPublicKeyBytes;
+use rustc_hash::FxHashSet;
 use serde::Deserialize;
 use tracing::{info, warn};
 
@@ -119,7 +120,7 @@ pub async fn payloads(
 
     let result = db.get_delivered_payloads(&(&params).into(), validator_preferences).await?;
 
-    let mut seen = HashSet::with_capacity(result.len());
+    let mut seen = FxHashSet::with_capacity_and_hasher(result.len(), Default::default());
     let response = result
         .into_iter()
         .filter(|b| seen.insert(b.bid_trace.block_hash))
@@ -140,7 +141,7 @@ pub async fn bids(
 
     let result = db.get_bids(&(&params).into(), validator_preferences).await?;
 
-    let mut seen = HashSet::with_capacity(result.len());
+    let mut seen = FxHashSet::with_capacity_and_hasher(result.len(), Default::default());
     let response = result
         .into_iter()
         .filter(|b| seen.insert(b.bid_trace.block_hash))

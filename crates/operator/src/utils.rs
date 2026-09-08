@@ -1,10 +1,9 @@
-use std::collections::HashMap;
-
 use helix_types::{BlsPublicKeyBytes, Demotion, Promotion};
 use libp2p::identity::{
     DecodingError, Keypair,
     secp256k1::{self, SecretKey},
 };
+use rustc_hash::FxHashMap;
 
 pub fn load_operator_keypair() -> Keypair {
     let operator_key_str = std::env::var("OPERATOR_KEY").expect("could not load OPERATOR_KEY");
@@ -20,7 +19,7 @@ pub fn keypair_from_bytes(bytes: &mut [u8]) -> Result<Keypair, DecodingError> {
 
 #[derive(Default)]
 pub(crate) struct PromotionStates {
-    states: HashMap<BlsPublicKeyBytes, PromotionState>,
+    states: FxHashMap<BlsPublicKeyBytes, PromotionState>,
 }
 
 impl PromotionStates {

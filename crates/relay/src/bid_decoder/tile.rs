@@ -271,12 +271,14 @@ impl DecoderTile {
         let stats = std::mem::take(&mut *self.stats.borrow_mut());
         let decode_errors: u32 = stats.decode_errors.values().sum();
         let errors_by_category = stats.decode_errors;
+        let merge_data_denylist = &self.config.block_merging_config.merge_data_denylist;
         info!(
             bid_slot = self.bid_slot,
             submissions_seen = stats.decoded_ok + decode_errors,
             decoded_ok = stats.decoded_ok,
             decode_errors,
             ?errors_by_category,
+            merge_data_denied_builders = merge_data_denylist.len(),
             "bid decoder slot stats"
         );
     }
@@ -344,21 +346,26 @@ impl DecoderTile {
 
         trace!("sending to auctioneer");
 
+        let merge_data_denied =
+            config.block_merging_config.is_merge_data_denied(submission.builder_pubkey());
+
         // Carried through raw (index-based, unexpanded) for `BlockMergingTile`, which
         // resolves tx bytes and caches blob sidecars itself when forwarding to the merge
         // builder — no need to do that work here on the submission hot path.
-        let merging_data =
-            if config.block_merging_config.is_enabled && header.merge_type != MergeType::Pause {
-                // Dry run only: unannotated collateralized submissions count as append-only.
-                merging_data.or_else(|| {
-                    config
-                        .block_merging_config
-                        .treat_as_append_only(submission.fee_recipient())
-                        .then(|| BlockMergingData::append_only(submission.fee_recipient()))
-                })
-            } else {
-                None
-            };
+        let merging_data = if config.block_merging_config.is_enabled &&
+            header.merge_type != MergeType::Pause &&
+            !merge_data_denied
+        {
+            // Dry run only: unannotated collateralized submissions count as append-only.
+            merging_data.or_else(|| {
+                config
+                    .block_merging_config
+                    .treat_as_append_only(submission.fee_recipient())
+                    .then(|| BlockMergingData::append_only(submission.fee_recipient()))
+            })
+        } else {
+            None
+        };
 
         let submission_data = SubmissionData {
             submission_ref: *submission_ref,

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use helix_common::{
     ProposerDuty, SignedValidatorRegistrationEntry,
@@ -13,6 +13,7 @@ use helix_common::{
 };
 use helix_database::handle::DbHandle;
 use helix_types::{BlsPublicKeyBytes, SignedValidatorRegistration, ValidatorRegistration};
+use rustc_hash::FxHashMap;
 use tracing::{error, info};
 use url::Url;
 
@@ -86,7 +87,7 @@ impl DutiesFetchState {
 
 fn _build_formatted_duties(
     proposer_duties: &[ProposerDuty],
-    registrations: &HashMap<BlsPublicKeyBytes, SignedValidatorRegistrationEntry>,
+    registrations: &FxHashMap<BlsPublicKeyBytes, SignedValidatorRegistrationEntry>,
 ) -> Vec<BuilderGetValidatorsResponseEntry> {
     proposer_duties
         .iter()

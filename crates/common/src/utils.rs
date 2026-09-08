@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     fs::{self, File},
     io::Write,
     panic,
@@ -13,6 +12,7 @@ use opentelemetry::{KeyValue, trace::TracerProvider as _};
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::Resource;
 use reqwest::Url;
+use rustc_hash::FxHashMap;
 use tracing::error;
 use tracing_appender::{non_blocking::WorkerGuard, rolling::Rotation};
 use tracing_opentelemetry::OpenTelemetryLayer;
@@ -167,7 +167,7 @@ pub fn alert_discord(message: &str) {
     let max_len = 1850.min(message.len());
     let msg = format!("Instance: {app_id}\n{}", &message[..max_len]);
 
-    let content = HashMap::from([("content", msg)]);
+    let content = FxHashMap::from_iter([("content", msg)]);
 
     if let Err(err) =
         reqwest::blocking::Client::new().post(webhook_url.clone()).json(&content).send()

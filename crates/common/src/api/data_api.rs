@@ -1,8 +1,7 @@
-use std::collections::HashMap;
-
 use alloy_primitives::{Address, B256, U256};
 use chrono::{DateTime, Utc};
 use helix_types::{BlsPublicKey, BlsPublicKeyBytes, BuilderInclusionResult, Slot};
+use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize, Default, Clone)]
@@ -278,7 +277,7 @@ pub struct MergedBlockResponse {
     /// Per-builder breakdown of the merge: `contribution` is the value merged in from that
     /// builder's block, `revenue` is what that builder actually earned for it (net of
     /// payout-tx gas). `contribution` values sum to `total_merged_value`.
-    pub builder_inclusions: HashMap<Address, BuilderInclusionResult>,
+    pub builder_inclusions: FxHashMap<Address, BuilderInclusionResult>,
 }
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]

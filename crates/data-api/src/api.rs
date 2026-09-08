@@ -21,6 +21,7 @@ use helix_database::{
     error::DatabaseError, postgres::postgres_db_service::PostgresDatabaseService,
 };
 use moka::sync::Cache;
+use rustc_hash::FxHashSet;
 use tracing::{debug, warn};
 
 use crate::{
@@ -124,7 +125,8 @@ impl<P: ApiProvider> DataApi<P> {
         {
             Ok(result) => {
                 debug!(?result, "payloads fetched");
-                let mut seen = std::collections::HashSet::with_capacity(result.len());
+                let mut seen =
+                    FxHashSet::with_capacity_and_hasher(result.len(), Default::default());
                 let response = result
                     .into_iter()
                     .filter(|b| seen.insert(b.bid_trace.block_hash))
@@ -232,7 +234,8 @@ impl<P: ApiProvider> DataApi<P> {
         match data_api.db.get_bids(&(&params).into(), data_api.validator_preferences.clone()).await
         {
             Ok(result) => {
-                let mut seen = std::collections::HashSet::with_capacity(result.len());
+                let mut seen =
+                    FxHashSet::with_capacity_and_hasher(result.len(), Default::default());
                 let response = result
                     .into_iter()
                     .filter(|b| seen.insert(b.bid_trace.block_hash))

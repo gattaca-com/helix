@@ -1,8 +1,9 @@
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use alloy_primitives::B256;
 use dashmap::DashMap;
 use helix_types::BlsPublicKeyBytes;
+use rustc_hash::FxHashMap;
 use teloxide::{
     Bot,
     payloads::SendMessageSetters,
@@ -37,7 +38,7 @@ pub enum AlertManager {
         bot: Bot,
         merged_blocks_chat_ids: Vec<ChatId>,
         demotion_chat_id: Option<ChatId>,
-        builder_demotion_chat_ids: HashMap<String, ChatId>,
+        builder_demotion_chat_ids: FxHashMap<String, ChatId>,
         promotion_tokens: PromotionTokenCache,
         relay_url: String,
     },
@@ -158,7 +159,7 @@ impl AlertManager {
 // shared demotion channel + builder-specific channel if configured
 fn demotion_targets(
     demotion_chat_id: Option<ChatId>,
-    builder_demotion_chat_ids: &HashMap<String, ChatId>,
+    builder_demotion_chat_ids: &FxHashMap<String, ChatId>,
     builder_id: &str,
 ) -> impl Iterator<Item = ChatId> {
     let builder_chat = builder_demotion_chat_ids

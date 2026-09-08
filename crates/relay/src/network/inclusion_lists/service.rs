@@ -1,7 +1,8 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use helix_common::api::builder_api::InclusionList;
 use helix_types::BlsPublicKeyBytes;
+use rustc_hash::FxHashMap;
 use tracing::{error, trace, warn};
 
 use crate::network::{
@@ -28,10 +29,10 @@ pub(crate) struct MultiRelayInclusionListsService {
     last_slot: u64,
     /// The local inclusion lists we've received from each peer, and the
     /// slot they are for.
-    local_ils: HashMap<BlsPublicKeyBytes, (u64, InclusionList)>,
+    local_ils: FxHashMap<BlsPublicKeyBytes, (u64, InclusionList)>,
     /// The shared inclusion lists we've received from each peer, and the
     /// slot they are for.
-    shared_ils: HashMap<BlsPublicKeyBytes, (u64, InclusionList)>,
+    shared_ils: FxHashMap<BlsPublicKeyBytes, (u64, InclusionList)>,
 }
 
 impl MultiRelayInclusionListsService {
@@ -39,8 +40,14 @@ impl MultiRelayInclusionListsService {
         Self {
             cutoff_1: Duration::from_millis(network_api.network_config.cutoff_1_ms),
             cutoff_2: Duration::from_millis(network_api.network_config.cutoff_2_ms),
-            local_ils: HashMap::with_capacity(network_api.network_config.peers.len()),
-            shared_ils: HashMap::with_capacity(network_api.network_config.peers.len()),
+            local_ils: FxHashMap::with_capacity_and_hasher(
+                network_api.network_config.peers.len(),
+                Default::default(),
+            ),
+            shared_ils: FxHashMap::with_capacity_and_hasher(
+                network_api.network_config.peers.len(),
+                Default::default(),
+            ),
             last_slot: 0,
             network_api,
         }

@@ -6,8 +6,6 @@
 mod tile;
 mod unbundling;
 
-use std::collections::HashMap;
-
 use alloy_consensus::{Bytes48, Transaction as _, TxEnvelope};
 use alloy_primitives::{Address, B256};
 use alloy_rlp::Decodable;
@@ -99,7 +97,7 @@ fn merged_block_to_response(
     let blobs_bundle =
         resolve_blobs_bundle(&execution_payload, blob_sidecars, max_blobs_per_block)?;
 
-    let builder_inclusions: HashMap<_, _> = m
+    let builder_inclusions: FxHashMap<_, _> = m
         .builder_inclusions
         .into_iter()
         .map(|i| {
@@ -147,7 +145,7 @@ fn merged_block_to_response(
 /// builder's `revenue.txs`; see `MergeSession::emit`). Used both to filter the unbundling
 /// check to genuinely appended content and to locate the base block's own payment tx.
 fn appended_tx_hashes(
-    builder_inclusions: &HashMap<Address, BuilderInclusionResult>,
+    builder_inclusions: &FxHashMap<Address, BuilderInclusionResult>,
 ) -> FxHashSet<B256> {
     builder_inclusions.values().flat_map(|inclusion| inclusion.txs.iter().copied()).collect()
 }
