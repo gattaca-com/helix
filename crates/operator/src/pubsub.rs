@@ -18,6 +18,19 @@ use super::{Operator, OperatorError};
 use crate::utils::{PromotionState, PromotionStates};
 
 const MAX_OPERATOR_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
+/// gossipsub checks `max_transmit_size` against the payload on publish, but against the whole
+/// length-prefixed RPC frame on decode. Slack covers signature, pubkey, seqno and topic; without
+/// it a payload near the cap is silently rejected by the receiver's codec, which tears down the
+/// inbound substream.
+const OPERATOR_RPC_OVERHEAD: usize = 1024;
+/// QUIC receive windows. gossipsub multiplexes every RPC for a peer onto a single substream, so
+/// the per-stream window bounds in-flight payload bytes. The libp2p defaults (10MB stream, 15MB
+/// connection) stall multi-MiB payloads at one window per RTT.
+const QUIC_STREAM_RECV_WINDOW: u32 = 64 * 1024 * 1024;
+const QUIC_CONN_RECV_WINDOW: u32 = 192 * 1024 * 1024;
+/// A queued publish is dropped, silently, once this elapses. The libp2p default of 5s is shorter
+/// than the time a burst of payloads needs on a congested link.
+const PUBLISH_QUEUE_DURATION: Duration = Duration::from_secs(12);
 
 #[derive(NetworkBehaviour)]
 struct NetBehaviour {
@@ -42,7 +55,11 @@ fn operator_gossipsub_config() -> Result<gossipsub::Config, gossipsub::ConfigBui
         .flood_publish(true)
         .validate_messages()
         .validation_mode(ValidationMode::Strict)
-        .max_transmit_size(MAX_OPERATOR_MESSAGE_SIZE)
+        .max_transmit_size(MAX_OPERATOR_MESSAGE_SIZE + OPERATOR_RPC_OVERHEAD)
+        .publish_queue_duration(PUBLISH_QUEUE_DURATION)
+        // Every message is Ignored after local delivery, so nothing is ever forwarded and
+        // IDONTWANT is pure overhead on the payload messages.
+        .idontwant_message_size_threshold(usize::MAX)
         .build()
 }
 
@@ -82,7 +99,11 @@ pub(super) async fn run_operator_connection(
 
     let mut swarm = SwarmBuilder::with_existing_identity(keypair)
         .with_tokio()
-        .with_quic()
+        .with_quic_config(|mut cfg| {
+            cfg.max_stream_data = QUIC_STREAM_RECV_WINDOW;
+            cfg.max_connection_data = QUIC_CONN_RECV_WINDOW;
+            cfg
+        })
         .with_behaviour(|_key| {
             Ok(NetBehaviour { allow_list, gossipsub, ping: ping::Behaviour::default() })
         })?
@@ -197,7 +218,9 @@ pub(super) async fn run_operator_connection(
 
                                     // Always handle payload messages
                                     if forward && (matches!(mode, OperatorP2pMode::On) || matches!(operator_msg, OperatorMessage::Payload(_))) {
-                                        let _ = incoming.send((operator.clone(), operator_msg)).await;
+                                        if let Err(e) = incoming.try_send((operator.clone(), operator_msg)) {
+                                            tracing::warn!(?e, "failed to forward operator message");
+                                        }
                                     }
                                 }
                                 None => {
@@ -235,6 +258,15 @@ pub(super) async fn run_operator_connection(
                                 let _ = swarm.disconnect_peer_id(peer_id);
                             }
                         }
+                        Event::SlowPeer { peer_id, failed_messages } => {
+                            // Queue timeouts and full queues are otherwise invisible; large
+                            // payload messages are the first to be dropped.
+                            tracing::warn!(
+                                operator = peers.get(&peer_id).map_or("unknown", |o| o.name.as_str()),
+                                ?failed_messages,
+                                "operator peer dropped queued gossip messages"
+                            );
+                        }
                         _ => {}
                     }
                     NetBehaviourEvent::Ping(_) => {}
@@ -267,7 +299,8 @@ mod tests {
     fn gossipsub_is_configured_for_direct_16_mib_messages() {
         let config = operator_gossipsub_config().unwrap();
 
-        assert_eq!(config.max_transmit_size(), MAX_OPERATOR_MESSAGE_SIZE);
+        assert_eq!(config.max_transmit_size(), MAX_OPERATOR_MESSAGE_SIZE + OPERATOR_RPC_OVERHEAD);
+        assert_eq!(config.publish_queue_duration(), PUBLISH_QUEUE_DURATION);
         assert!(config.flood_publish());
         assert!(config.validate_messages());
         assert!(matches!(config.validation_mode(), ValidationMode::Strict));
