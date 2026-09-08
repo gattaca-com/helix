@@ -1,8 +1,7 @@
-use std::collections::HashMap;
-
 use alloy_primitives::{Address, B256, U256};
 use bitflags::bitflags;
 use rand::Rng;
+use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use ssz::{Decode, Encode};
@@ -259,7 +258,7 @@ pub struct MergedBlock {
     pub merged_blob_count: usize,
     pub original_gas_used: u64,
     pub merged_gas_used: u64,
-    pub builder_inclusions: HashMap<Address, BuilderInclusionResult>,
+    pub builder_inclusions: FxHashMap<Address, BuilderInclusionResult>,
     pub trace: MergedBlockTrace,
 }
 

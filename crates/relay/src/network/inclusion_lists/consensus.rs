@@ -1,9 +1,8 @@
-use std::collections::HashMap;
-
 use alloy_consensus::TxEnvelope;
 use alloy_rlp::Decodable;
 use helix_common::api::builder_api::InclusionList;
 use helix_types::{BlsPublicKeyBytes, Transactions};
+use rustc_hash::FxHashMap;
 use tracing::error;
 use tree_hash::TreeHash;
 
@@ -13,11 +12,11 @@ pub(crate) const INCLUSION_LIST_MAX_BYTES: usize = 8 * 1024;
 /// to the maximum byte size. Ties are broken lexicographically via the transaction hash.
 /// Inclusion lists from older slots are ignored.
 pub(crate) fn compute_shared_inclusion_list(
-    vote_map: &HashMap<BlsPublicKeyBytes, (u64, InclusionList)>,
+    vote_map: &FxHashMap<BlsPublicKeyBytes, (u64, InclusionList)>,
     slot: u64,
     inclusion_list: InclusionList,
 ) -> InclusionList {
-    let mut tx_frequency = HashMap::new();
+    let mut tx_frequency = FxHashMap::default();
     for (il_slot, il) in vote_map
         .iter()
         .map(|(_, (slot, il))| (slot, il))
@@ -75,11 +74,12 @@ pub(crate) fn compute_shared_inclusion_list(
 /// inclusion list hash as a fallback key.
 /// Inclusion lists from older slots are ignored.
 pub(crate) fn compute_final_inclusion_list(
-    vote_map: &mut HashMap<BlsPublicKeyBytes, (u64, InclusionList)>,
+    vote_map: &mut FxHashMap<BlsPublicKeyBytes, (u64, InclusionList)>,
     slot: u64,
     inclusion_list: InclusionList,
 ) -> InclusionList {
-    let mut il_by_frequency = HashMap::with_capacity(vote_map.len() + 1);
+    let mut il_by_frequency =
+        FxHashMap::with_capacity_and_hasher(vote_map.len() + 1, Default::default());
     il_by_frequency.insert(inclusion_list.tree_hash_root(), (inclusion_list, 1));
 
     // Drain the vote map to avoid cloning inclusion lists
@@ -153,7 +153,7 @@ mod tests {
         let slot = 1;
         let inclusion_list = create_full_il(0);
 
-        let vote_map = HashMap::from([
+        let vote_map = FxHashMap::from_iter([
             ([1_u8; 48].into(), (slot, inclusion_list.clone())),
             ([2_u8; 48].into(), (slot, inclusion_list.clone())),
         ]);
@@ -174,7 +174,7 @@ mod tests {
 
         let il_different = create_full_il(1000);
 
-        let vote_map = HashMap::from([
+        let vote_map = FxHashMap::from_iter([
             ([1_u8; 48].into(), (slot, inclusion_list.clone())),
             ([2_u8; 48].into(), (slot, il_different)),
         ]);
@@ -207,7 +207,7 @@ mod tests {
             .chain(inclusion_list.txs.iter().cloned().skip(250))
             .collect();
 
-        let vote_map = HashMap::from([
+        let vote_map = FxHashMap::from_iter([
             (
                 [1_u8; 48].into(),
                 (slot, InclusionList {
@@ -236,7 +236,7 @@ mod tests {
         let slot = 1;
         let inclusion_list = create_full_il(0);
 
-        let mut vote_map = HashMap::from([
+        let mut vote_map = FxHashMap::from_iter([
             ([1_u8; 48].into(), (slot, inclusion_list.clone())),
             ([2_u8; 48].into(), (slot, inclusion_list.clone())),
         ]);
@@ -252,7 +252,7 @@ mod tests {
         let inclusion_list = create_full_il(0);
         let il_different = create_full_il(1000);
 
-        let mut vote_map = HashMap::from([
+        let mut vote_map = FxHashMap::from_iter([
             ([1_u8; 48].into(), (slot, inclusion_list.clone())),
             ([2_u8; 48].into(), (slot, il_different)),
         ]);

@@ -1,6 +1,6 @@
 pub(crate) mod error;
 
-use std::{collections::HashSet, fmt::Debug, sync::Arc, time::Duration};
+use std::{fmt::Debug, sync::Arc, time::Duration};
 
 use alloy_consensus::{BlockHeader, EnvKzgSettings, Transaction, TxReceipt};
 use alloy_eips::{eip4844::kzg_to_versioned_hash, eip7685::RequestsOrHash};
@@ -50,6 +50,7 @@ use reth_metrics::{
 use reth_node_builder::{BlockBody, ConfigureEvm};
 use reth_tasks::TaskExecutor;
 use revm::{Database, database::State};
+use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use sha2::{Digest, Sha256};
@@ -374,7 +375,7 @@ impl ValidationApi {
         }
 
         // collect which inclusion‐list hashes appeared in the block
-        let mut included_hashes = HashSet::new();
+        let mut included_hashes = FxHashSet::default();
         for tx in block.body().transactions() {
             if let Some(req) = inclusion_list.txs.iter().find(|t| t.hash == *tx.tx_hash()) {
                 included_hashes.insert(req.hash);

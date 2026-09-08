@@ -1,3 +1,6 @@
+// prometheus's register_* macros expand to std HashMap label maps
+#![allow(clippy::disallowed_types)]
+
 use std::{net::SocketAddr, time::Duration};
 
 use axum::{

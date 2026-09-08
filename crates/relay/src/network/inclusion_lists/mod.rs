@@ -27,7 +27,7 @@ pub(crate) mod service;
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
+    use std::{net::SocketAddr, sync::Arc, time::Duration};
 
     use alloy_consensus::{TxEip1559, TxEnvelope};
     use alloy_primitives::{Signature, hex::FromHex};
@@ -237,7 +237,7 @@ mod tests {
     //         info!(%slot, "Got inclusion lists from all peers");
 
     //         assert_eq!(results.len(), n_peers);
-    //         let mut results_map = HashMap::new();
+    //         let mut results_map = FxHashMap::default();
     //         for il in results {
     //             // let hash = il.as_ref().map(TreeHash::tree_hash_root).unwrap_or_default();
     //             // results_map.entry(hash).and_modify(|(c, _)| *c += 1).or_insert((1, il));

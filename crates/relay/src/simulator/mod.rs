@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use alloy_primitives::{Address, B256, U256};
 use helix_common::{
     api::builder_api::InclusionListWithMetadata, bid_submission::OptimisticVersion,
@@ -8,6 +6,7 @@ use helix_common::{
 use helix_types::{
     BlobsBundle, BuilderInclusionResult, ExecutionPayload, ExecutionRequests, MergedBlockTrace,
 };
+use rustc_hash::FxHashMap;
 
 use crate::{
     SubmissionRef,
@@ -65,7 +64,7 @@ pub struct BlockMergeResponse {
     pub proposer_value: U256,
     pub base_builder_revenue: U256,
     pub relay_revenue: U256,
-    pub builder_inclusions: HashMap<Address, BuilderInclusionResult>,
+    pub builder_inclusions: FxHashMap<Address, BuilderInclusionResult>,
     /// Index, within `execution_payload.transactions`, of the base block's own proposer
     /// payment tx. Base txs keep their original positions in a merged block -- only new
     /// content is ever appended after them -- so this is always

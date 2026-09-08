@@ -1,8 +1,7 @@
-use std::collections::HashMap;
-
 use alloy_primitives::B256;
 use helix_common::{PayloadAttributesUpdate, beacon::types::PayloadAttributesEvent};
 use helix_types::Slot;
+use rustc_hash::FxHashMap;
 use tracing::info;
 use tree_hash::TreeHash;
 
@@ -11,7 +10,7 @@ use crate::housekeeper::chain_head::ChainHead;
 pub fn process_payload_attributes(
     chain_head: &mut ChainHead,
     event: PayloadAttributesEvent,
-    known_payload_attributes: &mut HashMap<(B256, Slot), PayloadAttributesUpdate>,
+    known_payload_attributes: &mut FxHashMap<(B256, Slot), PayloadAttributesUpdate>,
 ) {
     // Drop stale payload attributes
     if chain_head.head() >= event.data.proposal_slot {
@@ -54,7 +53,7 @@ pub fn process_payload_attributes(
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, sync::Arc};
+    use std::sync::Arc;
 
     use alloy_primitives::B256;
     use helix_common::{
@@ -87,7 +86,7 @@ mod tests {
     #[test]
     fn stale_event_dropped() {
         let (mut ch, head_slot) = make_chain_head();
-        let mut known = HashMap::new();
+        let mut known = FxHashMap::default();
         // proposal_slot == head_slot: stale
         process_payload_attributes(&mut ch, make_event(head_slot, B256::ZERO), &mut known);
         assert!(known.is_empty());
@@ -96,7 +95,7 @@ mod tests {
     #[test]
     fn duplicate_event_dropped() {
         let (mut ch, head_slot) = make_chain_head();
-        let mut known = HashMap::new();
+        let mut known = FxHashMap::default();
         let slot = head_slot + 1;
         let parent = B256::from([1u8; 32]);
         process_payload_attributes(&mut ch, make_event(slot, parent), &mut known);
@@ -108,7 +107,7 @@ mod tests {
     #[test]
     fn valid_event_stored() {
         let (mut ch, head_slot) = make_chain_head();
-        let mut known = HashMap::new();
+        let mut known = FxHashMap::default();
         process_payload_attributes(
             &mut ch,
             make_event(head_slot + 1, B256::from([2u8; 32])),
@@ -120,7 +119,7 @@ mod tests {
     #[test]
     fn stale_entries_pruned_on_new_event() {
         let (mut ch, head_slot) = make_chain_head();
-        let mut known = HashMap::new();
+        let mut known = FxHashMap::default();
         // Insert an entry for head_slot + 1
         process_payload_attributes(
             &mut ch,
@@ -146,7 +145,7 @@ mod tests {
     fn bid_slot_event_marks_payload_attrs_done() {
         // proposal_slot == head + 1 (the bid slot): should mark done.
         let (mut ch, head_slot) = make_chain_head();
-        let mut known = HashMap::new();
+        let mut known = FxHashMap::default();
         process_payload_attributes(
             &mut ch,
             make_event(head_slot + 1, B256::from([5u8; 32])),
@@ -162,7 +161,7 @@ mod tests {
     fn future_slot_event_does_not_mark_payload_attrs_done() {
         // proposal_slot == head + 2: stored in cache but must NOT mark done for bid_slot.
         let (mut ch, head_slot) = make_chain_head();
-        let mut known = HashMap::new();
+        let mut known = FxHashMap::default();
         process_payload_attributes(
             &mut ch,
             make_event(head_slot + 2, B256::from([6u8; 32])),
@@ -180,7 +179,7 @@ mod tests {
     fn two_events_same_slot_different_parents_both_stored() {
         // Same proposal_slot but different parent → distinct keys, both kept.
         let (mut ch, head_slot) = make_chain_head();
-        let mut known = HashMap::new();
+        let mut known = FxHashMap::default();
         let slot = head_slot + 1;
         process_payload_attributes(&mut ch, make_event(slot, B256::from([7u8; 32])), &mut known);
         process_payload_attributes(&mut ch, make_event(slot, B256::from([8u8; 32])), &mut known);

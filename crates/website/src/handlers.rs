@@ -1,17 +1,18 @@
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use askama::Template;
 use axum::{
     extract::{Query, State},
     response::Html,
 };
+use rustc_hash::FxHashMap;
 use tracing::info;
 
 use crate::state::AppState;
 
 pub async fn index(
     State(state): State<Arc<AppState>>,
-    Query(params): Query<HashMap<String, String>>,
+    Query(params): Query<FxHashMap<String, String>>,
 ) -> Result<Html<String>, axum::http::StatusCode> {
     info!("Handling website request");
     let order_by = params.get("order_by").map(|s| s.as_str());

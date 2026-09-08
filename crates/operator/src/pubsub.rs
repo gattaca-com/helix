@@ -1,4 +1,4 @@
-use std::{collections::HashMap, time::Duration};
+use std::time::Duration;
 
 use async_channel::{Receiver, Sender};
 use helix_common::OperatorP2pMode;
@@ -12,6 +12,7 @@ use libp2p::{
     ping,
     swarm::{NetworkBehaviour, SwarmEvent},
 };
+use rustc_hash::FxHashMap;
 use ssz::{Decode, Encode};
 
 use super::{Operator, OperatorError};
@@ -47,7 +48,7 @@ fn operator_gossipsub_config() -> Result<gossipsub::Config, gossipsub::ConfigBui
 }
 
 fn record_builder_collateral(
-    builder_collateral: &mut HashMap<String, BuilderCollateral>,
+    builder_collateral: &mut FxHashMap<String, BuilderCollateral>,
     builder_id: String,
     collateral: BuilderCollateral,
 ) -> bool {
@@ -99,7 +100,7 @@ pub(super) async fn run_operator_connection(
     let peers = operators
         .into_iter()
         .map(|o| (PeerId::from_public_key(&o.pubkey), o))
-        .collect::<HashMap<_, _>>();
+        .collect::<FxHashMap<_, _>>();
 
     for (peer_id, operator) in &peers {
         // Dial other operators.
@@ -112,7 +113,7 @@ pub(super) async fn run_operator_connection(
     // Demotions keyed by builder pubkey. Sent when a new operator subscribes.
     let mut demotions = PromotionStates::default();
     // Local collateral keyed by builder pubkey. Sent when a new operator subscribes.
-    let mut builder_collateral = HashMap::<String, BuilderCollateral>::new();
+    let mut builder_collateral = FxHashMap::<String, BuilderCollateral>::default();
     // Number of connected peers
     let mut connected_peers = 0u32;
 
@@ -275,7 +276,7 @@ mod tests {
 
     #[test]
     fn first_builder_collateral_message_is_recorded_for_publish_and_replay() {
-        let mut state = HashMap::new();
+        let mut state = FxHashMap::default();
         let collateral = BuilderCollateral {
             ts_ms: 1,
             slot: 2,

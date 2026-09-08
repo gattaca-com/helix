@@ -18,6 +18,7 @@ helix-common.workspace = true
 helix-database.workspace = true
 helix-types.workspace = true
 mime_guess.workspace = true
+rustc-hash.workspace = true
 reqwest.workspace = true
 rust-embed.workspace = true
 serde.workspace = true

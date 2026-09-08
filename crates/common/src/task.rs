@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     future::Future,
     sync::{
         Arc, OnceLock,
@@ -9,6 +8,7 @@ use std::{
 };
 
 use parking_lot::Mutex;
+use rustc_hash::FxHashMap;
 use tokio::{
     runtime::{self},
     task::JoinHandle,
@@ -106,14 +106,14 @@ pub fn init_runtime(relay_config: &RelayConfig) {
 /// Helper struct for managing free cores for Tokio.
 #[derive(Default)]
 struct Cores {
-    by_id: HashMap<ThreadId, usize>,
-    counts: HashMap<usize, usize>,
+    by_id: FxHashMap<ThreadId, usize>,
+    counts: FxHashMap<usize, usize>,
 }
 
 impl Cores {
     fn new(cores: Vec<usize>) -> Self {
-        let by_id = HashMap::new();
-        let mut counts = HashMap::new();
+        let by_id = FxHashMap::default();
+        let mut counts = FxHashMap::default();
         cores.into_iter().for_each(|core| {
             counts.insert(core, 0);
         });

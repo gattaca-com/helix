@@ -1,5 +1,4 @@
-use std::collections::HashMap;
-
+use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::beacon::error::ApiError;
@@ -17,5 +16,5 @@ pub enum ApiResult<T: Serialize + DeserializeOwned> {
 pub struct BeaconResponse<T: Serialize + DeserializeOwned> {
     pub data: T,
     #[serde(flatten)]
-    pub meta: HashMap<String, serde_json::Value>,
+    pub meta: FxHashMap<String, serde_json::Value>,
 }

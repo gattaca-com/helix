@@ -15,6 +15,7 @@ helix-database.workspace = true
 helix-types.workspace = true
 hex.workspace = true
 libp2p.workspace = true
+rustc-hash.workspace = true
 serde.workspace = true
 serde_yaml.workspace = true
 thiserror.workspace = true
