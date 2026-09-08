@@ -16,7 +16,9 @@ use helix_common::simulator::BlockSimError;
 use tokio::sync::watch;
 
 use crate::{
-    engine::convert::{b256, block_to_payload_v3, eaddr, requests_to_v4},
+    engine::convert::{
+        b256, block_to_payload_v3, eaddr, h256, payload_v3_to_block, requests_to_v4,
+    },
     node::HeadInfo,
     testing::{ETH, GWEI, dev_genesis_store, funded_signers, signed_transfer},
     validation::{BlockValidator, error::ValidationError},
@@ -141,10 +143,12 @@ impl Fixture {
 
     fn bid_trace(&self, built: &Built) -> BidTrace {
         let header = &built.payload.payload_inner.payload_inner;
+        let block = payload_v3_to_block(&built.payload, B256::ZERO, &built.requests)
+            .expect("the fixture builds a convertible payload");
         BidTrace {
             slot: 1,
             parent_hash: header.parent_hash,
-            block_hash: header.block_hash,
+            block_hash: b256(block.hash()),
             builder_pubkey: Default::default(),
             proposer_pubkey: Default::default(),
             proposer_fee_recipient: self.proposer,
@@ -339,4 +343,154 @@ fn the_relay_classifies_the_parent_errors_it_must_retry() {
     let too_old = BlockSimError::BlockValidationFailed(ValidationError::BlockTooOld.to_string());
     assert!(too_old.is_too_old(), "{too_old}");
     assert!(!too_old.is_demotable(), "{too_old}");
+}
+
+fn withdrawal_request() -> ExecutionRequestsV4 {
+    ExecutionRequestsV4 {
+        withdrawals: vec![alloy_eips::eip7002::WithdrawalRequest {
+            source_address: Address::repeat_byte(0x11),
+            validator_pubkey: alloy_primitives::FixedBytes::repeat_byte(0x22),
+            amount: 1,
+        }],
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn a_valid_block_passes_execution() {
+    let fixture = Fixture::new().await;
+    let built = fixture.build_on(fixture.genesis_hash, fixture.genesis_timestamp + 12, 0);
+    let message = fixture.bid_trace(&built);
+
+    let executed = fixture
+        .validator()
+        .validate(&built.payload, &message, B256::ZERO, &built.requests)
+        .expect("a block the fixture built must validate");
+
+    assert_eq!(executed.receipts.len(), 1);
+    assert!(!executed.account_updates.is_empty());
+}
+
+/// A simulator must never persist what it validates. The submitted block is not
+/// stored, and the chain does not move.
+#[tokio::test]
+async fn validating_a_block_does_not_store_it() {
+    let fixture = Fixture::new().await;
+    let built = fixture.build_on(fixture.genesis_hash, fixture.genesis_timestamp + 12, 0);
+    let message = fixture.bid_trace(&built);
+
+    fixture
+        .validator()
+        .validate(&built.payload, &message, B256::ZERO, &built.requests)
+        .expect("a block the fixture built must validate");
+
+    assert_eq!(fixture.store.get_latest_block_number().await.unwrap(), 0);
+    assert!(
+        fixture.store.get_block_header_by_hash(h256(message.block_hash)).unwrap().is_none(),
+        "the validated block must not be in the store"
+    );
+}
+
+#[tokio::test]
+async fn a_tampered_state_root_is_rejected() {
+    let fixture = Fixture::new().await;
+    let mut built = fixture.build_on(fixture.genesis_hash, fixture.genesis_timestamp + 12, 0);
+    built.payload.payload_inner.payload_inner.state_root = B256::repeat_byte(0xaa);
+    let message = fixture.bid_trace(&built);
+
+    let error = fixture
+        .validator()
+        .validate(&built.payload, &message, B256::ZERO, &built.requests)
+        .expect_err("a wrong state root must be rejected");
+
+    assert!(matches!(error, ValidationError::StateRootMismatch { .. }), "{error}");
+}
+
+#[tokio::test]
+async fn a_tampered_gas_used_is_rejected() {
+    let fixture = Fixture::new().await;
+    let mut built = fixture.build_on(fixture.genesis_hash, fixture.genesis_timestamp + 12, 0);
+    built.payload.payload_inner.payload_inner.gas_used += 1;
+    let message = fixture.bid_trace(&built);
+
+    let error = fixture
+        .validator()
+        .validate(&built.payload, &message, B256::ZERO, &built.requests)
+        .expect_err("a wrong gas used must be rejected");
+
+    assert!(matches!(error, ValidationError::PostExecution(_)), "{error}");
+}
+
+#[tokio::test]
+async fn a_tampered_receipts_root_is_rejected() {
+    let fixture = Fixture::new().await;
+    let mut built = fixture.build_on(fixture.genesis_hash, fixture.genesis_timestamp + 12, 0);
+    built.payload.payload_inner.payload_inner.receipts_root = B256::repeat_byte(0xbb);
+    let message = fixture.bid_trace(&built);
+
+    let error = fixture
+        .validator()
+        .validate(&built.payload, &message, B256::ZERO, &built.requests)
+        .expect_err("a wrong receipts root must be rejected");
+
+    assert!(matches!(error, ValidationError::PostExecution(_)), "{error}");
+}
+
+/// The requests are submitted alongside the payload and commit into the header,
+/// so a bundle execution did not produce must fail.
+#[tokio::test]
+async fn execution_requests_that_the_block_did_not_produce_are_rejected() {
+    let fixture = Fixture::new().await;
+    let built = fixture.build_on(fixture.genesis_hash, fixture.genesis_timestamp + 12, 0);
+    let requests = withdrawal_request();
+    let tampered = Built { payload: built.payload.clone(), requests };
+    let message = fixture.bid_trace(&tampered);
+
+    let error = fixture
+        .validator()
+        .validate(&tampered.payload, &message, B256::ZERO, &tampered.requests)
+        .expect_err("unproduced requests must be rejected");
+
+    assert!(matches!(error, ValidationError::PostExecution(_)), "{error}");
+}
+
+/// Proves the pre-execution checks run: a bad base fee is caught by
+/// `validate_block_pre_execution`, before any transaction executes.
+#[tokio::test]
+async fn a_tampered_base_fee_is_rejected_before_execution() {
+    let fixture = Fixture::new().await;
+    let mut built = fixture.build_on(fixture.genesis_hash, fixture.genesis_timestamp + 12, 0);
+    built.payload.payload_inner.payload_inner.base_fee_per_gas += U256::from(1);
+    let message = fixture.bid_trace(&built);
+
+    let error = fixture
+        .validator()
+        .validate(&built.payload, &message, B256::ZERO, &built.requests)
+        .expect_err("a wrong base fee must be rejected");
+
+    assert!(matches!(error, ValidationError::PreExecution(_)), "{error}");
+}
+
+#[tokio::test]
+async fn a_block_with_an_unexecutable_transaction_is_rejected() {
+    let fixture = Fixture::new().await;
+    let mut built = fixture.build_on(fixture.genesis_hash, fixture.genesis_timestamp + 12, 0);
+    let bad_nonce = signed_transfer(
+        &fixture.signers[1],
+        fixture.chain_id,
+        99,
+        fixture.proposer,
+        U256::from(1),
+        100 * GWEI,
+        0,
+    );
+    built.payload.payload_inner.payload_inner.transactions.push(bad_nonce.into());
+    let message = fixture.bid_trace(&built);
+
+    let error = fixture
+        .validator()
+        .validate(&built.payload, &message, B256::ZERO, &built.requests)
+        .expect_err("an unexecutable transaction must be rejected");
+
+    assert!(matches!(error, ValidationError::Execution(_)), "{error}");
 }
