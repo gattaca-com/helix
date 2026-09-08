@@ -2,6 +2,7 @@ mod bid_adjustor;
 mod bid_sorter;
 mod block_merger;
 mod context;
+mod get_execution_payload_bid;
 mod get_header;
 mod get_payload;
 mod handle;
@@ -446,6 +447,24 @@ impl State {
                 drop(_guard);
             }
 
+            // get_execution_payload_bid (Gloas)
+            (State::Sorting(slot_data), Event::GetExecutionPayloadBid { params, res_tx, span }) => {
+                let _guard = span.enter();
+                trace!("received in auctioneer");
+
+                if slot_data.bid_slot != params.slot {
+                    let _ = res_tx.send(Err(ProposerApiError::RequestWrongSlot {
+                        request_slot: params.slot,
+                        bid_slot: slot_data.bid_slot.into(),
+                    }));
+                } else {
+                    ctx.handle_get_execution_payload_bid(params, slot_data, res_tx)
+                }
+
+                trace!("finished processing");
+                drop(_guard);
+            }
+
             // get_payload
             (
                 State::Sorting(slot_data),
@@ -530,6 +549,11 @@ impl State {
                 let _ = res_tx.send(Err(ProposerApiError::DeliveringPayload));
             }
 
+            // late get_execution_payload_bid
+            (State::Broadcasting { .. }, Event::GetExecutionPayloadBid { res_tx, .. }) => {
+                let _ = res_tx.send(Err(ProposerApiError::DeliveringPayload));
+            }
+
             // duplicate get_payload, proposer equivocating?
             (
                 State::Broadcasting { slot_data: slot_ctx, block_hash },
@@ -591,6 +615,22 @@ impl State {
 
             // get_header not sorting
             (State::Slot { bid_slot, .. }, Event::GetHeader { res_tx, params, .. }) => {
+                if params.slot == bid_slot.as_u64() {
+                    // either not registered or waiting for full data from housekepper
+                    let _ = res_tx.send(Err(ProposerApiError::NoBidPrepared));
+                } else {
+                    let _ = res_tx.send(Err(ProposerApiError::RequestWrongSlot {
+                        request_slot: params.slot,
+                        bid_slot: bid_slot.as_u64(),
+                    }));
+                }
+            }
+
+            // get_execution_payload_bid not sorting
+            (
+                State::Slot { bid_slot, .. },
+                Event::GetExecutionPayloadBid { res_tx, params, .. },
+            ) => {
                 if params.slot == bid_slot.as_u64() {
                     // either not registered or waiting for full data from housekepper
                     let _ = res_tx.send(Err(ProposerApiError::NoBidPrepared));
