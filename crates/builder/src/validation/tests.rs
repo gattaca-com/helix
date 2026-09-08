@@ -20,7 +20,10 @@ use crate::{
         b256, block_to_payload_v3, eaddr, h256, payload_v3_to_block, requests_to_v4,
     },
     node::HeadInfo,
-    testing::{ETH, GWEI, dev_genesis_store, funded_signers, signed_transfer},
+    testing::{
+        ETH, GWEI, deploy_payment_forwarder, dev_genesis_store_with, funded_signers,
+        signed_transfer, signed_unprotected_transfer,
+    },
     validation::{BlockValidator, error::ValidationError},
 };
 
@@ -51,7 +54,16 @@ struct Fixture {
 
 impl Fixture {
     async fn new() -> Self {
-        let (store, genesis) = dev_genesis_store().await;
+        Self::with_genesis(|_| {}).await
+    }
+
+    async fn with_forwarder() -> Self {
+        Self::with_genesis(deploy_payment_forwarder).await
+    }
+
+    async fn with_genesis(edit: impl FnOnce(&mut ethrex_common::types::Genesis)) -> Self {
+        let (store, genesis) = dev_genesis_store_with(edit).await;
+        let signers = funded_signers(&genesis, 4);
         let genesis_block = genesis.get_block();
         let blockchain: Arc<Blockchain> = Blockchain::new(store.clone(), BlockchainOptions {
             r#type: BlockchainType::L1,
@@ -74,8 +86,8 @@ impl Fixture {
             genesis_timestamp: genesis_block.header.timestamp,
             chain_id: genesis.config.chain_id,
             gas_limit: genesis_block.header.gas_limit,
-            signers: funded_signers(&genesis, 4),
-            proposer: Address::repeat_byte(0x77),
+            proposer: signers[3].address(),
+            signers,
         }
     }
 
@@ -95,12 +107,37 @@ impl Fixture {
             100 * GWEI,
             0,
         )];
+        self.build_block(parent, timestamp, txs, Vec::new())
+    }
+
+    /// The proposer spends, so its whole-block balance delta falls short of the
+    /// bid value and the payment must be recognised from a transaction.
+    fn proposer_spend(&self, nonce: u64) -> Vec<u8> {
+        signed_transfer(
+            &self.signers[3],
+            self.chain_id,
+            nonce,
+            Address::repeat_byte(0x55),
+            U256::from(GWEI),
+            100 * GWEI,
+            0,
+        )
+    }
+
+    fn build_block(
+        &self,
+        parent: H256,
+        timestamp: u64,
+        txs: Vec<Vec<u8>>,
+        withdrawals: Vec<ethrex_common::types::Withdrawal>,
+    ) -> Built {
+        let builder = &self.signers[0];
         let args = BuildPayloadArgs {
             parent,
             timestamp,
             fee_recipient: eaddr(builder.address()),
             random: H256::zero(),
-            withdrawals: Some(Vec::new()),
+            withdrawals: Some(withdrawals),
             beacon_root: Some(H256::zero()),
             slot_number: None,
             version: 3,
@@ -139,6 +176,33 @@ impl Fixture {
             self.head.send_replace(HeadInfo { number, hash: parent, timestamp, is_synced: true });
         }
         parent
+    }
+
+    fn signed_call(
+        &self,
+        signer: &alloy_signer_local::PrivateKeySigner,
+        nonce: u64,
+        to: Address,
+        value: U256,
+        input: Vec<u8>,
+    ) -> Vec<u8> {
+        use alloy_consensus::SignableTransaction;
+        use alloy_signer::SignerSync;
+        let tx = alloy_consensus::TxEip1559 {
+            chain_id: self.chain_id,
+            nonce,
+            gas_limit: 100_000,
+            max_fee_per_gas: 100 * GWEI,
+            max_priority_fee_per_gas: 0,
+            to: to.into(),
+            value,
+            access_list: Default::default(),
+            input: input.into(),
+        };
+        let signature = signer.sign_hash_sync(&tx.signature_hash()).unwrap();
+        alloy_eips::eip2718::Encodable2718::encoded_2718(&alloy_consensus::TxEnvelope::from(
+            tx.into_signed(signature),
+        ))
     }
 
     fn bid_trace(&self, built: &Built) -> BidTrace {
@@ -493,4 +557,409 @@ async fn a_block_with_an_unexecutable_transaction_is_rejected() {
         .expect_err("an unexecutable transaction must be rejected");
 
     assert!(matches!(error, ValidationError::Execution(_)), "{error}");
+}
+
+/// A block whose transactions raise the proposer's balance by the bid value
+/// needs no recognisable payment transaction.
+#[tokio::test]
+async fn a_payment_by_balance_delta_is_accepted() {
+    let fixture = Fixture::new().await;
+    let value = U256::from(ETH / 2);
+    let txs = vec![
+        signed_transfer(
+            &fixture.signers[1],
+            fixture.chain_id,
+            0,
+            fixture.proposer,
+            value,
+            100 * GWEI,
+            0,
+        ),
+        signed_transfer(
+            &fixture.signers[2],
+            fixture.chain_id,
+            0,
+            Address::repeat_byte(0x66),
+            U256::from(1),
+            100 * GWEI,
+            0,
+        ),
+    ];
+    let built =
+        fixture.build_block(fixture.genesis_hash, fixture.genesis_timestamp + 12, txs, Vec::new());
+    let mut message = fixture.bid_trace(&built);
+    message.value = value;
+
+    fixture
+        .validator()
+        .validate(&built.payload, &message, B256::ZERO, &built.requests)
+        .expect("a balance delta covering the bid must be accepted");
+}
+
+#[tokio::test]
+async fn a_trailing_direct_transfer_is_accepted() {
+    let fixture = Fixture::new().await;
+    let value = U256::from(ETH / 2);
+    let txs = vec![
+        fixture.proposer_spend(0),
+        signed_transfer(
+            &fixture.signers[0],
+            fixture.chain_id,
+            0,
+            fixture.proposer,
+            value,
+            100 * GWEI,
+            0,
+        ),
+    ];
+    let built =
+        fixture.build_block(fixture.genesis_hash, fixture.genesis_timestamp + 12, txs, Vec::new());
+    let mut message = fixture.bid_trace(&built);
+    message.value = value;
+
+    fixture
+        .validator()
+        .validate(&built.payload, &message, B256::ZERO, &built.requests)
+        .expect("a trailing direct transfer must be accepted");
+}
+
+#[tokio::test]
+async fn an_underpaid_block_is_rejected() {
+    let fixture = Fixture::new().await;
+    let paid = U256::from(ETH / 2);
+    let txs = vec![
+        fixture.proposer_spend(0),
+        signed_transfer(
+            &fixture.signers[0],
+            fixture.chain_id,
+            0,
+            fixture.proposer,
+            paid,
+            100 * GWEI,
+            0,
+        ),
+    ];
+    let built =
+        fixture.build_block(fixture.genesis_hash, fixture.genesis_timestamp + 12, txs, Vec::new());
+    let mut message = fixture.bid_trace(&built);
+    message.value = paid + U256::from(1);
+
+    let error = fixture
+        .validator()
+        .validate(&built.payload, &message, B256::ZERO, &built.requests)
+        .expect_err("paying less than the bid must be rejected");
+
+    assert!(matches!(error, ValidationError::ProposerPayment), "{error}");
+}
+
+/// A payment transaction that tips the builder is extracting value the bid did
+/// not account for.
+#[tokio::test]
+async fn a_payment_tx_with_a_priority_fee_is_rejected() {
+    let fixture = Fixture::new().await;
+    let value = U256::from(ETH / 2);
+    let txs = vec![
+        fixture.proposer_spend(0),
+        signed_transfer(
+            &fixture.signers[0],
+            fixture.chain_id,
+            0,
+            fixture.proposer,
+            value,
+            100 * GWEI,
+            GWEI,
+        ),
+    ];
+    let built =
+        fixture.build_block(fixture.genesis_hash, fixture.genesis_timestamp + 12, txs, Vec::new());
+    let mut message = fixture.bid_trace(&built);
+    message.value = value;
+
+    let error = fixture
+        .validator()
+        .validate(&built.payload, &message, B256::ZERO, &built.requests)
+        .expect_err("a tipping payment tx must be rejected");
+
+    assert!(matches!(error, ValidationError::ProposerPayment), "{error}");
+}
+
+/// EIP-155 replay protection binds the payment to this chain. A legacy
+/// transaction carrying no chain id is replayable, so it is not a payment.
+#[tokio::test]
+async fn an_unprotected_payment_tx_is_rejected() {
+    let fixture = Fixture::new().await;
+    let value = U256::from(ETH / 2);
+    let txs = vec![
+        fixture.proposer_spend(0),
+        signed_unprotected_transfer(&fixture.signers[0], 0, fixture.proposer, value, 100 * GWEI),
+    ];
+    let built =
+        fixture.build_block(fixture.genesis_hash, fixture.genesis_timestamp + 12, txs, Vec::new());
+    let mut message = fixture.bid_trace(&built);
+    message.value = value;
+
+    let error = fixture
+        .validator()
+        .validate(&built.payload, &message, B256::ZERO, &built.requests)
+        .expect_err("an unprotected payment tx must be rejected");
+
+    assert!(matches!(error, ValidationError::ProposerPayment), "{error}");
+}
+
+/// A withdrawal is consensus-layer income, not the builder's payment, so it is
+/// added to the balance the payment is measured against.
+#[tokio::test]
+async fn a_withdrawal_does_not_pay_the_bid() {
+    let fixture = Fixture::new().await;
+    let value = U256::from(ETH / 2);
+    let withdrawal = ethrex_common::types::Withdrawal {
+        index: 0,
+        validator_index: 0,
+        address: eaddr(fixture.proposer),
+        amount: 500_000_000, // gwei, == ETH / 2
+    };
+    let built = fixture.build_block(
+        fixture.genesis_hash,
+        fixture.genesis_timestamp + 12,
+        vec![fixture.proposer_spend(0)],
+        vec![withdrawal],
+    );
+    let mut message = fixture.bid_trace(&built);
+    message.value = value;
+
+    let error = fixture
+        .validator()
+        .validate(&built.payload, &message, B256::ZERO, &built.requests)
+        .expect_err("a withdrawal must not count as the bid payment");
+
+    assert!(matches!(error, ValidationError::ProposerPayment), "{error}");
+}
+
+fn forwarder_calldata(timestamp: u64, recipient: Address) -> Vec<u8> {
+    let mut calldata = (timestamp as u32).to_be_bytes().to_vec();
+    calldata.extend_from_slice(recipient.as_slice());
+    calldata
+}
+
+#[tokio::test]
+async fn a_payment_through_the_forwarder_is_accepted() {
+    let fixture = Fixture::with_forwarder().await;
+    let value = U256::from(ETH / 2);
+    let timestamp = fixture.genesis_timestamp + 12;
+    let txs = vec![
+        fixture.proposer_spend(0),
+        fixture.signed_call(
+            &fixture.signers[0],
+            0,
+            helix_common::PAYMENT_FORWARDER,
+            value,
+            forwarder_calldata(timestamp, fixture.proposer),
+        ),
+    ];
+    let built = fixture.build_block(fixture.genesis_hash, timestamp, txs, Vec::new());
+    let mut message = fixture.bid_trace(&built);
+    message.value = value;
+
+    fixture
+        .validator()
+        .validate(&built.payload, &message, B256::ZERO, &built.requests)
+        .expect("a forwarder payment must be accepted where the forwarder is deployed");
+}
+
+/// A value call to an address with no code succeeds and keeps the value, so the
+/// forwarder shape only counts where the forwarder runtime is actually present.
+#[tokio::test]
+async fn a_forwarder_payment_is_rejected_where_the_forwarder_is_absent() {
+    let fixture = Fixture::new().await;
+    let value = U256::from(ETH / 2);
+    let timestamp = fixture.genesis_timestamp + 12;
+    let txs = vec![
+        fixture.proposer_spend(0),
+        fixture.signed_call(
+            &fixture.signers[0],
+            0,
+            helix_common::PAYMENT_FORWARDER,
+            value,
+            forwarder_calldata(timestamp, fixture.proposer),
+        ),
+    ];
+    let built = fixture.build_block(fixture.genesis_hash, timestamp, txs, Vec::new());
+    let mut message = fixture.bid_trace(&built);
+    message.value = value;
+
+    let error = fixture
+        .validator()
+        .validate(&built.payload, &message, B256::ZERO, &built.requests)
+        .expect_err("an undeployed forwarder must not be trusted");
+
+    assert!(matches!(error, ValidationError::ProposerPayment), "{error}");
+}
+
+/// The forwarder reverts unless the calldata timestamp matches the block, and a
+/// reverted payment pays nothing.
+#[tokio::test]
+async fn a_reverted_payment_tx_is_rejected() {
+    let fixture = Fixture::with_forwarder().await;
+    let value = U256::from(ETH / 2);
+    let timestamp = fixture.genesis_timestamp + 12;
+    let txs = vec![
+        fixture.proposer_spend(0),
+        fixture.signed_call(
+            &fixture.signers[0],
+            0,
+            helix_common::PAYMENT_FORWARDER,
+            value,
+            forwarder_calldata(timestamp + 1, fixture.proposer),
+        ),
+    ];
+    let built = fixture.build_block(fixture.genesis_hash, timestamp, txs, Vec::new());
+    let mut message = fixture.bid_trace(&built);
+    message.value = value;
+
+    let error = fixture
+        .validator()
+        .validate(&built.payload, &message, B256::ZERO, &built.requests)
+        .expect_err("a reverted payment must be rejected");
+
+    assert!(matches!(error, ValidationError::ProposerPayment), "{error}");
+}
+
+/// A merged block pays in two places: the base block's own payment transaction,
+/// kept at `base_payment_tx_index`, and the distribution transaction appended
+/// last.
+#[tokio::test]
+async fn a_merged_payment_split_across_two_txs_is_accepted() {
+    let fixture = Fixture::new().await;
+    let base = U256::from(ETH / 4);
+    let added = U256::from(ETH / 4);
+    let txs = vec![
+        fixture.proposer_spend(0),
+        signed_transfer(
+            &fixture.signers[0],
+            fixture.chain_id,
+            0,
+            fixture.proposer,
+            base,
+            100 * GWEI,
+            0,
+        ),
+        signed_transfer(
+            &fixture.signers[1],
+            fixture.chain_id,
+            0,
+            Address::repeat_byte(0x66),
+            U256::from(1),
+            100 * GWEI,
+            0,
+        ),
+        signed_transfer(
+            &fixture.signers[2],
+            fixture.chain_id,
+            0,
+            fixture.proposer,
+            added,
+            100 * GWEI,
+            0,
+        ),
+    ];
+    let built =
+        fixture.build_block(fixture.genesis_hash, fixture.genesis_timestamp + 12, txs, Vec::new());
+    let mut message = fixture.bid_trace(&built);
+    message.value = base + added;
+
+    fixture
+        .validator()
+        .validate_merged(&built.payload, &message, B256::ZERO, &built.requests, 1)
+        .expect("both payment positions must count");
+}
+
+/// The relay supplies `base_payment_tx_index`. A wrong one must fail closed
+/// rather than let an underpaid block through.
+#[tokio::test]
+async fn a_merged_payment_with_a_wrong_base_index_is_rejected() {
+    let fixture = Fixture::new().await;
+    let base = U256::from(ETH / 4);
+    let added = U256::from(ETH / 4);
+    let txs = vec![
+        fixture.proposer_spend(0),
+        signed_transfer(
+            &fixture.signers[0],
+            fixture.chain_id,
+            0,
+            fixture.proposer,
+            base,
+            100 * GWEI,
+            0,
+        ),
+        signed_transfer(
+            &fixture.signers[1],
+            fixture.chain_id,
+            0,
+            Address::repeat_byte(0x66),
+            U256::from(1),
+            100 * GWEI,
+            0,
+        ),
+        signed_transfer(
+            &fixture.signers[2],
+            fixture.chain_id,
+            0,
+            fixture.proposer,
+            added,
+            100 * GWEI,
+            0,
+        ),
+    ];
+    let built =
+        fixture.build_block(fixture.genesis_hash, fixture.genesis_timestamp + 12, txs, Vec::new());
+    let mut message = fixture.bid_trace(&built);
+    message.value = base + added;
+
+    let error = fixture
+        .validator()
+        .validate_merged(&built.payload, &message, B256::ZERO, &built.requests, 2)
+        .expect_err("a wrong base payment index must fail closed");
+
+    assert!(matches!(error, ValidationError::ProposerPayment), "{error}");
+}
+
+/// The regular path only looks at the last transaction, so the same block that
+/// passes as a merged submission fails as a regular one.
+#[tokio::test]
+async fn a_split_payment_is_not_accepted_on_the_regular_path() {
+    let fixture = Fixture::new().await;
+    let base = U256::from(ETH / 4);
+    let added = U256::from(ETH / 4);
+    let txs = vec![
+        fixture.proposer_spend(0),
+        signed_transfer(
+            &fixture.signers[0],
+            fixture.chain_id,
+            0,
+            fixture.proposer,
+            base,
+            100 * GWEI,
+            0,
+        ),
+        signed_transfer(
+            &fixture.signers[2],
+            fixture.chain_id,
+            0,
+            fixture.proposer,
+            added,
+            100 * GWEI,
+            0,
+        ),
+    ];
+    let built =
+        fixture.build_block(fixture.genesis_hash, fixture.genesis_timestamp + 12, txs, Vec::new());
+    let mut message = fixture.bid_trace(&built);
+    message.value = base + added;
+
+    let error = fixture
+        .validator()
+        .validate(&built.payload, &message, B256::ZERO, &built.requests)
+        .expect_err("the regular path must not sum two positions");
+
+    assert!(matches!(error, ValidationError::ProposerPayment), "{error}");
 }
