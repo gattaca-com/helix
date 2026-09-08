@@ -1,4 +1,4 @@
-use alloy_primitives::B256;
+use alloy_primitives::{Address, B256};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ValidationError {
@@ -34,4 +34,6 @@ pub enum ValidationError {
     MissingParentState,
     #[error("could not verify proposer payment")]
     ProposerPayment,
+    #[error("block accesses blacklisted address: {0}")]
+    Blacklist(Address),
 }
