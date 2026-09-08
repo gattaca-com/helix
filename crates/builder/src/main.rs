@@ -45,8 +45,8 @@ fn main() -> eyre::Result<()> {
         EngineConfig::load_relay_signer()
     });
 
-    // Same, for the building role's own two keys. The role itself arrives in a
-    // later step; this only proves the keys are usable before the node boots.
+    // Same, for the building role's own two keys. They are consumed once the
+    // role signs and pays; loading here fails fast on a bad key.
     if let Some(building_config) = roles.building() {
         let keys = BuildingKeys::load()?;
         info!(
@@ -79,6 +79,14 @@ fn main() -> eyre::Result<()> {
             simulation_config.max_concurrent_validations,
         ));
         info!(ssz_addr = %simulation_config.ssz_addr, "Simulation role active");
+    }
+
+    if let Some(building_config) = roles.building() {
+        let (contexts, mut rx) = tokio::sync::mpsc::channel(4);
+        runtime.spawn(building::run(building_config.clone(), contexts));
+        // Steps 3 to 5 build and submit from these.
+        runtime.spawn(async move { while rx.recv().await.is_some() {} });
+        info!("Building role active");
     }
 
     // `BuilderSpine::start` blocks until its tiles stop, so merging starts last.
