@@ -45,17 +45,20 @@ fn main() -> eyre::Result<()> {
         EngineConfig::load_relay_signer()
     });
 
-    // Same, for the building role's own two keys. They are consumed once the
-    // role signs and pays; loading here fails fast on a bad key.
-    if let Some(building_config) = roles.building() {
-        let keys = BuildingKeys::load()?;
-        info!(
-            relay_url = %building_config.relay_url,
-            builder_pubkey = %keys.pubkey(),
-            payout_address = %keys.payout_address(),
-            "Loaded building config; register the pubkey and fund the payout address",
-        );
-    }
+    // Same, for the building role's own two keys.
+    let building_keys = match roles.building() {
+        Some(building_config) => {
+            let keys = BuildingKeys::load()?;
+            info!(
+                relay_url = %building_config.relay_url,
+                builder_pubkey = %keys.pubkey(),
+                payout_address = %keys.payout_address(),
+                "Loaded building config; register the pubkey and fund the payout address",
+            );
+            Some(keys)
+        }
+        None => None,
+    };
 
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
 
@@ -82,10 +85,19 @@ fn main() -> eyre::Result<()> {
     }
 
     if let Some(building_config) = roles.building() {
-        let (contexts, mut rx) = tokio::sync::mpsc::channel(4);
-        runtime.spawn(building::run(building_config.clone(), contexts));
-        // Steps 3 to 5 build and submit from these.
-        runtime.spawn(async move { while rx.recv().await.is_some() {} });
+        let keys = building_keys.expect("the building role loads its keys");
+        let chain_id = node.store.get_chain_config().chain_id;
+
+        let (contexts, rx) = tokio::sync::mpsc::channel(4);
+        runtime.spawn(building::watch_slots(building_config.clone(), contexts));
+        runtime.spawn(building::build_blocks(
+            building_config.clone(),
+            node.store.clone(),
+            node.blockchain.clone(),
+            keys.payout,
+            chain_id,
+            rx,
+        ));
         info!("Building role active");
     }
 
