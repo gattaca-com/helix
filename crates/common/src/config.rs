@@ -280,6 +280,10 @@ pub struct BlockMergingConfig {
     /// headers ahead of a broader rollout, without flipping the safety valve for everyone.
     #[serde(default)]
     pub serve_merged_headers_allowlist: HashSet<BlsPublicKeyBytes>,
+    /// Builder pubkeys whose merge data is dropped at decode time. Keeps a builder that submits
+    /// bad merge data out of the merge order pool, without stopping its normal submissions.
+    #[serde(default)]
+    pub merge_data_denylist: HashSet<BlsPublicKeyBytes>,
     /// Builder-side merging over TCP. Tile is only spawned if set.
     #[serde(default)]
     pub tcp: Option<BlockMergingTcpConfig>,
@@ -294,6 +298,10 @@ impl BlockMergingConfig {
             "serve_merged_headers must be false when mark_all_txs_mergeable is enabled"
         );
         Ok(())
+    }
+
+    pub fn is_merge_data_denied(&self, builder_pubkey: &BlsPublicKeyBytes) -> bool {
+        self.merge_data_denylist.contains(builder_pubkey)
     }
 
     pub fn is_builder_collateralized(&self, builder_coinbase: Address) -> bool {
