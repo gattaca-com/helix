@@ -35,6 +35,7 @@ hex.workspace = true
 flux-network.workspace = true
 flux-utils.workspace = true
 helix-tcp-types.workspace = true
+num_cpus.workspace = true
 rand.workspace = true
 rayon.workspace = true
 rustc-hash.workspace = true

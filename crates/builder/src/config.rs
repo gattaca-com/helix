@@ -89,6 +89,95 @@ impl MergingConfig {
     }
 }
 
+/// Builder-owned simulation configuration, loaded from YAML (`--sim.config`).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SimulationConfig {
+    pub ssz_addr: SocketAddr,
+    pub rpc_addr: SocketAddr,
+    #[serde(default = "default_blacklist_endpoint")]
+    pub blacklist_endpoint: String,
+    /// Maximum parent-to-head block distance a submission may build on.
+    #[serde(default = "default_validation_window")]
+    pub validation_window: u64,
+    #[serde(default = "default_max_concurrent_validations")]
+    pub max_concurrent_validations: usize,
+}
+
+impl SimulationConfig {
+    pub fn load(path: &Path) -> eyre::Result<Self> {
+        let raw = std::fs::read_to_string(path)
+            .map_err(|e| eyre::eyre!("failed to read simulation config {}: {e}", path.display()))?;
+        let config: Self = serde_yaml::from_str(&raw).map_err(|e| {
+            eyre::eyre!("failed to parse simulation config {}: {e}", path.display())
+        })?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    fn validate(&self) -> eyre::Result<()> {
+        if self.ssz_addr == self.rpc_addr {
+            eyre::bail!("simulation config: ssz_addr and rpc_addr must differ");
+        }
+        if self.blacklist_endpoint.is_empty() {
+            eyre::bail!("simulation config: blacklist_endpoint must not be empty");
+        }
+        if self.validation_window == 0 {
+            eyre::bail!("simulation config: validation_window must be > 0");
+        }
+        if self.max_concurrent_validations == 0 {
+            eyre::bail!("simulation config: max_concurrent_validations must be > 0");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum Roles {
+    Merging(MergingConfig),
+    Simulation(SimulationConfig),
+    Both { merging: MergingConfig, simulation: SimulationConfig },
+}
+
+impl Roles {
+    pub fn resolve(
+        merging: Option<MergingConfig>,
+        simulation: Option<SimulationConfig>,
+    ) -> eyre::Result<Self> {
+        match (merging, simulation) {
+            (Some(merging), Some(simulation)) => Ok(Self::Both { merging, simulation }),
+            (Some(merging), None) => Ok(Self::Merging(merging)),
+            (None, Some(simulation)) => Ok(Self::Simulation(simulation)),
+            (None, None) => {
+                eyre::bail!("no role selected: supply --merging.config, --sim.config, or both")
+            }
+        }
+    }
+
+    pub fn merging(&self) -> Option<&MergingConfig> {
+        match self {
+            Self::Merging(merging) | Self::Both { merging, .. } => Some(merging),
+            Self::Simulation(_) => None,
+        }
+    }
+
+    pub fn simulation(&self) -> Option<&SimulationConfig> {
+        match self {
+            Self::Simulation(simulation) | Self::Both { simulation, .. } => Some(simulation),
+            Self::Merging(_) => None,
+        }
+    }
+}
+
+fn default_blacklist_endpoint() -> String {
+    "http://localhost:3520/blacklist".to_string()
+}
+fn default_validation_window() -> u64 {
+    3
+}
+fn default_max_concurrent_validations() -> usize {
+    num_cpus::get()
+}
 fn default_max_orders_per_slot() -> u32 {
     8192
 }
@@ -141,5 +230,85 @@ mod tests {
         assert_eq!(config.max_frame_bytes, 32 * 1024 * 1024);
         assert_eq!(config.handshake_timeout_ms, 3000);
         assert!(config.cores.server_tile.is_none());
+    }
+}
+
+#[cfg(test)]
+mod simulation_config_tests {
+    use super::*;
+
+    fn minimal_merging_config() -> MergingConfig {
+        serde_yaml::from_str(
+            "listen_addr: \"0.0.0.0:9876\"\napi_keys: [\"00000000-0000-0000-0000-000000000001\"]\n",
+        )
+        .expect("the minimal merging config must parse")
+    }
+
+    fn minimal_simulation_config() -> SimulationConfig {
+        serde_yaml::from_str("ssz_addr: \"0.0.0.0:8552\"\nrpc_addr: \"0.0.0.0:8553\"\n")
+            .expect("the minimal simulation config must parse")
+    }
+
+    #[test]
+    fn parses_the_example_sim_config() {
+        let example = include_str!("../sim-config.example.yml");
+        let config: SimulationConfig = serde_yaml::from_str(example).unwrap();
+        config.validate().unwrap();
+
+        assert_eq!(config.ssz_addr, "0.0.0.0:8552".parse::<SocketAddr>().unwrap());
+        assert_eq!(config.rpc_addr, "0.0.0.0:8553".parse::<SocketAddr>().unwrap());
+        assert_eq!(config.blacklist_endpoint, "http://localhost:3520/blacklist");
+        assert_eq!(config.validation_window, 3);
+        assert_eq!(config.max_concurrent_validations, 32);
+    }
+
+    #[test]
+    fn minimal_sim_config_gets_defaults() {
+        let config = minimal_simulation_config();
+        config.validate().unwrap();
+
+        assert_eq!(config.blacklist_endpoint, "http://localhost:3520/blacklist");
+        assert_eq!(config.validation_window, 3);
+        assert_eq!(config.max_concurrent_validations, num_cpus::get());
+    }
+
+    #[test]
+    fn sim_config_rejects_one_address_for_both_servers() {
+        let config: SimulationConfig =
+            serde_yaml::from_str("ssz_addr: \"0.0.0.0:8552\"\nrpc_addr: \"0.0.0.0:8552\"\n")
+                .unwrap();
+
+        assert!(config.validate().is_err(), "ssz_addr must differ from rpc_addr");
+    }
+
+    #[test]
+    fn a_merging_config_alone_selects_the_merging_role() {
+        let roles = Roles::resolve(Some(minimal_merging_config()), None).unwrap();
+
+        assert!(roles.merging().is_some());
+        assert!(roles.simulation().is_none());
+    }
+
+    #[test]
+    fn a_sim_config_alone_selects_the_simulation_role() {
+        let roles = Roles::resolve(None, Some(minimal_simulation_config())).unwrap();
+
+        assert!(roles.simulation().is_some());
+        assert!(roles.merging().is_none(), "no merging role means no RELAY_KEY is needed");
+    }
+
+    #[test]
+    fn both_configs_select_both_roles() {
+        let roles =
+            Roles::resolve(Some(minimal_merging_config()), Some(minimal_simulation_config()))
+                .unwrap();
+
+        assert!(roles.merging().is_some());
+        assert!(roles.simulation().is_some());
+    }
+
+    #[test]
+    fn neither_config_is_a_startup_error() {
+        assert!(Roles::resolve(None, None).is_err(), "the builder must run at least one role");
     }
 }
