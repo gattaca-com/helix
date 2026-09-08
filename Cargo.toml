@@ -45,9 +45,10 @@ ethers = "2.0.14"
 # NOTE: the `ethrex` cmd-lib is deliberately NOT a dependency: it force-enables
 # ethrex-crypto's `aws-lc-rs` feature, whose cc >=1.2.26 requirement conflicts with
 # reth-mdbx-sys's exact `cc = 1.2.15` pin (via helix-simulator). The node is
-# assembled from the library crates instead.
-ethrex-blockchain = { git = "https://github.com/lambdaclass/ethrex", rev = "34cf6c6258d3acb06e918e4308a3e571e19dfe05", default-features = false, features = ["secp256k1", "c-kzg", "metrics"] }
-ethrex-common = { git = "https://github.com/lambdaclass/ethrex", rev = "34cf6c6258d3acb06e918e4308a3e571e19dfe05", default-features = false, features = ["secp256k1", "c-kzg"] }
+# assembled from the library crates instead, so `rayon` must be listed by hand:
+# the parallel BAL execution path is cfg-gated on it.
+ethrex-blockchain = { git = "https://github.com/lambdaclass/ethrex", rev = "34cf6c6258d3acb06e918e4308a3e571e19dfe05", default-features = false, features = ["secp256k1", "c-kzg", "metrics", "rayon"] }
+ethrex-common = { git = "https://github.com/lambdaclass/ethrex", rev = "34cf6c6258d3acb06e918e4308a3e571e19dfe05", default-features = false, features = ["secp256k1", "c-kzg", "rayon"] }
 ethrex-config = { git = "https://github.com/lambdaclass/ethrex", rev = "34cf6c6258d3acb06e918e4308a3e571e19dfe05" }
 # default features minus `aws-lc-rs` (see note above); P-256 verify uses the portable fallback
 ethrex-crypto = { git = "https://github.com/lambdaclass/ethrex", rev = "34cf6c6258d3acb06e918e4308a3e571e19dfe05", default-features = false, features = ["std", "kzg-rs", "secp256k1", "blst", "c-kzg"] }
@@ -59,7 +60,7 @@ ethrex-p2p = { git = "https://github.com/lambdaclass/ethrex", rev = "34cf6c6258d
 ethrex-rlp = { git = "https://github.com/lambdaclass/ethrex", rev = "34cf6c6258d3acb06e918e4308a3e571e19dfe05" }
 ethrex-rpc = { git = "https://github.com/lambdaclass/ethrex", rev = "34cf6c6258d3acb06e918e4308a3e571e19dfe05" }
 ethrex-storage = { git = "https://github.com/lambdaclass/ethrex", rev = "34cf6c6258d3acb06e918e4308a3e571e19dfe05", features = ["rocksdb"] }
-ethrex-vm = { git = "https://github.com/lambdaclass/ethrex", rev = "34cf6c6258d3acb06e918e4308a3e571e19dfe05", default-features = false, features = ["secp256k1", "c-kzg"] }
+ethrex-vm = { git = "https://github.com/lambdaclass/ethrex", rev = "34cf6c6258d3acb06e918e4308a3e571e19dfe05", default-features = false, features = ["secp256k1", "c-kzg", "rayon"] }
 
 eyre = "0.6.12"
 aws-sdk-s3 = "=1.35.0"
