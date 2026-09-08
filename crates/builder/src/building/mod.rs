@@ -3,6 +3,7 @@
 
 mod assemble;
 mod keys;
+mod schedule;
 mod slot;
 mod submit;
 mod watcher;
@@ -15,10 +16,13 @@ use ethrex_storage::Store;
 use helix_common::signing::RelaySigningContext;
 pub use keys::BuildingKeys;
 use tokio::sync::mpsc;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 pub use watcher::run as watch_slots;
 
-use crate::{building::slot::SlotContext, config::BuildingConfig};
+use crate::{
+    building::{schedule::BestBid, slot::SlotContext},
+    config::BuildingConfig,
+};
 
 /// Reads the network's spec and genesis from the beacon node, so the builder
 /// domain is never a hardcoded per-network constant.
@@ -45,51 +49,73 @@ pub async fn build_blocks(
     mut contexts: mpsc::Receiver<SlotContext>,
 ) {
     let submitter = submit::Submitter::new(&config.relay_url, config.api_key.clone(), signing);
+    let mut best = BestBid::default();
 
     while let Some(slot) = contexts.recv().await {
-        let (build_config, store, blockchain, signer, build_slot) = (
-            config.clone(),
-            store.clone(),
-            blockchain.clone(),
-            payout_signer.clone(),
-            slot.clone(),
-        );
-        // Building is CPU-bound and must not stall the runtime.
-        let built = tokio::task::spawn_blocking(move || {
-            assemble::build(&store, &blockchain, &build_slot, &build_config, &signer, chain_id)
-        })
-        .await;
+        best.prune(slot.slot);
 
-        let built = match built {
-            Ok(Ok(built)) => built,
-            Ok(Err(e)) => {
-                warn!(slot = slot.slot, err = %e, "skipping slot");
+        // Each delay is measured from the same instant, so they must not be
+        // slept end to end.
+        let base = tokio::time::Instant::now();
+        for delay in schedule::delays(slot.timestamp, &config.submit_offsets_ms, now_ms()) {
+            tokio::time::sleep_until(base + delay).await;
+
+            let (build_config, store, blockchain, signer, build_slot) = (
+                config.clone(),
+                store.clone(),
+                blockchain.clone(),
+                payout_signer.clone(),
+                slot.clone(),
+            );
+            // Building is CPU-bound and must not stall the runtime.
+            let built = tokio::task::spawn_blocking(move || {
+                assemble::build(&store, &blockchain, &build_slot, &build_config, &signer, chain_id)
+            })
+            .await;
+
+            let built = match built {
+                Ok(Ok(built)) => built,
+                Ok(Err(e)) => {
+                    warn!(slot = slot.slot, err = %e, "skipping slot");
+                    continue;
+                }
+                Err(e) => {
+                    error!(slot = slot.slot, err = %e, "build task panicked");
+                    continue;
+                }
+            };
+
+            if !best.improves(slot.slot, slot.parent_hash, built.value) {
+                debug!(slot = slot.slot, value = %built.value, "not an improvement");
                 continue;
             }
-            Err(e) => {
-                error!(slot = slot.slot, err = %e, "build task panicked");
-                continue;
-            }
-        };
 
-        let submission = match submitter.sign(&built, &slot) {
-            Ok(submission) => submission,
-            Err(e) => {
-                warn!(slot = slot.slot, err = %e, "cannot sign the block");
-                continue;
-            }
-        };
+            let submission = match submitter.sign(&built, &slot) {
+                Ok(submission) => submission,
+                Err(e) => {
+                    warn!(slot = slot.slot, err = %e, "cannot sign the block");
+                    continue;
+                }
+            };
 
-        match submitter.submit(&submission).await {
-            Ok(()) => info!(
-                slot = slot.slot,
-                block_hash = %submission.message.block_hash,
-                txs = built.block.body.transactions.len(),
-                value = %built.value,
-                "submitted a block",
-            ),
-            // The relay's reason is how an operator learns the blocks are bad.
-            Err(e) => warn!(slot = slot.slot, err = %e, "the relay refused the block"),
+            match submitter.submit(&submission).await {
+                Ok(()) => info!(
+                    slot = slot.slot,
+                    block_hash = %submission.message.block_hash,
+                    txs = built.block.body.transactions.len(),
+                    value = %built.value,
+                    "submitted a block",
+                ),
+                // The relay's reason is how an operator learns the blocks are bad.
+                Err(e) => warn!(slot = slot.slot, err = %e, "the relay refused the block"),
+            }
         }
     }
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("the clock is after the unix epoch")
+        .as_millis() as u64
 }
