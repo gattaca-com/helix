@@ -770,8 +770,6 @@ pub struct OperatorConfig {
     /// Operator group or company.
     #[serde(default)]
     pub operator_group: Option<String>,
-    #[serde(default)]
-    pub share_get_header_payloads: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

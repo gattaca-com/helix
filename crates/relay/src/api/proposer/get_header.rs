@@ -1,23 +1,13 @@
 use std::{
-    borrow::Cow,
-    sync::{
+    borrow::Cow, net::IpAddr, sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
-    },
-    time::{Duration, Instant},
+    }, time::{Duration, Instant},
 };
 
 use axum::{Extension, extract::Path, http::HeaderMap, response::IntoResponse};
 use helix_common::{
-    GET_HEADER_REQUEST_CUTOFF_MS, GetHeaderTrace, RequestTimings, ValidatorPreferences,
-    api::proposer_api::GetHeaderParams,
-    api_provider::{ApiProvider, TimingResult},
-    chain_info::ChainInfo,
-    decoder::{Encoding, HEADER_SSZ},
-    metrics::{BID_SIGNING_LATENCY, HEADER_TIMEOUT_FETCH, HEADER_TIMEOUT_SLEEP},
-    signing::RelaySigningContext,
-    spawn_tracked,
-    utils::{extract_request_id, utcnow_ms, utcnow_ns},
+    GET_HEADER_REQUEST_CUTOFF_MS, GetHeaderTrace, RequestTimings, ValidatorPreferences, api::proposer_api::GetHeaderParams, api_provider::{ApiProvider, TimingResult, header_ip_addr}, chain_info::ChainInfo, decoder::{Encoding, HEADER_SSZ}, metrics::{BID_SIGNING_LATENCY, HEADER_TIMEOUT_FETCH, HEADER_TIMEOUT_SLEEP}, signing::RelaySigningContext, spawn_tracked, utils::{extract_request_id, utcnow_ms, utcnow_ns},
 };
 use helix_types::{BuilderBid, ForkName, GetHeaderResponse, SignedBuilderBid};
 use http::{HeaderValue, header::CONTENT_TYPE};
@@ -31,6 +21,9 @@ use crate::api::{
     router::Terminating,
 };
 
+/// Gate for p2p payload sharing - get_header reqs in < 20% of previous epoch slots.  
+const IP_FREQUENCY_THRESHOLD: f64 = 0.2;
+
 pub(super) struct ValidatedHeaderRequest {
     pub ms_into_slot: u64,
     pub validation_complete_ns: u64,
@@ -39,6 +32,7 @@ pub(super) struct ValidatedHeaderRequest {
     pub sleep_time: Option<Duration>,
     pub timeout_ms: Option<u64>,
     pub preferences: ValidatorPreferences,
+    pub ip_addr: Option<IpAddr>,
 }
 
 impl<A: Api> ProposerApi<A> {
@@ -72,6 +66,7 @@ impl<A: Api> ProposerApi<A> {
         trace!(ms_into_slot, "completed validation");
 
         let user_agent = self.api_provider.get_metadata(headers);
+        let ip_addr = header_ip_addr(headers);
 
         let TimingResult { is_mev_boost, sleep_time, timeout_ms } = self
             .api_provider
@@ -86,6 +81,7 @@ impl<A: Api> ProposerApi<A> {
             sleep_time,
             timeout_ms,
             preferences: duty.entry.preferences,
+            ip_addr,
         })
     }
 
@@ -115,6 +111,7 @@ impl<A: Api> ProposerApi<A> {
             user_agent,
             is_mev_boost,
             sleep_time,
+            ip_addr,
             ..
         } = proposer_api.validate_header_request(&params, &headers, &terminating)?;
 
@@ -187,6 +184,7 @@ impl<A: Api> ProposerApi<A> {
         let signed_bid = resign_builder_bid(bid, &proposer_api.signing_context, fork);
 
         if proposer_api.relay_config.gossip_payload_on_header && is_mev_boost {
+            let ip_gate = ip_addr.map(|ip| proposer_api.ip_tracker.increment(params.slot, &ip)).unwrap_or_default();
             spawn_tracked!(
                 async move {
                     info!("gossiping payload");
@@ -197,7 +195,7 @@ impl<A: Api> ProposerApi<A> {
                             Cow::Owned(payload_and_blobs),
                             fork,
                             Cow::Owned(bid_data),
-                            true,
+                            ip_gate < IP_FREQUENCY_THRESHOLD,
                         )
                         .await;
                 }

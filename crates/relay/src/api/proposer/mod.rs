@@ -3,6 +3,7 @@ mod get_execution_payload_bid;
 mod get_header;
 pub(crate) mod get_payload;
 mod header_stream;
+mod ip_tracker;
 mod register;
 mod submit_builder_preferences;
 mod submit_signed_beacon_block;
@@ -21,10 +22,7 @@ use helix_operator::OperatorPubSub;
 use hyper::StatusCode;
 
 use crate::{
-    api::{Api, router::Terminating},
-    auctioneer::AuctioneerHandle,
-    gossip::GrpcGossiperClientManager,
-    registration::RegWorkerHandle,
+    api::{Api, proposer::ip_tracker::IpTracker, router::Terminating}, auctioneer::AuctioneerHandle, gossip::GrpcGossiperClientManager, registration::RegWorkerHandle,
 };
 
 #[derive(Clone)]
@@ -44,6 +42,7 @@ pub struct ProposerApi<A: Api> {
     pub auctioneer_handle: AuctioneerHandle,
     pub reg_handle: RegWorkerHandle,
     pub operator_api: Option<Arc<OperatorPubSub>>,
+    pub ip_tracker: IpTracker,
 }
 
 impl<A: Api> ProposerApi<A> {
@@ -78,6 +77,7 @@ impl<A: Api> ProposerApi<A> {
             auctioneer_handle,
             reg_handle,
             operator_api,
+            ip_tracker: IpTracker::default(),
         }
     }
 }
