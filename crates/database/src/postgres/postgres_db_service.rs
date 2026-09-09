@@ -1219,6 +1219,11 @@ impl PostgresDatabaseService {
     ) -> Result<(), DatabaseError> {
         let mut record = DbMetricRecord::new("set_proposer_duties");
 
+        if proposer_duties.is_empty() {
+            record.record_success();
+            return Ok(());
+        }
+
         let mut client = self.high_priority_pool.get().await?;
         let transaction = client.transaction().await?;
 
