@@ -197,6 +197,7 @@ impl<A: Api> ProposerApi<A> {
                             Cow::Owned(payload_and_blobs),
                             fork,
                             Cow::Owned(bid_data),
+                            true,
                         )
                         .await;
                 }
