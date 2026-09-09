@@ -1,9 +1,4 @@
-use std::{
-    collections::HashMap,
-    net::SocketAddr,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
 use bytes::Bytes;
 use dashmap::DashMap;
@@ -23,7 +18,8 @@ use uuid::Uuid;
 use crate::{
     HelixSpine,
     auctioneer::{InternalBidSubmissionHeader, SubmissionRef},
-    spine::messages::{NewBidSubmission, SubmissionResultWithRef},
+    housekeeper::SlotUpdate,
+    spine::messages::{NewBidSubmission, SlotMsg, SubmissionResultWithRef},
 };
 
 pub mod types;
@@ -38,11 +34,7 @@ pub use crate::tcp_bid_recv::types::{
 
 type SubmissionError = (Token, Option<u32>, Option<Uuid>, BidSubmissionError);
 
-/// Connections aren't slot-scoped, so this reports on a wall-clock cadence
-/// instead of a slot boundary. For a registered peer, every `Message` is
-/// either a decoded submission or a header-parse error:
-/// `submissions_received + header_parse_errors == messages_from_registered`.
-/// For an unregistered peer, every `Message` is a registration attempt:
+/// `submissions_received + header_parse_errors == messages_from_registered`, and
 /// `registration_ok + registration_invalid == registration_attempts`.
 #[derive(Default)]
 struct Stats {
@@ -69,19 +61,19 @@ pub struct BidSubmissionTcpListener {
     // mutated out from under the decoder between publish and consume.
     http_submissions: Arc<SharedVector<Bytes>>,
 
+    slot_events: Arc<SharedVector<SlotUpdate>>,
+    bid_slot: u64,
     stats: Stats,
-    next_report: Instant,
 }
 
 impl BidSubmissionTcpListener {
-    const REPORT_FREQ: Duration = Duration::from_millis(500);
-
     pub fn new(
         listener_addr: SocketAddr,
         api_key_cache: Arc<DashMap<String, Vec<BlsPublicKeyBytes>>>,
         max_connections: usize,
         dcache_ptr: DCachePtr,
         http_submissions: Arc<SharedVector<Bytes>>,
+        slot_events: Arc<SharedVector<SlotUpdate>>,
     ) -> Self {
         // TODO: enable telemetry once the per-connection shm queue leak is fixed
         // Telemetry creates 4 shm queues per accepted connection keyed by peer
@@ -100,20 +92,29 @@ impl BidSubmissionTcpListener {
             registered: HashMap::with_capacity(max_connections),
             submission_errors: Vec::with_capacity(max_connections),
             http_submissions,
+            slot_events,
+            bid_slot: 0,
             stats: Stats::default(),
-            next_report: Instant::now() + Self::REPORT_FREQ,
         }
     }
 
-    fn maybe_report_stats(&mut self) {
-        let now = Instant::now();
-        if now < self.next_report {
+    fn on_slot_msg(&mut self, msg: SlotMsg) {
+        let Some(ev) = self.slot_events.get(msg.ix) else { return };
+        let bid_slot = ev.bid_slot.as_u64();
+        if bid_slot <= self.bid_slot {
             return;
         }
-        self.next_report = now + Self::REPORT_FREQ;
+        self.report_slot_stats();
+        self.bid_slot = bid_slot;
+    }
 
+    fn report_slot_stats(&mut self) {
+        if self.bid_slot == 0 {
+            return;
+        }
         let stats = std::mem::take(&mut self.stats);
         info!(
+            bid_slot = self.bid_slot,
             accepted = stats.accepted,
             reconnected = stats.reconnected,
             disconnected = stats.disconnected,
@@ -124,13 +125,15 @@ impl BidSubmissionTcpListener {
             submissions_received = stats.submissions_received,
             header_parse_errors = stats.header_parse_errors,
             results_sent = stats.results_sent,
-            "tcp bid recv tile stats"
+            "tcp bid recv slot stats"
         );
     }
 }
 
 impl Tile<HelixSpine> for BidSubmissionTcpListener {
     fn loop_body(&mut self, adapter: &mut flux::spine::SpineAdapter<HelixSpine>) {
+        adapter.consume(|msg: SlotMsg, _| self.on_slot_msg(msg));
+
         self.listener.poll_with_produce(&mut adapter.producers, |event| match event {
             PollEvent::Accept { listener: _, stream, peer_addr } => {
                 tracing::trace!("connected to new peer {:?} with token {:?}", peer_addr, stream);
@@ -256,7 +259,5 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                 response.ssz_append(buffer);
             });
         });
-
-        self.maybe_report_stats();
     }
 }

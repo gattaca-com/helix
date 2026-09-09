@@ -74,7 +74,7 @@ impl Fixture {
         SlotContext {
             slot: 1,
             parent_hash: self.parent_hash,
-            parent_block_number: 0,
+            parent_block_number: Some(0),
             timestamp: self.parent_timestamp + 12,
             prev_randao: B256::repeat_byte(0xcc),
             withdrawals: Withdrawals::default(),
