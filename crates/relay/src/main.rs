@@ -272,8 +272,12 @@ async fn run(
 
         if config.is_registration_instance {
             for core in config.cores.reg_workers.clone() {
-                let tile =
-                    RegistrationTile::new(core, chain_info.as_ref().clone(), reg_worker_rx.clone());
+                let tile = RegistrationTile::new(
+                    core,
+                    chain_info.as_ref().clone(),
+                    reg_worker_rx.clone(),
+                    slot_events.clone(),
+                );
                 attach_tile(tile, spine, TileConfig::new(core, ThreadPriority::OSDefault));
             }
         }
@@ -321,6 +325,7 @@ async fn run(
                 config.tcp_max_connections,
                 spine.spine.dcache_ptr_for::<NewBidSubmission>(),
                 http_submissions.clone(),
+                slot_events.clone(),
             );
             attach_tile(
                 block_submission_tcp_listener,
