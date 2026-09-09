@@ -23,7 +23,7 @@ pub struct ProposerDuty {
 pub struct SlotContext {
     pub slot: u64,
     pub parent_hash: B256,
-    pub parent_block_number: u64,
+    pub parent_block_number: Option<u64>,
     pub timestamp: u64,
     pub prev_randao: B256,
     pub withdrawals: Withdrawals,
@@ -144,7 +144,7 @@ mod tests {
             data: PayloadAttributesEventData {
                 proposer_index: 1,
                 proposal_slot: slot.into(),
-                parent_block_number: slot - 1,
+                parent_block_number: Some(slot - 1),
                 parent_block_root: String::new(),
                 parent_block_hash: parent,
                 payload_attributes: PayloadAttributes {
@@ -174,7 +174,7 @@ mod tests {
 
         assert_eq!(context.slot, 10);
         assert_eq!(context.parent_hash, B256::repeat_byte(0x11));
-        assert_eq!(context.parent_block_number, 9);
+        assert_eq!(context.parent_block_number, Some(9));
         assert_eq!(context.timestamp, 1_700_000_000 + 120);
         assert_eq!(context.prev_randao, B256::repeat_byte(0xcc));
         assert_eq!(context.parent_beacon_block_root, B256::repeat_byte(0xdd));
@@ -337,11 +337,40 @@ mod tests {
         let context = tracker.on_payload_attributes(event).expect("a complete event must build");
 
         assert_eq!(context.slot, 11111);
-        assert_eq!(context.parent_block_number, 999);
+        assert_eq!(context.parent_block_number, Some(999));
         assert_eq!(context.timestamp, 1_700_000_000);
         assert_eq!(context.parent_hash, B256::repeat_byte(0x22));
         assert_eq!(context.parent_beacon_block_root, B256::repeat_byte(0x44));
         assert_eq!(context.withdrawals.len(), 1);
         assert_eq!(context.withdrawals[0].amount, 32_000_000_000);
+    }
+
+    #[test]
+    fn parses_a_gloas_payload_attributes_event_without_a_parent_block_number() {
+        let json = r#"{
+            "version": "gloas",
+            "data": {
+                "proposer_index": "123",
+                "proposal_slot": "11111",
+                "parent_block_root": "0x1111111111111111111111111111111111111111111111111111111111111111",
+                "parent_block_hash": "0x2222222222222222222222222222222222222222222222222222222222222222",
+                "payload_attributes": {
+                    "timestamp": "1700000000",
+                    "prev_randao": "0x3333333333333333333333333333333333333333333333333333333333333333",
+                    "suggested_fee_recipient": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                    "withdrawals": [],
+                    "parent_beacon_block_root": "0x4444444444444444444444444444444444444444444444444444444444444444"
+                }
+            }
+        }"#;
+
+        let event: PayloadAttributesEvent = serde_json::from_str(json).unwrap();
+        let mut tracker = SlotTracker::default();
+        tracker.on_duties(vec![duty_response(11111)]);
+
+        let context = tracker.on_payload_attributes(event).expect("a Gloas event must build");
+
+        assert_eq!(context.slot, 11111);
+        assert_eq!(context.parent_block_number, None);
     }
 }

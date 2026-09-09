@@ -23,7 +23,7 @@ fn slot_context() -> SlotContext {
     SlotContext {
         slot: 42,
         parent_hash: B256::repeat_byte(0x11),
-        parent_block_number: 41,
+        parent_block_number: Some(41),
         timestamp: 1_700_000_000,
         prev_randao: B256::repeat_byte(0xcc),
         withdrawals: Withdrawals::default(),
