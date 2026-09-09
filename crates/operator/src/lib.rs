@@ -53,6 +53,7 @@ pub struct OperatorPubSub {
     outgoing_msgs: Sender<(Option<String>, OperatorMessage)>,
     incoming_msgs: Receiver<(Operator, OperatorMessage)>,
     task_handle: AbortHandle,
+    share_get_header_payloads: bool,
 }
 
 impl Drop for OperatorPubSub {
@@ -67,6 +68,7 @@ impl OperatorPubSub {
         local_keypair: Keypair,
         operators: Vec<Operator>,
         mode: OperatorP2pMode,
+        share_get_header_payloads: bool,
     ) -> Self {
         let (outgoing_msgs, out_recv) = bounded(128);
         let (in_send, incoming_msgs) = bounded(128);
@@ -81,7 +83,12 @@ impl OperatorPubSub {
             mode,
         ));
 
-        Self { outgoing_msgs, incoming_msgs, task_handle: handle.abort_handle() }
+        Self {
+            outgoing_msgs,
+            incoming_msgs,
+            task_handle: handle.abort_handle(),
+            share_get_header_payloads,
+        }
     }
 
     pub async fn send(
@@ -111,6 +118,10 @@ impl OperatorPubSub {
             Err(e) => Err(e.into()),
         }
     }
+
+    pub fn share_get_header_payloads(&self) -> bool {
+        self.share_get_header_payloads
+    }
 }
 
 pub fn spawn_operator_connection<F>(
@@ -134,6 +145,7 @@ where
         operator_keypair,
         config.operators,
         config.mode,
+        config.share_get_header_payloads,
     ));
 
     // spawn a task to load initial db state
@@ -305,6 +317,7 @@ mod tests {
             keypair_a,
             vec![operator_b],
             helix_common::OperatorP2pMode::On,
+            false,
         );
         // Ensure A is listening before B initiates its dial.
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -313,6 +326,7 @@ mod tests {
             keypair_b,
             vec![operator_a],
             helix_common::OperatorP2pMode::On,
+            false,
         );
         // Wait for the gossipsub subscription exchange before publishing. Messages are
         // intentionally best-effort and are not queued for peers that have not subscribed yet.

@@ -369,6 +369,7 @@ impl<A: Api> ProposerApi<A> {
             Cow::Borrowed(&to_proposer.data),
             fork,
             Cow::Borrowed(&bid),
+            false,
         )
         .await;
 
@@ -546,6 +547,7 @@ impl<A: Api> ProposerApi<A> {
         execution_payload: Cow<'_, PayloadAndBlobs>,
         fork_name: ForkName,
         bid: Cow<'_, PayloadBidData>,
+        header: bool,
     ) {
         let params = BroadcastPayloadParams::to_proto(
             &execution_payload,
@@ -557,6 +559,7 @@ impl<A: Api> ProposerApi<A> {
         self.gossiper.broadcast_payload(params).await;
 
         if let Some(operator_pubsub) = self.operator_api.as_ref() &&
+            (!header || operator_pubsub.share_get_header_payloads()) &&
             let Err(e) = operator_pubsub
                 .send(
                     None,
