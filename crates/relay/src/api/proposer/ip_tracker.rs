@@ -20,7 +20,7 @@ impl Default for IpTracker {
     }
 }
 
-/// Maintains per-slot counts in a rotating wheel. 
+/// Maintains per-slot counts in a rotating wheel.
 pub(crate) struct Tracker<const N: usize, K: Clone + Eq + Hash> {
     buckets: [FxHashMap<K, usize>; N],
     current: usize,
@@ -29,11 +29,7 @@ pub(crate) struct Tracker<const N: usize, K: Clone + Eq + Hash> {
 
 impl<const N: usize, K: Clone + Eq + Hash> Default for Tracker<N, K> {
     fn default() -> Self {
-        Self {
-           buckets: std::array::from_fn(|_| FxHashMap::default()),
-           current: 0,
-           seq: 0,
-        }
+        Self { buckets: std::array::from_fn(|_| FxHashMap::default()), current: 0, seq: 0 }
     }
 }
 

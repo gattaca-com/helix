@@ -22,7 +22,10 @@ use helix_operator::OperatorPubSub;
 use hyper::StatusCode;
 
 use crate::{
-    api::{Api, proposer::ip_tracker::IpTracker, router::Terminating}, auctioneer::AuctioneerHandle, gossip::GrpcGossiperClientManager, registration::RegWorkerHandle,
+    api::{Api, proposer::ip_tracker::IpTracker, router::Terminating},
+    auctioneer::AuctioneerHandle,
+    gossip::GrpcGossiperClientManager,
+    registration::RegWorkerHandle,
 };
 
 #[derive(Clone)]

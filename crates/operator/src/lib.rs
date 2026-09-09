@@ -81,11 +81,7 @@ impl OperatorPubSub {
             mode,
         ));
 
-        Self {
-            outgoing_msgs,
-            incoming_msgs,
-            task_handle: handle.abort_handle(),
-        }
+        Self { outgoing_msgs, incoming_msgs, task_handle: handle.abort_handle() }
     }
 
     pub async fn send(
