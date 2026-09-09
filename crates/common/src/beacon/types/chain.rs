@@ -81,11 +81,27 @@ pub struct PayloadAttributesEventData {
     #[serde(with = "serde_utils::quoted_u64")]
     pub proposer_index: u64,
     pub proposal_slot: Slot,
-    #[serde(with = "serde_utils::quoted_u64")]
-    pub parent_block_number: u64,
+    /// Absent from Gloas, which no longer carries it.
+    #[serde(default, with = "quoted_u64_opt")]
+    pub parent_block_number: Option<u64>,
     pub parent_block_root: String,
     pub parent_block_hash: B256,
     pub payload_attributes: PayloadAttributes,
+}
+
+mod quoted_u64_opt {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use serde_utils::quoted_u64::Quoted;
+
+    pub fn serialize<S: Serializer>(value: &Option<u64>, serializer: S) -> Result<S::Ok, S::Error> {
+        value.map(|value| Quoted { value }).serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<u64>, D::Error> {
+        Ok(Option::<Quoted<u64>>::deserialize(deserializer)?.map(|quoted| quoted.value))
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
