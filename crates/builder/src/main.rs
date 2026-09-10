@@ -4,6 +4,7 @@ use flux::{
     tile::{TileConfig, attach_tile},
     utils::ThreadPriority,
 };
+use helix_common::utils::install_default_crypto_provider;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -31,6 +32,8 @@ use validation::{BlockValidator, server as validation_server};
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 fn main() -> eyre::Result<()> {
+    install_default_crypto_provider();
+
     let cli = BuilderCli::parse();
     init_tracing(&cli);
 
