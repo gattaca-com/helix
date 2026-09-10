@@ -7,6 +7,8 @@ use tokio::sync::oneshot;
 use tracing::warn;
 use tree_hash::TreeHash;
 
+const WEI_PER_GWEI: u64 = 1_000_000_000;
+
 use crate::{
     api::proposer::{GloasBuilderIdentity, ProposerApiError},
     auctioneer::{
@@ -80,8 +82,9 @@ pub(super) fn build_signed_bid(
     let execution_requests = execution_requests_to_gloas(entry.bid_data_ref().execution_requests);
     let execution_requests_root = execution_requests.tree_hash_root();
 
-    // Per gattaca-com/helix#489: no payment-split product need yet, so execution_payment = value.
-    let value = entry.value().saturating_to::<u64>();
+    // The proposer is paid in-block, so the enshrined `value` stays 0.
+    let execution_payment =
+        (entry.value() / alloy_primitives::U256::from(WEI_PER_GWEI)).saturating_to::<u64>();
 
     let bid = ExecutionPayloadBid {
         parent_block_hash: ExecutionBlockHash(params.parent_hash),
@@ -92,8 +95,8 @@ pub(super) fn build_signed_bid(
         gas_limit: payload.gas_limit,
         builder_index: identity.builder_index,
         slot,
-        value,
-        execution_payment: value,
+        value: 0,
+        execution_payment,
         blob_kzg_commitments: convert_kzg_commitments_to_progressive(
             &entry.payload_and_blobs().blobs_bundle.commitments,
         ),
@@ -279,7 +282,7 @@ mod tests {
         let block_hash = B256::repeat_byte(0x99);
         let parent_hash = B256::repeat_byte(0x11);
         let parent_root = B256::repeat_byte(0x22);
-        let entry = payload_entry(block_hash, 42);
+        let entry = payload_entry(block_hash, 42 * WEI_PER_GWEI);
         let identity = bid_identity(7);
         let params = params(parent_hash, parent_root);
 
@@ -289,8 +292,8 @@ mod tests {
         assert_eq!(signed_bid.message.parent_block_hash.0, parent_hash);
         assert_eq!(signed_bid.message.parent_block_root, parent_root);
         assert_eq!(signed_bid.message.builder_index, 7);
-        assert_eq!(signed_bid.message.value, 42);
-        assert_eq!(signed_bid.message.execution_payment, 42);
+        assert_eq!(signed_bid.message.value, 0, "the proposer is paid in-block");
+        assert_eq!(signed_bid.message.execution_payment, 42, "wei converts to gwei");
 
         let epoch = signed_bid.message.slot.epoch(helix_types::MainnetEthSpec::slots_per_epoch());
         let fork = chain_info.spec.fork_at_epoch(epoch);
