@@ -1,6 +1,6 @@
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
 use alloy_primitives::{Address, B256, U256};
@@ -13,7 +13,7 @@ use helix_common::{
     },
     bid_submission::OptimisticVersion,
     is_local_dev,
-    utils::alert_discord,
+    utils::{alert_discord, utcnow_sec},
 };
 use helix_types::{BlsPublicKeyBytes, MergedBlock, SignedBidSubmission};
 use tracing::{error, warn};
@@ -22,6 +22,27 @@ use crate::{
     postgres::postgres_db_service::{DbRequest, PendingBlockSubmissionValue},
     types::{BuilderInfoDocument, SavePayloadParams},
 };
+
+static DROPPED_SUBMISSIONS: AtomicU64 = AtomicU64::new(0);
+static LAST_DROP_LOG_SEC: AtomicU64 = AtomicU64::new(0);
+
+/// Counts one dropped submission. Returns the number to report when this caller wins the
+/// once-a-second log, so a full channel costs one line instead of one line per submission.
+fn count_dropped_submission(
+    now_sec: u64,
+    dropped: &AtomicU64,
+    last_log_sec: &AtomicU64,
+) -> Option<u64> {
+    dropped.fetch_add(1, Ordering::Relaxed);
+    let last = last_log_sec.load(Ordering::Relaxed);
+    if now_sec <= last {
+        return None;
+    }
+    if last_log_sec.compare_exchange(last, now_sec, Ordering::Relaxed, Ordering::Relaxed).is_err() {
+        return None;
+    }
+    Some(dropped.swap(0, Ordering::Relaxed))
+}
 
 #[derive(Clone)]
 struct DbSender<T> {
@@ -129,7 +150,11 @@ impl DbHandle {
             is_adjusted,
             live_ts,
         }) {
-            error!(%err, "failed to store block submission");
+            if let Some(dropped) =
+                count_dropped_submission(utcnow_sec(), &DROPPED_SUBMISSIONS, &LAST_DROP_LOG_SEC)
+            {
+                error!(%err, dropped, "failed to store block submissions");
+            }
         }
     }
 
@@ -251,5 +276,22 @@ impl DbHandle {
         if let Err(err) = self.sender.try_send(DbRequest::SaveMergedBlocks { blocks }) {
             error!(%err, "failed to send SaveMergedBlocks request");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A full channel must cost one log a second, and no dropped submission may go uncounted.
+    #[test]
+    fn dropped_submissions_report_once_a_second_and_lose_nothing() {
+        let dropped = AtomicU64::new(0);
+        let last_log_sec = AtomicU64::new(0);
+
+        assert_eq!(count_dropped_submission(10, &dropped, &last_log_sec), Some(1));
+        assert_eq!(count_dropped_submission(10, &dropped, &last_log_sec), None);
+        assert_eq!(count_dropped_submission(10, &dropped, &last_log_sec), None);
+        assert_eq!(count_dropped_submission(11, &dropped, &last_log_sec), Some(3));
     }
 }

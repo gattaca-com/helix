@@ -2,12 +2,25 @@ use deadpool_postgres::PoolError;
 use helix_types::{BlsPublicKey, BlsPublicKeyBytes, CryptoError, SszError};
 use thiserror::Error;
 
+/// `tokio_postgres::Error` displays as just "db error": the SQLSTATE and the server's
+/// message live in its source chain.
+fn source_chain(err: &dyn std::error::Error) -> String {
+    let mut out = err.to_string();
+    let mut source = err.source();
+    while let Some(err) = source {
+        out.push_str(": ");
+        out.push_str(&err.to_string());
+        source = err.source();
+    }
+    out
+}
+
 #[derive(Debug, Error)]
 pub enum DatabaseError {
-    #[error("Postgres Pool error: {0}")]
+    #[error("Postgres Pool error: {}", source_chain(.0))]
     PostgresPool(#[from] PoolError),
 
-    #[error("PostgresDB error: {0}")]
+    #[error("PostgresDB error: {}", source_chain(.0))]
     Postgres(#[from] tokio_postgres::Error),
 
     #[error("Validator registration not found")]
@@ -57,4 +70,23 @@ pub enum DatabaseError {
 
     #[error("General error")]
     GeneralError,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The cause must reach the log: a bare Display drops it.
+    #[test]
+    fn source_chain_joins_every_cause() {
+        #[derive(Debug, Error)]
+        #[error("inner")]
+        struct Inner;
+
+        #[derive(Debug, Error)]
+        #[error("outer")]
+        struct Outer(#[source] Inner);
+
+        assert_eq!(source_chain(&Outer(Inner)), "outer: inner");
+    }
 }

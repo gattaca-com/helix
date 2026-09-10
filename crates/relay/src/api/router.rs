@@ -1,5 +1,5 @@
 use std::{
-    sync::{Arc, atomic::AtomicBool},
+    sync::{Arc, LazyLock, Mutex, atomic::AtomicBool},
     time::Duration,
 };
 
@@ -16,12 +16,13 @@ use hyper::{
     HeaderMap, Uri,
     header::{CONTENT_LENGTH, HeaderName},
 };
+use rustc_hash::FxHashMap;
 use tower::{BoxError, ServiceBuilder, timeout::TimeoutLayer};
 use tower_governor::{
     GovernorLayer, governor::GovernorConfigBuilder, key_extractor::SmartIpKeyExtractor,
 };
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::{
     api::{
@@ -33,6 +34,60 @@ use crate::{
     },
     network::api::RelayNetworkApi,
 };
+
+/// Source address and route.
+type TimeoutKey = (Box<str>, Box<str>);
+type TimeoutCounts = FxHashMap<TimeoutKey, u64>;
+
+/// Request timeouts, counted per source address and route instead of logged one by one:
+/// a single slow submitter used to be 250k warnings a day.
+static REQUEST_TIMEOUTS: LazyLock<Mutex<TimeoutCounts>> =
+    LazyLock::new(|| Mutex::new(TimeoutCounts::default()));
+
+/// Caps the map so an unknown set of source addresses cannot grow it without bound.
+const MAX_TIMEOUT_KEYS: usize = 1024;
+
+const TIMEOUT_REPORT_SECS: u64 = 60;
+
+fn record_timeout(counts: &mut TimeoutCounts, source_ip: &str, uri: &str) {
+    let key = (Box::from(source_ip), Box::from(uri));
+    if counts.len() >= MAX_TIMEOUT_KEYS && !counts.contains_key(&key) {
+        *counts.entry((Box::from("other"), Box::from(uri))).or_default() += 1;
+        return;
+    }
+    *counts.entry(key).or_default() += 1;
+}
+
+fn count_request_timeout(source_ip: &str, uri: &str) {
+    let mut counts = REQUEST_TIMEOUTS.lock().unwrap_or_else(|e| e.into_inner());
+    record_timeout(&mut counts, source_ip, uri);
+}
+
+/// Total, and the worst sources first as `<ip> <uri>=<count>`.
+fn timeout_report(counts: TimeoutCounts) -> (u64, Vec<String>) {
+    let total: u64 = counts.values().sum();
+    let mut by_source: Vec<(TimeoutKey, u64)> = counts.into_iter().collect();
+    by_source.sort_unstable_by_key(|((ip, uri), count)| {
+        (std::cmp::Reverse(*count), ip.clone(), uri.clone())
+    });
+    let by_source =
+        by_source.iter().take(10).map(|((ip, uri), count)| format!("{ip} {uri}={count}")).collect();
+    (total, by_source)
+}
+
+/// Logs one line for the whole window, then starts the next one.
+fn report_request_timeouts() {
+    let counts = {
+        let mut counts = REQUEST_TIMEOUTS.lock().unwrap_or_else(|e| e.into_inner());
+        std::mem::take(&mut *counts)
+    };
+    if counts.is_empty() {
+        return;
+    }
+
+    let (total, by_source) = timeout_report(counts);
+    warn!(total, window_secs = TIMEOUT_REPORT_SECS, ?by_source, "requests timed out");
+}
 
 #[derive(Clone)]
 pub struct Terminating(pub Arc<AtomicBool>);
@@ -129,15 +184,16 @@ pub fn build_router<A: Api>(
         router = router.route(&route_info.route.path(), maybe_limited);
     }
 
-    // periodically prune rate limits
+    // periodically prune rate limits and report request timeouts
     std::thread::spawn(move || {
-        let interval = Duration::from_secs(60);
+        let interval = Duration::from_secs(TIMEOUT_REPORT_SECS);
         loop {
             std::thread::sleep(interval);
             for (limiter, route) in limiters.iter() {
                 info!(size = limiters.len(), %route, "pruning rate limits");
                 limiter.retain_recent();
             }
+            report_request_timeouts();
         }
     });
 
@@ -156,11 +212,13 @@ pub fn build_router<A: Api>(
                 // caller at this layer. Not the API key -- it's a credential.
                 let header =
                     |name| headers.get(name).and_then(|v| v.to_str().ok()).unwrap_or("unknown");
-                warn!(
+                let source_ip = header(X_FORWARDED_FOR);
+                count_request_timeout(source_ip, uri.path());
+                debug!(
                     uri = %uri.path(),
                     %request_id,
                     content_length = header(CONTENT_LENGTH),
-                    source_ip = header(X_FORWARDED_FOR),
+                    source_ip,
                     "request timed out {:?}",
                     e
                 );
@@ -183,4 +241,35 @@ pub fn build_router<A: Api>(
         .layer(Extension(Terminating(terminating)));
 
     router
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Timeouts must aggregate per source and route, worst first.
+    #[test]
+    fn timeouts_aggregate_per_source() {
+        let mut counts = TimeoutCounts::default();
+        record_timeout(&mut counts, "1.1.1.1", "/blocks");
+        record_timeout(&mut counts, "1.1.1.1", "/blocks");
+        record_timeout(&mut counts, "2.2.2.2", "/blocks");
+
+        let (total, by_source) = timeout_report(counts);
+
+        assert_eq!(total, 3);
+        assert_eq!(by_source, vec!["1.1.1.1 /blocks=2", "2.2.2.2 /blocks=1"]);
+    }
+
+    /// An unknown set of source addresses must not grow the map without bound.
+    #[test]
+    fn timeouts_from_unknown_sources_are_capped() {
+        let mut counts = TimeoutCounts::default();
+        for i in 0..MAX_TIMEOUT_KEYS + 10 {
+            record_timeout(&mut counts, &format!("10.0.0.{i}"), "/blocks");
+        }
+
+        assert_eq!(counts.len(), MAX_TIMEOUT_KEYS + 1);
+        assert_eq!(counts.get(&(Box::from("other"), Box::from("/blocks"))), Some(&10));
+    }
 }

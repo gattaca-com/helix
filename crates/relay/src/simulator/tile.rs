@@ -114,6 +114,9 @@ impl Tile<HelixSpine> for SimulatorTile {
             ToSimKind::NewSlot => {
                 self.on_new_slot(msg.bid_slot);
             }
+            ToSimKind::FeedCache => {
+                self.handle_feed_cache(msg.ix, msg.bid_slot);
+            }
         });
     }
 
@@ -321,6 +324,19 @@ impl SimulatorTile {
         }
     }
 
+    /// Feeds a submission the tile is never asked to simulate, such as one the auctioneer
+    /// rejected in validation after its transactions entered the auctioneer's own cache.
+    fn handle_feed_cache(&mut self, decoded_ix: usize, bid_slot: u64) {
+        if bid_slot != self.last_bid_slot {
+            return;
+        }
+        let Some(decoded_data) = self.decoded.get(decoded_ix) else {
+            warn!(ix = decoded_ix, "decoded submission not found in ring, cannot feed cache");
+            return;
+        };
+        self.feed_cache(&decoded_data.submission_data.submission);
+    }
+
     #[timed]
     fn spawn_sim(&mut self, id: usize, req: ValidationRequest) {
         let Some(decoded_data) = self.decoded.get(req.decoded_ix) else {
@@ -365,7 +381,7 @@ impl SimulatorTile {
                         sim.pending += 1;
                         let result_ix = self
                             .sim_results
-                            .push(SimResult::Validate((id, Some(infra_error(&req)))));
+                            .push(SimResult::Validate((id, Some(hydration_error(&req)))));
                         let _ = self.task_tx.try_send(SimTileInternalEvent::TaskDone {
                             id,
                             paused_until: None,
@@ -907,6 +923,15 @@ fn infra_error(req: &ValidationRequest) -> SimulationResultInner {
     }
 }
 
+fn hydration_error(req: &ValidationRequest) -> SimulationResultInner {
+    SimulationResultInner {
+        submission_ref: req.submission_ref,
+        optimistic_version: req.optimistic_version(),
+        bid: None,
+        result: Err(BlockSimError::RelayHydrationFailed),
+    }
+}
+
 fn infra_merge_error(req: &MergedValidationRequest) -> MergedSimulationResultInner {
     MergedSimulationResultInner {
         merged_block_ix: req.merged_block_ix,
@@ -999,9 +1024,10 @@ mod tests {
     use helix_common::decoder::{Encoding, SubmissionDecoderParams};
     use helix_tcp_types::{Compression, MergeType};
     use helix_types::{
-        BlobWithMetadata, BlobsBundle, ExecutionPayload, ExecutionRequests, ForkName,
-        MergedBlockTrace, SubmissionVersion, TestRandom, dehydrated_submission_with_txs_for_test,
-        full_tx_for_test, tx_cache_key, tx_hash_ref_for_test,
+        BlobWithMetadata, BlobsBundle, DehydratedBidSubmission, ExecutionPayload,
+        ExecutionRequests, ForkName, MergedBlockTrace, SubmissionVersion, TestRandom,
+        dehydrated_submission_with_txs_for_test, full_tx_for_test, tx_cache_key,
+        tx_hash_ref_for_test,
     };
     use rand::{SeedableRng, rngs::SmallRng};
 
@@ -1088,6 +1114,10 @@ mod tests {
         let mut dehydrated =
             dehydrated_submission_with_txs_for_test(vec![tx_hash_ref_for_test(tx_cache_key(&tx))]);
         dehydrated.set_builder_pubkey_for_test(builder);
+        decoded_from(dehydrated)
+    }
+
+    fn decoded_from(dehydrated: DehydratedBidSubmission) -> SubmissionDataWithSpan {
         let submission_data = SubmissionData {
             submission_ref: SubmissionRef::Internal,
             submission: Submission::Dehydrated(dehydrated),
@@ -1219,6 +1249,44 @@ mod tests {
             tile.hydration_cache.can_hydrate(&later, max_blobs),
             "a queued submission's transactions must be usable by the next submission"
         );
+    }
+
+    /// gattaca-com/helix#537: the auctioneer rejects a submission in validation, feeds its
+    /// own cache and asks for no simulation. The sim tile must still learn that
+    /// submission's transactions, or every later reference to them misses.
+    #[test]
+    fn a_feed_cache_message_fills_from_a_submission_that_is_never_simulated() {
+        let tx = full_tx_for_test(1);
+        let earlier = dehydrated_submission_with_txs_for_test(vec![tx.clone()]);
+        let later =
+            dehydrated_submission_with_txs_for_test(vec![tx_hash_ref_for_test(tx_cache_key(&tx))]);
+        let decoded = decoded_from(earlier);
+        let bid_slot = decoded.submission_data.submission.bid_slot();
+
+        let mut tile = test_tile();
+        tile.last_bid_slot = bid_slot;
+        let ix = tile.decoded.push(decoded);
+        tile.handle_feed_cache(ix, bid_slot);
+
+        assert!(
+            tile.hydration_cache.can_hydrate(&later, tile.chain_info.max_blobs_per_block()),
+            "a rejected submission must still fill the sim tile's cache"
+        );
+    }
+
+    /// The cache is cleared on each slot, so a feed from another slot must not refill it.
+    #[test]
+    fn a_feed_cache_message_for_another_slot_is_ignored() {
+        let tx = full_tx_for_test(1);
+        let decoded = decoded_from(dehydrated_submission_with_txs_for_test(vec![tx]));
+        let bid_slot = decoded.submission_data.submission.bid_slot();
+
+        let mut tile = test_tile();
+        tile.last_bid_slot = bid_slot + 1;
+        let ix = tile.decoded.push(decoded);
+        tile.handle_feed_cache(ix, bid_slot);
+
+        assert_eq!(tile.hydration_cache.tx_count(), 0);
     }
 
     /// A full submission carries no hash references, so feeding it is a no-op for

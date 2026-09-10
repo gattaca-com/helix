@@ -45,8 +45,11 @@ pub async fn process_gossip_messages<A: Api>(
                         Ok(_) => {
                             debug!(request_id = %payload.request_id, "gossiped payload processed")
                         }
-                        Err(err) => {
+                        Err(err) if err.should_report_gossiped() => {
                             error!(request_id = %payload.request_id, %err, "error processing gossiped payload");
+                        }
+                        Err(err) => {
+                            debug!(request_id = %payload.request_id, %err, "gossiped payload not processed");
                         }
                     }
                 });

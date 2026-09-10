@@ -9,7 +9,7 @@ use std::{
 use alloy_primitives::B256;
 use aws_sdk_s3::{
     Client,
-    config::{BehaviorVersion, Credentials, Region},
+    config::{BehaviorVersion, Credentials, Region, retry::RetryConfig},
     error::{DisplayErrorContext, ProvideErrorMetadata},
     primitives::ByteStream,
 };
@@ -33,10 +33,13 @@ impl S3Data {
         let secret_access_key = expect_env_var(ENV_SECRET_ACCESS_KEY);
 
         let creds = Credentials::new(&access_key_id, &secret_access_key, None, None, "env");
+        // A hand-built config retries nothing by default, so a `SlowDown` lost the object.
+        // Adaptive mode also paces the client down while the bucket throttles us.
         let sdk_config = aws_sdk_s3::Config::builder()
             .behavior_version(BehaviorVersion::latest())
             .credentials_provider(creds)
             .region(Region::new(config.region.clone()))
+            .retry_config(RetryConfig::adaptive().with_max_attempts(3))
             .build();
         let client = Client::from_conf(sdk_config);
 

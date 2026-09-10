@@ -482,17 +482,18 @@ impl MergeEngine {
         if msg.merge_orders.len() > MAX_ORDERS_PER_BLOCK {
             return Err(fail(MergeError::LimitExceeded("max orders per block".into())));
         }
+        // Decode txs and recover senders in parallel, through the per-slot
+        // cache (incremental submissions share most txs); resolves any
+        // tx-hash references against txs already seen whole this slot. Runs before the
+        // order checks so a block rejected for its orders still fills the tx cache.
+        let decoded = decode_block_txs(&msg, &mut state.recovery_cache, &mut state.tx_cache)
+            .map_err(|err| fail(MergeError::InvalidOrder(err)))?;
+
         for order in &msg.merge_orders {
             order
                 .validate(tx_bytes.len())
                 .map_err(|_| fail(MergeError::InvalidOrder("order ref out of range".into())))?;
         }
-
-        // Decode txs and recover senders in parallel, through the per-slot
-        // cache (incremental submissions share most txs); resolves any
-        // tx-hash references against txs already seen whole this slot.
-        let decoded = decode_block_txs(&msg, &mut state.recovery_cache, &mut state.tx_cache)
-            .map_err(|err| fail(MergeError::InvalidOrder(err)))?;
         let txs = Arc::new(decoded);
 
         let prepared_orders: Vec<PreparedOrder> = msg
@@ -596,58 +597,86 @@ fn decode_block_txs(
         New(Box<Partial>),
     }
 
-    let entries: Vec<Entry> = tx_bytes
+    // Never short-circuit: this block's own txs must reach the caches even when one of its
+    // references does not resolve, or every later block that references them fails too.
+    let mut first_err: Option<String> = None;
+    let entries: Vec<Option<Entry>> = tx_bytes
         .iter()
         .map(|bytes| {
-            if is_tx_hash_ref(bytes) {
+            let entry = if is_tx_hash_ref(bytes) {
                 let hash = B256::from_slice(bytes);
-                return tx_cache
+                tx_cache
                     .get(&hash)
                     .cloned()
                     .map(Entry::Cached)
-                    .ok_or_else(|| format!("unresolved tx hash reference: {hash}"));
+                    .ok_or_else(|| format!("unresolved tx hash reference: {hash}"))
+            } else {
+                ethrex_common::types::Transaction::decode_canonical(bytes)
+                    .map_err(|e| format!("tx decode: {e}"))
+                    .map(|tx| {
+                        let hash = keccak256(bytes);
+                        Entry::New(Box::new(Partial {
+                            tx,
+                            hash,
+                            cached_sender: recovery_cache.get(&hash).copied(),
+                        }))
+                    })
+            };
+            match entry {
+                Ok(entry) => Some(entry),
+                Err(err) => {
+                    first_err.get_or_insert(err);
+                    None
+                }
             }
-            let tx = ethrex_common::types::Transaction::decode_canonical(bytes)
-                .map_err(|e| format!("tx decode: {e}"))?;
-            let hash = keccak256(bytes);
-            Ok(Entry::New(Box::new(Partial {
-                tx,
-                hash,
-                cached_sender: recovery_cache.get(&hash).copied(),
-            })))
         })
-        .collect::<Result<_, String>>()?;
+        .collect();
 
-    let decoded: Vec<Arc<DecodedTx>> = entries
+    let decoded: Vec<Option<Result<Arc<DecodedTx>, String>>> = entries
         .into_par_iter()
         .map(|entry| {
-            let partial = match entry {
-                Entry::Cached(tx) => return Ok(tx),
+            let partial = match entry? {
+                Entry::Cached(tx) => return Some(Ok(tx)),
                 Entry::New(partial) => *partial,
             };
             let sender = match partial.cached_sender {
                 Some(sender) => sender,
-                None => {
-                    partial.tx.sender(&NativeCrypto).map_err(|e| format!("sender recovery: {e}"))?
-                }
+                None => match partial.tx.sender(&NativeCrypto) {
+                    Ok(sender) => sender,
+                    Err(e) => return Some(Err(format!("sender recovery: {e}"))),
+                },
             };
             let blob_hashes =
                 partial.tx.blob_versioned_hashes().into_iter().map(convert::b256).collect();
-            Ok(Arc::new(DecodedTx {
+            Some(Ok(Arc::new(DecodedTx {
                 gas_limit: partial.tx.gas_limit(),
                 blob_hashes,
                 hash: partial.hash,
                 sender,
                 tx: partial.tx,
-            }))
+            })))
         })
-        .collect::<Result<_, String>>()?;
+        .collect();
 
-    for tx in &decoded {
-        recovery_cache.insert(tx.hash, tx.sender);
-        tx_cache.entry(tx.hash).or_insert_with(|| tx.clone());
+    let mut txs = Vec::with_capacity(decoded.len());
+    for entry in decoded {
+        match entry {
+            Some(Ok(tx)) => {
+                recovery_cache.insert(tx.hash, tx.sender);
+                tx_cache.entry(tx.hash).or_insert_with(|| tx.clone());
+                txs.push(tx);
+            }
+            Some(Err(err)) => {
+                first_err.get_or_insert(err);
+            }
+            None => {}
+        }
     }
-    Ok(decoded)
+
+    match first_err {
+        Some(err) => Err(err),
+        None => Ok(txs),
+    }
 }
 
 fn prepare_order(

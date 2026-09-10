@@ -502,39 +502,47 @@ impl PostgresDatabaseService {
         let svc_clone = self.clone();
         tokio::spawn(async move {
             let mut batch = Vec::with_capacity(2_000);
-            let mut ticker = tokio::time::interval(Duration::from_secs(5));
+            let mut ticker = tokio::time::interval(Duration::from_secs(1));
             let mut last_slot_processed = 0;
             loop {
-                tokio::select! {
-                    _ = ticker.tick() => {
-                        // Drain all available messages from the crossbeam channel
-                        while let Ok(item) = batch_receiver.try_recv() {
-                            batch.push(item);
-                        }
+                ticker.tick().await;
 
-                        if !batch.is_empty() {
+                // Keep draining until the channel is empty: submissions arrive during a
+                // flush too, and a full channel drops them.
+                loop {
+                    while let Ok(item) = batch_receiver.try_recv() {
+                        batch.push(item);
+                    }
 
-                            let mut retry_count = 0;
-                            const MAX_RETRIES: usize = 3;
+                    if batch.is_empty() {
+                        break;
+                    }
 
-                            loop {
-                                match svc_clone._flush_block_submissions(&batch, &mut last_slot_processed).await {
-                                    Ok(_) => break,
-                                    Err(e) => {
-                                        retry_count += 1;
+                    let mut retry_count = 0;
+                    const MAX_RETRIES: usize = 3;
 
-                                        if retry_count >= MAX_RETRIES {
-                                            error!("block batch failed after {} retries: {:?}", retry_count, e);
-                                            break;
-                                        }
+                    loop {
+                        match svc_clone
+                            ._flush_block_submissions(&batch, &mut last_slot_processed)
+                            .await
+                        {
+                            Ok(_) => break,
+                            Err(e) => {
+                                retry_count += 1;
 
-                                        tokio::time::sleep(Duration::from_millis(100)).await;
-                                    }
+                                if retry_count >= MAX_RETRIES {
+                                    error!(
+                                        "block batch failed after {} retries: {:?}",
+                                        retry_count, e
+                                    );
+                                    break;
                                 }
+
+                                tokio::time::sleep(Duration::from_millis(100)).await;
                             }
-                            batch.clear();
                         }
                     }
+                    batch.clear();
                 }
             }
         });
