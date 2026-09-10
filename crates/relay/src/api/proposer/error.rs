@@ -138,6 +138,22 @@ pub enum ProposerApiError {
     MissingTimingHeaders,
 }
 
+impl ProposerApiError {
+    /// Whether a failure to process a *gossiped* payload deserves an error log. The gossip
+    /// path races the relay that served the request, so these outcomes are expected.
+    pub fn should_report_gossiped(&self) -> bool {
+        !matches!(
+            self,
+            Self::RequestForPastSlot { .. } |
+                Self::NoExecutionPayloadFound |
+                Self::ProposerNotRegistered |
+                Self::GetPayloadRequestTooLate { .. } |
+                Self::GetPayloadAlreadyReceived |
+                Self::DeliveringPayload
+        )
+    }
+}
+
 impl From<DecodeError> for ProposerApiError {
     fn from(value: DecodeError) -> Self {
         Self::SszDecodeError(value)
@@ -197,5 +213,24 @@ impl IntoResponse for ProposerApiError {
             };
 
         (code, self.to_string()).into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A gossiped payload that another relay already served must not log as an error.
+    #[test]
+    fn gossiped_payload_races_are_not_reported() {
+        assert!(!ProposerApiError::NoExecutionPayloadFound.should_report_gossiped());
+        assert!(
+            !ProposerApiError::RequestForPastSlot {
+                request_slot: Slot::new(1),
+                head_slot: Slot::new(2)
+            }
+            .should_report_gossiped()
+        );
+        assert!(ProposerApiError::InternalServerError.should_report_gossiped());
     }
 }

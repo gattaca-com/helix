@@ -108,6 +108,9 @@ pub enum ToSimKind {
     /// SimRequest or MergeRequest stored at `ix`.
     Request,
     NewSlot,
+    /// Feed the sim tile's hydration cache from the `decoded` entry at `ix`, for a
+    /// submission that is never simulated. `ix` indexes `decoded`, not `SimInboundPayload`.
+    FeedCache,
 }
 
 /// SimulatorTile → Auctioneer: index into `SharedVector<SimOutboundPayload>`.

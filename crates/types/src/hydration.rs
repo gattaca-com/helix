@@ -679,7 +679,7 @@ impl Default for HydrationCache {
 
 #[derive(Debug, thiserror::Error)]
 pub enum HydrationError {
-    #[error("unkown tx: index {index}, hash {hash}")]
+    #[error("unknown tx: index {index}, hash {hash}")]
     UnknownTxHash { index: usize, hash: u64 },
 
     #[error("invalid tx bytes: length {length}, index {index}")]

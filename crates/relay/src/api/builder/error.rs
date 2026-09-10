@@ -15,7 +15,7 @@ pub enum BuilderApiError {
     #[error("IO error: {0}")]
     IOError(#[from] std::io::Error),
 
-    #[error("failed to decode payload")]
+    #[error("failed to decode payload: {0}")]
     PayloadDecode(#[from] DecoderError),
 
     #[error("block validation: {0}")]
@@ -101,6 +101,7 @@ impl BuilderApiError {
                 BlockSimError::Timeout | BlockSimError::SimulationDropped => {
                     StatusCode::REQUEST_TIMEOUT
                 }
+                BlockSimError::RelayHydrationFailed => StatusCode::INTERNAL_SERVER_ERROR,
                 _ => StatusCode::BAD_REQUEST,
             },
 

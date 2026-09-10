@@ -1,21 +1,24 @@
-use std::time::{Duration, Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use flux::{
     tile::{Tile, TileName},
     utils::{ShortTypename, short_typename},
 };
 use flux_profiler::timed;
+use flux_utils::SharedVector;
 use helix_common::{chain_info::ChainInfo, utils::utcnow_ns};
 use helix_types::SignedValidatorRegistration;
 use tracing::info;
 
-use crate::{HelixSpine, api::proposer::ProposerApiError, registration::handle::RegWorkerJob};
+use crate::{
+    HelixSpine, api::proposer::ProposerApiError, housekeeper::SlotUpdate,
+    registration::handle::RegWorkerJob, spine::messages::SlotMsg,
+};
 
-/// Registrations aren't slot-scoped (they arrive on their own schedule, not
-/// tied to `bid_slot`), so this reports on the same wall-clock cadence as the
-/// rest of `Telemetry` rather than on a slot boundary.
-/// `registrations_seen == valid + invalid`; `batches_seen == completed +
-/// aborted`.
+/// `registrations_seen == valid + invalid`; `batches_seen == completed + aborted`.
 #[derive(Default)]
 struct RegStats {
     valid: u32,
@@ -30,7 +33,6 @@ struct Telemetry {
     next_record: Instant,
     loop_start: Instant,
     loop_worked: Duration,
-    stats: RegStats,
 }
 
 impl Telemetry {
@@ -63,18 +65,6 @@ impl Telemetry {
 
             WORKER_UTIL.with_label_values(&[id]).observe(util);
             WORKER_QUEUE_LEN.with_label_values(&[queue_type]).observe(rx.len() as f64);
-
-            let stats = std::mem::take(&mut self.stats);
-            info!(
-                id,
-                registrations_seen = stats.valid + stats.invalid,
-                valid = stats.valid,
-                invalid = stats.invalid,
-                batches_seen = stats.completed + stats.aborted,
-                completed = stats.completed,
-                aborted = stats.aborted,
-                "registration tile stats"
-            );
         }
     }
 }
@@ -89,7 +79,6 @@ impl Default for Telemetry {
                 Duration::from_millis(utcnow_ns() % 10 * 5),
             loop_start: Instant::now(),
             loop_worked: Default::default(),
-            stats: RegStats::default(),
         }
     }
 }
@@ -100,6 +89,9 @@ pub struct RegistrationTile {
     chain_info: ChainInfo,
     tel: Telemetry,
     rx: crossbeam_channel::Receiver<RegWorkerJob>,
+    slot_events: Arc<SharedVector<SlotUpdate>>,
+    bid_slot: u64,
+    stats: RegStats,
 }
 
 impl RegistrationTile {
@@ -107,9 +99,47 @@ impl RegistrationTile {
         core_id: usize,
         chain_info: ChainInfo,
         rx: crossbeam_channel::Receiver<RegWorkerJob>,
+        slot_events: Arc<SharedVector<SlotUpdate>>,
     ) -> Self {
         let id = ShortTypename::from_str_truncate(&format!("registration_{core_id}"));
-        Self { core_id, id, chain_info, tel: Default::default(), rx }
+        Self {
+            core_id,
+            id,
+            chain_info,
+            tel: Default::default(),
+            rx,
+            slot_events,
+            bid_slot: 0,
+            stats: RegStats::default(),
+        }
+    }
+
+    fn on_slot_msg(&mut self, msg: SlotMsg) {
+        let Some(ev) = self.slot_events.get(msg.ix) else { return };
+        let bid_slot = ev.bid_slot.as_u64();
+        if bid_slot <= self.bid_slot {
+            return;
+        }
+        self.report_slot_stats();
+        self.bid_slot = bid_slot;
+    }
+
+    fn report_slot_stats(&mut self) {
+        if self.bid_slot == 0 {
+            return;
+        }
+        let stats = std::mem::take(&mut self.stats);
+        info!(
+            id = &*self.id,
+            bid_slot = self.bid_slot,
+            registrations_seen = stats.valid + stats.invalid,
+            valid = stats.valid,
+            invalid = stats.invalid,
+            batches_seen = stats.completed + stats.aborted,
+            completed = stats.completed,
+            aborted = stats.aborted,
+            "registration slot stats"
+        );
     }
 
     fn handle_reg_task(&mut self, task: RegWorkerJob) {
@@ -119,9 +149,9 @@ impl RegistrationTile {
         let completed = self.process_reg_task(task);
         let tag = if completed { "RegistrationBatch" } else { "RegistrationBatch_Aborted" };
         if completed {
-            self.tel.stats.completed += 1;
+            self.stats.completed += 1;
         } else {
-            self.tel.stats.aborted += 1;
+            self.stats.aborted += 1;
         }
 
         let dur = start_task.elapsed();
@@ -146,9 +176,9 @@ impl RegistrationTile {
             let start = Instant::now();
             let valid = validate_registration(&self.chain_info, &regs[i]);
             if valid.is_ok() {
-                self.tel.stats.valid += 1;
+                self.stats.valid += 1;
             } else {
-                self.tel.stats.invalid += 1;
+                self.stats.invalid += 1;
             }
             res.push((i, valid.is_ok()));
 
@@ -164,7 +194,9 @@ impl RegistrationTile {
 }
 
 impl Tile<HelixSpine> for RegistrationTile {
-    fn loop_body(&mut self, _adapter: &mut flux::spine::SpineAdapter<HelixSpine>) {
+    fn loop_body(&mut self, adapter: &mut flux::spine::SpineAdapter<HelixSpine>) {
+        adapter.consume(|msg: SlotMsg, _| self.on_slot_msg(msg));
+
         if let Ok(task) = self.rx.recv_timeout(Duration::from_millis(50)) {
             self.handle_reg_task(task);
         }

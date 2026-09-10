@@ -91,6 +91,11 @@ pub enum BlockSimError {
     #[error("hydration miss: simulator cache does not have required transactions/blobs")]
     HydrationMiss,
 
+    /// The relay's own cache could not resolve the submission's tx references. Distinct from
+    /// `HydrationMiss`, which is the simulator's cache and drives the full-SSZ retry.
+    #[error("relay hydration failed: unresolved transaction references")]
+    RelayHydrationFailed,
+
     /// Not the builder's fault -- helix's own simulator client has no validation RPC method for
     /// this fork yet. See gattaca-com/helix#518.
     #[error("no validation RPC method for fork {0}")]
@@ -112,6 +117,7 @@ impl BlockSimError {
             BlockSimError::RpcError => true,
             BlockSimError::NoSimulatorAvailable => true,
             BlockSimError::UnsupportedFork(_) => true,
+            BlockSimError::RelayHydrationFailed => true,
             _ => false,
         }
     }
@@ -230,5 +236,14 @@ mod tests {
             BlockSimError::InvalidTxRoot { got: Default::default(), expected: Default::default() }
                 .is_demotable()
         )
+    }
+
+    /// A relay-side hydration failure is never the builder's fault, so it must not demote.
+    #[test]
+    fn relay_hydration_failure_never_demotes() {
+        let err = BlockSimError::RelayHydrationFailed;
+
+        assert!(err.is_temporary());
+        assert!(!err.is_demotable());
     }
 }

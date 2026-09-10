@@ -48,9 +48,15 @@ impl<B: BidAdjustor> Context<B> {
             match self.validate_submission(submission_data, &builder_info, slot_data) {
                 Ok(v) => v,
                 Err(e) => {
-                    // We must still update the hydration cache for this builder, otherwise
-                    // subsequnet submissions may fail due to missing txs.
+                    // Both hydration caches must still learn this submission's txs, otherwise
+                    // subsequent submissions referencing them fail: the auctioneer's here, and
+                    // the sim tile's, which never sees a submission it is not asked to simulate.
                     let _ = self.hydrate(submission_data.submission.clone());
+                    self.feed_sim_cache(
+                        decoded_ix,
+                        submission_data.submission.bid_slot(),
+                        producers,
+                    );
                     send_submission_result(
                         producers,
                         &self.future_results,
@@ -248,6 +254,15 @@ impl<B: BidAdjustor> Context<B> {
         }
 
         self.payloads.insert(block_hash, entry);
+    }
+
+    pub fn feed_sim_cache(
+        &self,
+        decoded_ix: usize,
+        bid_slot: u64,
+        producers: &mut HelixSpineProducers,
+    ) {
+        producers.produce(ToSimMsg { kind: ToSimKind::FeedCache, ix: decoded_ix, bid_slot });
     }
 
     pub fn send_to_sim(

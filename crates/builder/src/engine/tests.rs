@@ -350,6 +350,29 @@ impl Fixture {
     }
 }
 
+/// A block that references a tx the builder has not seen must still leave its own txs in
+/// the cache, or every later block that references them fails too.
+#[tokio::test]
+async fn an_unresolved_reference_still_caches_the_blocks_own_txs() {
+    let fixture = Fixture::new().await;
+    let (mut msg, _) = fixture.build_base(U256::from(ETH));
+    let own_txs = msg.execution_payload.payload_inner.payload_inner.transactions.len();
+    msg.execution_payload
+        .payload_inner
+        .payload_inner
+        .transactions
+        .push(alloy_primitives::Bytes::copy_from_slice(B256::repeat_byte(0xab).as_slice()));
+
+    let mut recovery_cache = rustc_hash::FxHashMap::default();
+    let mut tx_cache = rustc_hash::FxHashMap::default();
+    let err = crate::engine::decode_block_txs(&msg, &mut recovery_cache, &mut tx_cache)
+        .err()
+        .unwrap_or_default();
+
+    assert!(err.starts_with("unresolved tx hash reference"), "{err}");
+    assert_eq!(tx_cache.len(), own_txs);
+}
+
 fn mergeable_event(msg: &MergeableBlockV1, recv_ns: u64) -> EngineEvent {
     EngineEvent::MergeableBlock { body: msg.as_ssz_bytes(), recv_ns, generation: 0 }
 }

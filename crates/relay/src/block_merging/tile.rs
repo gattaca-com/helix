@@ -920,9 +920,10 @@ impl BlockMergingTile {
         // into another builder's base block can be re-attached from here later.
         self.blob_sidecars.extend(submission_blob_sidecars(&signed.blobs_bundle()));
 
+        let block_tx_count = signed.num_txs();
         let mut merge_orders = Vec::with_capacity(merging.merge_orders.len());
         for order in &merging.merge_orders {
-            match order_to_ref(order) {
+            match order_to_ref(order, block_tx_count) {
                 Some(r) => merge_orders.push(r),
                 None => self.stats.orders_dropped += 1,
             }

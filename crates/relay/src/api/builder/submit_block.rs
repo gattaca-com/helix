@@ -96,7 +96,7 @@ impl<A: Api> BuilderApi<A> {
                 (result.http_status(), result.error_msg.to_string()).into_response()
             }
         } else {
-            tracing::error!("timeout while waiting for bid submission processing respopnse");
+            tracing::error!("timeout while waiting for bid submission processing response");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }

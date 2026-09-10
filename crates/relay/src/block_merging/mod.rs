@@ -35,11 +35,13 @@ fn append_frame<T: Encode>(buf: &mut Vec<u8>, msg_id: MergingMsgId, msg: &T) {
 }
 
 /// Index-based submission order -> wire ref. `None` if an index exceeds u16.
-fn order_to_ref(order: &Order) -> Option<MergeOrderRef> {
+/// `None` for an order the merge builder would reject, including one whose indices fall
+/// outside the block it came from: forwarding it costs the whole block, not just the order.
+fn order_to_ref(order: &Order, block_tx_count: usize) -> Option<MergeOrderRef> {
     fn idx(i: usize) -> Option<u16> {
         u16::try_from(i).ok()
     }
-    Some(match order {
+    let order_ref = match order {
         Order::Tx(tx) => {
             MergeOrderRef::Tx(TxOrderRef { index: idx(tx.index)?, can_revert: tx.can_revert })
         }
@@ -55,7 +57,9 @@ fn order_to_ref(order: &Order) -> Option<MergeOrderRef> {
             dropping_txs: bundle.dropping_txs.iter().map(|&i| idx(i)).collect::<Option<_>>()?,
             latest_only: bundle.flags.contains(MergeOrderFlags::LATEST_ONLY),
         }),
-    })
+    };
+    order_ref.validate(block_tx_count).ok()?;
+    Some(order_ref)
 }
 
 /// Distinct-order identity for a wire ref: the tx hash for a solo tx, or a
@@ -64,10 +68,9 @@ fn order_to_ref(order: &Order) -> Option<MergeOrderRef> {
 /// (`OrderMeta::order_hash`), so a repeat announcement of the same order —
 /// any block, any builder, any resubmission — is recognised as the *same*
 /// order here too, instead of the per-connection send budget counting every
-/// announcement as a new one. Indices are validated against the
-/// submission's own tx count well upstream of this; an out-of-range index
-/// here would mean that invariant broke, and falls back to a zero hash
-/// rather than panicking.
+/// announcement as a new one. `order_to_ref` validates indices against the
+/// submission's own tx count, so an out-of-range index here would mean that
+/// invariant broke, and falls back to a zero hash rather than panicking.
 fn order_ref_hash(order_ref: &MergeOrderRef, tx_hashes: &[B256]) -> B256 {
     match order_ref {
         MergeOrderRef::Tx(tx) => tx_hashes.get(tx.index as usize).copied().unwrap_or_default(),
@@ -212,7 +215,7 @@ mod tests {
     fn order_conversion() {
         let tx = Order::Tx(TransactionOrder { index: 7, can_revert: true });
         assert_eq!(
-            order_to_ref(&tx),
+            order_to_ref(&tx, 8),
             Some(MergeOrderRef::Tx(TxOrderRef { index: 7, can_revert: true }))
         );
 
@@ -222,7 +225,7 @@ mod tests {
             dropping_txs: indices(&[1]),
         });
         assert_eq!(
-            order_to_ref(&bundle),
+            order_to_ref(&bundle, 8),
             Some(MergeOrderRef::Bundle(BundleOrderRef {
                 txs: vec![1, 2],
                 reverting_txs: vec![0],
@@ -238,7 +241,7 @@ mod tests {
             flags: MergeOrderFlags::LATEST_ONLY,
         });
         assert_eq!(
-            order_to_ref(&bundle_v2),
+            order_to_ref(&bundle_v2, 8),
             Some(MergeOrderRef::Bundle(BundleOrderRef {
                 txs: vec![1, 2],
                 reverting_txs: vec![0],
@@ -248,7 +251,24 @@ mod tests {
         );
 
         let oob = Order::Tx(TransactionOrder { index: u16::MAX as usize + 1, can_revert: false });
-        assert_eq!(order_to_ref(&oob), None);
+        assert_eq!(order_to_ref(&oob, 8), None);
+    }
+
+    /// The merge builder rejects a whole block over one bad order ref, so the relay must
+    /// drop the order instead of forwarding it.
+    #[test]
+    fn orders_outside_the_block_are_dropped() {
+        let tx = Order::Tx(TransactionOrder { index: 1, can_revert: false });
+        assert!(order_to_ref(&tx, 2).is_some());
+        assert_eq!(order_to_ref(&tx, 1), None);
+
+        let bundle = Order::Bundle(BundleOrder {
+            txs: indices(&[0, 3]),
+            reverting_txs: indices(&[]),
+            dropping_txs: indices(&[]),
+        });
+        assert!(order_to_ref(&bundle, 4).is_some());
+        assert_eq!(order_to_ref(&bundle, 3), None);
     }
 
     #[test]
