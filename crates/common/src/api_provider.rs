@@ -68,6 +68,15 @@ pub trait ApiProvider: Send + Sync + Clone + 'static {
     ) -> Result<(), &'static str> {
         if config.admit_all { Ok(()) } else { Err("header stream not available") }
     }
+
+    /// Payload delivered for a signature-verified blinded block: this ip is the slot's proposer.
+    fn on_proposer_confirmed(&self, _ip: IpAddr) {}
+
+    /// Held `get_header` dropped before sending: bounds this client's real deadline from above.
+    fn on_request_abandoned(&self, _ip: IpAddr, _elapsed_ms: u64) {}
+
+    /// Held `get_header` sent: bounds this client's real deadline from below.
+    fn on_request_completed(&self, _ip: IpAddr, _held_ms: u64) {}
 }
 
 pub struct TimingResult {

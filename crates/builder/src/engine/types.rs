@@ -32,6 +32,12 @@ pub struct EngineConfig {
     pub min_emission_interval: Duration,
     /// Optional core pin for the engine worker thread.
     pub core: Option<usize>,
+    /// Speculative replay workers; 0 disables speculation.
+    pub speculation_workers: usize,
+    pub speculation_queue_capacity: usize,
+    pub max_prebuilt_per_builder: usize,
+    /// One core per speculative replay worker; empty leaves them unpinned.
+    pub replay_worker_cores: Vec<usize>,
 }
 
 impl EngineConfig {
@@ -62,6 +68,14 @@ pub struct PreparedBlock {
     /// Index-aligned with `payload.transactions`.
     pub txs: Arc<Vec<Arc<DecodedTx>>>,
     pub recv_ns: u64,
+}
+
+impl PreparedBlock {
+    /// Base block coinbase; the merged block's beneficiary and the shard key
+    /// for both replay checkpoints and speculative replay.
+    pub fn beneficiary(&self) -> Address {
+        self.payload.payload_inner.payload_inner.fee_recipient
+    }
 }
 
 /// One mergeable order drawn from a prepared block's `merge_orders`.
@@ -107,15 +121,25 @@ pub struct OriginRevenue {
     pub pubkey: BlsPublicKey,
 }
 
+/// Consensus-fixed slot fields, shared with the speculative replay workers.
+#[derive(Debug, Clone)]
+pub struct SlotContext {
+    pub slot: u64,
+    pub parent_hash: B256,
+    pub proposer_fee_recipient: Address,
+    pub parent_beacon_block_root: B256,
+}
+
 /// All merging state for the current slot.
 pub struct SlotState {
     pub slot: u64,
     pub parent_hash: B256,
     pub proposer_fee_recipient: Address,
-    pub parent_beacon_block_root: B256,
+    /// The three fields above plus the beacon root, as the replay workers take them.
+    pub ctx: Arc<SlotContext>,
     /// Relay config snapshot taken at slot start.
-    pub relay_config: Option<RelayConfigV1>,
-    pub blocks: FxHashMap<B256, PreparedBlock>,
+    pub relay_config: Option<Arc<RelayConfigV1>>,
+    pub blocks: FxHashMap<B256, Arc<PreparedBlock>>,
     pub orders: Vec<PreparedOrder>,
     /// order_id -> index into `orders` (dedup; attribution goes to the
     /// highest-value source block).
@@ -143,6 +167,27 @@ pub struct SlotState {
     pub checkpoint_misses: usize,
     pub excluded: FxHashSet<B256>,
     pub latest_only: FxHashMap<BlsPublicKey, FxHashSet<B256>>,
+    /// Sessions replayed speculatively on arrival, keyed by base block hash.
+    pub prebuilt: FxHashMap<B256, MergeSession>,
+    /// Prebuilt hashes per base builder, oldest first; caps retention.
+    pub prebuilt_by_builder: FxHashMap<Address, Vec<B256>>,
+    /// Blocks dispatched to a replay worker and not yet answered.
+    pub speculating: FxHashSet<B256>,
+    pub spec: SpecStats,
+}
+
+/// Speculation counters for one slot, logged at slot end.
+#[derive(Debug, Default)]
+pub struct SpecStats {
+    pub dispatched: u64,
+    pub queue_full: u64,
+    pub completed: u64,
+    pub failed: u64,
+    pub evicted: u64,
+    /// Activations served from `prebuilt` with no replay on the engine thread.
+    pub hits: u64,
+    /// Activations that fell through to an engine-thread replay.
+    pub misses: u64,
 }
 
 impl SlotState {
@@ -160,11 +205,17 @@ impl SlotState {
     }
 
     pub fn new(msg: &helix_tcp_types::merging::relay_to_builder::SlotStartV1) -> Self {
-        Self {
+        let ctx = Arc::new(SlotContext {
             slot: msg.slot,
             parent_hash: msg.parent_hash,
             proposer_fee_recipient: msg.proposer_fee_recipient,
             parent_beacon_block_root: msg.parent_beacon_block_root,
+        });
+        Self {
+            slot: ctx.slot,
+            parent_hash: ctx.parent_hash,
+            proposer_fee_recipient: ctx.proposer_fee_recipient,
+            ctx,
             relay_config: None,
             blocks: FxHashMap::default(),
             orders: Vec::new(),
@@ -179,6 +230,44 @@ impl SlotState {
             checkpoint_misses: 0,
             excluded: FxHashSet::default(),
             latest_only: FxHashMap::default(),
+            prebuilt: FxHashMap::default(),
+            prebuilt_by_builder: FxHashMap::default(),
+            speculating: FxHashSet::default(),
+            spec: SpecStats::default(),
         }
+    }
+
+    /// Stores a speculatively replayed session, evicting the builder's oldest
+    /// beyond `max_per_builder`. Returns the number evicted.
+    pub fn insert_prebuilt(
+        &mut self,
+        beneficiary: Address,
+        session: MergeSession,
+        max_per_builder: usize,
+    ) -> usize {
+        let block_hash = session.base_block_hash;
+        if self.prebuilt.insert(block_hash, session).is_none() {
+            self.prebuilt_by_builder.entry(beneficiary).or_default().push(block_hash);
+        }
+        let mut evicted = 0;
+        if let Some(hashes) = self.prebuilt_by_builder.get_mut(&beneficiary) {
+            while hashes.len() > max_per_builder {
+                let old = hashes.remove(0);
+                if let Some(session) = self.prebuilt.remove(&old) {
+                    session.log_stats("prebuilt_eviction");
+                    evicted += 1;
+                }
+            }
+        }
+        evicted
+    }
+
+    /// Takes the prebuilt session for `block_hash`, if one was warmed.
+    pub fn take_prebuilt(&mut self, block_hash: &B256) -> Option<MergeSession> {
+        let session = self.prebuilt.remove(block_hash)?;
+        for hashes in self.prebuilt_by_builder.values_mut() {
+            hashes.retain(|hash| hash != block_hash);
+        }
+        Some(session)
     }
 }

@@ -129,12 +129,21 @@ fn main() -> eyre::Result<()> {
                 merging_config.emission.min_interval_ms,
             ),
             core: merging_config.cores.merge_worker,
+            speculation_workers: if merging_config.speculation.enabled {
+                merging_config.speculation.workers
+            } else {
+                0
+            },
+            speculation_queue_capacity: merging_config.speculation.queue_capacity,
+            max_prebuilt_per_builder: merging_config.speculation.max_prebuilt_per_builder,
+            replay_worker_cores: merging_config.cores.replay_workers.clone(),
         };
         let _engine = MergeEngine::spawn(
             engine_config,
             node.store.clone(),
             node.blockchain.clone(),
             node.head.clone(),
+            event_tx.clone(),
             event_rx,
             output_tx,
         );

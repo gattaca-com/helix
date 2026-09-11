@@ -77,6 +77,42 @@ pub async fn dev_genesis_store_with(edit: impl FnOnce(&mut Genesis)) -> (Store, 
     (store, genesis)
 }
 
+/// An EIP-1559 call with calldata, for paying the proposer through a contract.
+pub fn signed_call(
+    signer: &PrivateKeySigner,
+    chain_id: u64,
+    nonce: u64,
+    to: Address,
+    value: U256,
+    input: Vec<u8>,
+) -> Vec<u8> {
+    use alloy_consensus::SignableTransaction;
+    use alloy_signer::SignerSync;
+    let tx = alloy_consensus::TxEip1559 {
+        chain_id,
+        nonce,
+        gas_limit: 100_000,
+        max_fee_per_gas: 100 * GWEI,
+        max_priority_fee_per_gas: 0,
+        to: to.into(),
+        value,
+        access_list: Default::default(),
+        input: input.into(),
+    };
+    let signature = signer.sign_hash_sync(&tx.signature_hash()).unwrap();
+    alloy_eips::eip2718::Encodable2718::encoded_2718(&alloy_consensus::TxEnvelope::from(
+        tx.into_signed(signature),
+    ))
+}
+
+/// Calldata for a [`helix_common::PAYMENT_FORWARDER`] call: a 4 byte deadline
+/// that must equal the block timestamp, then the recipient.
+pub fn forwarder_calldata(timestamp: u64, recipient: Address) -> Vec<u8> {
+    let mut calldata = (timestamp as u32).to_be_bytes().to_vec();
+    calldata.extend_from_slice(recipient.as_slice());
+    calldata
+}
+
 /// The `PaymentForwarder` runtime, from contracts/README.md.
 pub fn deploy_payment_forwarder(genesis: &mut Genesis) {
     genesis.alloc.insert(eaddr(helix_common::PAYMENT_FORWARDER), GenesisAccount {

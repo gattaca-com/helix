@@ -20,10 +20,22 @@ idle_disconnect_s: 30
 max_blocks_per_slot: 256
 event_queue_capacity: 4096
 
-# Optional core pins for the latency-sensitive threads.
+# Optional core pins for the latency-sensitive threads. `replay_workers` must
+# be empty or hold exactly `speculation.workers` core ids.
 cores:
-  server_tile: null
-  merge_worker: null
+  server_tile: 6
+  merge_worker: 7
+  replay_workers: [8, 9, 10, 11, 12, 13]
+
+# Replay every appendable base block as it arrives, on the workers below, so
+# ActivateBaseBlockV1 costs a lookup instead of a full base replay.
+speculation:
+  enabled: true
+  workers: 6
+  # Warm sessions retained per base builder, newest first.
+  max_prebuilt_per_builder: 2
+  # A full worker queue drops the job; that base just replays inline instead.
+  queue_capacity: 64
 
 emission:
   # Only emit when proposer value improves by more than this many wei.

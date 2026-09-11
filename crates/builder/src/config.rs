@@ -42,6 +42,8 @@ pub struct MergingConfig {
     pub cores: CoreConfig,
     #[serde(default)]
     pub emission: EmissionConfig,
+    #[serde(default)]
+    pub speculation: SpeculationConfig,
 }
 
 /// Optional core pins; unpinned when absent.
@@ -50,6 +52,49 @@ pub struct MergingConfig {
 pub struct CoreConfig {
     pub server_tile: Option<usize>,
     pub merge_worker: Option<usize>,
+    /// One core per speculative replay worker; unpinned when shorter than `speculation.workers`.
+    #[serde(default)]
+    pub replay_workers: Vec<usize>,
+}
+
+/// Speculative base-block replay: warms a merge session for every appendable
+/// block as it arrives, so `ActivateBaseBlockV1` costs a lookup, not a replay.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpeculationConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_speculation_workers")]
+    pub workers: usize,
+    /// Warm sessions retained per base builder, newest first.
+    #[serde(default = "default_max_prebuilt_per_builder")]
+    pub max_prebuilt_per_builder: usize,
+    /// Per-worker job queue depth; a full queue drops the job instead of blocking.
+    #[serde(default = "default_speculation_queue_capacity")]
+    pub queue_capacity: usize,
+}
+
+impl Default for SpeculationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            workers: default_speculation_workers(),
+            max_prebuilt_per_builder: default_max_prebuilt_per_builder(),
+            queue_capacity: default_speculation_queue_capacity(),
+        }
+    }
+}
+
+fn default_speculation_workers() -> usize {
+    6
+}
+
+fn default_max_prebuilt_per_builder() -> usize {
+    2
+}
+
+fn default_speculation_queue_capacity() -> usize {
+    64
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -89,6 +134,27 @@ impl MergingConfig {
         }
         if self.max_orders_per_slot == 0 || self.max_blocks_per_slot == 0 {
             eyre::bail!("merging config: max_orders_per_slot and max_blocks_per_slot must be > 0");
+        }
+        if self.speculation.enabled {
+            if self.speculation.workers == 0 {
+                eyre::bail!("merging config: speculation.workers must be > 0 when enabled");
+            }
+            if self.speculation.max_prebuilt_per_builder == 0 {
+                eyre::bail!(
+                    "merging config: speculation.max_prebuilt_per_builder must be > 0 when enabled"
+                );
+            }
+            if self.speculation.queue_capacity == 0 {
+                eyre::bail!("merging config: speculation.queue_capacity must be > 0 when enabled");
+            }
+            if !self.cores.replay_workers.is_empty() &&
+                self.cores.replay_workers.len() != self.speculation.workers
+            {
+                eyre::bail!(
+                    "merging config: cores.replay_workers must be empty or have exactly \
+                     speculation.workers entries"
+                );
+            }
         }
         Ok(())
     }

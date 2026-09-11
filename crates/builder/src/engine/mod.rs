@@ -6,6 +6,7 @@
 pub mod convert;
 pub mod error;
 pub mod payment;
+pub mod replay;
 pub mod session;
 pub mod simulate;
 #[cfg(test)]
@@ -35,6 +36,7 @@ use tracing::{debug, info, warn};
 use crate::{
     engine::{
         error::MergeError,
+        replay::{ReplayJob, ReplayPool},
         session::{EmitOutcome, MergeSession},
         types::{
             DecodedTx, EngineConfig, MAX_PARKED_SESSIONS, MAX_REPLAY_CHECKPOINTS, PreparedBlock,
@@ -71,6 +73,15 @@ pub enum EngineEvent {
         block_hash: B256,
         recv_ns: u64,
         generation: u64,
+    },
+    /// A speculative replay finished; `session` is `None` when it failed.
+    Prebuilt {
+        slot: u64,
+        generation: u64,
+        block_hash: B256,
+        beneficiary: alloy_primitives::Address,
+        checkpoint_hit: bool,
+        session: Option<Box<MergeSession>>,
     },
 }
 
@@ -113,8 +124,10 @@ pub struct MergeEngine {
     /// Latest connection generation; events from older connections are dropped.
     generation: u64,
     /// Latest relay config; snapshotted into the slot at `SlotStart`.
-    relay_config: Option<RelayConfigV1>,
+    relay_config: Option<Arc<RelayConfigV1>>,
     slot: Option<SlotState>,
+    /// Speculative replay workers; `None` when speculation is disabled.
+    replay: Option<ReplayPool>,
 }
 
 impl MergeEngine {
@@ -123,6 +136,7 @@ impl MergeEngine {
         store: Store,
         blockchain: Arc<Blockchain>,
         head: watch::Receiver<HeadInfo>,
+        event_tx: Sender<EngineEvent>,
         events: Receiver<EngineEvent>,
         out: Sender<EngineOutput>,
     ) -> std::thread::JoinHandle<()> {
@@ -134,6 +148,16 @@ impl MergeEngine {
                 {
                     warn!(core, "failed to pin merge engine thread");
                 }
+                let replay = (config.speculation_workers > 0).then(|| {
+                    ReplayPool::spawn(
+                        config.speculation_workers,
+                        config.speculation_queue_capacity,
+                        &config.replay_worker_cores,
+                        store.clone(),
+                        blockchain.clone(),
+                        event_tx,
+                    )
+                });
                 let mut engine = MergeEngine {
                     config,
                     store,
@@ -143,6 +167,7 @@ impl MergeEngine {
                     generation: 0,
                     relay_config: None,
                     slot: None,
+                    replay,
                 };
                 info!("merge engine started");
                 engine.run(events);
@@ -201,11 +226,23 @@ impl MergeEngine {
             for session in &state.parked {
                 session.log_stats(reason);
             }
+            for session in state.prebuilt.values() {
+                session.log_stats("prebuilt_unused");
+            }
             info!(
                 reason,
                 slot = state.slot,
                 checkpoint_hits = state.checkpoint_hits,
                 checkpoint_misses = state.checkpoint_misses,
+                blocks_pooled = state.blocks.len(),
+                spec_dispatched = state.spec.dispatched,
+                spec_completed = state.spec.completed,
+                spec_failed = state.spec.failed,
+                spec_queue_full = state.spec.queue_full,
+                spec_evicted = state.spec.evicted,
+                spec_hits = state.spec.hits,
+                spec_misses = state.spec.misses,
+                prebuilt_unused = state.prebuilt.len(),
                 "merge slot ended"
             );
         }
@@ -229,7 +266,7 @@ impl MergeEngine {
                     collaterals = config.builder_collaterals.len(),
                     "relay config received"
                 );
-                self.relay_config = Some(config);
+                self.relay_config = Some(Arc::new(config));
                 false
             }
             EngineEvent::SlotStart(msg) => {
@@ -299,6 +336,69 @@ impl MergeEngine {
                 state.pending_activation = Some((block_hash, recv_ns));
                 true
             }
+            EngineEvent::Prebuilt {
+                slot,
+                generation,
+                block_hash,
+                beneficiary,
+                checkpoint_hit,
+                session,
+            } => {
+                let Some(state) = self.slot.as_mut() else { return false };
+                if slot != state.slot {
+                    return false;
+                }
+                // Always clear the in-flight mark: `merge_pass` waits on it.
+                state.speculating.remove(&block_hash);
+                let waiting = state.pending_activation.is_some_and(|(h, _)| h == block_hash);
+                if generation != self.generation {
+                    return waiting;
+                }
+                let Some(session) = session else {
+                    state.spec.failed += 1;
+                    return waiting;
+                };
+                state.spec.completed += 1;
+                if checkpoint_hit {
+                    state.checkpoint_hits += 1;
+                } else {
+                    state.checkpoint_misses += 1;
+                }
+                let max = self.config.max_prebuilt_per_builder;
+                state.spec.evicted += state.insert_prebuilt(beneficiary, *session, max) as u64;
+                waiting
+            }
+        }
+    }
+
+    /// Queues a speculative replay for a newly pooled appendable block.
+    fn dispatch_speculation(&mut self, base: &Arc<PreparedBlock>) {
+        let Some(pool) = self.replay.as_ref() else { return };
+        let Some(state) = self.slot.as_mut() else { return };
+        // The slot snapshot, so a warmed session never uses a different
+        // collateral or distribution policy than the inline path would.
+        let Some(relay_config) = state.relay_config.clone() else { return };
+        let block_hash = base.block_hash;
+        if state.prebuilt.contains_key(&block_hash) || !state.speculating.insert(block_hash) {
+            return;
+        }
+        let head = *self.head.borrow();
+        if !head.is_synced || convert::b256(head.hash) != state.parent_hash {
+            state.speculating.remove(&block_hash);
+            return;
+        }
+        let job = ReplayJob {
+            ctx: state.ctx.clone(),
+            base: base.clone(),
+            relay_config,
+            generation: self.generation,
+        };
+        let beneficiary = base.beneficiary();
+        if pool.dispatch(beneficiary, job) {
+            state.spec.dispatched += 1;
+        } else {
+            state.speculating.remove(&block_hash);
+            state.spec.queue_full += 1;
         }
     }
 
@@ -311,115 +411,152 @@ impl MergeEngine {
             return;
         };
 
-        // Resolve a pending activation once its block is pooled.
-        if let Some((block_hash, activate_recv_ns)) = state.pending_activation {
-            if let Some(base) = state.blocks.get(&block_hash) {
+        // Resolve a pending activation once its block is pooled and no worker
+        // is still replaying it. Either way the live session still extends.
+        let pending = state.pending_activation.and_then(|(block_hash, recv_ns)| {
+            if state.speculating.contains(&block_hash) {
+                return None;
+            }
+            let base = state.blocks.get(&block_hash).cloned()?;
+            Some((block_hash, recv_ns, base))
+        });
+        if let Some((block_hash, activate_recv_ns, base)) = pending {
+            if !base.allow_appending {
                 state.pending_activation = None;
-                if !base.allow_appending {
-                    let _ = self.out.send(EngineOutput::reject(
-                        self.generation,
-                        state.slot,
-                        RejectCode::UnknownBaseBlock,
-                        RejectSubject::BlockHash(block_hash),
-                        "base block was not forwarded as appendable",
-                    ));
-                } else {
-                    // Park the outgoing session: the relay's top bid often
-                    // flips back, and resuming skips the base re-replay.
-                    if let Some(old) = state.session.take() {
-                        debug!(base_block_hash = %old.base_block_hash, "parking session");
-                        state.parked.push(old);
-                        if state.parked.len() > MAX_PARKED_SESSIONS {
-                            let evicted = state.parked.remove(0);
-                            evicted.log_stats("parked_eviction");
-                        }
+                let _ = self.out.send(EngineOutput::reject(
+                    self.generation,
+                    state.slot,
+                    RejectCode::UnknownBaseBlock,
+                    RejectSubject::BlockHash(block_hash),
+                    "base block was not forwarded as appendable",
+                ));
+            } else {
+                state.pending_activation = None;
+                // Park the outgoing session: the relay's top bid often
+                // flips back, and resuming skips the base re-replay.
+                if let Some(old) = state.session.take() {
+                    debug!(base_block_hash = %old.base_block_hash, "parking session");
+                    state.parked.push(old);
+                    if state.parked.len() > MAX_PARKED_SESSIONS {
+                        let evicted = state.parked.remove(0);
+                        evicted.log_stats("parked_eviction");
                     }
+                }
 
-                    let head = *self.head.borrow();
-                    let parked_ix =
-                        state.parked.iter().position(|s| s.base_block_hash == block_hash);
-                    if let Some(ix) = parked_ix {
-                        // Resume: the base was already validated and replayed
-                        // when the session was first built and the slot's
-                        // parent is fixed; only re-check sync.
-                        if head.is_synced {
-                            info!(
-                                slot = state.slot,
-                                base_block_hash = %block_hash,
-                                "merge session resumed from parked"
-                            );
-                            state.session = Some(state.parked.remove(ix));
-                        } else {
-                            let session = state.parked.remove(ix);
-                            session.log_stats("resume_not_synced");
-                            let _ = self.out.send(EngineOutput::reject(
-                                self.generation,
-                                state.slot,
-                                RejectCode::NotSynced,
-                                RejectSubject::BlockHash(block_hash),
-                                "builder lost sync while session was parked",
-                            ));
-                        }
+                let head = *self.head.borrow();
+                let beneficiary_alloy = base.beneficiary();
+                let parked_ix = state.parked.iter().position(|s| s.base_block_hash == block_hash);
+                let prebuilt = state.take_prebuilt(&block_hash);
+                let mut source = "replay";
+                let mut checkpoint_hit = false;
+                let mut replay_us = 0;
+                let mut activated = false;
+
+                if let Some(ix) = parked_ix {
+                    // Resume: the base was already validated and replayed
+                    // when the session was first built and the slot's
+                    // parent is fixed; only re-check sync.
+                    if head.is_synced {
+                        source = "parked";
+                        state.session = Some(state.parked.remove(ix));
+                        activated = true;
                     } else {
-                        // Head gating: the base must build on our synced head.
-                        let head_hash = convert::b256(head.hash);
-                        let beneficiary_alloy =
-                            base.payload.payload_inner.payload_inner.fee_recipient;
-                        let result = if !head.is_synced {
-                            Err(MergeError::NotSynced)
-                        } else if head_hash != state.parent_hash {
-                            Err(MergeError::HeadMismatch)
-                        } else {
-                            let checkpoint = state.replay_checkpoints.get(&beneficiary_alloy);
-                            MergeSession::activate(
-                                state,
-                                base,
-                                &self.store,
-                                self.blockchain.clone(),
-                                &relay_config,
-                                checkpoint,
-                            )
-                        };
-                        match result {
-                            Ok((session, new_checkpoint, checkpoint_hit)) => {
-                                info!(
-                                    slot = state.slot,
-                                    base_block_hash = %block_hash,
-                                    checkpoint_hit,
-                                    activate_to_replay_us = crate::utils::utcnow_ns()
-                                        .saturating_sub(activate_recv_ns) /
-                                        1000,
-                                    "merge session activated"
-                                );
-                                if checkpoint_hit {
-                                    state.checkpoint_hits += 1;
-                                } else {
-                                    state.checkpoint_misses += 1;
-                                }
-                                if state.replay_checkpoints.len() >= MAX_REPLAY_CHECKPOINTS &&
-                                    !state.replay_checkpoints.contains_key(&beneficiary_alloy) &&
-                                    let Some(evict) =
-                                        state.replay_checkpoints.keys().next().copied()
-                                {
-                                    state.replay_checkpoints.remove(&evict);
-                                }
-                                state.replay_checkpoints.insert(beneficiary_alloy, new_checkpoint);
-                                state.session = Some(session);
+                        let session = state.parked.remove(ix);
+                        session.log_stats("resume_not_synced");
+                        let _ = self.out.send(EngineOutput::reject(
+                            self.generation,
+                            state.slot,
+                            RejectCode::NotSynced,
+                            RejectSubject::BlockHash(block_hash),
+                            "builder lost sync while session was parked",
+                        ));
+                    }
+                } else if let Some(session) = prebuilt {
+                    if head.is_synced {
+                        source = "prebuilt";
+                        replay_us = session.replay_us;
+                        state.spec.hits += 1;
+                        state.session = Some(session);
+                        activated = true;
+                    } else {
+                        session.log_stats("prebuilt_not_synced");
+                        let _ = self.out.send(EngineOutput::reject(
+                            self.generation,
+                            state.slot,
+                            RejectCode::NotSynced,
+                            RejectSubject::BlockHash(block_hash),
+                            "builder lost sync while session was prebuilt",
+                        ));
+                    }
+                } else {
+                    // Head gating: the base must build on our synced head.
+                    let head_hash = convert::b256(head.hash);
+                    let result = if !head.is_synced {
+                        Err(MergeError::NotSynced)
+                    } else if head_hash != state.parent_hash {
+                        Err(MergeError::HeadMismatch)
+                    } else {
+                        state.spec.misses += 1;
+                        let checkpoint = state.replay_checkpoints.get(&beneficiary_alloy);
+                        MergeSession::activate(
+                            &state.ctx,
+                            &base,
+                            &self.store,
+                            self.blockchain.clone(),
+                            &relay_config,
+                            checkpoint,
+                        )
+                    };
+                    match result {
+                        Ok((session, new_checkpoint, hit)) => {
+                            checkpoint_hit = hit;
+                            source = if hit { "checkpoint" } else { "replay" };
+                            replay_us = session.replay_us;
+                            if hit {
+                                state.checkpoint_hits += 1;
+                            } else {
+                                state.checkpoint_misses += 1;
                             }
-                            Err(err) => {
-                                warn!(%err, base_block_hash = %block_hash, "activation failed");
-                                if let Some((code, subject)) = err.reject(Some(block_hash)) {
-                                    let _ = self.out.send(EngineOutput::reject(
-                                        self.generation,
-                                        state.slot,
-                                        code,
-                                        subject,
-                                        err.to_string(),
-                                    ));
-                                }
+                            if state.replay_checkpoints.len() >= MAX_REPLAY_CHECKPOINTS &&
+                                !state.replay_checkpoints.contains_key(&beneficiary_alloy) &&
+                                let Some(evict) = state.replay_checkpoints.keys().next().copied()
+                            {
+                                state.replay_checkpoints.remove(&evict);
+                            }
+                            state.replay_checkpoints.insert(beneficiary_alloy, new_checkpoint);
+                            state.session = Some(session);
+                            activated = true;
+                        }
+                        Err(err) => {
+                            warn!(%err, base_block_hash = %block_hash, "activation failed");
+                            if let Some((code, subject)) = err.reject(Some(block_hash)) {
+                                let _ = self.out.send(EngineOutput::reject(
+                                    self.generation,
+                                    state.slot,
+                                    code,
+                                    subject,
+                                    err.to_string(),
+                                ));
                             }
                         }
                     }
+                }
+
+                if activated {
+                    info!(
+                        slot = state.slot,
+                        base_block_hash = %block_hash,
+                        beneficiary = %beneficiary_alloy,
+                        source,
+                        checkpoint_hit,
+                        replay_us,
+                        activate_to_replay_us = crate::utils::utcnow_ns()
+                            .saturating_sub(activate_recv_ns) /
+                            1000,
+                        forward_to_activate_ms = activate_recv_ns.saturating_sub(base.recv_ns) /
+                            1_000_000,
+                        "merge session activated"
+                    );
                 }
             }
         }
@@ -545,7 +682,7 @@ impl MergeEngine {
         );
 
         let slot = state.slot;
-        state.blocks.insert(block_hash, PreparedBlock {
+        let prepared = Arc::new(PreparedBlock {
             block_hash,
             builder_pubkey: msg.builder_pubkey,
             block_value: msg.block_value,
@@ -554,6 +691,12 @@ impl MergeEngine {
             txs,
             recv_ns,
         });
+        state.blocks.insert(block_hash, prepared.clone());
+
+        // Warm a session for every base candidate, off the engine thread.
+        if prepared.allow_appending {
+            self.dispatch_speculation(&prepared);
+        }
 
         // Dropped orders still leave a usable base candidate, so keep the block.
         if pool_full {

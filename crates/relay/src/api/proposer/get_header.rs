@@ -132,7 +132,11 @@ impl<A: Api> ProposerApi<A> {
             ..Default::default()
         };
 
-        let mut timing_guard = TimeoutGuard::default();
+        let mut timing_guard = TimeoutGuard::<A> {
+            reporter: ip_addr.map(|ip| (ip, proposer_api.api_provider.clone())),
+            started: Instant::now(),
+            ..Default::default()
+        };
 
         if let Some(sleep_time) = sleep_time {
             debug!(
@@ -240,20 +244,33 @@ impl<A: Api> ProposerApi<A> {
     }
 }
 
-#[derive(Default)]
-struct TimeoutGuard {
+struct TimeoutGuard<A: Api> {
     done_sleep: bool,
     done_fetch: bool,
+    started: Instant,
+    reporter: Option<(IpAddr, Arc<A::ApiProvider>)>,
 }
 
-impl Drop for TimeoutGuard {
+impl<A: Api> Default for TimeoutGuard<A> {
+    fn default() -> Self {
+        Self { done_sleep: false, done_fetch: false, started: Instant::now(), reporter: None }
+    }
+}
+
+impl<A: Api> Drop for TimeoutGuard<A> {
     fn drop(&mut self) {
+        let elapsed_ms = self.started.elapsed().as_millis() as u64;
         if !self.done_sleep {
             HEADER_TIMEOUT_SLEEP.inc();
-            warn!("didn't complete sleep")
+            warn!("didn't complete sleep");
+            if let Some((ip, provider)) = &self.reporter {
+                provider.on_request_abandoned(*ip, elapsed_ms);
+            }
         } else if !self.done_fetch {
             HEADER_TIMEOUT_FETCH.inc();
             warn!("didn't complete fetch")
+        } else if let Some((ip, provider)) = &self.reporter {
+            provider.on_request_completed(*ip, elapsed_ms);
         }
     }
 }

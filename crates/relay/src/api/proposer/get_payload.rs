@@ -4,7 +4,7 @@ use alloy_primitives::{Address, B256};
 use axum::{Extension, http::HeaderMap, response::IntoResponse};
 use helix_common::{
     Filtering, GetPayloadTrace, RequestTimings,
-    api_provider::ApiProvider,
+    api_provider::{ApiProvider, header_ip_addr},
     beacon::types::BroadcastValidation,
     chain_info::ChainInfo,
     decoder::{Encoding, HEADER_SSZ},
@@ -170,20 +170,23 @@ impl<A: Api> ProposerApi<A> {
             ._get_payload(signed_blinded_block, &mut trace, user_agent, ProposerApiVersion::V1)
             .await
         {
-            Ok(get_payload_response) => match response_encoding {
-                Encoding::Json => Ok(axum::Json(get_payload_response).into_response()),
-                Encoding::Ssz => {
-                    let mut response = get_payload_response.data.as_ssz_bytes().into_response();
-                    let headers = response.headers_mut();
-                    headers.insert(CONTENT_TYPE, HeaderValue::from_str(HEADER_SSZ).unwrap());
-                    headers.insert(
-                        CONSENSUS_VERSION_HEADER,
-                        HeaderValue::from_str(&fork.to_string()).unwrap(),
-                    );
+            Ok(get_payload_response) => {
+                confirm_proposer_ip(&proposer_api, &headers);
+                match response_encoding {
+                    Encoding::Json => Ok(axum::Json(get_payload_response).into_response()),
+                    Encoding::Ssz => {
+                        let mut response = get_payload_response.data.as_ssz_bytes().into_response();
+                        let headers = response.headers_mut();
+                        headers.insert(CONTENT_TYPE, HeaderValue::from_str(HEADER_SSZ).unwrap());
+                        headers.insert(
+                            CONSENSUS_VERSION_HEADER,
+                            HeaderValue::from_str(&fork.to_string()).unwrap(),
+                        );
 
-                    Ok(response)
+                        Ok(response)
+                    }
                 }
-            },
+            }
             Err(err) => {
                 proposer_api.db.save_failed_get_payload(
                     slot.into(),
@@ -236,7 +239,10 @@ impl<A: Api> ProposerApi<A> {
             ._get_payload(signed_blinded_block, &mut trace, user_agent, ProposerApiVersion::V2)
             .await
         {
-            Ok(_) => Ok(StatusCode::ACCEPTED),
+            Ok(_) => {
+                confirm_proposer_ip(&proposer_api, &headers);
+                Ok(StatusCode::ACCEPTED)
+            }
             Err(err) => {
                 proposer_api.db.save_failed_get_payload(
                     slot.into(),
@@ -668,5 +674,12 @@ mod tests {
             evaluate_response_buffer(CUTOFF + 1, CUTOFF, 0),
             Err(ProposerApiError::GetPayloadRequestTooLate { .. })
         ));
+    }
+}
+
+/// A delivered payload proves the caller signed the blinded block, so its ip is the proposer's.
+fn confirm_proposer_ip<A: Api>(proposer_api: &ProposerApi<A>, headers: &HeaderMap) {
+    if let Some(ip) = header_ip_addr(headers) {
+        proposer_api.api_provider.on_proposer_confirmed(ip);
     }
 }

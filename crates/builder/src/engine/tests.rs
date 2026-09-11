@@ -24,7 +24,10 @@ use crate::{
         types::EngineConfig,
     },
     node::HeadInfo,
-    testing::{ETH, GWEI, dev_genesis_store, funded_signers, signed_transfer},
+    testing::{
+        ETH, GWEI, deploy_payment_forwarder, dev_genesis_store_with, forwarder_calldata,
+        funded_signers, signed_call, signed_transfer,
+    },
 };
 
 const SLOT: u64 = 1;
@@ -44,7 +47,17 @@ struct Fixture {
 
 impl Fixture {
     async fn new() -> Self {
-        let (store, genesis) = dev_genesis_store().await;
+        Self::with_genesis(|_| {}).await
+    }
+
+    /// Genesis with the `PaymentForwarder` deployed, so a base block can pay
+    /// the proposer through a contract the way builders do in production.
+    async fn with_forwarder() -> Self {
+        Self::with_genesis(deploy_payment_forwarder).await
+    }
+
+    async fn with_genesis(edit: impl FnOnce(&mut ethrex_common::types::Genesis)) -> Self {
+        let (store, genesis) = dev_genesis_store_with(edit).await;
         let chain_id = genesis.config.chain_id;
         let genesis_block = genesis.get_block();
         let genesis_hash = genesis_block.hash();
@@ -93,6 +106,10 @@ impl Fixture {
             min_value_increase_wei: U256::ZERO,
             min_emission_interval,
             core: None,
+            speculation_workers: 0,
+            speculation_queue_capacity: 64,
+            max_prebuilt_per_builder: 2,
+            replay_worker_cores: Vec::new(),
         }
     }
 
@@ -138,6 +155,42 @@ impl Fixture {
             ),
             signed_transfer(builder, self.chain_id, 0, self.proposer, payment_value, 100 * GWEI, 0),
         ];
+        self.base_from_txs(base_txs, payment_value)
+    }
+
+    /// A base block whose trailing tx pays the proposer through
+    /// `PAYMENT_FORWARDER` rather than by a direct transfer.
+    fn build_base_paying_via_forwarder(&self, user_value: U256) -> (MergeableBlockV1, B256) {
+        let builder = &self.signers[0];
+        let timestamp = self.genesis_timestamp + 12;
+        let base_txs = vec![
+            signed_transfer(
+                &self.signers[1],
+                self.chain_id,
+                0,
+                Address::repeat_byte(0x55),
+                user_value,
+                100 * GWEI,
+                GWEI,
+            ),
+            signed_call(
+                builder,
+                self.chain_id,
+                0,
+                helix_common::PAYMENT_FORWARDER,
+                self.block_value,
+                forwarder_calldata(timestamp, self.proposer),
+            ),
+        ];
+        self.base_from_txs(base_txs, self.block_value)
+    }
+
+    fn base_from_txs(
+        &self,
+        base_txs: Vec<Vec<u8>>,
+        payment_value: U256,
+    ) -> (MergeableBlockV1, B256) {
+        let builder = &self.signers[0];
         let args = BuildPayloadArgs {
             parent: self.genesis_hash,
             timestamp: self.genesis_timestamp + 12,
@@ -221,8 +274,28 @@ impl Fixture {
             generation: 0,
             relay_config: None,
             slot: None,
+            replay: None,
         };
         (engine, output_rx)
+    }
+
+    /// A direct-drive engine with a real replay pool; `events` receives the
+    /// workers' `Prebuilt` results for the test to feed back in.
+    fn direct_engine_with_speculation(
+        &self,
+    ) -> (MergeEngine, crossbeam_channel::Receiver<EngineEvent>) {
+        let (event_tx, event_rx) = crossbeam_channel::bounded(64);
+        let (mut engine, _) = self.direct_engine(Duration::ZERO);
+        engine.config.speculation_workers = 1;
+        engine.replay = Some(crate::engine::replay::ReplayPool::spawn(
+            1,
+            64,
+            &[],
+            self.store.clone(),
+            self.blockchain.clone(),
+            event_tx,
+        ));
+        (engine, event_rx)
     }
 
     fn direct_engine_with_order_cap(
@@ -408,6 +481,7 @@ async fn merges_order_into_activated_base_block() {
         fixture.store.clone(),
         fixture.blockchain.clone(),
         fixture.head(),
+        event_tx.clone(),
         event_rx,
         output_tx,
     );
@@ -912,4 +986,131 @@ async fn every_pooled_order_is_accounted_for() {
         excluded_in_pool,
         "the skip counter must account for exactly the excluded pool entries"
     );
+}
+
+/// Speculative replay must only move where the base replay runs. The merged
+/// block it produces has to be byte-for-byte what the inline path produces.
+#[tokio::test(flavor = "multi_thread")]
+async fn speculative_replay_produces_the_same_merged_block() {
+    let fixture = Fixture::new().await;
+    let (base_msg, base_block_hash) = fixture.build_base(U256::from(ETH));
+    let mergeable_msg = fixture.mergeable_tx(&base_msg, 3, U256::from(ETH / 5), 0xdd);
+
+    let run = |workers: usize| {
+        let mut config = fixture.engine_config(Duration::ZERO);
+        config.speculation_workers = workers;
+        let (event_tx, event_rx) = crossbeam_channel::bounded(1024);
+        let (output_tx, output_rx) = crossbeam_channel::bounded(64);
+        let _engine = MergeEngine::spawn(
+            config,
+            fixture.store.clone(),
+            fixture.blockchain.clone(),
+            fixture.head(),
+            event_tx.clone(),
+            event_rx,
+            output_tx,
+        );
+        event_tx.send(EngineEvent::RelayConfig(fixture.relay_config.clone())).unwrap();
+        event_tx.send(EngineEvent::SlotStart(fixture.slot_start())).unwrap();
+        event_tx.send(mergeable_event(&base_msg, 1)).unwrap();
+        event_tx.send(mergeable_event(&mergeable_msg, 2)).unwrap();
+        event_tx.send(activate_event(base_block_hash)).unwrap();
+        let output =
+            output_rx.recv_timeout(Duration::from_secs(60)).expect("engine produced nothing");
+        expect_merged(output)
+    };
+
+    let inline = run(0);
+    let speculative = run(4);
+
+    let inline_v1 = &inline.execution_payload.payload_inner.payload_inner;
+    let speculative_v1 = &speculative.execution_payload.payload_inner.payload_inner;
+    assert_eq!(speculative_v1.block_hash, inline_v1.block_hash);
+    assert_eq!(speculative_v1.state_root, inline_v1.state_root);
+    assert_eq!(speculative_v1.transactions, inline_v1.transactions);
+    assert_eq!(speculative.proposer_value, inline.proposer_value);
+    assert_eq!(speculative.base_builder_revenue, inline.base_builder_revenue);
+    assert_eq!(speculative.included_order_ids, inline.included_order_ids);
+}
+
+/// A base block warmed by a replay worker must be activated straight from
+/// `prebuilt`, with no replay on the engine thread.
+#[tokio::test(flavor = "multi_thread")]
+async fn activation_uses_the_speculatively_replayed_session() {
+    let fixture = Fixture::new().await;
+    let (base_msg, base_block_hash) = fixture.build_base(U256::from(ETH));
+    let (mut engine, replay_rx) = fixture.direct_engine_with_speculation();
+
+    engine.handle_event(EngineEvent::RelayConfig(fixture.relay_config.clone()));
+    engine.handle_event(EngineEvent::SlotStart(fixture.slot_start()));
+    engine.handle_event(mergeable_event(&base_msg, 1));
+
+    let state = engine.slot.as_ref().unwrap();
+    assert_eq!(state.spec.dispatched, 1);
+    assert!(state.speculating.contains(&base_block_hash));
+
+    let prebuilt = replay_rx.recv_timeout(Duration::from_secs(60)).expect("no replay result");
+    engine.handle_event(prebuilt);
+
+    let state = engine.slot.as_ref().unwrap();
+    assert_eq!(state.spec.completed, 1);
+    assert!(state.prebuilt.contains_key(&base_block_hash));
+    assert!(state.speculating.is_empty());
+
+    engine.handle_event(activate_event(base_block_hash));
+    engine.merge_pass();
+
+    let state = engine.slot.as_ref().unwrap();
+    assert_eq!(state.spec.hits, 1);
+    assert_eq!(state.spec.misses, 0, "the engine thread must not have replayed the base");
+    assert_eq!(
+        state.session.as_ref().map(|s| s.base_block_hash),
+        Some(base_block_hash),
+        "the prebuilt session must become the live session"
+    );
+    assert!(state.prebuilt.is_empty());
+}
+
+/// Builders pay the proposer through a forwarder contract, so the trailing tx
+/// carries the contract as `to` and a value that is not the bid. Only the
+/// proposer's balance delta proves the payment, and merging must accept it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_base_block_paying_through_a_contract_is_merged() {
+    let fixture = Fixture::with_forwarder().await;
+    let (base_msg, base_block_hash) = fixture.build_base_paying_via_forwarder(U256::from(ETH));
+    let mergeable_msg = fixture.mergeable_tx(&base_msg, 3, U256::from(ETH / 5), 0xdd);
+
+    let last_tx =
+        base_msg.execution_payload.payload_inner.payload_inner.transactions.last().unwrap();
+    let decoded = ethrex_common::types::Transaction::decode_canonical(last_tx).unwrap();
+    assert_ne!(
+        decoded.to(),
+        ethrex_common::types::TxKind::Call(eaddr(fixture.proposer)),
+        "the payment tx must not target the proposer directly, or this proves nothing"
+    );
+
+    let (event_tx, event_rx) = crossbeam_channel::bounded(1024);
+    let (output_tx, output_rx) = crossbeam_channel::bounded(64);
+    let _engine = MergeEngine::spawn(
+        fixture.engine_config(Duration::ZERO),
+        fixture.store.clone(),
+        fixture.blockchain.clone(),
+        fixture.head(),
+        event_tx.clone(),
+        event_rx,
+        output_tx,
+    );
+
+    event_tx.send(EngineEvent::RelayConfig(fixture.relay_config.clone())).unwrap();
+    event_tx.send(EngineEvent::SlotStart(fixture.slot_start())).unwrap();
+    event_tx.send(mergeable_event(&base_msg, 1)).unwrap();
+    event_tx.send(mergeable_event(&mergeable_msg, 2)).unwrap();
+    event_tx.send(activate_event(base_block_hash)).unwrap();
+
+    let output = output_rx
+        .recv_timeout(Duration::from_secs(60))
+        .expect("a contract-paid base block must activate and merge");
+    let merged = expect_merged(output);
+    assert_eq!(merged.base_block_hash, base_block_hash);
+    assert!(merged.proposer_value > fixture.block_value);
 }

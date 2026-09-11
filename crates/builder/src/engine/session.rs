@@ -14,7 +14,7 @@ use ethrex_blockchain::{
     Blockchain,
     payload::{BuildPayloadArgs, HeadTransaction, PayloadBuildContext, create_payload},
 };
-use ethrex_common::types::{ELASTICITY_MULTIPLIER, TxKind, calculate_base_fee_per_gas};
+use ethrex_common::types::{ELASTICITY_MULTIPLIER, calculate_base_fee_per_gas};
 use ethrex_crypto::native::NativeCrypto;
 use ethrex_storage::Store;
 use helix_tcp_types::merging::{
@@ -31,7 +31,7 @@ use crate::{
         payment::{self, DistributionConfig, PaymentInputs},
         simulate::{self, balance_of},
         types::{
-            EngineConfig, OriginRevenue, PreparedBlock, PreparedOrder, SimulatedOrder, SlotState,
+            EngineConfig, OriginRevenue, PreparedBlock, PreparedOrder, SimulatedOrder, SlotContext,
         },
     },
     utils::utcnow_ns,
@@ -166,6 +166,8 @@ pub struct MergeSession {
     pub pending_emission: bool,
     stats: MergeStats,
     trace: MergeTraceV1,
+    /// Wall time the base replay in `activate` took, for the activation log.
+    pub replay_us: u64,
 }
 
 impl MergeSession {
@@ -174,13 +176,14 @@ impl MergeSession {
     /// Returns the session, a fresh checkpoint for the caller to store back,
     /// and whether this activation was itself a checkpoint hit.
     pub fn activate(
-        slot: &SlotState,
+        slot: &SlotContext,
         base: &PreparedBlock,
         store: &Store,
         blockchain: Arc<Blockchain>,
         relay_config: &RelayConfigV1,
         checkpoint: Option<&ReplayCheckpoint>,
     ) -> Result<(Self, ReplayCheckpoint, bool), MergeError> {
+        let started = Instant::now();
         let v1 = &base.payload.payload_inner.payload_inner;
         let beneficiary_alloy = v1.fee_recipient;
         let beneficiary = eaddr(beneficiary_alloy);
@@ -190,12 +193,12 @@ impl MergeSession {
             .collateral_safe(&beneficiary_alloy)
             .ok_or(MergeError::UnknownCollateral(beneficiary_alloy))?;
 
-        // The trailing tx must be the proposer payment of exactly block_value.
-        // It is kept in place; the distribution tx is appended separately.
-        let last_tx = base.txs.last().ok_or(MergeError::InvalidPayment)?;
-        let pays_proposer =
-            matches!(last_tx.tx.to(), TxKind::Call(to) if to == eaddr(slot.proposer_fee_recipient));
-        if !pays_proposer || au256(last_tx.tx.value()) != base.block_value {
+        // A base block must have a trailing tx to pay the proposer with. Its
+        // `to`/`value` are deliberately not inspected: builders commonly pay
+        // through a splitter or disperser contract, so `to` is that contract
+        // and `value` is not the bid. The proposer's balance delta across this
+        // tx, checked after the replay below, is the real payment proof.
+        if base.txs.is_empty() {
             return Err(MergeError::InvalidPayment);
         }
 
@@ -319,12 +322,11 @@ impl MergeSession {
         };
 
         // Replay every base tx from `replay_from` onward, proposer payment
-        // included. The `to`/`value` check above only establishes intent; a
-        // payment tx can carry the right fields and still revert (e.g. a
-        // griefing receiver), so the proposer's balance delta across the
-        // last tx is checked below as the real, execution-backed payment
-        // proof. A checkpoint snapshot is taken at the same point, right
-        // before the payment tx, for a later resubmission to reuse.
+        // included. The proposer's balance delta across the last tx is the
+        // only payment proof: it covers a direct transfer and a contract
+        // payment alike, and a tx that carries the right fields but reverts
+        // shows no delta. A checkpoint snapshot is taken at the same point,
+        // right before the payment tx, for a later resubmission to reuse.
         let proposer = eaddr(slot.proposer_fee_recipient);
         let base_fee = ctx.payload.header.base_fee_per_gas;
         let mut proposer_balance_before_payment = None;
@@ -418,6 +420,7 @@ impl MergeSession {
             pending_emission: false,
             stats: MergeStats::default(),
             trace: MergeTraceV1 { base_block_recv_ns: base.recv_ns, ..Default::default() },
+            replay_us: started.elapsed().as_micros() as u64,
         };
         Ok((session, new_checkpoint, checkpoint_hit))
     }
