@@ -20,6 +20,7 @@ use helix_common::{
     chain_info::ChainInfo,
     http::client::{HttpClient, PendingResponse, SseStream},
     local_cache::LocalCache,
+    metrics::{DUTIES_AGE_SECONDS, DUTIES_FETCH, DUTIES_LOOKAHEAD_SLOTS},
 };
 use helix_types::Slot;
 use rustc_hash::FxHashMap;
@@ -29,7 +30,7 @@ use crate::{
     DbHandle, HelixSpine,
     housekeeper::{
         chain_head::ChainHead,
-        duties::{DutiesFetchState, process_duties},
+        duties::{DutiesFetchState, RequestedRegistrations, merge_partial_duties, process_duties},
         inclusion_list_service::{IL_CUTOFF, IlFetchState},
         payload_attrs::process_payload_attributes,
         primev_service::{
@@ -43,6 +44,8 @@ use crate::{
 
 const KNOWN_VALIDATORS_REFRESH_INTERVAL: Duration = Duration::from_secs(10 * 60);
 const SYNC_STATUS_CHECK_INTERVAL: Duration = Duration::from_secs(4);
+/// Warn once a slot when the duty list is older than this.
+const DUTIES_STALE_AFTER: Duration = Duration::from_secs(60);
 const SYNC_STATUS_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Slot event stored in SharedVector and broadcast via spine.
@@ -67,6 +70,8 @@ struct HousekeeperStats {
     duties_fetch_ok: u32,
     duties_fetch_empty: u32,
     duties_fetch_err: u32,
+    duties_fetch_partial: u32,
+    duties_dependent_root_changed: u32,
     il_fetch_ok: u32,
     il_fetch_timeout: u32,
     il_fetch_decode_err: u32,
@@ -102,6 +107,10 @@ pub struct HousekeeperTile {
 
     known_payload_attributes: FxHashMap<(B256, Slot), PayloadAttributesUpdate>,
     duties: Vec<ProposerDuty>,
+    requested_registrations: RequestedRegistrations,
+    last_dependent_root: Option<B256>,
+    duties_fetch_attempt: usize,
+    last_duties_ok: Instant,
 
     // In-flight fetch state machines
     duties_fetch: Option<DutiesFetchState>,
@@ -174,6 +183,10 @@ impl HousekeeperTile {
             db,
             known_payload_attributes: FxHashMap::default(),
             duties: Vec::with_capacity(64),
+            requested_registrations: RequestedRegistrations::default(),
+            last_dependent_root: None,
+            duties_fetch_attempt: 0,
+            last_duties_ok: Instant::now(),
             duties_fetch: None,
             primev_builders_fetch: None,
             primev_validators_fetch: None,
@@ -194,8 +207,10 @@ impl HousekeeperTile {
         let slot = self.chain_head.head();
         info!(%slot, "new slot started");
 
+        self.duties_fetch_attempt = 0;
         self.fetch_duties();
         self.maybe_fetch_il();
+        self.report_duties_age();
 
         let bid_slot = slot + 1;
         for d in &self.duties {
@@ -218,7 +233,29 @@ impl HousekeeperTile {
             &self.http_client,
             &self.beacon_client,
             self.chain_head.epoch().as_u64(),
+            self.duties_fetch_attempt,
         );
+    }
+
+    /// First slot a next-epoch failure leaves uncovered, i.e. the start of the next epoch.
+    fn first_uncovered_slot(&self) -> Slot {
+        let slots_per_epoch = self.chain_head.chain_info().slots_per_epoch();
+        (self.chain_head.epoch() + 1).start_slot(slots_per_epoch)
+    }
+
+    fn report_duties_age(&self) {
+        let age = self.last_duties_ok.elapsed();
+        DUTIES_AGE_SECONDS.set(age.as_secs_f64());
+        let head = self.chain_head.head();
+        let last_duty = self.duties.iter().map(|d| d.slot).max().unwrap_or(head);
+        DUTIES_LOOKAHEAD_SLOTS.set(last_duty.as_u64().saturating_sub(head.as_u64()) as f64);
+        if age >= DUTIES_STALE_AFTER {
+            warn!(
+                age_secs = age.as_secs(),
+                lookahead_slots = last_duty.as_u64().saturating_sub(head.as_u64()),
+                "proposer duties are stale, serving a duty list from an earlier fetch"
+            );
+        }
     }
 
     fn maybe_fetch_primev(&mut self) {
@@ -307,20 +344,54 @@ impl Tile<HelixSpine> for HousekeeperTile {
         if let Some(result) = duties_result {
             self.duties_fetch = None;
             match result {
-                Ok(proposer_duties) if proposer_duties.is_empty() => {
+                Ok(update) if update.duties.is_empty() => {
                     self.stats.duties_fetch_empty += 1;
+                    DUTIES_FETCH.with_label_values(&["empty"]).inc();
                     warn!("no proposer duties found");
                 }
-                Ok(proposer_duties) => {
+                Ok(update) => {
                     self.stats.duties_fetch_ok += 1;
-                    process_duties(&proposer_duties, &self.local_cache, &self.db);
-                    self.duties = proposer_duties;
+                    DUTIES_FETCH.with_label_values(&["ok"]).inc();
+                    self.last_duties_ok = Instant::now();
+                    let root_changed = update.dependent_root.is_some() &&
+                        self.last_dependent_root.is_some() &&
+                        update.dependent_root != self.last_dependent_root;
+                    if update.dependent_root.is_some() {
+                        self.last_dependent_root = update.dependent_root;
+                    }
+                    if !update.has_next_epoch {
+                        self.stats.duties_fetch_partial += 1;
+                        DUTIES_FETCH.with_label_values(&["partial"]).inc();
+                    }
+                    let duties =
+                        merge_partial_duties(update, &self.duties, self.first_uncovered_slot());
+                    process_duties(
+                        &duties,
+                        &self.local_cache,
+                        &self.db,
+                        &mut self.requested_registrations,
+                        self.chain_head.epoch().as_u64(),
+                    );
+                    self.duties = duties;
                     self.chain_head.mark_duties_done();
+                    if root_changed {
+                        self.stats.duties_dependent_root_changed += 1;
+                        warn!(
+                            dependent_root = ?self.last_dependent_root,
+                            "proposer duties dependent root changed, re-sending slot update"
+                        );
+                        self.chain_head.mark_duties_changed();
+                    }
                     self.maybe_fetch_primev();
                 }
                 Err(e) => {
                     self.stats.duties_fetch_err += 1;
-                    error!(%e, "failed to fetch proposer duties");
+                    DUTIES_FETCH.with_label_values(&["err"]).inc();
+                    error!(%e, attempt = self.duties_fetch_attempt, "failed to fetch proposer duties");
+                    self.duties_fetch_attempt += 1;
+                    if self.duties_fetch_attempt < self.beacon_client.beacon_clients.len() {
+                        self.fetch_duties();
+                    }
                 }
             }
         }
@@ -569,6 +640,8 @@ fn send_slot_event(
         duties_fetch_ok = stats.duties_fetch_ok,
         duties_fetch_empty = stats.duties_fetch_empty,
         duties_fetch_err = stats.duties_fetch_err,
+        duties_fetch_partial = stats.duties_fetch_partial,
+        duties_dependent_root_changed = stats.duties_dependent_root_changed,
         il_fetch_ok = stats.il_fetch_ok,
         il_fetch_timeout = stats.il_fetch_timeout,
         il_fetch_decode_err = stats.il_fetch_decode_err,

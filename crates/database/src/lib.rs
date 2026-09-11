@@ -14,7 +14,7 @@ use std::{
 
 use helix_common::{RelayConfig, is_local_dev, local_cache};
 pub use postgres::postgres_db_service::PostgresDatabaseService;
-use tracing::info;
+use tracing::{error, info};
 pub use types::*;
 
 pub use crate::postgres::postgres_db_service::{DbRequest, PendingBlockSubmissionValue};
@@ -77,10 +77,21 @@ pub async fn start_db_service(
                         snapshot::save_known_validators_bg(dir, &set);
                     }
                     let fetch_time = SystemTime::now();
-                    postgres_db.update_validator_registrations(validator_reg_update_time).await;
-                    validator_reg_update_time = fetch_time;
+                    match postgres_db
+                        .update_validator_registrations(validator_reg_update_time)
+                        .await
+                    {
+                        Ok(()) => validator_reg_update_time = fetch_time,
+                        Err(err) => {
+                            error!(%err, "validator registration update failed, keeping watermark")
+                        }
+                    }
                     if let Some(dir) = &snapshot_dir {
-                        save_validator_registrations_snapshot(&local_cache, dir, fetch_time);
+                        save_validator_registrations_snapshot(
+                            &local_cache,
+                            dir,
+                            validator_reg_update_time,
+                        );
                     }
                     postgres_db.load_builder_infos(local_cache.clone()).await;
                 }

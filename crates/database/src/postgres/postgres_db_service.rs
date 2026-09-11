@@ -40,7 +40,7 @@ use crate::{
         postgres_db_init::run_migrations_async,
         postgres_db_row_parsing::{
             parse_bytes_to_hash, parse_bytes_to_pubkey_bytes, parse_i32_to_u64, parse_i64_to_u64,
-            parse_row, parse_rows,
+            parse_row, parse_rows, parse_rows_lossy,
         },
         postgres_db_u256_parsing::PostgresNumeric,
     },
@@ -111,6 +111,9 @@ pub enum DbRequest {
     SetProposerDuties {
         duties: Vec<BuilderGetValidatorsResponseEntry>,
     },
+    FetchValidatorRegistrations {
+        pub_keys: Vec<BlsPublicKeyBytes>,
+    },
     DisableAdjustments {
         block_hash: B256,
         failsafe_trigger: Arc<AtomicBool>,
@@ -139,6 +142,8 @@ const MAINNET_VALIDATOR_COUNT: usize = 1_100_000;
 const DB_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 static DELIVERED_PAYLOADS_MIG_SLOT: AtomicU64 = AtomicU64::new(0);
 const POSTGRES_PASSWORD_ENV_VAR: &str = "POSTGRES_PASSWORD";
+/// Covers clock skew between hosts and the delay between `inserted_at` and the commit.
+const REGISTRATION_FETCH_OVERLAP: Duration = Duration::from_secs(120);
 
 fn new_validator_set() -> FxHashSet<BlsPublicKeyBytes> {
     FxHashSet::with_capacity_and_hasher(MAINNET_VALIDATOR_COUNT, Default::default())
@@ -357,24 +362,22 @@ impl PostgresDatabaseService {
     }
 
     #[instrument(skip_all)]
-    pub async fn update_validator_registrations(&self, last_update_time: SystemTime) {
+    pub async fn update_validator_registrations(
+        &self,
+        last_update_time: SystemTime,
+    ) -> Result<(), DatabaseError> {
         let mut record = DbMetricRecord::new("update_validator_registrations");
 
-        match self.fetch_validator_registrations_since(last_update_time).await {
-            Ok(entries) => {
-                let num_entries = entries.len();
-                entries.into_iter().for_each(|entry| {
-                    self.local_cache
-                        .validator_registration_cache
-                        .insert(entry.registration_info.registration.message.pubkey, entry);
-                });
-                info!("Loaded {} validator registrations", num_entries);
-                record.record_success();
-            }
-            Err(e) => {
-                error!("Error loading validator registrations: {}", e);
-            }
-        }
+        let entries = self.fetch_validator_registrations_since(last_update_time).await?;
+        let num_entries = entries.len();
+        entries.into_iter().for_each(|entry| {
+            self.local_cache
+                .validator_registration_cache
+                .insert(entry.registration_info.registration.message.pubkey, entry);
+        });
+        info!("Loaded {} validator registrations", num_entries);
+        record.record_success();
+        Ok(())
     }
 
     pub async fn start_processors(
@@ -690,6 +693,26 @@ impl PostgresDatabaseService {
             DbRequest::SetProposerDuties { duties } => {
                 if let Err(err) = self.set_proposer_duties(duties).await {
                     error!(%err, "failed to set proposer duties");
+                }
+            }
+            DbRequest::FetchValidatorRegistrations { pub_keys } => {
+                let refs: Vec<&BlsPublicKeyBytes> = pub_keys.iter().collect();
+                match self.get_validator_registrations_for_pub_keys(&refs).await {
+                    Ok(entries) => {
+                        let found = entries.len();
+                        for entry in entries {
+                            self.local_cache
+                                .validator_registration_cache
+                                .insert(entry.registration_info.registration.message.pubkey, entry);
+                        }
+                        info!(
+                            requested = pub_keys.len(),
+                            found, "fetched registrations missing for upcoming duties"
+                        );
+                    }
+                    Err(err) => {
+                        error!(%err, "failed to fetch registrations for upcoming duties");
+                    }
                 }
             }
             DbRequest::DisableAdjustments { block_hash, failsafe_trigger, adjustments_enabled } => {
@@ -1159,7 +1182,7 @@ impl PostgresDatabaseService {
             .await?;
 
         record.record_success();
-        parse_rows(rows)
+        Ok(parse_rows_lossy(rows, "validator_registrations"))
     }
 
     #[instrument(skip_all)]
@@ -1168,6 +1191,10 @@ impl PostgresDatabaseService {
         last_fetch_time: SystemTime,
     ) -> Result<Vec<SignedValidatorRegistrationEntry>, DatabaseError> {
         let mut record = DbMetricRecord::new("fetch_validator_registrations_since");
+
+        let since = last_fetch_time
+            .checked_sub(REGISTRATION_FETCH_OVERLAP)
+            .unwrap_or(SystemTime::UNIX_EPOCH);
 
         let rows = self
             .pool
@@ -1180,12 +1207,12 @@ impl PostgresDatabaseService {
                     ON validator_registrations.public_key = validator_preferences.public_key
                     WHERE validator_registrations.active = true AND validator_registrations.inserted_at > $1
                 ",
-                &[&last_fetch_time],
+                &[&since],
             )
             .await?;
 
         record.record_success();
-        parse_rows(rows)
+        Ok(parse_rows_lossy(rows, "validator_registrations_since"))
     }
 
     #[instrument(skip_all)]

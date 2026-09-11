@@ -12,6 +12,7 @@ use helix_types::{
     BidTrace, BlsPublicKeyBytes, BlsSignatureBytes, SignedValidatorRegistration,
     ValidatorRegistration,
 };
+use tracing::warn;
 use uuid::Uuid;
 
 use crate::{
@@ -385,6 +386,27 @@ pub fn parse_numeric_to_u256(value: PostgresNumeric) -> U256 {
 
 pub fn parse_rows<T: FromRow>(rows: Vec<tokio_postgres::Row>) -> Result<Vec<T>, DatabaseError> {
     rows.iter().map(|row| T::from_row(row)).collect()
+}
+
+/// Parse rows, dropping the ones that fail instead of losing the whole batch.
+pub fn parse_rows_lossy<T: FromRow>(rows: Vec<tokio_postgres::Row>, context: &str) -> Vec<T> {
+    let mut parsed = Vec::with_capacity(rows.len());
+    let mut skipped = 0usize;
+    for row in rows.iter() {
+        match T::from_row(row) {
+            Ok(value) => parsed.push(value),
+            Err(err) => {
+                if skipped == 0 {
+                    warn!(%err, context, "skipping unparsable row");
+                }
+                skipped += 1;
+            }
+        }
+    }
+    if skipped > 0 {
+        warn!(skipped, context, "skipped unparsable rows");
+    }
+    parsed
 }
 
 pub fn parse_row<T: FromRow>(row: &tokio_postgres::Row) -> Result<T, DatabaseError> {
