@@ -157,7 +157,7 @@ pub fn signed_blob_transfer(
         nonce,
         gas_limit: 100_000,
         max_fee_per_gas: 100_000_000_000,
-        max_priority_fee_per_gas: 0,
+        max_priority_fee_per_gas: 1,
         to,
         value: U256::ZERO,
         access_list: Default::default(),

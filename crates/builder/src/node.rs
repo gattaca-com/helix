@@ -8,7 +8,7 @@
 use std::{
     net::{IpAddr, Ipv4Addr},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, RwLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -20,9 +20,9 @@ use ethrex_p2p::{
     network::P2PContext,
     peer_handler::PeerHandler,
     peer_table::{PeerTable, PeerTableServer, PeerTableServerProtocol as _},
-    sync::SyncMode,
+    sync::{BackfillConfig, HistoryChain, SyncMode},
     sync_manager::SyncManager,
-    types::{NetworkConfig, Node, NodeRecord},
+    types::{LocalNode, NetworkConfig, Node, NodeRecord, SharedLocalNode},
     utils::public_key_from_signing_key,
 };
 use ethrex_storage::{EngineType, Store, StoreConfig};
@@ -54,7 +54,7 @@ pub struct NodeHandle {
     pub head: watch::Receiver<HeadInfo>,
     pub datadir: PathBuf,
     peer_table: PeerTable,
-    node_record: NodeRecord,
+    local_node: SharedLocalNode,
 }
 
 /// Boots the embedded ethrex node. Must be called from within a tokio runtime.
@@ -81,10 +81,10 @@ pub async fn start(opts: &NodeOptions) -> eyre::Result<NodeHandle> {
     debug!("Preloading KZG trusted setup");
     ethrex_crypto::kzg::warm_up_trusted_setup();
 
-    let store_config = StoreConfig {
-        rocksdb_block_cache_size: opts.rocksdb_block_cache_size,
-        ..StoreConfig::default()
-    };
+    let store_config = opts
+        .rocksdb_block_cache_size
+        .map(StoreConfig::with_rocksdb_block_cache_size)
+        .unwrap_or_default();
     let engine_type =
         if is_memory_datadir(&datadir) { EngineType::InMemory } else { EngineType::RocksDB };
     let mut store = Store::new_with_config(&datadir, engine_type, store_config)?;
@@ -112,6 +112,8 @@ pub async fn start(opts: &NodeOptions) -> eyre::Result<NodeHandle> {
     let signer = get_signer(&datadir);
     let (local_p2p_node, network_config) = get_local_p2p_node(opts, &signer);
     let node_record = get_local_node_record(&datadir, &local_p2p_node, &signer);
+    let local_node: SharedLocalNode =
+        Arc::new(RwLock::new(LocalNode { node: local_p2p_node.clone(), record: node_record }));
 
     let peer_table =
         PeerTableServer::spawn(local_p2p_node.node_id(), opts.target_peers, store.clone());
@@ -143,6 +145,8 @@ pub async fn start(opts: &NodeOptions) -> eyre::Result<NodeHandle> {
         blockchain.clone(),
         store.clone(),
         datadir.clone(),
+        BackfillConfig { mode: HistoryChain::Off, tx_index_horizon: 0 },
+        tracker.clone(),
     )
     .await;
 
@@ -161,8 +165,7 @@ pub async fn start(opts: &NodeOptions) -> eyre::Result<NodeHandle> {
         store.clone(),
         blockchain.clone(),
         jwt_secret,
-        local_p2p_node.clone(),
-        node_record.clone(),
+        local_node.clone(),
         syncer,
         peer_handler.clone(),
         client_version(),
@@ -204,9 +207,9 @@ pub async fn start(opts: &NodeOptions) -> eyre::Result<NodeHandle> {
         let discovery_config = DiscoveryConfig {
             discv4_enabled: opts.discv4_enabled,
             discv5_enabled: opts.discv5_enabled,
-            ..Default::default()
+            nat_extip_set: false,
         };
-        ethrex_p2p::start_network(p2p_context, bootnodes, discovery_config)
+        ethrex_p2p::start_network(p2p_context, bootnodes, discovery_config, local_node.clone())
             .await
             .map_err(|e| eyre::eyre!("Network failed to start: {e}"))?;
         tracker.spawn(ethrex_p2p::periodically_show_peer_stats(
@@ -226,7 +229,7 @@ pub async fn start(opts: &NodeOptions) -> eyre::Result<NodeHandle> {
         head,
         datadir,
         peer_table,
-        node_record,
+        local_node,
     })
 }
 
@@ -238,7 +241,9 @@ impl NodeHandle {
         self.cancel_token.cancel();
 
         if !is_memory_datadir(&self.datadir) {
-            let node_config = NodeConfigFile::new(&self.peer_table, self.node_record).await;
+            let node_record =
+                self.local_node.read().unwrap_or_else(|e| e.into_inner()).record.clone();
+            let node_config = NodeConfigFile::new(&self.peer_table, node_record).await;
             store_node_config_file(node_config, self.datadir.join(NODE_CONFIG_FILENAME));
         }
 
@@ -285,7 +290,7 @@ async fn spawn_head_watcher(
 }
 
 async fn read_head(store: &Store, blockchain: &Blockchain) -> eyre::Result<HeadInfo> {
-    let number = store.get_latest_block_number().await?;
+    let number = store.get_latest_block_number()?;
     let hash = store
         .get_canonical_block_hash(number)
         .await?
@@ -298,7 +303,7 @@ async fn read_head(store: &Store, blockchain: &Blockchain) -> eyre::Result<HeadI
 /// Re-apply blocks from the last on-disk state root up to the head block,
 /// rebuilding the in-memory trie diff-layers lost across a restart.
 async fn regenerate_head_state(store: &Store, blockchain: &Arc<Blockchain>) -> eyre::Result<()> {
-    let head_block_number = store.get_latest_block_number().await?;
+    let head_block_number = store.get_latest_block_number()?;
     let Some(last_header) = store.get_block_header(head_block_number)? else {
         eyre::bail!("database is empty, genesis block should be present");
     };
