@@ -207,7 +207,7 @@ impl Fixture {
             let number = block.header.number;
             let timestamp = block.header.timestamp;
             self.blockchain.add_block(block).unwrap();
-            apply_fork_choice(&self.store, parent, parent, parent).await.unwrap();
+            apply_fork_choice(&self.store, parent, parent, parent, None).await.unwrap();
             self.head.send_replace(HeadInfo { number, hash: parent, timestamp, is_synced: true });
         }
         parent
@@ -504,7 +504,7 @@ async fn validating_a_block_does_not_store_it() {
         .validate(&built.payload, &message, B256::ZERO, &built.requests, &empty_bundle(), false)
         .expect("a block the fixture built must validate");
 
-    assert_eq!(fixture.store.get_latest_block_number().await.unwrap(), 0);
+    assert_eq!(fixture.store.get_latest_block_number().unwrap(), 0);
     assert!(
         fixture.store.get_block_header_by_hash(h256(message.block_hash)).unwrap().is_none(),
         "the validated block must not be in the store"

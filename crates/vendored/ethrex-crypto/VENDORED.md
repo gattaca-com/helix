@@ -2,7 +2,7 @@
 
 Copy of `crates/common/crypto` from
 [lambdaclass/ethrex](https://github.com/lambdaclass/ethrex) at rev
-`b4d5677812fdf58cb3e439c77906dda4d9b6f91a` (MIT OR Apache-2.0), applied to the
+`ee98e879880aee80440bcd59936c384c26629814` (MIT OR Apache-2.0), applied to the
 workspace via `[patch]` in the root `Cargo.toml`.
 
 ## Why
