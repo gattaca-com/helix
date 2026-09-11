@@ -132,11 +132,8 @@ impl<A: Api> ProposerApi<A> {
             ..Default::default()
         };
 
-        let mut timing_guard = TimeoutGuard::<A> {
-            reporter: ip_addr.map(|ip| (ip, proposer_api.api_provider.clone())),
-            started: Instant::now(),
-            ..Default::default()
-        };
+        let mut timing_guard =
+            TimeoutGuard::<A>::new(ip_addr.map(|ip| (ip, proposer_api.api_provider.clone())));
 
         if let Some(sleep_time) = sleep_time {
             debug!(
@@ -251,9 +248,11 @@ struct TimeoutGuard<A: Api> {
     reporter: Option<(IpAddr, Arc<A::ApiProvider>)>,
 }
 
-impl<A: Api> Default for TimeoutGuard<A> {
-    fn default() -> Self {
-        Self { done_sleep: false, done_fetch: false, started: Instant::now(), reporter: None }
+impl<A: Api> TimeoutGuard<A> {
+    /// Never derive or use `Default` here: a `..Default::default()` base outlives the update
+    /// expression and fires `Drop`, reporting a bogus abandon for every request.
+    fn new(reporter: Option<(IpAddr, Arc<A::ApiProvider>)>) -> Self {
+        Self { done_sleep: false, done_fetch: false, started: Instant::now(), reporter }
     }
 }
 
@@ -321,4 +320,37 @@ pub fn resign_builder_bid(
     debug!("signing builder bid took {:?}", start.elapsed());
 
     bid
+}
+
+#[cfg(test)]
+mod tests {
+    use helix_common::api_provider::DefaultApiProvider;
+
+    use super::*;
+    use crate::api::Api;
+
+    #[derive(Clone)]
+    struct TestApi;
+
+    impl Api for TestApi {
+        type ApiProvider = DefaultApiProvider;
+    }
+
+    #[test]
+    fn the_guard_only_reports_an_abandon_when_the_sleep_was_cut_short() {
+        let before = HEADER_TIMEOUT_SLEEP.get();
+
+        let mut completed = TimeoutGuard::<TestApi>::new(None);
+        completed.done_sleep = true;
+        completed.done_fetch = true;
+        drop(completed);
+        assert_eq!(HEADER_TIMEOUT_SLEEP.get(), before, "a completed request reported an abandon");
+
+        drop(TimeoutGuard::<TestApi>::new(None));
+        assert_eq!(
+            HEADER_TIMEOUT_SLEEP.get(),
+            before + 1,
+            "a request dropped mid-sleep did not report an abandon"
+        );
+    }
 }
