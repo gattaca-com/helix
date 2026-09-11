@@ -192,6 +192,28 @@ lazy_static! {
     )
     .unwrap();
 
+    pub static ref DUTIES_FETCH: IntCounterVec = register_int_counter_vec_with_registry!(
+        "duties_fetch_total",
+        "Count of proposer duties fetches by outcome",
+        &["status"],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    pub static ref DUTIES_AGE_SECONDS: Gauge = register_gauge_with_registry!(
+        "duties_age_seconds",
+        "Seconds since the last successful proposer duties fetch",
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    pub static ref DUTIES_LOOKAHEAD_SLOTS: Gauge = register_gauge_with_registry!(
+        "duties_lookahead_slots",
+        "Slots between the head and the last duty the relay knows about",
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
     //////////////// SIMULATOR ////////////////
     static ref SIMULATOR_COUNTS: IntCounterVec = register_int_counter_vec_with_registry!(
         "simulator_count_total",

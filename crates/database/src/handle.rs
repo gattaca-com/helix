@@ -252,6 +252,13 @@ impl DbHandle {
         }
     }
 
+    pub fn fetch_validator_registrations(&self, pub_keys: Vec<BlsPublicKeyBytes>) {
+        if let Err(err) = self.sender.try_send(DbRequest::FetchValidatorRegistrations { pub_keys })
+        {
+            error!(%err, "failed to send FetchValidatorRegistrations request");
+        }
+    }
+
     pub fn disable_adjustments(
         &self,
         block_hash: B256,

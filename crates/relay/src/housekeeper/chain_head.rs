@@ -147,6 +147,10 @@ impl ChainHead {
     pub fn mark_duties_done(&mut self) {
         self.duties_done = true;
     }
+    /// Re-arm `is_ready()` so a corrective update goes out after a reorg changed the duties.
+    pub fn mark_duties_changed(&mut self) {
+        self.sent_was_complete = false;
+    }
     pub fn mark_payload_attrs_done(&mut self) {
         self.payload_attributes_done = true;
     }
@@ -221,6 +225,33 @@ mod tests {
         // Advancing to a future slot resets the deadline, so is_ready() must
         // not fire immediately (Pending, flags unset, fresh deadline).
         ch.update(head_event(ci.current_slot() + 1));
+        assert!(!ch.is_ready());
+    }
+
+    #[test]
+    fn duties_change_rearms_a_complete_send() {
+        let (mut ch, ci) = make_head();
+        ch.update(head_event(ci.current_slot() + 1));
+        ch.mark_duties_done();
+        ch.mark_payload_attrs_done();
+        ch.mark_il_done();
+        ch.sent();
+        assert!(!ch.is_ready());
+
+        ch.mark_duties_changed();
+        assert!(ch.is_ready());
+    }
+
+    #[test]
+    fn a_corrective_send_does_not_rearm_again() {
+        let (mut ch, ci) = make_head();
+        ch.update(head_event(ci.current_slot() + 1));
+        ch.mark_duties_done();
+        ch.mark_payload_attrs_done();
+        ch.mark_il_done();
+        ch.sent();
+        ch.mark_duties_changed();
+        ch.sent();
         assert!(!ch.is_ready());
     }
 
