@@ -8,7 +8,7 @@ use flux_profiler::timed;
 use helix_common::{
     RelayConfig,
     local_cache::LocalCache,
-    metrics::MERGE_TRACE_LATENCY,
+    metrics::{MERGE_TRACE_LATENCY, MERGED_BID_AGE, MERGED_BID_DECISION, MERGED_BID_MARGIN},
     utils::{utcnow_ms, utcnow_ns},
 };
 use helix_types::{BlsPublicKeyBytes, MergedBlock, PayloadAndBlobs, PayloadBidData, Transactions};
@@ -73,7 +73,10 @@ impl BlockMerger {
         trace!("fetching merged header");
         let start_time = Instant::now();
         let coinbase = original_bid.execution_payload().fee_recipient;
-        let entry = self.best_merged_blocks.get(&coinbase)?;
+        let Some(entry) = self.best_merged_blocks.get(&coinbase) else {
+            MERGED_BID_DECISION.with_label_values(&["no_block_for_builder"]).inc();
+            return None;
+        };
 
         if is_mev_boost {
             self.local_cache
@@ -101,9 +104,11 @@ impl BlockMerger {
         }
 
         if entry.bid.parent_hash() != original_bid.parent_hash() {
+            MERGED_BID_DECISION.with_label_values(&["parent_mismatch"]).inc();
             trace!("merged bid parent hash does not match original bid parent hash");
             return None;
         }
+        MERGED_BID_DECISION.with_label_values(&["served"]).inc();
 
         record_step("get_header", start_time.elapsed());
         trace!("fetched merged header");
@@ -318,14 +323,33 @@ fn log_if_only_payment_tx_changed(
     true
 }
 
+/// Wei as gwei, saturating rather than panicking on an absurd value.
+fn gwei(v: U256) -> f64 {
+    let wei: f64 = if v > U256::from(u128::MAX) { u128::MAX as f64 } else { v.to::<u128>() as f64 };
+    wei / 1e9
+}
+
 fn merged_bid_higher(
     merged_bid: &PayloadEntry,
     original_bid: &PayloadEntry,
     time: u64,
     max_merged_bid_age_ms: u64,
 ) -> bool {
+    let now_ms = utcnow_ms();
+    let age_ms = now_ms.saturating_sub(time);
+    // Recorded for every decision, so the margin distribution shows both the
+    // edge we win by and the ratchet we lose to.
+    let (direction, margin) = if merged_bid.value() > original_bid.value() {
+        ("ahead", *merged_bid.value() - *original_bid.value())
+    } else {
+        ("behind", *original_bid.value() - *merged_bid.value())
+    };
+    MERGED_BID_MARGIN.with_label_values(&[direction]).observe(gwei(margin));
+
     // If the current best bid has equal or higher value, we use that
     if merged_bid.value() <= original_bid.value() {
+        MERGED_BID_DECISION.with_label_values(&["not_higher"]).inc();
+        MERGED_BID_AGE.with_label_values(&["not_higher"]).observe(age_ms as f64);
         debug!(
             "merged bid {:?} with value {:?} is not higher than regular bid, using regular bid, value = {:?}, block_hash = {:?}",
             merged_bid.block_hash(),
@@ -336,19 +360,21 @@ fn merged_bid_higher(
         return false;
     }
     // If the merged bid is stale, we use the current best bid
-    let now_ms = utcnow_ms();
-    if time < now_ms - max_merged_bid_age_ms {
+    if age_ms > max_merged_bid_age_ms {
+        MERGED_BID_DECISION.with_label_values(&["stale"]).inc();
+        MERGED_BID_AGE.with_label_values(&["stale"]).observe(age_ms as f64);
         debug!(
             "merged bid {:?} with value {:?} is stale ({} ms old), using regular bid, value = {:?}, block_hash = {:?}",
             merged_bid.value(),
             merged_bid.block_hash(),
-            now_ms - time,
+            age_ms,
             original_bid.value(),
             original_bid.block_hash()
         );
         return false;
     }
 
+    MERGED_BID_AGE.with_label_values(&["higher"]).observe(age_ms as f64);
     debug!(
         "using merged bid, value = {:?}, block_hash = {:?}",
         merged_bid.value(),

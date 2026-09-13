@@ -32,10 +32,15 @@ cores:
 speculation:
   enabled: true
   workers: 6
-  # Warm sessions retained per base builder, newest first.
-  max_prebuilt_per_builder: 2
+  # Warm only the top-K builders by best bid this slot; 0 warms every one.
+  top_k: 4
+  # Only the newest warm session per builder is ever activated.
+  max_prebuilt_per_builder: 1
   # A full worker queue drops the job; that base just replays inline instead.
   queue_capacity: 64
+
+# Prometheus endpoint for the merging role; omit to disable.
+metrics_port: 9600
 
 emission:
   # Only emit when proposer value improves by more than this many wei.

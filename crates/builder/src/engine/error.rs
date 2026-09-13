@@ -34,6 +34,24 @@ pub enum MergeError {
 }
 
 impl MergeError {
+    /// Bounded label for metrics; never carries the variable payload.
+    pub fn metric_label(&self) -> &'static str {
+        match self {
+            MergeError::NotSynced => "not_synced",
+            MergeError::HeadMismatch => "head_mismatch",
+            MergeError::InvalidPayment => "invalid_payment",
+            MergeError::UnknownCollateral(_) => "unknown_collateral",
+            MergeError::InvalidOrder(_) => "invalid_order",
+            MergeError::StaleSlot => "stale_slot",
+            MergeError::LimitExceeded(_) => "limit_exceeded",
+            MergeError::InvalidBaseBlock(_) => "invalid_base_block",
+            MergeError::NoBalanceInBuilderSafe { .. } => "safe_balance",
+            MergeError::RevenueAllocationReverted => "distribution_reverted",
+            MergeError::BalanceDeltaMismatch { .. } => "balance_delta_mismatch",
+            MergeError::Internal(_) => "internal",
+        }
+    }
+
     /// The `RejectV1` mapping for this error, or `None` for internal
     /// conditions that must not produce protocol traffic.
     pub fn reject(&self, block_hash: Option<B256>) -> Option<(RejectCode, RejectSubject)> {

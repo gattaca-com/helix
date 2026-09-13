@@ -491,6 +491,38 @@ lazy_static! {
     )
     .unwrap();
 
+    /// Why a merged block was or was not served at get_header. `stale` against
+    /// `served` says whether `max_merged_bid_age_ms` is the binding constraint.
+    pub static ref MERGED_BID_DECISION: IntCounterVec = register_int_counter_vec_with_registry!(
+        "block_merge_decision_total",
+        "get_header outcomes for the merged bid",
+        &["outcome"],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    /// Age of the merged bid's base block when the decision is made, measured
+    /// against `max_merged_bid_age_ms`.
+    pub static ref MERGED_BID_AGE: HistogramVec = register_histogram_vec_with_registry!(
+        "block_merge_bid_age_ms",
+        "Age of the merged bid's base block at the get_header decision",
+        &["outcome"],
+        vec![1., 5., 10., 25., 50., 75., 100., 150., 200., 250., 300., 400., 600., 1_000., 2_000.],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    /// How far the merged bid was ahead of, or behind, the original bid. The
+    /// `behind` distribution is the ratchet we failed to beat.
+    pub static ref MERGED_BID_MARGIN: HistogramVec = register_histogram_vec_with_registry!(
+        "block_merge_bid_margin_gwei",
+        "Merged bid value minus original bid value, by direction",
+        &["direction"],
+        vec![0., 1e3, 1e4, 1e5, 1e6, 5e6, 1e7, 5e7, 1e8, 5e8, 1e9, 5e9, 1e10, 5e10, 1e11],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
     //////////////// GET PAYLOAD ////////////////
     pub static ref BEACON_BLOCK_PUBLISH_FAILURES: IntCounter = register_int_counter_with_registry!(
         "beacon_block_publish_failures_total",

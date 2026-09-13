@@ -11,6 +11,7 @@ mod building;
 mod cli;
 mod config;
 mod engine;
+mod metrics;
 mod node;
 mod server;
 mod spine;
@@ -115,6 +116,10 @@ fn main() -> eyre::Result<()> {
     if let Some(merging_config) = roles.merging() {
         let relay_signer = relay_signer.expect("the merging role loads a relay signer");
 
+        if let Some(port) = merging_config.metrics_port {
+            runtime.spawn(metrics::serve(port));
+        }
+
         let (event_tx, event_rx) = crossbeam_channel::bounded(merging_config.event_queue_capacity);
         let (output_tx, output_rx) = crossbeam_channel::bounded(64);
 
@@ -136,6 +141,7 @@ fn main() -> eyre::Result<()> {
             },
             speculation_queue_capacity: merging_config.speculation.queue_capacity,
             max_prebuilt_per_builder: merging_config.speculation.max_prebuilt_per_builder,
+            speculation_top_k: merging_config.speculation.top_k,
             replay_worker_cores: merging_config.cores.replay_workers.clone(),
         };
         let _engine = MergeEngine::spawn(

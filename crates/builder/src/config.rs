@@ -44,6 +44,13 @@ pub struct MergingConfig {
     pub emission: EmissionConfig,
     #[serde(default)]
     pub speculation: SpeculationConfig,
+    /// Port for the merging-role prometheus endpoint; omit to disable.
+    #[serde(default = "default_metrics_port")]
+    pub metrics_port: Option<u16>,
+}
+
+fn default_metrics_port() -> Option<u16> {
+    Some(9600)
 }
 
 /// Optional core pins; unpinned when absent.
@@ -66,9 +73,13 @@ pub struct SpeculationConfig {
     pub enabled: bool,
     #[serde(default = "default_speculation_workers")]
     pub workers: usize,
-    /// Warm sessions retained per base builder, newest first.
+    /// Warm sessions retained per base builder, newest first. Only the newest
+    /// is ever activated in practice, so 1 is the default.
     #[serde(default = "default_max_prebuilt_per_builder")]
     pub max_prebuilt_per_builder: usize,
+    /// Warm only the top-K builders by best bid this slot; 0 warms every one.
+    #[serde(default = "default_speculation_top_k")]
+    pub top_k: usize,
     /// Per-worker job queue depth; a full queue drops the job instead of blocking.
     #[serde(default = "default_speculation_queue_capacity")]
     pub queue_capacity: usize,
@@ -80,6 +91,7 @@ impl Default for SpeculationConfig {
             enabled: true,
             workers: default_speculation_workers(),
             max_prebuilt_per_builder: default_max_prebuilt_per_builder(),
+            top_k: default_speculation_top_k(),
             queue_capacity: default_speculation_queue_capacity(),
         }
     }
@@ -90,7 +102,11 @@ fn default_speculation_workers() -> usize {
 }
 
 fn default_max_prebuilt_per_builder() -> usize {
-    2
+    1
+}
+
+fn default_speculation_top_k() -> usize {
+    4
 }
 
 fn default_speculation_queue_capacity() -> usize {
