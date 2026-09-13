@@ -109,6 +109,7 @@ impl Fixture {
             speculation_workers: 0,
             speculation_queue_capacity: 64,
             max_prebuilt_per_builder: 2,
+            speculation_top_k: 0,
             replay_worker_cores: Vec::new(),
         }
     }
@@ -1113,4 +1114,193 @@ async fn a_base_block_paying_through_a_contract_is_merged() {
     let merged = expect_merged(output);
     assert_eq!(merged.base_block_hash, base_block_hash);
     assert!(merged.proposer_value > fixture.block_value);
+}
+
+fn submission_stream(samples: &[(u64, u64)]) -> crate::engine::types::SlotState {
+    let mut state = crate::engine::types::SlotState::new(&SlotStartV1 {
+        slot: SLOT,
+        parent_hash: B256::ZERO,
+        proposer_fee_recipient: Address::ZERO,
+        parent_beacon_block_root: B256::ZERO,
+    });
+    for (value, ms) in samples {
+        state.record_submission(BUILDER, U256::from(*value), ms * 1_000_000);
+    }
+    state
+}
+
+const BUILDER: Address = Address::repeat_byte(0x11);
+
+/// The budget is the time until the builder's own stream out-bids our merge:
+/// emit any earlier and we win, any later and we lose.
+#[test]
+fn budget_ends_when_the_builder_outbids_the_merge() {
+    // uplift over the base of 100: +0, +5, +30
+    let state = submission_stream(&[(100, 0), (105, 10), (130, 25)]);
+    let subs = state.submissions.get(&BUILDER).unwrap();
+
+    // delta 20 survives the +5 step and dies on the +30 step.
+    let (steps, budget_ms, deadline_seen) = subs.budget(0, U256::from(100), U256::from(20));
+    assert!(deadline_seen, "the out-bidding submission is in the history");
+    assert_eq!(steps, 1, "one submission of headroom");
+    assert_eq!(budget_ms, 25, "we had until the out-bidding submission arrived");
+}
+
+/// A delta the builder never out-bids has no deadline yet, so the budget is a
+/// lower bound rather than an exact figure.
+#[test]
+fn budget_is_a_lower_bound_while_the_merge_still_leads() {
+    let state = submission_stream(&[(100, 0), (105, 10), (130, 25)]);
+    let subs = state.submissions.get(&BUILDER).unwrap();
+
+    let (steps, budget_ms, deadline_seen) = subs.budget(0, U256::from(100), U256::from(1_000));
+    assert!(!deadline_seen);
+    assert_eq!(steps, 2);
+    assert_eq!(budget_ms, 25);
+}
+
+/// A merge that is already behind when it is emitted gets no budget at all.
+#[test]
+fn budget_is_zero_when_the_next_submission_already_wins() {
+    let state = submission_stream(&[(100, 0), (200, 8)]);
+    let subs = state.submissions.get(&BUILDER).unwrap();
+
+    let (steps, budget_ms, deadline_seen) = subs.budget(0, U256::from(100), U256::from(20));
+    assert!(deadline_seen);
+    assert_eq!(steps, 0, "no headroom: the very next submission beat us");
+    assert_eq!(budget_ms, 8);
+}
+
+/// The live session must follow its builder's newest appendable block. Holding
+/// a base while the builder submits past it is what makes the merged bid stale
+/// and lose, so a fresher warm session replaces the live one.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_live_session_rebases_onto_a_fresher_base_from_the_same_builder() {
+    let fixture = Fixture::new().await;
+    let (base_a, hash_a) = fixture.build_base(U256::from(ETH));
+    let (base_b, hash_b) = fixture.build_base(U256::from(ETH / 2));
+    assert_ne!(hash_a, hash_b, "the two bases must be distinct blocks");
+
+    let (mut engine, replay_rx) = fixture.direct_engine_with_speculation();
+    engine.handle_event(EngineEvent::RelayConfig(fixture.relay_config.clone()));
+    engine.handle_event(EngineEvent::SlotStart(fixture.slot_start()));
+
+    // First base: warm it, then activate it.
+    engine.handle_event(mergeable_event(&base_a, 1));
+    let warm_a = replay_rx.recv_timeout(Duration::from_secs(60)).expect("no replay for base a");
+    engine.handle_event(warm_a);
+    engine.handle_event(activate_event(hash_a));
+    engine.merge_pass();
+
+    let state = engine.slot.as_ref().unwrap();
+    assert_eq!(state.session.as_ref().map(|s| s.base_block_hash), Some(hash_a));
+    assert_eq!(state.rebases, 0);
+
+    // The same builder submits again; the live session must follow it.
+    engine.handle_event(mergeable_event(&base_b, 2));
+    let warm_b = replay_rx.recv_timeout(Duration::from_secs(60)).expect("no replay for base b");
+    engine.handle_event(warm_b);
+
+    let state = engine.slot.as_ref().unwrap();
+    assert_eq!(
+        state.session.as_ref().map(|s| s.base_block_hash),
+        Some(hash_b),
+        "the live session must move to the builder's newer base"
+    );
+    assert_eq!(state.rebases, 1);
+}
+
+/// A pending activation names the base the relay wants, so a rebase must not
+/// race ahead of it and swap the session out from under it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pending_activation_blocks_the_rebase() {
+    let fixture = Fixture::new().await;
+    let (base_a, hash_a) = fixture.build_base(U256::from(ETH));
+    let (base_b, hash_b) = fixture.build_base(U256::from(ETH / 2));
+
+    let (mut engine, replay_rx) = fixture.direct_engine_with_speculation();
+    engine.handle_event(EngineEvent::RelayConfig(fixture.relay_config.clone()));
+    engine.handle_event(EngineEvent::SlotStart(fixture.slot_start()));
+    engine.handle_event(mergeable_event(&base_a, 1));
+    let warm_a = replay_rx.recv_timeout(Duration::from_secs(60)).expect("no replay for base a");
+    engine.handle_event(warm_a);
+    engine.handle_event(activate_event(hash_a));
+    engine.merge_pass();
+
+    // An activation is outstanding when the fresher base lands.
+    engine.handle_event(mergeable_event(&base_b, 2));
+    engine.handle_event(activate_event(hash_b));
+    let warm_b = replay_rx.recv_timeout(Duration::from_secs(60)).expect("no replay for base b");
+    engine.handle_event(warm_b);
+
+    let state = engine.slot.as_ref().unwrap();
+    assert_eq!(state.rebases, 0, "the pending activation owns the base choice");
+}
+
+fn replay_job(
+    fixture: &Fixture,
+    payload: &alloy_rpc_types::engine::ExecutionPayloadV3,
+    block_hash: B256,
+    value: u64,
+) -> crate::engine::replay::ReplayJob {
+    let state = crate::engine::types::SlotState::new(&fixture.slot_start());
+    crate::engine::replay::ReplayJob {
+        ctx: state.ctx.clone(),
+        base: Arc::new(crate::engine::types::PreparedBlock {
+            block_hash,
+            builder_pubkey: Default::default(),
+            block_value: U256::from(value),
+            allow_appending: true,
+            payload: payload.clone(),
+            txs: Arc::new(Vec::new()),
+            recv_ns: 0,
+            submission_index: 0,
+        }),
+        relay_config: Arc::new(fixture.relay_config.clone()),
+        generation: 0,
+    }
+}
+
+/// A builder's newer block must replace its older pending replay, and the
+/// replaced block hash must be reported: it will never produce a result, so
+/// the engine has to stop treating it as in flight or it waits on it forever.
+#[tokio::test]
+async fn a_newer_block_supersedes_the_pending_replay_for_that_builder() {
+    let fixture = Fixture::new().await;
+    let (base, _) = fixture.build_base(U256::from(ETH));
+    let payload = base.execution_payload;
+    let pending = crate::engine::replay::Pending::new(8);
+    let builder = Address::repeat_byte(0x11);
+    let (old_hash, new_hash) = (B256::repeat_byte(0xa1), B256::repeat_byte(0xb2));
+
+    assert!(matches!(
+        pending.offer(builder, replay_job(&fixture, &payload, old_hash, 100)),
+        crate::engine::replay::Dispatch::Accepted
+    ));
+    match pending.offer(builder, replay_job(&fixture, &payload, new_hash, 200)) {
+        crate::engine::replay::Dispatch::Superseded(hash) => assert_eq!(hash, old_hash),
+        _ => panic!("the older pending job must be reported as superseded"),
+    }
+
+    let taken = pending.try_take().expect("a job must be pending");
+    assert_eq!(taken.base.block_hash, new_hash, "the newest block must be the one replayed");
+    assert!(pending.try_take().is_none(), "the superseded job must not also be queued");
+}
+
+/// With several builders pending, the highest bid is warmed first: it is the
+/// one most likely to win the slot.
+#[tokio::test]
+async fn the_highest_bidding_builder_is_replayed_first() {
+    let fixture = Fixture::new().await;
+    let (base, _) = fixture.build_base(U256::from(ETH));
+    let payload = base.execution_payload;
+    let pending = crate::engine::replay::Pending::new(8);
+    let low = Address::repeat_byte(0x11);
+    let high = Address::repeat_byte(0x22);
+
+    pending.offer(low, replay_job(&fixture, &payload, B256::repeat_byte(0xa1), 100));
+    pending.offer(high, replay_job(&fixture, &payload, B256::repeat_byte(0xb2), 900));
+
+    let first = pending.try_take().expect("a job must be pending");
+    assert_eq!(first.base.block_value, U256::from(900));
 }

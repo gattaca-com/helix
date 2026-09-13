@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{collections::VecDeque, sync::Arc, time::Duration};
 
 use alloy_primitives::{Address, B256, U256};
 use alloy_rpc_types::beacon::BlsPublicKey;
@@ -36,6 +36,8 @@ pub struct EngineConfig {
     pub speculation_workers: usize,
     pub speculation_queue_capacity: usize,
     pub max_prebuilt_per_builder: usize,
+    /// Warm only the top-K builders by best bid this slot; 0 warms every one.
+    pub speculation_top_k: usize,
     /// One core per speculative replay worker; empty leaves them unpinned.
     pub replay_worker_cores: Vec<usize>,
 }
@@ -68,6 +70,9 @@ pub struct PreparedBlock {
     /// Index-aligned with `payload.transactions`.
     pub txs: Arc<Vec<Arc<DecodedTx>>>,
     pub recv_ns: u64,
+    /// Index of this block in its builder's submission stream this slot: `i`
+    /// in the win condition.
+    pub submission_index: u64,
 }
 
 impl PreparedBlock {
@@ -174,6 +179,106 @@ pub struct SlotState {
     /// Blocks dispatched to a replay worker and not yet answered.
     pub speculating: FxHashSet<B256>,
     pub spec: SpecStats,
+    /// Per-builder bid history this slot. `best` is what the relay's top bid
+    /// for that builder will be, so it is what our merged bid is compared
+    /// against; the consecutive deltas give R, the ratchet we must beat.
+    pub submissions: FxHashMap<Address, BuilderSubmissions>,
+    /// Emissions whose proposer value beat the base builder's own best bid,
+    /// and those that did not. The win predictor, per slot.
+    pub emissions_ahead: u64,
+    pub emissions_behind: u64,
+    /// Beneficiary of the live session. Its newest appendable block is what we
+    /// want to be merging onto at all times, so a warm session for a later
+    /// block from this builder replaces the live one.
+    pub live_builder: Option<Address>,
+    /// Live sessions replaced by a fresher base from the same builder.
+    pub rebases: u64,
+}
+
+/// One submission in a builder's stream, kept so the exact win condition can
+/// be evaluated at emission instead of reconstructed from aggregates.
+#[derive(Debug, Clone, Copy)]
+pub struct Submission {
+    pub index: u64,
+    pub value: U256,
+    pub recv_ns: u64,
+}
+
+/// Submissions retained per builder. Bounds the history walk; a builder sends
+/// on the order of 150 blocks a slot, so this covers a full slot in practice.
+pub const MAX_SUBMISSION_HISTORY: usize = 512;
+
+#[derive(Debug, Clone)]
+pub struct BuilderSubmissions {
+    pub best: U256,
+    pub last: U256,
+    pub last_recv_ns: u64,
+    pub count: u64,
+    /// Total upward bid movement this slot, against `span_ms`, gives the rate.
+    pub total_rise: U256,
+    pub first_recv_ns: u64,
+    /// Recent submissions, oldest first.
+    pub history: VecDeque<Submission>,
+}
+
+impl BuilderSubmissions {
+    fn new(value: U256, recv_ns: u64) -> Self {
+        let mut history = VecDeque::with_capacity(MAX_SUBMISSION_HISTORY);
+        history.push_back(Submission { index: 0, value, recv_ns });
+        Self {
+            best: value,
+            last: value,
+            last_recv_ns: recv_ns,
+            count: 1,
+            total_rise: U256::ZERO,
+            first_recv_ns: recv_ns,
+            history,
+        }
+    }
+
+    pub fn span_ms(&self) -> u64 {
+        self.last_recv_ns.saturating_sub(self.first_recv_ns) / 1_000_000
+    }
+
+    fn push(&mut self, value: U256, recv_ns: u64) -> u64 {
+        let index = self.count;
+        if self.history.len() == MAX_SUBMISSION_HISTORY {
+            self.history.pop_front();
+        }
+        self.history.push_back(Submission { index, value, recv_ns });
+        index
+    }
+
+    /// How long we had to emit a merged block on base `(base_index,
+    /// base_value)` and still beat this builder's own stream, given
+    /// `delta` of added proposer value.
+    ///
+    /// Walks forward from the base to the last submission whose uplift over
+    /// the base stays under `delta`; the next one after that is the deadline.
+    /// Returns (steps allowed, budget in ms, deadline known). When the whole
+    /// retained history stays under `delta` the budget is a lower bound, since
+    /// the deadline has not happened yet.
+    pub fn budget(&self, base_index: u64, base_value: U256, delta: U256) -> (u64, u64, bool) {
+        let Some(base) = self.history.iter().find(|s| s.index == base_index) else {
+            return (0, 0, false);
+        };
+        let mut last_ok = base;
+        for sample in self.history.iter().filter(|s| s.index > base_index) {
+            if sample.value.saturating_sub(base_value) >= delta {
+                return (
+                    sample.index - base_index - 1,
+                    sample.recv_ns.saturating_sub(base.recv_ns) / 1_000_000,
+                    true,
+                );
+            }
+            last_ok = sample;
+        }
+        (
+            last_ok.index - base_index,
+            last_ok.recv_ns.saturating_sub(base.recv_ns) / 1_000_000,
+            false,
+        )
+    }
 }
 
 /// Speculation counters for one slot, logged at slot end.
@@ -188,6 +293,11 @@ pub struct SpecStats {
     pub hits: u64,
     /// Activations that fell through to an engine-thread replay.
     pub misses: u64,
+    /// Appendable blocks from builders outside the top-K, never warmed.
+    pub skipped_not_top_k: u64,
+    /// Pending replays dropped because the builder submitted a newer block
+    /// before the old one started. Replaying a superseded base cannot help.
+    pub superseded: u64,
 }
 
 impl SlotState {
@@ -234,7 +344,60 @@ impl SlotState {
             prebuilt_by_builder: FxHashMap::default(),
             speculating: FxHashSet::default(),
             spec: SpecStats::default(),
+            submissions: FxHashMap::default(),
+            emissions_ahead: 0,
+            emissions_behind: 0,
+            live_builder: None,
+            rebases: 0,
         }
+    }
+
+    /// Records a submission and returns the ratchet against the previous one
+    /// from the same builder, as (delta, interval_ms, rising).
+    pub fn record_submission(
+        &mut self,
+        builder: Address,
+        value: U256,
+        recv_ns: u64,
+    ) -> (u64, Option<(U256, u64, bool)>) {
+        match self.submissions.get_mut(&builder) {
+            Some(prev) => {
+                let interval_ms = recv_ns.saturating_sub(prev.last_recv_ns) / 1_000_000;
+                let rising = value >= prev.last;
+                let delta = if rising { value - prev.last } else { prev.last - value };
+                if rising {
+                    prev.total_rise = prev.total_rise.saturating_add(delta);
+                }
+                let index = prev.push(value, recv_ns);
+                prev.last = value;
+                prev.last_recv_ns = recv_ns;
+                prev.count += 1;
+                if value > prev.best {
+                    prev.best = value;
+                }
+                (index, Some((delta, interval_ms, rising)))
+            }
+            None => {
+                self.submissions.insert(builder, BuilderSubmissions::new(value, recv_ns));
+                (0, None)
+            }
+        }
+    }
+
+    /// What our merged bid for `builder` is compared against. The bid sorter
+    /// honours cancellations -- a lower resubmission replaces the previous bid
+    /// -- so `latest` is the real reference and `best` is an upper bound on it.
+    /// Both are reported so the gap between them is visible.
+    pub fn reference_bids(&self, builder: &Address) -> (U256, U256) {
+        self.submissions.get(builder).map(|s| (s.last, s.best)).unwrap_or_default()
+    }
+
+    /// Builders ranked by their best bid this slot, highest first.
+    pub fn top_builders(&self, k: usize) -> Vec<Address> {
+        let mut ranked: Vec<(Address, U256)> =
+            self.submissions.iter().map(|(addr, s)| (*addr, s.best)).collect();
+        ranked.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+        ranked.into_iter().take(k).map(|(addr, _)| addr).collect()
     }
 
     /// Stores a speculatively replayed session, evicting the builder's oldest
