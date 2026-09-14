@@ -52,6 +52,8 @@ block_merging_config:
   #       collateral_safe: "0x0000000000000000000000000000000000000000"
 target_get_payload_propagation_duration_ms: 0
 get_payload_v1_response_buffer_ms: 800
+# Maximum per-IP get_header frequency that permits payload sharing with operator peers.
+ip_frequency_threshold: 0.2
 primev_config: null
 discord_webhook_url: null
 is_submission_instance: true

@@ -62,6 +62,10 @@ pub struct RelayConfig {
     pub cores: CoresConfig,
     #[serde(default = "default_bool::<true>")]
     pub gossip_payload_on_header: bool,
+    /// Maximum per-IP `get_header` frequency that still permits sharing the payload with
+    /// operator peers.
+    #[serde(default = "default_ip_frequency_threshold")]
+    pub ip_frequency_threshold: f64,
     #[serde(default = "default_u16::<4040>")]
     pub api_port: u16,
     #[serde(default = "default_u16::<4041>")]
@@ -124,6 +128,7 @@ impl RelayConfig {
                 housekeeper: None,
             },
             gossip_payload_on_header: false,
+            ip_frequency_threshold: default_ip_frequency_threshold(),
             api_port: 4040,
             tcp_port: 4041,
             tcp_max_connections: 512,
@@ -356,6 +361,12 @@ pub const fn default_usize<const U: usize>() -> usize {
 
 pub const fn default_u64<const D: u64>() -> u64 {
     D
+}
+
+const DEFAULT_IP_FREQUENCY_THRESHOLD: f64 = 0.2;
+
+const fn default_ip_frequency_threshold() -> f64 {
+    DEFAULT_IP_FREQUENCY_THRESHOLD
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -792,6 +803,20 @@ impl Default for HeaderStreamConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_ip_frequency_threshold_config_default_and_override() {
+        let threshold_key = serde_yaml::Value::String("ip_frequency_threshold".to_owned());
+        let mut value = serde_yaml::to_value(RelayConfig::empty_for_test()).unwrap();
+        value.as_mapping_mut().unwrap().remove(&threshold_key);
+
+        let default_config: RelayConfig = serde_yaml::from_value(value.clone()).unwrap();
+        assert_eq!(default_config.ip_frequency_threshold, DEFAULT_IP_FREQUENCY_THRESHOLD);
+
+        value.as_mapping_mut().unwrap().insert(threshold_key, serde_yaml::to_value(0.5).unwrap());
+        let overridden_config: RelayConfig = serde_yaml::from_value(value).unwrap();
+        assert_eq!(overridden_config.ip_frequency_threshold, 0.5);
+    }
 
     fn create_router_config(routes: Vec<Route>) -> RouterConfig {
         RouterConfig {

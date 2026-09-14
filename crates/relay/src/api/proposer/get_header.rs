@@ -32,9 +32,6 @@ use crate::api::{
     router::Terminating,
 };
 
-/// Gate for p2p payload sharing - get_header reqs in < 20% of previous epoch slots.  
-const IP_FREQUENCY_THRESHOLD: f64 = 0.2;
-
 pub(super) struct ValidatedHeaderRequest {
     pub ms_into_slot: u64,
     pub validation_complete_ns: u64,
@@ -209,7 +206,7 @@ impl<A: Api> ProposerApi<A> {
                             Cow::Owned(payload_and_blobs),
                             fork,
                             Cow::Owned(bid_data),
-                            ip_gate < IP_FREQUENCY_THRESHOLD,
+                            ip_gate < proposer_api.relay_config.ip_frequency_threshold,
                         )
                         .await;
                 }
