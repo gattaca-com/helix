@@ -525,7 +525,6 @@ fn handle_active_message(
             send_control(engine_tx, EngineEvent::ActivateBase {
                 slot: msg.slot,
                 block_hash: msg.block_hash,
-                recv_ns: utcnow_ns(),
                 generation,
             });
         }

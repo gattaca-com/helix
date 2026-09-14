@@ -6,17 +6,20 @@
 pub mod convert;
 pub mod error;
 pub mod payment;
-pub mod replay;
 pub mod session;
 pub mod simulate;
+pub mod streams;
 #[cfg(test)]
 mod tests;
 pub mod types;
 
-use std::{sync::Arc, time::Duration};
+use std::sync::{
+    Arc, RwLock,
+    atomic::{AtomicU64, Ordering},
+};
 
 use alloy_primitives::{B256, keccak256};
-use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
+use crossbeam_channel::{Receiver, Sender};
 use ethrex_blockchain::Blockchain;
 use ethrex_crypto::native::NativeCrypto;
 use ethrex_storage::Store;
@@ -25,7 +28,7 @@ use helix_tcp_types::merging::{
     control::RelayConfigV1,
     order::{
         MAX_BLOCK_TXS, MAX_ORDERS_PER_BLOCK, MAX_TX_BYTES, MergeOrderRef, OrderMeta,
-        bundle_order_hash, is_tx_hash_ref, order_id,
+        bundle_order_hash, is_tx_hash_ref,
     },
     relay_to_builder::{MergeableBlockV1, SlotStartV1},
 };
@@ -36,11 +39,10 @@ use tracing::{debug, info, warn};
 use crate::{
     engine::{
         error::MergeError,
-        replay::{Dispatch, ReplayJob, ReplayPool},
-        session::{EmitOutcome, MergeSession},
+        streams::{MergeStreams, Offer, StreamJob},
         types::{
-            DecodedTx, EngineConfig, MAX_PARKED_SESSIONS, MAX_REPLAY_CHECKPOINTS, PreparedBlock,
-            PreparedOrder, SlotState,
+            DecodedTx, EngineConfig, PreparedBlock, PreparedOrder, SharedInner, SharedSlot,
+            SlotState,
         },
     },
     metrics,
@@ -72,17 +74,7 @@ pub enum EngineEvent {
     ActivateBase {
         slot: u64,
         block_hash: B256,
-        recv_ns: u64,
         generation: u64,
-    },
-    /// A speculative replay finished; `session` is `None` when it failed.
-    Prebuilt {
-        slot: u64,
-        generation: u64,
-        block_hash: B256,
-        beneficiary: alloy_primitives::Address,
-        checkpoint_hit: bool,
-        session: Option<Box<MergeSession>>,
     },
 }
 
@@ -117,9 +109,7 @@ impl EngineOutput {
 
 /// The ethrex-backed merge engine worker.
 pub struct MergeEngine {
-    config: EngineConfig,
-    store: Store,
-    blockchain: Arc<Blockchain>,
+    config: Arc<EngineConfig>,
     head: watch::Receiver<HeadInfo>,
     out: Sender<EngineOutput>,
     /// Latest connection generation; events from older connections are dropped.
@@ -127,8 +117,8 @@ pub struct MergeEngine {
     /// Latest relay config; snapshotted into the slot at `SlotStart`.
     relay_config: Option<Arc<RelayConfigV1>>,
     slot: Option<SlotState>,
-    /// Speculative replay workers; `None` when speculation is disabled.
-    replay: Option<ReplayPool>,
+    /// Per-builder merge streams; `None` when disabled.
+    streams: Option<MergeStreams>,
 }
 
 impl MergeEngine {
@@ -149,26 +139,25 @@ impl MergeEngine {
                 {
                     warn!(core, "failed to pin merge engine thread");
                 }
-                let replay = (config.speculation_workers > 0).then(|| {
-                    ReplayPool::spawn(
-                        config.speculation_workers,
-                        config.speculation_queue_capacity,
+                let config = Arc::new(config);
+                let streams = (config.max_builder_streams > 0).then(|| {
+                    MergeStreams::new(
+                        config.max_builder_streams,
                         &config.replay_worker_cores,
                         store.clone(),
                         blockchain.clone(),
-                        event_tx,
+                        out.clone(),
                     )
                 });
+                drop(event_tx);
                 let mut engine = MergeEngine {
                     config,
-                    store,
-                    blockchain,
                     head,
                     out,
                     generation: 0,
                     relay_config: None,
                     slot: None,
-                    replay,
+                    streams,
                 };
                 info!("merge engine started");
                 engine.run(events);
@@ -178,90 +167,41 @@ impl MergeEngine {
     }
 
     fn run(&mut self, events: Receiver<EngineEvent>) {
-        loop {
-            // A throttled improvement is waiting: wake up after the spacing
-            // window even if no further events arrive (slot-tail emissions
-            // would otherwise be lost).
-            let first = if self.has_pending_emission() {
-                let wait = self.config.min_emission_interval.max(Duration::from_millis(1));
-                match events.recv_timeout(wait) {
-                    Ok(event) => Some(event),
-                    Err(RecvTimeoutError::Timeout) => None,
-                    Err(RecvTimeoutError::Disconnected) => break,
-                }
-            } else {
-                match events.recv() {
-                    Ok(event) => Some(event),
-                    Err(_) => break,
-                }
-            };
-
-            // A timeout wake-up is itself work: retry the pending emission.
-            let mut work = match first {
-                Some(event) => self.handle_event(event),
-                None => true,
-            };
-            // Coalesce everything already queued into one merge pass.
+        while let Ok(event) = events.recv() {
+            self.handle_event(event);
             while let Ok(event) = events.try_recv() {
-                work |= self.handle_event(event);
-            }
-            if work {
-                self.merge_pass();
+                self.handle_event(event);
             }
         }
     }
 
-    fn has_pending_emission(&self) -> bool {
-        self.slot
-            .as_ref()
-            .and_then(|state| state.session.as_ref())
-            .is_some_and(|session| session.pending_emission)
-    }
-
-    /// Logs the stats of every session (live + parked) and drops the slot.
     fn teardown_slot(&mut self, reason: &str) {
         if let Some(state) = self.slot.take() {
-            if let Some(session) = &state.session {
-                session.log_stats(reason);
-            }
-            for session in &state.parked {
-                session.log_stats(reason);
-            }
-            for session in state.prebuilt.values() {
-                session.log_stats("prebuilt_unused");
-            }
+            let (builders, orders, top_rise, top_span) = match &state.shared {
+                Some(shared) => {
+                    let inner = shared.inner.read().expect("shared slot poisoned");
+                    let top = inner.top_builders(1).first().and_then(|b| inner.submissions.get(b));
+                    (
+                        inner.submissions.len(),
+                        inner.orders.len(),
+                        top.map(|s| metrics::gwei(s.total_rise)).unwrap_or_default(),
+                        top.map(|s| s.span_ms()).unwrap_or_default(),
+                    )
+                }
+                None => (0, 0, 0.0, 0),
+            };
             info!(
                 reason,
                 slot = state.slot,
-                checkpoint_hits = state.checkpoint_hits,
-                checkpoint_misses = state.checkpoint_misses,
                 blocks_pooled = state.blocks.len(),
-                spec_dispatched = state.spec.dispatched,
-                spec_completed = state.spec.completed,
-                spec_failed = state.spec.failed,
-                spec_queue_full = state.spec.queue_full,
-                spec_evicted = state.spec.evicted,
-                spec_hits = state.spec.hits,
-                spec_misses = state.spec.misses,
-                spec_skipped_not_top_k = state.spec.skipped_not_top_k,
-                spec_superseded = state.spec.superseded,
-                prebuilt_unused = state.prebuilt.len(),
-                emissions_ahead = state.emissions_ahead,
-                emissions_behind = state.emissions_behind,
-                rebases = state.rebases,
-                builders = state.submissions.len(),
-                top_builder_rise_gwei = state
-                    .top_builders(1)
-                    .first()
-                    .and_then(|b| state.submissions.get(b))
-                    .map(|s| metrics::gwei(s.total_rise))
-                    .unwrap_or_default(),
-                top_builder_span_ms = state
-                    .top_builders(1)
-                    .first()
-                    .and_then(|b| state.submissions.get(b))
-                    .map(|s| s.span_ms())
-                    .unwrap_or_default(),
+                orders_pooled = orders,
+                offered = state.stream.offered,
+                superseded = state.stream.superseded,
+                refused = state.stream.refused,
+                skipped_not_top_k = state.stream.skipped_not_top_k,
+                builders,
+                top_builder_rise_gwei = top_rise,
+                top_builder_span_ms = top_span,
                 "merge slot ended"
             );
         }
@@ -301,7 +241,15 @@ impl MergeEngine {
                 debug!(slot = msg.slot, parent_hash = %msg.parent_hash, "slot start");
                 self.teardown_slot("slot_start");
                 let mut state = SlotState::new(&msg);
-                state.relay_config = self.relay_config.clone();
+                state.shared = self.relay_config.clone().map(|relay_config| {
+                    Arc::new(SharedSlot {
+                        ctx: state.ctx.clone(),
+                        relay_config,
+                        engine_config: self.config.clone(),
+                        inner: RwLock::new(SharedInner::default()),
+                        pool_version: AtomicU64::new(0),
+                    })
+                });
                 self.slot = Some(state);
                 false
             }
@@ -334,13 +282,13 @@ impl MergeEngine {
                     }
                 }
             }
-            EngineEvent::ActivateBase { slot, block_hash, recv_ns, generation } => {
+            EngineEvent::ActivateBase { slot, block_hash, generation } => {
                 if generation != self.generation {
                     return false;
                 }
-                let current_slot = self.slot.as_ref().map(|s| s.slot);
-                if current_slot != Some(slot) {
-                    let _ = self.out.send(EngineOutput::reject(
+                let Some(state) = self.slot.as_mut() else { return false };
+                if state.slot != slot {
+                    let _unused = self.out.send(EngineOutput::reject(
                         self.generation,
                         slot,
                         RejectCode::StaleSlot,
@@ -349,383 +297,66 @@ impl MergeEngine {
                     ));
                     return false;
                 }
-                let state = self.slot.as_mut().expect("checked above");
-                if state.session.as_ref().is_some_and(|s| s.base_block_hash == block_hash) {
-                    return false;
+                // Advisory only. We cannot know which builder holds the top bid
+                // when get_header is called, so every candidate builder gets a
+                // stream regardless; this just records the relay's current view.
+                if let Some(base) = state.blocks.get(&block_hash) {
+                    let beneficiary = base.beneficiary();
+                    state.top_builder = Some(beneficiary);
+                    metrics::activation_source("advisory");
                 }
-                state.pending_activation = Some((block_hash, recv_ns));
-                true
-            }
-            EngineEvent::Prebuilt {
-                slot,
-                generation,
-                block_hash,
-                beneficiary,
-                checkpoint_hit,
-                session,
-            } => {
-                let Some(state) = self.slot.as_mut() else { return false };
-                if slot != state.slot {
-                    return false;
-                }
-                // Always clear the in-flight mark: `merge_pass` waits on it.
-                state.speculating.remove(&block_hash);
-                let waiting = state.pending_activation.is_some_and(|(h, _)| h == block_hash);
-                if generation != self.generation {
-                    return waiting;
-                }
-                let Some(session) = session else {
-                    state.spec.failed += 1;
-                    metrics::speculation("failed");
-                    return waiting;
-                };
-                state.spec.completed += 1;
-                metrics::speculation("completed");
-                if checkpoint_hit {
-                    state.checkpoint_hits += 1;
-                } else {
-                    state.checkpoint_misses += 1;
-                }
-                let max = self.config.max_prebuilt_per_builder;
-                let base_index = session.base_index;
-                let block_hash = session.base_block_hash;
-                let evicted = state.insert_prebuilt(beneficiary, *session, max) as u64;
-                state.spec.evicted += evicted;
-                metrics::speculation_by("evicted", evicted);
-
-                // The live session's base is now stale by at least one
-                // submission. Swap to this fresher base: the relay accepts any
-                // appendable base, keeps only the latest merge per builder, and
-                // drops merges whose base is older than its staleness gate.
-                let is_live_builder = state.live_builder == Some(beneficiary);
-                let live_is_older =
-                    state.session.as_ref().is_some_and(|live| live.base_index < base_index);
-                if is_live_builder && live_is_older && state.pending_activation.is_none() {
-                    if let Some(fresh) = state.take_prebuilt(&block_hash) {
-                        if let Some(stale) = state.session.replace(fresh) {
-                            // Superseded by a later base from the same builder,
-                            // so it can never be activated again.
-                            stale.log_stats("rebased");
-                        }
-                        state.rebases += 1;
-                        metrics::rebase();
-                        return true;
-                    }
-                }
-                waiting
+                false
             }
         }
     }
 
     /// Queues a speculative replay for a newly pooled appendable block.
-    fn dispatch_speculation(&mut self, base: &Arc<PreparedBlock>) {
-        let Some(pool) = self.replay.as_ref() else { return };
+    /// Offers a newly pooled appendable block to its builder's merge stream.
+    /// Never blocks: a refusal just means that builder is not merged this round.
+    fn offer_to_stream(&mut self, base: &Arc<PreparedBlock>) {
+        let Some(streams) = self.streams.as_ref() else { return };
         let Some(state) = self.slot.as_mut() else { return };
-        // The slot snapshot, so a warmed session never uses a different
-        // collateral or distribution policy than the inline path would.
-        let Some(relay_config) = state.relay_config.clone() else { return };
-        let block_hash = base.block_hash;
-        if state.prebuilt.contains_key(&block_hash) || state.speculating.contains(&block_hash) {
-            return;
-        }
-        // Only the builders that can plausibly win the slot are worth warming.
-        // Everything else was being replayed and then evicted unused.
+        let Some(shared) = state.shared.clone() else { return };
+
         let beneficiary = base.beneficiary();
         let top_k = self.config.speculation_top_k;
-        let is_live = state.live_builder == Some(beneficiary);
-        if top_k > 0 && !is_live && !state.top_builders(top_k).contains(&beneficiary) {
-            state.spec.skipped_not_top_k += 1;
-            metrics::speculation("skipped_not_top_k");
-            return;
+        if top_k > 0 {
+            let in_top_k = {
+                let inner = shared.inner.read().expect("shared slot poisoned");
+                inner.top_builders(top_k).contains(&beneficiary)
+            };
+            if !in_top_k && state.top_builder != Some(beneficiary) {
+                state.stream.skipped_not_top_k += 1;
+                metrics::speculation("skipped_not_top_k");
+                return;
+            }
         }
-        state.speculating.insert(block_hash);
+
         let head = *self.head.borrow();
         if !head.is_synced || convert::b256(head.hash) != state.parent_hash {
-            state.speculating.remove(&block_hash);
             return;
         }
-        let job = ReplayJob {
-            ctx: state.ctx.clone(),
+
+        let job = StreamJob {
+            shared,
             base: base.clone(),
-            relay_config,
             generation: self.generation,
+            offered_ns: crate::utils::utcnow_ns(),
         };
-        match pool.dispatch(beneficiary, job) {
-            Dispatch::Accepted => {
-                state.spec.dispatched += 1;
-                metrics::speculation("dispatched");
+        match streams.offer(beneficiary, job) {
+            Offer::Accepted => {
+                state.stream.offered += 1;
+                metrics::speculation("offered");
             }
-            Dispatch::Superseded(stale) => {
-                // The replaced job will never produce a `Prebuilt`, so it must
-                // stop counting as in flight or `merge_pass` waits on it
-                // forever.
-                state.speculating.remove(&stale);
-                state.spec.dispatched += 1;
-                state.spec.superseded += 1;
-                metrics::speculation("dispatched");
+            Offer::Superseded => {
+                state.stream.offered += 1;
+                state.stream.superseded += 1;
+                metrics::speculation("offered");
                 metrics::speculation("superseded");
             }
-            Dispatch::Refused => {
-                state.speculating.remove(&block_hash);
-                state.spec.queue_full += 1;
+            Offer::Refused => {
+                state.stream.refused += 1;
                 metrics::speculation("refused");
-            }
-        }
-    }
-
-    /// One merge pass: resolve a pending activation, extend the session with
-    /// the pooled orders, emit if improved.
-    fn merge_pass(&mut self) {
-        let Some(state) = self.slot.as_mut() else { return };
-        let Some(relay_config) = state.relay_config.clone() else {
-            // No config yet: nothing can be merged (no collateral/distribution).
-            return;
-        };
-
-        // Resolve a pending activation once its block is pooled and no worker
-        // is still replaying it. Either way the live session still extends.
-        let pending = state.pending_activation.and_then(|(block_hash, recv_ns)| {
-            if state.speculating.contains(&block_hash) {
-                return None;
-            }
-            let base = state.blocks.get(&block_hash).cloned()?;
-            Some((block_hash, recv_ns, base))
-        });
-        if let Some((block_hash, activate_recv_ns, base)) = pending {
-            if !base.allow_appending {
-                state.pending_activation = None;
-                let _ = self.out.send(EngineOutput::reject(
-                    self.generation,
-                    state.slot,
-                    RejectCode::UnknownBaseBlock,
-                    RejectSubject::BlockHash(block_hash),
-                    "base block was not forwarded as appendable",
-                ));
-            } else {
-                state.pending_activation = None;
-                // Park the outgoing session: the relay's top bid often
-                // flips back, and resuming skips the base re-replay.
-                if let Some(old) = state.session.take() {
-                    debug!(base_block_hash = %old.base_block_hash, "parking session");
-                    state.parked.push(old);
-                    if state.parked.len() > MAX_PARKED_SESSIONS {
-                        let evicted = state.parked.remove(0);
-                        evicted.log_stats("parked_eviction");
-                    }
-                }
-
-                let head = *self.head.borrow();
-                let beneficiary_alloy = base.beneficiary();
-                let parked_ix = state.parked.iter().position(|s| s.base_block_hash == block_hash);
-                let prebuilt = state.take_prebuilt(&block_hash);
-                let mut source = "replay";
-                let mut checkpoint_hit = false;
-                let mut replay_us = 0;
-                let mut activated = false;
-
-                if let Some(ix) = parked_ix {
-                    // Resume: the base was already validated and replayed
-                    // when the session was first built and the slot's
-                    // parent is fixed; only re-check sync.
-                    if head.is_synced {
-                        source = "parked";
-                        state.session = Some(state.parked.remove(ix));
-                        activated = true;
-                    } else {
-                        let session = state.parked.remove(ix);
-                        session.log_stats("resume_not_synced");
-                        let _ = self.out.send(EngineOutput::reject(
-                            self.generation,
-                            state.slot,
-                            RejectCode::NotSynced,
-                            RejectSubject::BlockHash(block_hash),
-                            "builder lost sync while session was parked",
-                        ));
-                    }
-                } else if let Some(session) = prebuilt {
-                    if head.is_synced {
-                        source = "prebuilt";
-                        replay_us = session.replay_us;
-                        state.spec.hits += 1;
-                        state.session = Some(session);
-                        activated = true;
-                    } else {
-                        session.log_stats("prebuilt_not_synced");
-                        let _ = self.out.send(EngineOutput::reject(
-                            self.generation,
-                            state.slot,
-                            RejectCode::NotSynced,
-                            RejectSubject::BlockHash(block_hash),
-                            "builder lost sync while session was prebuilt",
-                        ));
-                    }
-                } else {
-                    // Head gating: the base must build on our synced head.
-                    let head_hash = convert::b256(head.hash);
-                    let result = if !head.is_synced {
-                        Err(MergeError::NotSynced)
-                    } else if head_hash != state.parent_hash {
-                        Err(MergeError::HeadMismatch)
-                    } else {
-                        state.spec.misses += 1;
-                        let checkpoint = state.replay_checkpoints.get(&beneficiary_alloy);
-                        MergeSession::activate(
-                            &state.ctx,
-                            &base,
-                            &self.store,
-                            self.blockchain.clone(),
-                            &relay_config,
-                            checkpoint,
-                        )
-                    };
-                    match result {
-                        Ok((session, new_checkpoint, hit)) => {
-                            checkpoint_hit = hit;
-                            source = if hit { "checkpoint" } else { "replay" };
-                            replay_us = session.replay_us;
-                            if hit {
-                                state.checkpoint_hits += 1;
-                            } else {
-                                state.checkpoint_misses += 1;
-                            }
-                            if state.replay_checkpoints.len() >= MAX_REPLAY_CHECKPOINTS &&
-                                !state.replay_checkpoints.contains_key(&beneficiary_alloy) &&
-                                let Some(evict) = state.replay_checkpoints.keys().next().copied()
-                            {
-                                state.replay_checkpoints.remove(&evict);
-                            }
-                            state.replay_checkpoints.insert(beneficiary_alloy, new_checkpoint);
-                            state.session = Some(session);
-                            activated = true;
-                        }
-                        Err(err) => {
-                            metrics::rejection("activation", err.metric_label());
-                            warn!(%err, base_block_hash = %block_hash, "activation failed");
-                            if let Some((code, subject)) = err.reject(Some(block_hash)) {
-                                let _ = self.out.send(EngineOutput::reject(
-                                    self.generation,
-                                    state.slot,
-                                    code,
-                                    subject,
-                                    err.to_string(),
-                                ));
-                            }
-                        }
-                    }
-                }
-
-                if activated {
-                    state.live_builder = Some(beneficiary_alloy);
-                    metrics::activation_source(source);
-                    metrics::stage_latency(
-                        "activate_queue",
-                        crate::utils::utcnow_ns().saturating_sub(activate_recv_ns) / 1000,
-                    );
-                    metrics::base_age(
-                        "activate",
-                        activate_recv_ns.saturating_sub(base.recv_ns) / 1_000_000,
-                    );
-                    info!(
-                        slot = state.slot,
-                        base_block_hash = %block_hash,
-                        beneficiary = %beneficiary_alloy,
-                        source,
-                        checkpoint_hit,
-                        replay_us,
-                        activate_to_replay_us = crate::utils::utcnow_ns()
-                            .saturating_sub(activate_recv_ns) /
-                            1000,
-                        forward_to_activate_ms = activate_recv_ns.saturating_sub(base.recv_ns) /
-                            1_000_000,
-                        "merge session activated"
-                    );
-                }
-            }
-        }
-
-        if state.session.is_none() {
-            return;
-        }
-        let slot = &state.slot;
-        let proposer_fee_recipient = &state.proposer_fee_recipient;
-        let changed = {
-            let SlotState { orders, session, excluded, .. } = state;
-            let session = session.as_mut().expect("checked above");
-            session.try_extend(orders, excluded)
-        };
-        let pending =
-            state.session.as_ref().is_some_and(|s| s.pending_emission || s.has_pending_revenue());
-        if !changed && !pending {
-            return;
-        }
-        let session = state.session.as_mut().expect("checked above");
-        let base_index_for_emission = session.base_index;
-        let base_value_for_emission = session.base_bid_value;
-        let base_recv_for_emission = session.base_recv_ns();
-        match session.emit(*slot, *proposer_fee_recipient, &relay_config, &self.config) {
-            Ok(EmitOutcome::Emitted(msg)) => {
-                // The comparison the relay will make at get_header, evaluated
-                // now: our merged bid against this builder's own best bid.
-                let beneficiary = msg.execution_payload.payload_inner.payload_inner.fee_recipient;
-                // The exact win condition, evaluated here rather than
-                // reconstructed from aggregates: delta and the uplift are
-                // negatively correlated, so a ratio of means flatters us.
-                let (own_latest, own_best) = state.reference_bids(&beneficiary);
-                let beats_latest = msg.proposer_value > own_latest;
-                metrics::beats_own_bid("latest", beats_latest);
-                metrics::beats_own_bid("best", msg.proposer_value > own_best);
-                if beats_latest {
-                    state.emissions_ahead += 1;
-                } else {
-                    state.emissions_behind += 1;
-                }
-
-                let base_index = base_index_for_emission;
-                let base_value = base_value_for_emission;
-                let delta = msg.proposer_value.saturating_sub(base_value);
-                let uplift = own_latest.saturating_sub(base_value);
-                let latest_index =
-                    state.submissions.get(&beneficiary).map(|s| s.count - 1).unwrap_or_default();
-                let (budget_steps, budget_ms, deadline_seen) = state
-                    .submissions
-                    .get(&beneficiary)
-                    .map(|s| s.budget(base_index, base_value, delta))
-                    .unwrap_or_default();
-                let steps_behind = latest_index.saturating_sub(base_index);
-                let base_age_ms =
-                    crate::utils::utcnow_ns().saturating_sub(base_recv_for_emission) / 1_000_000;
-                metrics::emission_verdict(
-                    beats_latest,
-                    steps_behind,
-                    base_age_ms,
-                    budget_steps,
-                    budget_ms,
-                    deadline_seen,
-                );
-                info!(
-                    base_block_hash = %msg.base_block_hash,
-                    builder = %beneficiary,
-                    base_index,
-                    latest_index,
-                    steps_behind,
-                    base_age_ms,
-                    delta_gwei = metrics::gwei(delta),
-                    uplift_gwei = metrics::gwei(uplift),
-                    margin_gwei = metrics::gwei(delta) - metrics::gwei(uplift),
-                    budget_steps,
-                    budget_ms,
-                    deadline_seen,
-                    won = beats_latest,
-                    "merged block emitted"
-                );
-                let _ = self.out.send(EngineOutput::Merged { generation: self.generation, msg });
-            }
-            // Throttled sets `pending_emission`; the worker loop retries after
-            // the spacing window.
-            Ok(EmitOutcome::Throttled) | Ok(EmitOutcome::NotImproved) => {}
-            Err(err) => {
-                metrics::rejection("emission", err.metric_label());
-                warn!(%err, "emission failed")
             }
         }
     }
@@ -757,8 +388,13 @@ impl MergeEngine {
             // Same block re-forwarded (e.g. handshake replay): nothing new.
             return Ok(());
         }
-        let (submission_index, ratchet) =
-            state.record_submission(msg.builder_address, msg.block_value, recv_ns);
+        let Some(shared) = state.shared.clone() else {
+            return Err(fail(MergeError::StaleSlot));
+        };
+        let (submission_index, ratchet) = {
+            let mut inner = shared.inner.write().expect("shared slot poisoned");
+            inner.record_submission(msg.builder_address, msg.block_value, recv_ns)
+        };
         if let Some((delta, interval_ms, rising)) = ratchet {
             metrics::ratchet(delta, interval_ms, rising);
         }
@@ -795,36 +431,44 @@ impl MergeEngine {
             .map(|order_ref| prepare_order(&msg, order_ref, &txs, block_hash))
             .collect();
 
-        state.update_latest_only(
-            msg.builder_pubkey,
-            prepared_orders
-                .iter()
-                .filter(|order| order.latest_only)
-                .map(|order| order.order_hash)
-                .collect(),
-        );
-
         // Budget counts distinct pooled orders, as the relay's `orders_sent` does.
         let mut pool_full = false;
-        for prepared in prepared_orders {
-            match state.order_ids.get(&prepared.order_id) {
-                Some(&existing_ix) => {
-                    // Duplicate order: attribution goes to the highest-value
-                    // source block.
-                    let existing = &state.orders[existing_ix];
-                    if msg.block_value > existing.source_block_value {
-                        state.orders[existing_ix] = prepared;
+        {
+            let mut inner = shared.inner.write().expect("shared slot poisoned");
+            inner.update_latest_only(
+                msg.builder_pubkey,
+                prepared_orders
+                    .iter()
+                    .filter(|order| order.latest_only)
+                    .map(|order| order.order_hash)
+                    .collect(),
+            );
+            for prepared in prepared_orders {
+                match inner.order_ids.get(&prepared.order_id) {
+                    Some(&existing_ix) => {
+                        // Duplicate order: attribution goes to the highest-value
+                        // source block.
+                        let existing = &inner.orders[existing_ix];
+                        if msg.block_value > existing.source_block_value {
+                            inner.orders[existing_ix] = prepared;
+                        }
                     }
-                }
-                None => {
-                    if state.orders.len() >= self.config.max_orders_per_slot {
-                        pool_full = true;
-                        break;
+                    None => {
+                        if inner.orders.len() >= self.config.max_orders_per_slot {
+                            pool_full = true;
+                            break;
+                        }
+                        let ix = inner.orders.len();
+                        inner.order_ids.insert(prepared.order_id, ix);
+                        inner.orders.push(prepared);
                     }
-                    state.order_ids.insert(prepared.order_id, state.orders.len());
-                    state.orders.push(prepared);
                 }
             }
+        }
+
+        shared.pool_version.fetch_add(1, Ordering::Release);
+        if let Some(streams) = self.streams.as_ref() {
+            streams.wake_all();
         }
 
         debug!(
@@ -832,7 +476,7 @@ impl MergeEngine {
             %block_hash,
             txs = txs.len(),
             orders = msg.merge_orders.len(),
-            pool = state.orders.len(),
+            pool = shared.inner.read().map(|i| i.orders.len()).unwrap_or_default(),
             allow_appending = msg.allow_appending,
             "mergeable block pooled"
         );
@@ -847,12 +491,13 @@ impl MergeEngine {
             txs,
             recv_ns,
             submission_index,
+            ingest_done_ns: crate::utils::utcnow_ns(),
         });
         state.blocks.insert(block_hash, prepared.clone());
 
-        // Warm a session for every base candidate, off the engine thread.
+        // Every appendable base goes to its builder's stream.
         if prepared.allow_appending {
-            self.dispatch_speculation(&prepared);
+            self.offer_to_stream(&prepared);
         }
 
         // Dropped orders still leave a usable base candidate, so keep the block.
