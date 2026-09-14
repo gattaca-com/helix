@@ -363,8 +363,10 @@ pub const fn default_u64<const D: u64>() -> u64 {
     D
 }
 
+const DEFAULT_IP_FREQUENCY_THRESHOLD: f64 = 0.2;
+
 const fn default_ip_frequency_threshold() -> f64 {
-    0.2
+    DEFAULT_IP_FREQUENCY_THRESHOLD
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -801,6 +803,20 @@ impl Default for HeaderStreamConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_ip_frequency_threshold_config_default_and_override() {
+        let threshold_key = serde_yaml::Value::String("ip_frequency_threshold".to_owned());
+        let mut value = serde_yaml::to_value(RelayConfig::empty_for_test()).unwrap();
+        value.as_mapping_mut().unwrap().remove(&threshold_key);
+
+        let default_config: RelayConfig = serde_yaml::from_value(value.clone()).unwrap();
+        assert_eq!(default_config.ip_frequency_threshold, DEFAULT_IP_FREQUENCY_THRESHOLD);
+
+        value.as_mapping_mut().unwrap().insert(threshold_key, serde_yaml::to_value(0.5).unwrap());
+        let overridden_config: RelayConfig = serde_yaml::from_value(value).unwrap();
+        assert_eq!(overridden_config.ip_frequency_threshold, 0.5);
+    }
 
     fn create_router_config(routes: Vec<Route>) -> RouterConfig {
         RouterConfig {
