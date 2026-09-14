@@ -62,6 +62,10 @@ pub struct RelayConfig {
     pub cores: CoresConfig,
     #[serde(default = "default_bool::<true>")]
     pub gossip_payload_on_header: bool,
+    /// Maximum per-IP `get_header` frequency that still permits sharing the payload with
+    /// operator peers.
+    #[serde(default = "default_ip_frequency_threshold")]
+    pub ip_frequency_threshold: f64,
     #[serde(default = "default_u16::<4040>")]
     pub api_port: u16,
     #[serde(default = "default_u16::<4041>")]
@@ -124,6 +128,7 @@ impl RelayConfig {
                 housekeeper: None,
             },
             gossip_payload_on_header: false,
+            ip_frequency_threshold: default_ip_frequency_threshold(),
             api_port: 4040,
             tcp_port: 4041,
             tcp_max_connections: 512,
@@ -356,6 +361,10 @@ pub const fn default_usize<const U: usize>() -> usize {
 
 pub const fn default_u64<const D: u64>() -> u64 {
     D
+}
+
+const fn default_ip_frequency_threshold() -> f64 {
+    0.2
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
