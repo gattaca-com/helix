@@ -59,7 +59,8 @@ fn default_metrics_port() -> Option<u16> {
 pub struct CoreConfig {
     pub server_tile: Option<usize>,
     pub merge_worker: Option<usize>,
-    /// One core per speculative replay worker; unpinned when shorter than `speculation.workers`.
+    /// One core per merge stream, in creation order. Streams beyond the list
+    /// run unpinned, so a short list is a valid choice, not an error.
     #[serde(default)]
     pub replay_workers: Vec<usize>,
 }
@@ -71,46 +72,54 @@ pub struct CoreConfig {
 pub struct SpeculationConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
-    #[serde(default = "default_speculation_workers")]
-    pub workers: usize,
-    /// Warm sessions retained per base builder, newest first. Only the newest
-    /// is ever activated in practice, so 1 is the default.
-    #[serde(default = "default_max_prebuilt_per_builder")]
-    pub max_prebuilt_per_builder: usize,
-    /// Warm only the top-K builders by best bid this slot; 0 warms every one.
+    /// Cap on distinct per-builder merge streams. One stream runs per builder
+    /// that sends appendable blocks, so this only needs to exceed the relay's
+    /// collateral set.
+    #[serde(default = "default_max_builder_streams")]
+    pub max_streams: usize,
     #[serde(default = "default_speculation_top_k")]
     pub top_k: usize,
-    /// Per-worker job queue depth; a full queue drops the job instead of blocking.
-    #[serde(default = "default_speculation_queue_capacity")]
-    pub queue_capacity: usize,
+    /// Stop improving a base once it is this old. This must match the relay's
+    /// `max_merged_bid_age_ms`: set it lower and we stop accumulating value on
+    /// bases the relay would still serve; set it higher and we produce bids it
+    /// drops. The relay does not send this over the wire, so it is duplicated
+    /// here and has to be kept in step by hand.
+    #[serde(default = "default_max_base_age_ms")]
+    pub max_base_age_ms: u64,
+    /// How much of a base's accumulated delta the first pass on a *new* base is
+    /// assumed to recover, in basis points. Switching forfeits the rest, so the
+    /// rebase rule requires a waiting bid to beat that forfeit as well as the
+    /// last pass's gain. Lower means hold a base longer.
+    #[serde(default = "default_rebase_recovery_bps")]
+    pub rebase_recovery_bps: u64,
 }
 
 impl Default for SpeculationConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            workers: default_speculation_workers(),
-            max_prebuilt_per_builder: default_max_prebuilt_per_builder(),
+            max_streams: default_max_builder_streams(),
             top_k: default_speculation_top_k(),
-            queue_capacity: default_speculation_queue_capacity(),
+            max_base_age_ms: default_max_base_age_ms(),
+            rebase_recovery_bps: default_rebase_recovery_bps(),
         }
     }
 }
 
-fn default_speculation_workers() -> usize {
-    6
-}
-
-fn default_max_prebuilt_per_builder() -> usize {
-    1
+fn default_max_builder_streams() -> usize {
+    16
 }
 
 fn default_speculation_top_k() -> usize {
     4
 }
 
-fn default_speculation_queue_capacity() -> usize {
-    64
+fn default_max_base_age_ms() -> u64 {
+    600
+}
+
+fn default_rebase_recovery_bps() -> u64 {
+    5_000
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -152,24 +161,8 @@ impl MergingConfig {
             eyre::bail!("merging config: max_orders_per_slot and max_blocks_per_slot must be > 0");
         }
         if self.speculation.enabled {
-            if self.speculation.workers == 0 {
-                eyre::bail!("merging config: speculation.workers must be > 0 when enabled");
-            }
-            if self.speculation.max_prebuilt_per_builder == 0 {
-                eyre::bail!(
-                    "merging config: speculation.max_prebuilt_per_builder must be > 0 when enabled"
-                );
-            }
-            if self.speculation.queue_capacity == 0 {
-                eyre::bail!("merging config: speculation.queue_capacity must be > 0 when enabled");
-            }
-            if !self.cores.replay_workers.is_empty() &&
-                self.cores.replay_workers.len() != self.speculation.workers
-            {
-                eyre::bail!(
-                    "merging config: cores.replay_workers must be empty or have exactly \
-                     speculation.workers entries"
-                );
+            if self.speculation.rebase_recovery_bps > 10_000 {
+                eyre::bail!("merging config: speculation.rebase_recovery_bps must be <= 10000");
             }
         }
         Ok(())

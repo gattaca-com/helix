@@ -20,24 +20,35 @@ idle_disconnect_s: 30
 max_blocks_per_slot: 256
 event_queue_capacity: 4096
 
-# Optional core pins for the latency-sensitive threads. `replay_workers` must
-# be empty or hold exactly `speculation.workers` core ids.
+# Optional core pins. `replay_workers` is one core per merge stream, in the
+# order streams are created; any beyond the list run unpinned.
 cores:
   server_tile: 6
   merge_worker: 7
   replay_workers: [8, 9, 10, 11, 12, 13]
 
-# Replay every appendable base block as it arrives, on the workers below, so
-# ActivateBaseBlockV1 costs a lookup instead of a full base replay.
+# One merge stream per builder. Each replays that builder's newest appendable
+# block, improves it with the pooled orders, and takes a fresher base only when
+# the bid it carries gains more than another improvement pass would.
+# One merge stream per candidate builder: each replays that builder's newest
+# appendable block, extends it with the pooled orders and emits, then takes
+# their next block. We cannot know which builder holds the top bid when
+# get_header is called, so every candidate is merged independently.
 speculation:
   enabled: true
-  workers: 6
-  # Warm only the top-K builders by best bid this slot; 0 warms every one.
-  top_k: 4
-  # Only the newest warm session per builder is ever activated.
-  max_prebuilt_per_builder: 1
-  # A full worker queue drops the job; that base just replays inline instead.
-  queue_capacity: 64
+  # Cap on distinct per-builder streams. One runs per builder that sends
+  # appendable blocks, so this only has to exceed the relay's collateral set.
+  max_streams: 16
+  # Merge only the top-K builders by best bid this slot; 0 merges every one.
+  top_k: 0
+  # MUST match the relay's max_merged_bid_age_ms. The relay does not send it
+  # over the wire, so it is duplicated here. Set it lower and we stop improving
+  # bases the relay would still serve; set it higher and we emit bids it drops.
+  max_base_age_ms: 600
+  # How much of a base's delta the first pass on a new base is assumed to
+  # recover, in basis points. Switching forfeits the rest, and a waiting bid has
+  # to beat that forfeit before it is worth taking. Lower holds a base longer.
+  rebase_recovery_bps: 5000
 
 # Prometheus endpoint for the merging role; omit to disable.
 metrics_port: 9600

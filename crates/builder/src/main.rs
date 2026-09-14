@@ -133,14 +133,16 @@ fn main() -> eyre::Result<()> {
                 merging_config.emission.min_interval_ms,
             ),
             core: merging_config.cores.merge_worker,
-            speculation_workers: if merging_config.speculation.enabled {
-                merging_config.speculation.workers
+            max_builder_streams: if merging_config.speculation.enabled {
+                merging_config.speculation.max_streams
             } else {
                 0
             },
-            speculation_queue_capacity: merging_config.speculation.queue_capacity,
-            max_prebuilt_per_builder: merging_config.speculation.max_prebuilt_per_builder,
             speculation_top_k: merging_config.speculation.top_k,
+            max_base_age: std::time::Duration::from_millis(
+                merging_config.speculation.max_base_age_ms,
+            ),
+            rebase_recovery_bps: merging_config.speculation.rebase_recovery_bps,
             replay_worker_cores: merging_config.cores.replay_workers.clone(),
         };
         let _engine = MergeEngine::spawn(

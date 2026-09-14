@@ -32,6 +32,7 @@ use crate::{
         simulate::{self, balance_of},
         types::{
             EngineConfig, OriginRevenue, PreparedBlock, PreparedOrder, SimulatedOrder, SlotContext,
+            Timeline,
         },
     },
     metrics,
@@ -199,6 +200,9 @@ pub struct MergeSession {
     pub base_index: u64,
     /// Value of the base bid, `V(b_i)`.
     pub base_bid_value: U256,
+    /// Stamps from base arrival to emission, filled in as the base moves
+    /// through the pipeline.
+    pub timeline: Timeline,
 }
 
 impl MergeSession {
@@ -215,6 +219,7 @@ impl MergeSession {
         checkpoint: Option<&ReplayCheckpoint>,
     ) -> Result<(Self, ReplayCheckpoint, bool), MergeError> {
         let started = Instant::now();
+        let replay_start_ns = utcnow_ns();
         let v1 = &base.payload.payload_inner.payload_inner;
         let beneficiary_alloy = v1.fee_recipient;
         let beneficiary = eaddr(beneficiary_alloy);
@@ -281,6 +286,7 @@ impl MergeSession {
             )
         });
 
+        let setup_start = Instant::now();
         let (mut ctx, mut tx_hashes, replay_from) = if checkpoint_hit {
             // Reused wholesale: within one slot every header field the
             // checkpoint's state was executed against (parent, timestamp,
@@ -351,6 +357,10 @@ impl MergeSession {
 
             (ctx, FxHashSet::default(), 0)
         };
+        metrics::stage_latency(
+            if checkpoint_hit { "replay_setup_hit" } else { "replay_setup_full" },
+            setup_start.elapsed().as_micros() as u64,
+        );
 
         // Replay every base tx from `replay_from` onward, proposer payment
         // included. The proposer's balance delta across the last tx is the
@@ -360,6 +370,8 @@ impl MergeSession {
         // right before the payment tx, for a later resubmission to reuse.
         let proposer = eaddr(slot.proposer_fee_recipient);
         let base_fee = ctx.payload.header.base_fee_per_gas;
+        let replay_start = Instant::now();
+        let mut snapshot_us = 0u64;
         let mut proposer_balance_before_payment = None;
         let mut new_checkpoint = None;
         for (ix, decoded) in base.txs.iter().enumerate().skip(replay_from) {
@@ -371,6 +383,7 @@ impl MergeSession {
                     balance_of(&mut ctx.vm, proposer)
                         .map_err(|e| MergeError::Internal(e.to_string()))?,
                 );
+                let snapshot_start = Instant::now();
                 new_checkpoint = Some(ReplayCheckpoint {
                     beneficiary_alloy,
                     proposer_fee_recipient: slot.proposer_fee_recipient,
@@ -380,6 +393,7 @@ impl MergeSession {
                     included_tx_hashes: tx_hashes.clone(),
                     ctx: ctx.clone(),
                 });
+                snapshot_us = snapshot_start.elapsed().as_micros() as u64;
             }
             let head = HeadTransaction {
                 tx: ethrex_common::types::MempoolTransaction::new(
@@ -393,6 +407,18 @@ impl MergeSession {
                 .map_err(|e| MergeError::InvalidBaseBlock(format!("base tx failed: {e}")))?;
             tx_hashes.insert(decoded.hash);
         }
+        {
+            let mut probe = ctx.vm.clone();
+            if let Ok(updates) = probe.get_state_transitions() {
+                let slots: usize = updates.iter().map(|u| u.added_storage.len()).sum();
+                metrics::account_updates("base", updates.len(), slots);
+            }
+        }
+        metrics::stage_latency(
+            "replay_txs",
+            (replay_start.elapsed().as_micros() as u64).saturating_sub(snapshot_us),
+        );
+        metrics::stage_latency("replay_snapshot", snapshot_us);
         let new_checkpoint = new_checkpoint
             .expect("base.txs is non-empty (checked above), so last_ix is always visited");
         debug!(
@@ -455,6 +481,13 @@ impl MergeSession {
             replay_us: started.elapsed().as_micros() as u64,
             base_index: base.submission_index,
             base_bid_value: base.block_value,
+            timeline: Timeline {
+                recv_ns: base.recv_ns,
+                ingest_done_ns: base.ingest_done_ns,
+                replay_start_ns,
+                replay_end_ns: utcnow_ns(),
+                ..Default::default()
+            },
         };
         metrics::stage_latency(
             if checkpoint_hit { "replay_checkpoint_hit" } else { "replay_full" },
@@ -756,7 +789,10 @@ impl MergeSession {
 
         // Finalization clears the vm caches, so it runs on a clone; the live
         // session stays extendable.
+        let clone_start = Instant::now();
         let mut ctx = self.ctx.clone();
+        metrics::stage_latency("emit_clone", clone_start.elapsed().as_micros() as u64);
+        let payment_start = Instant::now();
 
         let payment_gas_limit =
             self.max_tx_gas_limit.min(ctx.payload.header.gas_limit.saturating_sub(ctx.gas_used()));
@@ -822,6 +858,9 @@ impl MergeSession {
             return Err(MergeError::RevenueAllocationReverted);
         }
 
+        metrics::stage_latency("emit_payment", payment_start.elapsed().as_micros() as u64);
+        let finalize_start = Instant::now();
+
         self.blockchain
             .extract_requests(&mut ctx)
             .map_err(|e| MergeError::Internal(format!("extract requests: {e}")))?;
@@ -832,6 +871,12 @@ impl MergeSession {
             .finalize_payload(&mut ctx)
             .map_err(|e| MergeError::Internal(format!("finalize payload: {e}")))?;
 
+        metrics::stage_latency("emit_finalize", finalize_start.elapsed().as_micros() as u64);
+        {
+            let slots: usize = ctx.account_updates.iter().map(|u| u.added_storage.len()).sum();
+            metrics::account_updates("total", ctx.account_updates.len(), slots);
+        }
+        let encode_start = Instant::now();
         self.trace.finalize_ns = utcnow_ns();
         metrics::emit_value(total_revenue, proposer_added_value);
         metrics::base_age(
@@ -844,6 +889,7 @@ impl MergeSession {
         let execution_requests = requests_to_v4(ctx.requests.as_deref().unwrap_or_default())
             .map_err(|e| MergeError::Internal(format!("execution requests: {e}")))?;
 
+        metrics::stage_latency("emit_encode", encode_start.elapsed().as_micros() as u64);
         let builder_inclusions = self
             .revenues
             .iter()
@@ -893,22 +939,6 @@ impl MergeSession {
 
     fn available_blobs(&self) -> u64 {
         self.max_blobs.saturating_sub(self.blob_count)
-    }
-
-    pub fn has_pending_revenue(&self) -> bool {
-        !self.revenues.is_empty()
-    }
-
-    /// Whether this live session already applied `order_id` — if so, a
-    /// revocation of that order can't be reflected without rebuilding from
-    /// the base, since there's no way to un-apply a committed tx.
-    /// Arrival time of the base block on the builder's clock.
-    pub fn base_recv_ns(&self) -> u64 {
-        self.trace.base_block_recv_ns
-    }
-
-    pub fn has_applied(&self, order_id: &B256) -> bool {
-        self.applied_orders.contains(order_id)
     }
 
     #[cfg(test)]
