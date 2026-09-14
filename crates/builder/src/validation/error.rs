@@ -30,6 +30,7 @@ pub enum ValidationError {
     PostExecution(String),
     #[error("block state root mismatch: got {got}, expected {expected}")]
     StateRootMismatch { got: B256, expected: B256 },
+    // Text matched by `BlockSimError::is_temporary`; changing it demotes builders.
     #[error("parent state is not available")]
     MissingParentState,
     #[error("could not verify proposer payment")]

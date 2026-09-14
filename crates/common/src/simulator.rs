@@ -64,6 +64,8 @@ const BLOCK_ALREADY_KNOWN: &str = "block already known";
 const BLOCK_TOO_OLD: &str = "block is too old, outside validation window";
 const BLOCK_REQ_REORG: &str = "block requires a reorg";
 const PARENT_BLOCK_NOT_FOUND: &str = "could not find parent block: parent block not found";
+const NO_STATE_FOR_BLOCK: &str = "no state found for block";
+const MISSING_PARENT_STATE: &str = "parent state is not available";
 
 #[derive(Debug, Clone, Error)]
 pub enum BlockSimError {
@@ -110,7 +112,9 @@ impl BlockSimError {
                 PARENT_NOT_FOUND => true,
                 PARENT_BLOCK_NOT_FOUND => true,
                 BLOCK_REQ_REORG => true,
+                MISSING_PARENT_STATE => true,
                 r if r.starts_with(MISSING_TRIE_NODE) => true,
+                r if r.starts_with(NO_STATE_FOR_BLOCK) => true,
                 _ => false,
             },
             BlockSimError::Timeout => true,
@@ -236,6 +240,20 @@ mod tests {
             BlockSimError::InvalidTxRoot { got: Default::default(), expected: Default::default() }
                 .is_demotable()
         )
+    }
+
+    /// The parent state can be missing while the simulator lags or reorgs, so it must not demote.
+    #[test]
+    fn missing_parent_state_never_demotes() {
+        for reason in [
+            "no state found for block 0xf9d64b1e6815113d8a761cac2d094802520a082b19221dcbeff2940b469adb7d",
+            "parent state is not available",
+        ] {
+            let err = BlockSimError::BlockValidationFailed(reason.to_string());
+
+            assert!(err.is_temporary(), "{err}");
+            assert!(!err.is_demotable(), "{err}");
+        }
     }
 
     /// A relay-side hydration failure is never the builder's fault, so it must not demote.
