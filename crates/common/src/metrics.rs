@@ -279,6 +279,30 @@ lazy_static! {
     )
     .unwrap();
 
+    static ref SIMULATOR_LIMIT: GaugeVec = register_gauge_vec_with_registry!(
+        "simulator_limit",
+        "Adaptive concurrency limit per simulator",
+        &["simulator"],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    static ref SIMULATOR_SLOT_LATENCY: GaugeVec = register_gauge_vec_with_registry!(
+        "simulator_slot_latency_secs",
+        "Mean simulation latency per simulator over the last slot",
+        &["simulator"],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    static ref SIMULATOR_HEALTH: GaugeVec = register_gauge_vec_with_registry!(
+        "simulator_health",
+        "Simulator health: 0 ok, 1 probe, 2 breaker open, 3 unsynced",
+        &["simulator"],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
     ////////////////// BEACON //////////////////
 
     static ref BEACON_SYNC: GaugeVec = register_gauge_vec_with_registry!(
@@ -845,6 +869,20 @@ impl SimulatorMetrics {
 
     pub fn simulator_sync(simulator: &str, is_synced: bool) {
         SIMULATOR_SYNC.with_label_values(&[simulator]).set(is_synced as i64 as f64);
+    }
+
+    pub fn simulator_limit(simulator: &str, limit: usize) {
+        SIMULATOR_LIMIT.with_label_values(&[simulator]).set(limit as f64);
+    }
+
+    pub fn simulator_slot_latency(simulator: &str, avg: Option<Duration>) {
+        SIMULATOR_SLOT_LATENCY
+            .with_label_values(&[simulator])
+            .set(avg.map(|d| d.as_secs_f64()).unwrap_or(0.0));
+    }
+
+    pub fn simulator_health(simulator: &str, health: usize) {
+        SIMULATOR_HEALTH.with_label_values(&[simulator]).set(health as f64);
     }
 
     pub fn sim_mananger_count(label: &str, count: usize) {

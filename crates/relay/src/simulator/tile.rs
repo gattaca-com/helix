@@ -83,17 +83,17 @@ impl Tile<HelixSpine> for SimulatorTile {
         let events: Vec<SimTileInternalEvent> = self.rx.try_iter().collect();
         for event in events {
             match event {
-                SimTileInternalEvent::TaskDone { id, paused_until, result_ix, elapsed } => {
+                SimTileInternalEvent::TaskDone { id, error, result_ix, elapsed } => {
                     self.handle_task_response(
                         id,
-                        paused_until,
+                        error,
                         result_ix,
                         elapsed,
                         &mut adapter.producers,
                     );
                 }
-                SimTileInternalEvent::SyncStatus { id, is_synced } => {
-                    self.handle_sync_status(id, is_synced);
+                SimTileInternalEvent::SyncStatus { id, reported } => {
+                    self.handle_sync_status(id, reported);
                 }
             }
         }
@@ -157,14 +157,17 @@ impl SimulatorTile {
                 async move {
                     loop {
                         for (id, simulator) in clients.iter().enumerate() {
-                            let is_synced = simulator.is_synced().await.unwrap_or(false);
+                            let reported = simulator.is_synced().await.ok();
                             if sync_tx
-                                .try_send(SimTileInternalEvent::SyncStatus { id, is_synced })
+                                .try_send(SimTileInternalEvent::SyncStatus { id, reported })
                                 .is_err()
                             {
                                 error!("failed to send sync status to sim tile");
                             }
-                            SimulatorMetrics::simulator_sync(simulator.endpoint(), is_synced);
+                            SimulatorMetrics::simulator_sync(
+                                simulator.endpoint(),
+                                reported.unwrap_or(false),
+                            );
                         }
 
                         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -208,9 +211,10 @@ impl SimulatorTile {
         (accept_optimistic, failsafe_triggered, tile)
     }
 
-    fn handle_sync_status(&mut self, id: usize, is_synced: bool) {
-        self.simulators[id].is_synced = is_synced;
-        let new = self.simulators.iter().any(|s| s.can_simulate_light());
+    fn handle_sync_status(&mut self, id: usize, reported: Option<bool>) {
+        self.simulators[id].record_sync(reported);
+        let now = Instant::now();
+        let new = self.simulators.iter().any(|s| s.can_simulate_light(now));
         let prev = self.accept_optimistic.load(Ordering::Relaxed);
         if new != prev {
             warn!(prev, new, "changing accept_optimistic simulation status");
@@ -276,7 +280,7 @@ impl SimulatorTile {
 
         self.local_telemetry.sims_reqs += 1;
 
-        if let Some(id) = self.next_client(|s| s.can_simulate()) {
+        if let Some(id) = self.next_client(Instant::now()) {
             self.local_telemetry.sims_sent_immediately += 1;
             self.spawn_merge_sim(id, req);
         } else {
@@ -288,14 +292,23 @@ impl SimulatorTile {
     fn handle_task_response(
         &mut self,
         id: usize,
-        paused_until: Option<Instant>,
+        error: Option<BlockSimError>,
         result_ix: usize,
         elapsed: Option<Duration>,
         producers: &mut HelixSpineProducers,
     ) {
+        let now = Instant::now();
         let sim = &mut self.simulators[id];
         sim.pending = sim.pending.saturating_sub(1);
-        sim.paused_until = sim.paused_until.max(paused_until); // keep highest pause
+
+        match error {
+            Some(err) => sim.record_failure(&err, now),
+            None => {
+                if let Some(elapsed) = elapsed {
+                    sim.record_success(elapsed);
+                }
+            }
+        }
 
         if let Some(elapsed) = elapsed {
             let stats = &mut self.sim_slot_stats[id];
@@ -305,7 +318,7 @@ impl SimulatorTile {
 
         producers.produce(FromSimMsg { ix: result_ix });
 
-        if let Some(id) = self.next_client(|s| s.can_simulate()) {
+        if let Some(id) = self.next_client(now) {
             if let Some(req) = self.priority_requests.next_req().or(self.requests.next_req()) {
                 self.local_telemetry.sims_sent_from_queue += 1;
                 self.spawn_sim(id, req);
@@ -348,7 +361,7 @@ impl SimulatorTile {
                 self.sim_results.push(SimResult::Validate((id, Some(infra_error(&req)))));
             let _ = self.task_tx.try_send(SimTileInternalEvent::TaskDone {
                 id,
-                paused_until: None,
+                error: None,
                 result_ix,
                 elapsed: None,
             });
@@ -384,7 +397,7 @@ impl SimulatorTile {
                             .push(SimResult::Validate((id, Some(hydration_error(&req)))));
                         let _ = self.task_tx.try_send(SimTileInternalEvent::TaskDone {
                             id,
-                            paused_until: None,
+                            error: None,
                             result_ix,
                             elapsed: None,
                         });
@@ -421,7 +434,7 @@ impl SimulatorTile {
                 )));
                 let _ = self.task_tx.try_send(SimTileInternalEvent::TaskDone {
                     id,
-                    paused_until: None,
+                    error: None,
                     result_ix,
                     elapsed: None,
                 });
@@ -489,13 +502,7 @@ impl SimulatorTile {
 
             debug!(%block_hash, time_secs = time, ?res, "simulation completed");
 
-            let paused_until = if let Err(err) = res.as_ref() {
-                SimulatorMetrics::sim_status(false);
-                if err.is_temporary() { Some(Instant::now() + PAUSE_DURATION) } else { None }
-            } else {
-                SimulatorMetrics::sim_status(true);
-                None
-            };
+            SimulatorMetrics::sim_status(res.is_ok());
 
             if let Some(got) = tx_root {
                 let expected = submission.transactions_root();
@@ -506,6 +513,7 @@ impl SimulatorTile {
 
             record_submission_step("simulation", start_sim.elapsed());
 
+            let error = res.as_ref().err().cloned();
             let bid = Bid::new(version, &submission);
             let inner = SimulationResultInner {
                 submission_ref,
@@ -517,7 +525,7 @@ impl SimulatorTile {
             let result_ix = sim_results.push(SimResult::Validate((id, Some(inner))));
             let _ = task_tx.try_send(SimTileInternalEvent::TaskDone {
                 id,
-                paused_until,
+                error,
                 result_ix,
                 elapsed: Some(Duration::from_secs_f64(time)),
             });
@@ -535,7 +543,7 @@ impl SimulatorTile {
                 .push(SimResult::ValidateMerged((id, Some(infra_merge_error(&req)))));
             let _ = self.task_tx.try_send(SimTileInternalEvent::TaskDone {
                 id,
-                paused_until: None,
+                error: None,
                 result_ix,
                 elapsed: None,
             });
@@ -554,7 +562,7 @@ impl SimulatorTile {
                 let result_ix = self.sim_results.push(SimResult::ValidateMerged((id, Some(inner))));
                 let _ = self.task_tx.try_send(SimTileInternalEvent::TaskDone {
                     id,
-                    paused_until: None,
+                    error: None,
                     result_ix,
                     elapsed: None,
                 });
@@ -620,21 +628,16 @@ impl SimulatorTile {
             let time = timer.stop_and_record();
             debug!(%block_hash, time_secs = time, ?res, "merged block simulation completed");
 
-            let paused_until = if let Err(err) = res.as_ref() {
-                SimulatorMetrics::sim_status(false);
-                if err.is_temporary() { Some(Instant::now() + PAUSE_DURATION) } else { None }
-            } else {
-                SimulatorMetrics::sim_status(true);
-                None
-            };
+            SimulatorMetrics::sim_status(res.is_ok());
 
             record_submission_step("merge_simulation", start_sim.elapsed());
 
+            let error = res.as_ref().err().cloned();
             let inner = MergedSimulationResultInner { merged_block_ix, result: res };
             let result_ix = sim_results.push(SimResult::ValidateMerged((id, Some(inner))));
             let _ = task_tx.try_send(SimTileInternalEvent::TaskDone {
                 id,
-                paused_until,
+                error,
                 result_ix,
                 elapsed: Some(Duration::from_secs_f64(time)),
             });
@@ -642,24 +645,28 @@ impl SimulatorTile {
     }
 
     /// Selection priority:
-    /// 1. Any SSZ-capable sim, least pending (binary protocol)
-    /// 2. Any sim, least pending (JSON-RPC fallback)
+    /// 1. Any SSZ-capable sim, lowest utilization (binary protocol)
+    /// 2. Any sim, lowest utilization (JSON-RPC fallback)
     #[timed]
     fn select_simulator(&self) -> Option<usize> {
-        self.ssz_sim_indices
-            .iter()
-            .filter(|&&i| self.simulators[i].can_simulate())
-            .min_by_key(|&&i| self.simulators[i].pending)
-            .copied()
-            .or_else(|| self.next_client(|s| s.can_simulate()))
+        self.select_simulator_at(Instant::now())
     }
 
-    fn next_client(&self, pred: impl Fn(&SimEntry) -> bool) -> Option<usize> {
+    fn select_simulator_at(&self, now: Instant) -> Option<usize> {
+        self.ssz_sim_indices
+            .iter()
+            .filter(|&&i| self.simulators[i].can_simulate_at(now))
+            .min_by_key(|&&i| self.simulators[i].utilization(now))
+            .copied()
+            .or_else(|| self.next_client(now))
+    }
+
+    fn next_client(&self, now: Instant) -> Option<usize> {
         self.simulators
             .iter()
             .enumerate()
-            .filter(|(_, s)| pred(s))
-            .min_by_key(|(_, s)| s.pending)
+            .filter(|(_, s)| s.can_simulate_at(now))
+            .min_by_key(|(_, s)| s.utilization(now))
             .map(|(i, _)| i)
     }
 
@@ -673,12 +680,6 @@ impl SimulatorTile {
         self.priority_requests.clear();
         self.merge_requests.clear();
         self.hydration_cache.clear();
-        let now = Instant::now();
-        for s in self.simulators.iter_mut() {
-            if s.paused_until.is_some_and(|until| until < now) {
-                s.paused_until = None;
-            }
-        }
     }
 
     fn report(&mut self) {
@@ -691,13 +692,24 @@ impl SimulatorTile {
         SimulatorMetrics::sim_manager_gauge("max_pending", tel.max_pending);
         SimulatorMetrics::sim_manager_gauge("max_in_flight", tel.max_in_flight);
 
+        let now = Instant::now();
         let sim_report: Vec<_> = self
             .simulators
             .iter()
             .zip(self.sim_slot_stats.iter())
             .map(|(sim, stats)| {
                 let avg = avg_duration(stats.total_time, stats.count);
-                format!("{}: count={}, avg={avg:?}", sim.client.endpoint(), stats.count)
+                let health = sim.health(now);
+                let endpoint = sim.client.endpoint();
+                SimulatorMetrics::simulator_limit(endpoint, sim.limit);
+                SimulatorMetrics::simulator_health(endpoint, health.gauge());
+                SimulatorMetrics::simulator_slot_latency(endpoint, avg);
+                format!(
+                    "{endpoint}: count={}, avg={avg:?}, limit={}, health={}",
+                    stats.count,
+                    sim.limit,
+                    health.label()
+                )
             })
             .collect();
         self.sim_slot_stats.fill(SimSlotStats::default());
@@ -727,39 +739,170 @@ impl SimulatorTile {
     }
 }
 
+/// An open breaker whose `until` has passed is the half-open state: it admits one probe.
+#[derive(Clone, Copy)]
+enum Breaker {
+    Closed,
+    Open { until: Instant, backoff: Duration },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SimHealth {
+    Ok,
+    Probe,
+    Open,
+    Unsynced,
+}
+
+impl SimHealth {
+    fn label(self) -> &'static str {
+        match self {
+            SimHealth::Ok => "ok",
+            SimHealth::Probe => "probe",
+            SimHealth::Open => "open",
+            SimHealth::Unsynced => "unsynced",
+        }
+    }
+
+    fn gauge(self) -> usize {
+        match self {
+            SimHealth::Ok => 0,
+            SimHealth::Probe => 1,
+            SimHealth::Open => 2,
+            SimHealth::Unsynced => 3,
+        }
+    }
+}
+
 struct SimEntry {
     client: SimulatorClient,
     is_synced: bool,
-    /// For certain errors we pause sims for some time to allow time for the node to recover
-    paused_until: Option<Instant>,
+    breaker: Breaker,
+    /// Adaptive concurrency limit, bounded by `max_concurrent_tasks`.
+    limit: usize,
+    /// Consecutive sim faults, reset by any answer from the node.
+    faults: usize,
+    /// Consecutive failed sync polls, reset by any answer from the node.
+    sync_failures: usize,
     /// Current number of pending tasks (validation or merging)
     pending: usize,
 }
 
 impl SimEntry {
     fn new(client: SimulatorClient) -> Self {
-        Self { client, is_synced: false, paused_until: None, pending: 0 }
+        let limit = client.config.max_concurrent_tasks.max(MIN_LIMIT);
+        Self {
+            client,
+            is_synced: false,
+            breaker: Breaker::Closed,
+            limit,
+            faults: 0,
+            sync_failures: 0,
+            pending: 0,
+        }
+    }
+
+    fn ceiling(&self) -> usize {
+        self.client.config.max_concurrent_tasks.max(MIN_LIMIT)
+    }
+
+    /// How many tasks this sim may hold now: none while the breaker is open, one probe once
+    /// the backoff expires, otherwise the adaptive limit.
+    fn effective_limit(&self, now: Instant) -> usize {
+        match self.breaker {
+            Breaker::Closed => self.limit,
+            Breaker::Open { until, .. } if now < until => 0,
+            Breaker::Open { .. } => 1,
+        }
     }
 
     /// A lighter check to decide whether we should accept optimistic submissions
-    fn can_simulate_light(&self) -> bool {
-        self.is_synced &&
-            match self.paused_until {
-                Some(until) => Instant::now() > until,
-                None => true,
-            }
+    fn can_simulate_light(&self, now: Instant) -> bool {
+        self.is_synced && self.effective_limit(now) > 0
     }
 
-    fn can_simulate(&self) -> bool {
-        self.can_simulate_light() && self.pending < self.client.config.max_concurrent_tasks
+    fn can_simulate_at(&self, now: Instant) -> bool {
+        self.is_synced && self.pending < self.effective_limit(now)
+    }
+
+    fn health(&self, now: Instant) -> SimHealth {
+        if !self.is_synced {
+            return SimHealth::Unsynced;
+        }
+        match self.effective_limit(now) {
+            0 => SimHealth::Open,
+            1 if !matches!(self.breaker, Breaker::Closed) => SimHealth::Probe,
+            _ => SimHealth::Ok,
+        }
+    }
+
+    /// The share of the current limit in use, scaled so it sorts as an integer.
+    fn utilization(&self, now: Instant) -> usize {
+        match self.effective_limit(now) {
+            0 => usize::MAX,
+            limit => self.pending * UTILIZATION_SCALE / limit,
+        }
+    }
+
+    /// The node answered. Close the breaker, then let the latency move the limit.
+    fn record_success(&mut self, elapsed: Duration) {
+        self.faults = 0;
+        self.breaker = Breaker::Closed;
+        self.limit = if elapsed <= LATENCY_TARGET {
+            (self.limit + 1).min(self.ceiling())
+        } else {
+            (self.limit / 2).max(MIN_LIMIT)
+        };
+    }
+
+    fn record_failure(&mut self, err: &BlockSimError, now: Instant) {
+        if !err.is_sim_fault() {
+            return;
+        }
+
+        self.faults += 1;
+        self.limit = (self.limit / 2).max(MIN_LIMIT);
+
+        self.breaker = match self.breaker {
+            Breaker::Open { backoff, .. } => {
+                let backoff = (backoff * 2).min(BREAKER_BACKOFF_MAX);
+                Breaker::Open { until: now + backoff, backoff }
+            }
+            Breaker::Closed if self.faults >= SIM_FAULTS_TO_OPEN => {
+                Breaker::Open { until: now + BREAKER_BACKOFF_START, backoff: BREAKER_BACKOFF_START }
+            }
+            Breaker::Closed => Breaker::Closed,
+        };
+    }
+
+    /// `None` means the poll itself failed. `Some(false)` is the node's own answer that it
+    /// is still syncing, which we trust at once.
+    fn record_sync(&mut self, reported: Option<bool>) {
+        match reported {
+            Some(synced) => {
+                self.sync_failures = 0;
+                self.is_synced = synced;
+            }
+            None => {
+                self.sync_failures += 1;
+                if self.sync_failures >= SYNC_FAILURES_TO_UNSYNC {
+                    self.is_synced = false;
+                }
+            }
+        }
     }
 }
 
 pub(crate) const SIMULATOR_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
-/// How long a simulator is paused after a temporary error, for both submission and
-/// merged-block simulations.
-const PAUSE_DURATION: Duration = Duration::from_secs(60);
+/// A simulation slower than this means the node is over its comfortable load.
+const LATENCY_TARGET: Duration = Duration::from_millis(300);
+const MIN_LIMIT: usize = 1;
+const UTILIZATION_SCALE: usize = 1_000;
+const SIM_FAULTS_TO_OPEN: usize = 3;
+const BREAKER_BACKOFF_START: Duration = Duration::from_secs(12);
+const BREAKER_BACKOFF_MAX: Duration = Duration::from_secs(60);
+const SYNC_FAILURES_TO_UNSYNC: usize = 3;
 
 #[derive(Default)]
 struct LocalTelemetry {
@@ -821,13 +964,13 @@ pub(super) enum SimTileInternalEvent {
     /// (e.g. decoded submission or hydration missing).
     TaskDone {
         id: usize,
-        paused_until: Option<Instant>,
+        error: Option<BlockSimError>,
         result_ix: usize,
         elapsed: Option<Duration>,
     },
     SyncStatus {
         id: usize,
-        is_synced: bool,
+        reported: Option<bool>,
     },
 }
 
@@ -1217,11 +1360,261 @@ mod tests {
     }
 
     #[test]
-    fn select_simulator_skips_paused_sims() {
+    fn select_simulator_skips_sims_with_an_open_breaker() {
         let mut tile = test_tile_with_sims(&[(true, true, 0), (true, true, 8)]);
-        tile.simulators[0].paused_until = Some(Instant::now() + Duration::from_secs(60));
+        let now = Instant::now();
+        open_breaker(&mut tile.simulators[0], now);
 
-        assert_eq!(tile.select_simulator(), Some(1));
+        assert_eq!(tile.select_simulator_at(now), Some(1));
+    }
+
+    fn open_breaker(sim: &mut SimEntry, now: Instant) {
+        for _ in 0..SIM_FAULTS_TO_OPEN {
+            sim.record_failure(&BlockSimError::RpcError, now);
+        }
+    }
+
+    fn fast_sim(max_concurrent_tasks: usize) -> SimEntry {
+        SimEntry::new(SimulatorClient::new(reqwest::Client::new(), SimulatorConfig {
+            url: "http://localhost:8545".into(),
+            namespace: "relay".into(),
+            max_concurrent_tasks,
+            ssz_url: Some("http://localhost:8546".into()),
+        }))
+    }
+
+    /// The configured cap is a ceiling, never the operating point.
+    #[test]
+    fn in_flight_never_passes_the_current_limit() {
+        let now = Instant::now();
+        let mut sim = fast_sim(8);
+        sim.is_synced = true;
+        sim.limit = 3;
+
+        sim.pending = 2;
+        assert!(sim.can_simulate_at(now));
+
+        sim.pending = 3;
+        assert!(!sim.can_simulate_at(now), "the limit must bind before the configured cap");
+    }
+
+    #[test]
+    fn a_fast_success_raises_the_limit_up_to_the_ceiling() {
+        let mut sim = fast_sim(4);
+        sim.limit = 1;
+
+        for _ in 0..10 {
+            sim.record_success(LATENCY_TARGET / 2);
+        }
+
+        assert_eq!(sim.limit, 4, "the limit must stop at the configured cap");
+    }
+
+    #[test]
+    fn a_slow_success_halves_the_limit() {
+        let mut sim = fast_sim(32);
+        sim.limit = 32;
+
+        sim.record_success(LATENCY_TARGET * 2);
+
+        assert_eq!(sim.limit, 16);
+    }
+
+    #[test]
+    fn the_limit_never_falls_below_one() {
+        let mut sim = fast_sim(32);
+        sim.limit = 32;
+
+        for _ in 0..20 {
+            sim.record_success(LATENCY_TARGET * 2);
+        }
+
+        assert_eq!(sim.limit, 1, "a sim must keep one slot to prove it recovered");
+    }
+
+    /// Today one error removes a sim for five slots. It must take a run of them.
+    #[test]
+    fn one_sim_fault_does_not_remove_a_sim() {
+        let now = Instant::now();
+        let mut sim = fast_sim(8);
+        sim.is_synced = true;
+
+        sim.record_failure(&BlockSimError::RpcError, now);
+
+        assert!(sim.can_simulate_at(now));
+    }
+
+    #[test]
+    fn a_run_of_sim_faults_opens_the_breaker() {
+        let now = Instant::now();
+        let mut sim = fast_sim(8);
+        sim.is_synced = true;
+
+        open_breaker(&mut sim, now);
+
+        assert!(!sim.can_simulate_at(now));
+        assert_eq!(sim.effective_limit(now), 0);
+    }
+
+    #[test]
+    fn a_success_clears_the_fault_run() {
+        let now = Instant::now();
+        let mut sim = fast_sim(8);
+        sim.is_synced = true;
+
+        for _ in 0..SIM_FAULTS_TO_OPEN - 1 {
+            sim.record_failure(&BlockSimError::RpcError, now);
+        }
+        sim.record_success(LATENCY_TARGET / 2);
+        sim.record_failure(&BlockSimError::RpcError, now);
+
+        assert!(sim.can_simulate_at(now), "the run must restart after a success");
+    }
+
+    #[test]
+    fn an_expired_breaker_admits_exactly_one_probe() {
+        let now = Instant::now();
+        let mut sim = fast_sim(8);
+        sim.is_synced = true;
+        open_breaker(&mut sim, now);
+        let probe_time = now + BREAKER_BACKOFF_START;
+
+        assert_eq!(sim.effective_limit(probe_time), 1);
+
+        sim.pending = 1;
+        assert!(!sim.can_simulate_at(probe_time), "a second probe must wait");
+    }
+
+    #[test]
+    fn a_successful_probe_restores_full_service() {
+        let now = Instant::now();
+        let mut sim = fast_sim(8);
+        sim.is_synced = true;
+        sim.limit = 8;
+        open_breaker(&mut sim, now);
+        let probe_time = now + BREAKER_BACKOFF_START;
+
+        sim.record_success(LATENCY_TARGET / 2);
+
+        assert!(sim.effective_limit(probe_time) > 1, "a healthy sim must return at once");
+        sim.pending = 1;
+        assert!(sim.can_simulate_at(probe_time));
+    }
+
+    #[test]
+    fn a_failed_probe_extends_the_backoff() {
+        let now = Instant::now();
+        let mut sim = fast_sim(8);
+        sim.is_synced = true;
+        open_breaker(&mut sim, now);
+        let probe_time = now + BREAKER_BACKOFF_START;
+
+        sim.record_failure(&BlockSimError::RpcError, probe_time);
+
+        assert_eq!(sim.effective_limit(probe_time), 0, "the breaker must close again");
+        assert_eq!(sim.effective_limit(probe_time + BREAKER_BACKOFF_START), 0);
+        assert_eq!(sim.effective_limit(probe_time + BREAKER_BACKOFF_START * 2), 1);
+    }
+
+    #[test]
+    fn the_backoff_is_capped() {
+        let mut now = Instant::now();
+        let mut sim = fast_sim(8);
+        sim.is_synced = true;
+        open_breaker(&mut sim, now);
+
+        for _ in 0..10 {
+            now += BREAKER_BACKOFF_MAX;
+            sim.record_failure(&BlockSimError::RpcError, now);
+        }
+
+        assert_eq!(sim.effective_limit(now + BREAKER_BACKOFF_MAX), 1);
+    }
+
+    /// The parent is simply newer than the node's head. Every sim sees this at a
+    /// slot boundary, so it must never take a sim out of service.
+    #[test]
+    fn a_missing_parent_arms_no_breaker() {
+        let now = Instant::now();
+        let mut sim = fast_sim(8);
+        sim.is_synced = true;
+        let err = BlockSimError::BlockValidationFailed("parent block not found".into());
+
+        for _ in 0..SIM_FAULTS_TO_OPEN * 3 {
+            sim.record_failure(&err, now);
+        }
+
+        assert!(sim.can_simulate_at(now));
+    }
+
+    /// A sim with a small limit is not as free as a sim with a big one at the same
+    /// pending count, so selection must compare the share used, not the raw count.
+    #[test]
+    fn select_simulator_picks_the_lowest_utilization() {
+        let now = Instant::now();
+        let mut tile = test_tile_with_sims(&[(true, true, 8), (true, true, 2)]);
+        tile.simulators[0].limit = 32;
+        tile.simulators[1].limit = 4;
+
+        assert_eq!(tile.select_simulator_at(now), Some(0));
+    }
+
+    /// Open and probe share one enum variant, so the report must still tell them apart.
+    #[test]
+    fn the_health_label_names_the_probe_window() {
+        let now = Instant::now();
+        let mut sim = fast_sim(8);
+        sim.is_synced = true;
+
+        assert_eq!(sim.health(now), SimHealth::Ok);
+
+        open_breaker(&mut sim, now);
+        assert_eq!(sim.health(now), SimHealth::Open);
+        assert_eq!(sim.health(now + BREAKER_BACKOFF_START), SimHealth::Probe);
+    }
+
+    #[test]
+    fn an_unsynced_sim_reports_unsynced() {
+        let now = Instant::now();
+        let sim = fast_sim(8);
+
+        assert_eq!(sim.health(now), SimHealth::Unsynced);
+    }
+
+    #[test]
+    fn one_failed_sync_poll_does_not_remove_a_sim() {
+        let mut sim = fast_sim(8);
+        sim.is_synced = true;
+
+        sim.record_sync(None);
+
+        assert!(sim.is_synced, "a single dropped poll must not remove a sim");
+    }
+
+    #[test]
+    fn a_run_of_failed_sync_polls_removes_a_sim() {
+        let mut sim = fast_sim(8);
+        sim.is_synced = true;
+
+        for _ in 0..SYNC_FAILURES_TO_UNSYNC {
+            sim.record_sync(None);
+        }
+
+        assert!(!sim.is_synced);
+
+        sim.record_sync(Some(true));
+        assert!(sim.is_synced, "one good poll must restore a sim");
+    }
+
+    /// An honest "I am syncing" is not a dropped poll. Trust it at once.
+    #[test]
+    fn a_node_that_reports_syncing_is_removed_at_once() {
+        let mut sim = fast_sim(8);
+        sim.is_synced = true;
+
+        sim.record_sync(Some(false));
+
+        assert!(!sim.is_synced);
     }
 
     #[test]

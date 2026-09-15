@@ -122,6 +122,20 @@ impl BlockSimError {
         }
     }
 
+    /// Whether this error says the simulator itself is unhealthy.
+    ///
+    /// A missing parent is temporary but is not a sim fault: at a slot boundary every node
+    /// sees it until it imports the new head.
+    pub fn is_sim_fault(&self) -> bool {
+        match self {
+            BlockSimError::BlockValidationFailed(reason) => {
+                reason.to_lowercase().starts_with(MISSING_TRIE_NODE)
+            }
+            BlockSimError::Timeout | BlockSimError::RpcError => true,
+            _ => false,
+        }
+    }
+
     pub fn is_already_known(&self) -> bool {
         match self {
             BlockSimError::BlockValidationFailed(reason) => {
@@ -228,6 +242,39 @@ mod tests {
         let err = BlockSimError::BlockValidationFailed(s);
 
         assert!(err.is_temporary())
+    }
+
+    /// A parent the node has not imported yet is normal at a slot boundary. It says
+    /// nothing about the node's health, so it must not count against the simulator.
+    #[test]
+    fn a_missing_parent_is_no_sim_fault() {
+        for reason in [
+            "unknown ancestor",
+            "parent block not found",
+            "could not find parent block: parent block not found",
+            "block requires a reorg",
+        ] {
+            let err = BlockSimError::BlockValidationFailed(reason.into());
+
+            assert!(err.is_temporary(), "{reason} must still retry elsewhere");
+            assert!(!err.is_sim_fault(), "{reason} must not count against the sim");
+        }
+    }
+
+    #[test]
+    fn an_unreachable_sim_is_a_sim_fault() {
+        assert!(BlockSimError::RpcError.is_sim_fault());
+        assert!(BlockSimError::Timeout.is_sim_fault());
+        assert!(
+            BlockSimError::BlockValidationFailed("missing trie node abcd".into()).is_sim_fault()
+        );
+    }
+
+    #[test]
+    fn a_rejected_block_is_no_sim_fault() {
+        let err = BlockSimError::BlockValidationFailed("insufficient balance".into());
+
+        assert!(!err.is_sim_fault());
     }
 
     #[test]
