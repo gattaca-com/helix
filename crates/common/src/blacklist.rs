@@ -1,6 +1,24 @@
 use alloy_primitives::Address;
 use dashmap::DashSet;
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
+
+/// A blacklist payload, either a bare array of addresses or one wrapped in `items`.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum DisallowListPayload {
+    Bare(Vec<String>),
+    Wrapped { items: Vec<String> },
+}
+
+impl DisallowListPayload {
+    pub fn into_addresses(self) -> Vec<Address> {
+        match self {
+            Self::Bare(list) => parse_disallow_list(list),
+            Self::Wrapped { items } => parse_disallow_list(items),
+        }
+    }
+}
 
 /// Parses a blacklist payload into the addresses to disallow.
 pub fn parse_disallow_list(list: Vec<String>) -> Vec<Address> {
@@ -43,6 +61,28 @@ mod blacklist_tests {
     use alloy_primitives::address;
 
     use super::*;
+
+    #[test]
+    fn a_wrapped_payload_loads() {
+        let payload: DisallowListPayload =
+            serde_json::from_str(r#"{"items":["0x8589427373D6D84E98730D7795D8f6f8731FDA16"]}"#)
+                .expect("the provider's wrapped shape must load");
+
+        assert_eq!(payload.into_addresses(), vec![address!(
+            "0x8589427373D6D84E98730D7795D8f6f8731FDA16"
+        )]);
+    }
+
+    #[test]
+    fn a_bare_payload_loads() {
+        let payload: DisallowListPayload =
+            serde_json::from_str(r#"["0x8589427373D6D84E98730D7795D8f6f8731FDA16"]"#)
+                .expect("a bare array must load");
+
+        assert_eq!(payload.into_addresses(), vec![address!(
+            "0x8589427373D6D84E98730D7795D8f6f8731FDA16"
+        )]);
+    }
 
     #[test]
     fn loads_an_address_list() {

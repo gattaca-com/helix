@@ -11,14 +11,14 @@ use axum::{
 };
 use dashmap::DashSet;
 use helix_common::{
-    blacklist::{changed_disallow_hash, parse_disallow_list},
+    blacklist::{DisallowListPayload, changed_disallow_hash},
     decoder::{DecoderError, SubmissionDecoder, SubmissionDecoderParams},
     simulator::{SszMergedValidationRequest, SszValidationRequest},
 };
 use helix_types::Submission;
 use ssz::Decode;
 use tokio::{net::TcpListener, sync::Semaphore, time};
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 use crate::{
     engine::convert::eblobs,
@@ -154,9 +154,12 @@ fn bad_request(message: String) -> Response {
 }
 
 /// Replaces the disallow list, returning its new digest when it changed.
-pub fn refresh_disallow(disallow: &DashSet<Address>, list: Vec<String>) -> Option<String> {
+pub fn refresh_disallow(
+    disallow: &DashSet<Address>,
+    payload: DisallowListPayload,
+) -> Option<String> {
     let previous = changed_disallow_hash(disallow, None);
-    let parsed = parse_disallow_list(list);
+    let parsed = payload.into_addresses();
     disallow.clear();
     for address in parsed {
         disallow.insert(address);
@@ -169,19 +172,35 @@ const REFRESH_INTERVAL: time::Duration = time::Duration::from_secs(300);
 pub async fn refresh_blacklist(endpoint: String, disallow: Arc<DashSet<Address>>) {
     let client = reqwest::Client::new();
     let mut interval = time::interval(REFRESH_INTERVAL);
+    let mut loaded = false;
     loop {
         interval.tick().await;
-        match client.get(&endpoint).send().await {
-            Ok(response) if response.status().is_success() => match response.json().await {
-                Ok(list) => {
-                    if let Some(hash) = refresh_disallow(&disallow, list) {
-                        info!(%hash, size = disallow.len(), "disallow list updated");
+        let failure = match client.get(&endpoint).send().await {
+            Ok(response) if response.status().is_success() => {
+                match response.json::<DisallowListPayload>().await {
+                    Ok(payload) => {
+                        if let Some(hash) = refresh_disallow(&disallow, payload) {
+                            info!(%hash, size = disallow.len(), "disallow list updated");
+                        }
+                        loaded = true;
+                        None
                     }
+                    Err(err) => Some(format!("could not read the disallow list: {err}")),
                 }
-                Err(err) => warn!(%err, "could not read the disallow list"),
-            },
-            Ok(response) => warn!(status = %response.status(), "disallow list fetch failed"),
-            Err(err) => warn!(%err, "disallow list fetch failed"),
+            }
+            Ok(response) => Some(format!("disallow list fetch failed: HTTP {}", response.status())),
+            Err(err) => Some(format!("disallow list fetch failed: {err}")),
+        };
+
+        if let Some(reason) = failure {
+            if loaded {
+                error!(%endpoint, "{reason}");
+            } else {
+                error!(
+                    %endpoint,
+                    "{reason}; no disallow list is in force, this builder applies no address filtering"
+                );
+            }
         }
     }
 }

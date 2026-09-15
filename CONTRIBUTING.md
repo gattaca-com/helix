@@ -13,6 +13,10 @@ Design, review, and testing are human responsibilities. Implementation
 work can be delegated to an agent to speed things up. But we follow
 a trust but verify approach for ai work.
 
+Humans write the prose. Issues, PR descriptions, commit messages, and
+code comments are written by a person, not by an agent. Agents write
+code.
+
 This is test-driven development: tests are written before or alongside
 implementation and define correctness, not issues or design docs. Run
 tests throughout implementation, not just at the end. A human must review
@@ -23,17 +27,17 @@ implementation code is written against them.
 
 A trivial one-liner (typo, obvious small fix) can go straight to a small
 PR — no issue required. Any actual behavior or feature change gets a
-GitHub issue first, using the matching template under
-[`.github/ISSUE_TEMPLATE/`](.github/ISSUE_TEMPLATE/) (`feature`, `bug`,
-`refactor`, `perf`).
+GitHub issue first. Say what is wrong or wanted, how to reproduce or
+verify it, and which files it touches.
 
 Large issues get a step checklist, one PR per step. The checklist can grow
 as work proceeds.
 
 ## Pull requests
 
-Scope each PR to one step of one issue. Use
-[`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md).
+Scope each PR to one step of one issue. Link the issue, say what the PR
+does, and add a "what this deliberately does not do" note when the scope
+could be mistaken for an oversight.
 
 Stack a step's PR on the previous step's branch rather than waiting for
 it to merge. Note the base branch in the PR description, and retarget to

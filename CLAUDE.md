@@ -12,18 +12,15 @@
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full workflow. Operational
 rules for you specifically:
 
-- Tests define correctness. When starting a step with no tests yet, draft
-  the tests (and the issue, if it needs updating) first. Get explicit
-  human approval before writing implementation code — use plan mode, or
-  ask directly and wait for an answer.
-- If a nontrivial change has no GitHub issue yet, draft one using the
-  matching template under
-  [`.github/ISSUE_TEMPLATE/`](.github/ISSUE_TEMPLATE/) (`feature`, `bug`,
-  `refactor`, `perf`) for review. Don't put specs or plans in `docs/`.
-- Scope each PR to one step of one issue. Use
-  [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md),
-  including a "what this deliberately does not do" note when scope could
-  be mistaken for an oversight.
+- Write code, not prose. I write the issues, the PR descriptions, the
+  commit messages, and the code comments. Don't draft them, and don't
+  put specs or plans in `docs/`. Report your findings to me in chat
+  instead.
+- Tests define correctness. When starting a step with no tests yet,
+  write the tests first. Get explicit human approval before writing
+  implementation code — use plan mode, or ask directly and wait for an
+  answer.
+- Scope each change to one step of one issue.
 - Before declaring a step done, run:
 
   ```

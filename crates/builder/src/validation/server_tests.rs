@@ -5,7 +5,7 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use helix_common::simulator::SszMergedValidationRequest;
+use helix_common::{blacklist::DisallowListPayload, simulator::SszMergedValidationRequest};
 use ssz::Encode;
 use tower::ServiceExt;
 
@@ -180,9 +180,10 @@ fn a_refreshed_list_replaces_the_previous_one() {
     let disallow = Arc::new(dashmap::DashSet::new());
     disallow.insert(Address::repeat_byte(0x11));
 
-    let hash = crate::validation::server::refresh_disallow(&disallow, vec![
-        "0x2222222222222222222222222222222222222222".into(),
-    ]);
+    let hash = crate::validation::server::refresh_disallow(
+        &disallow,
+        DisallowListPayload::Bare(vec!["0x2222222222222222222222222222222222222222".into()]),
+    );
 
     assert!(hash.is_some(), "a changed list must report a new digest");
     assert!(!disallow.contains(&Address::repeat_byte(0x11)), "stale entries must go");
@@ -194,13 +195,18 @@ fn an_unchanged_list_reports_no_new_digest() {
     let disallow = Arc::new(dashmap::DashSet::new());
     let entries = vec!["0x2222222222222222222222222222222222222222".to_string()];
 
-    let first = crate::validation::server::refresh_disallow(&disallow, entries.clone())
-        .expect("a first list is always new");
+    let first = crate::validation::server::refresh_disallow(
+        &disallow,
+        DisallowListPayload::Bare(entries.clone()),
+    )
+    .expect("a first list is always new");
 
     assert!(!first.is_empty());
     assert_eq!(
-        crate::validation::server::refresh_disallow(&disallow, entries),
+        crate::validation::server::refresh_disallow(&disallow, DisallowListPayload::Wrapped {
+            items: entries
+        }),
         None,
-        "an unchanged list must report nothing"
+        "the wrapped shape yields the same list"
     );
 }

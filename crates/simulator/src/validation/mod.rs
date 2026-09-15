@@ -21,7 +21,7 @@ use dashmap::DashSet;
 use helix_common::{
     PAYMENT_FORWARDER, PAYMENT_FORWARDER_CODE_HASH,
     api::builder_api::InclusionListWithMetadata,
-    blacklist::{changed_disallow_hash, parse_disallow_list},
+    blacklist::{DisallowListPayload, changed_disallow_hash},
     payment::multisend_paid_amount,
     payment_forwarder_recipient,
 };
@@ -60,7 +60,7 @@ use tokio::{
     sync::{RwLock, oneshot},
     time,
 };
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use crate::{
     common::{RethConsensus, RethEvmConfig, RethPayloadValidator, RethProvider},
@@ -109,46 +109,66 @@ impl ValidationApi {
         });
 
         inner.metrics.disallow_size.set(inner.disallow.len() as f64);
+        inner.metrics.disallow_loaded.set(0.0);
 
         // spawn background updater task
         let client = reqwest::Client::new();
         let ep = blacklist_endpoint.clone();
         let dash = disallow.clone();
         let gauge = inner.metrics.disallow_size.clone();
+        let loaded_gauge = inner.metrics.disallow_loaded.clone();
         spawn(async move {
             let mut interval = time::interval(Duration::from_secs(300));
             // Stays `None` until the first successful fetch, so a restart doesn't publish the
             // hash of the empty list we start out with.
             let mut current_hash: Option<String> = None;
+            let mut loaded = false;
             loop {
                 interval.tick().await;
-                match client.get(&ep).send().await {
+                let failure = match client.get(&ep).send().await {
                     Ok(resp) if resp.status().is_success() => {
-                        if let Ok(list) = resp.json::<Vec<String>>().await {
-                            let parsed = parse_disallow_list(list);
-                            dash.clear();
-                            for addr in parsed {
-                                dash.insert(addr);
-                            }
-                            gauge.set(dash.len() as f64);
-
-                            if let Some(new_hash) =
-                                changed_disallow_hash(&dash, current_hash.as_deref())
-                            {
-                                // Setting the value for old hash to zero and the new hash to one.
-                                if let Some(prev) = current_hash.take() {
-                                    gauge!("builder_validation_disallow_hash", "hash" => prev)
-                                        .set(0.0);
+                        match resp.json::<DisallowListPayload>().await {
+                            Ok(payload) => {
+                                dash.clear();
+                                for addr in payload.into_addresses() {
+                                    dash.insert(addr);
                                 }
-                                gauge!("builder_validation_disallow_hash", "hash" => new_hash.clone())
-                                    .set(1.0);
-                                info!(hash = %new_hash, size = dash.len(), "disallow list updated");
-                                current_hash = Some(new_hash);
+                                gauge.set(dash.len() as f64);
+                                loaded = true;
+                                loaded_gauge.set(1.0);
+
+                                if let Some(new_hash) =
+                                    changed_disallow_hash(&dash, current_hash.as_deref())
+                                {
+                                    // Setting the value for old hash to zero and the new hash to
+                                    // one.
+                                    if let Some(prev) = current_hash.take() {
+                                        gauge!("builder_validation_disallow_hash", "hash" => prev)
+                                            .set(0.0);
+                                    }
+                                    gauge!("builder_validation_disallow_hash", "hash" => new_hash.clone())
+                                        .set(1.0);
+                                    info!(hash = %new_hash, size = dash.len(), "disallow list updated");
+                                    current_hash = Some(new_hash);
+                                }
+                                None
                             }
+                            Err(e) => Some(format!("could not read the disallow list: {e}")),
                         }
                     }
-                    Ok(r) => warn!("Blacklist fetch failed: HTTP {}", r.status()),
-                    Err(e) => warn!("Blacklist fetch error: {}", e),
+                    Ok(r) => Some(format!("blacklist fetch failed: HTTP {}", r.status())),
+                    Err(e) => Some(format!("blacklist fetch failed: {e}")),
+                };
+
+                if let Some(reason) = failure {
+                    if loaded {
+                        error!(endpoint = %ep, "{reason}");
+                    } else {
+                        error!(
+                            endpoint = %ep,
+                            "{reason}; no disallow list is in force, this simulator applies no address filtering"
+                        );
+                    }
                 }
             }
         });
@@ -992,6 +1012,8 @@ impl Default for ValidationApiConfig {
 pub(crate) struct ValidationMetrics {
     /// The number of entries configured in the builder validation disallow list.
     pub(crate) disallow_size: Gauge,
+    /// One once a disallow list has loaded, zero while none is in force.
+    pub(crate) disallow_loaded: Gauge,
 }
 
 #[serde_as]
