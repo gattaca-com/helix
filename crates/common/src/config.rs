@@ -80,6 +80,7 @@ pub struct RelayConfig {
     pub enable_flux_profiler: bool,
     #[serde(default)]
     pub operator_config: Option<OperatorConfig>,
+    pub blacklist_provider: Option<Url>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -137,6 +138,7 @@ impl RelayConfig {
             clickhouse: None,
             enable_flux_profiler: false,
             operator_config: None,
+            blacklist_provider: None,
         }
     }
 }
@@ -688,6 +690,7 @@ pub enum Route {
     DataAdjustments,
     MergedBlocks,
     PromoteBuilder,
+    Blacklist,
     /// Gloas (ePBS): not yet wired to the auctioneer, see docs/gloas-support-plan.md.
     GetExecutionPayloadBid,
     /// Gloas (ePBS): not yet wired to the auctioneer, see docs/gloas-support-plan.md.
@@ -741,6 +744,7 @@ impl Route {
             Route::ProposerApi => panic!("ProposerApi is not a real route"),
             Route::DataApi => panic!("DataApi is not a real route"),
             Route::RelayNetwork => PATH_RELAY_NETWORK.to_string(),
+            Route::Blacklist => PATH_BLACKLIST.to_string(),
         }
     }
 }

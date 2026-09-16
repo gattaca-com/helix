@@ -34,6 +34,7 @@ router_config:
     - route: ProposerPayloadDelivered
     - route: RegisterValidators
     - route: Status
+    - route: Blacklist
 block_merging_config:
   is_enabled: false
   max_merged_bid_age_ms: 250
@@ -56,6 +57,8 @@ get_payload_v1_response_buffer_ms: 800
 ip_frequency_threshold: 0.2
 primev_config: null
 discord_webhook_url: null
+# Upstream source for the Blacklist route, cached for 5 minutes.
+blacklist_provider: null
 is_submission_instance: true
 is_registration_instance: true
 logging: !File
