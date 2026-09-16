@@ -34,6 +34,7 @@ use tracing::{debug, error, info, trace, warn};
 use crate::{
     config::MergingConfig,
     engine::{EngineEvent, EngineOutput},
+    metrics,
     spine::BuilderSpine,
     utils::utcnow_ns,
 };
@@ -238,6 +239,11 @@ impl MergingServerTile {
 
     fn flush_reactions(&mut self) {
         for (token, reply) in self.replies.drain(..) {
+            match &reply {
+                Reply::Reject(msg) => metrics::reject_sent(reject_label(msg.code), false),
+                Reply::Fatal(msg) => metrics::reject_sent(reject_label(msg.code), true),
+                Reply::Ack(_) | Reply::Pong(_) => {}
+            }
             self.listener.write_or_enqueue_with(SendBehavior::Single(token), |buf| match &reply {
                 Reply::Ack(msg) => append_frame(buf, MergingMsgId::MergerAckV1, msg),
                 Reply::Pong(msg) => append_frame(buf, MergingMsgId::PongV1, msg),
@@ -245,6 +251,7 @@ impl MergingServerTile {
                 Reply::Fatal(msg) => append_frame(buf, MergingMsgId::FatalV1, msg),
             });
         }
+        metrics::relay_connected(self.active.is_some());
         for token in std::mem::take(&mut self.to_disconnect) {
             self.listener.disconnect(token);
             self.sessions.remove(&token);
@@ -329,7 +336,23 @@ fn session_zstd(sessions: &FxHashMap<Token, Session>, token: Token) -> bool {
 /// wedged, which is fatal for the merge pipeline (the TCP tile keeps serving).
 fn send_control(engine_tx: &Sender<EngineEvent>, event: EngineEvent) {
     if let Err(TrySendError::Full(_)) = engine_tx.try_send(event) {
+        metrics::queue_drop("engine_control");
         error!("engine event queue full, dropping control event");
+    }
+}
+
+fn reject_label(code: RejectCode) -> &'static str {
+    match code {
+        RejectCode::HeadMismatch => "head_mismatch",
+        RejectCode::NotSynced => "not_synced",
+        RejectCode::UnknownBaseBlock => "unknown_base_block",
+        RejectCode::InvalidPayment => "invalid_payment",
+        RejectCode::UnknownCollateral => "unknown_collateral",
+        RejectCode::InvalidOrder => "invalid_order",
+        RejectCode::StaleSlot => "stale_slot",
+        RejectCode::LimitExceeded => "limit_exceeded",
+        RejectCode::Busy => "busy",
+        RejectCode::InvalidBaseBlock => "invalid_base_block",
     }
 }
 
@@ -498,6 +521,7 @@ fn handle_active_message(
                 fatal(replies, to_disconnect, RejectCode::InvalidOrder, "invalid relay config");
                 return;
             }
+            metrics::ingest("relay_config");
             send_control(engine_tx, EngineEvent::RelayConfig(config));
         }
         MergingMsgId::SlotStartV1 => {
@@ -506,6 +530,7 @@ fn handle_active_message(
                 return;
             };
             debug!(slot = msg.slot, "slot start");
+            metrics::ingest("slot_start");
             send_control(engine_tx, EngineEvent::SlotStart(msg));
         }
         MergingMsgId::SlotEndV1 => {
@@ -514,6 +539,7 @@ fn handle_active_message(
                 return;
             };
             debug!(slot = msg.slot, "slot end");
+            metrics::ingest("slot_end");
             send_control(engine_tx, EngineEvent::SlotEnd { slot: msg.slot });
         }
         MergingMsgId::ActivateBaseBlockV1 => {
@@ -522,6 +548,7 @@ fn handle_active_message(
                 return;
             };
             debug!(slot = msg.slot, block_hash = %msg.block_hash, "activate base block");
+            metrics::ingest("activate_base");
             send_control(engine_tx, EngineEvent::ActivateBase {
                 slot: msg.slot,
                 block_hash: msg.block_hash,
@@ -536,7 +563,9 @@ fn handle_active_message(
                 recv_ns: utcnow_ns(),
                 generation,
             };
+            metrics::ingest("mergeable_block");
             if let Err(TrySendError::Full(_)) = engine_tx.try_send(event) {
+                metrics::queue_drop("engine_mergeable");
                 let slot = peek_slot(body).unwrap_or_default();
                 debug!(?token, slot, "engine busy, rejecting mergeable block");
                 replies.push((

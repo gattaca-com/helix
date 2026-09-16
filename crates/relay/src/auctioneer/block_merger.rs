@@ -8,7 +8,10 @@ use flux_profiler::timed;
 use helix_common::{
     RelayConfig,
     local_cache::LocalCache,
-    metrics::{MERGE_TRACE_LATENCY, MERGED_BID_AGE, MERGED_BID_DECISION, MERGED_BID_MARGIN},
+    metrics::{
+        MERGE_STORE, MERGE_STORE_DELTA, MERGE_TRACE_LATENCY, MERGED_BID_AGE, MERGED_BID_DECISION,
+        MERGED_BID_MARGIN,
+    },
     utils::{utcnow_ms, utcnow_ns},
 };
 use helix_types::{BlsPublicKeyBytes, MergedBlock, PayloadAndBlobs, PayloadBidData, Transactions};
@@ -99,6 +102,7 @@ impl BlockMerger {
                 &entry.bid.execution_payload().transactions,
             ) {
                 self.flagged_payment_tx_only_blocks.insert(original_block_hash);
+                MERGED_BID_DECISION.with_label_values(&["payment_tx_only"]).inc();
             }
             return None;
         }
@@ -185,6 +189,7 @@ impl BlockMerger {
                 merged = %response.proposer_value,
                 "merged payload value is not higher than original bid"
             );
+            MERGE_STORE.with_label_values(&["not_valuable"]).inc();
             return Err(PayloadMergingError::MergedPayloadNotValuable {
                 original: original_value,
                 merged: response.proposer_value,
@@ -203,6 +208,7 @@ impl BlockMerger {
         }
 
         let block_hash = response.execution_payload.block_hash;
+        let response_value = response.proposer_value;
         let base_block_time_ms = response.trace.request_time_ns / 1_000_000;
 
         let mut trace = response.trace;
@@ -260,6 +266,9 @@ impl BlockMerger {
         let coinbase = original_payload.execution_payload.fee_recipient;
         self.best_merged_blocks
             .insert(coinbase, BestMergedBlock { base_block_time_ms, bid: new_bid.clone() });
+
+        MERGE_STORE.with_label_values(&["stored"]).inc();
+        MERGE_STORE_DELTA.observe(gwei(response_value.saturating_sub(original_value)));
 
         record_step("prepare_merged_payload_for_storage", start_time.elapsed());
 
