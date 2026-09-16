@@ -50,3 +50,5 @@ pub const PATH_VALIDATOR_REGISTRATION: &str = "/validator_registration";
 pub const PATH_RELAY_NETWORK: &str = "/relay/v1/network";
 
 pub const PATH_PROMOTE_BUILDER: &str = "/promote";
+
+pub const PATH_BLACKLIST: &str = "/blacklist";

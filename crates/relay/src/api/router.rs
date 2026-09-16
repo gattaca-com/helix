@@ -27,6 +27,7 @@ use tracing::{debug, info, warn};
 use crate::{
     api::{
         Api, BidsCache, BidsCacheV2, DataApi, DeliveredPayloadsCache, DeliveredPayloadsCacheV2,
+        blacklist::{BlacklistCache, get_blacklist},
         builder::api::BuilderApi,
         middleware::body_limit_middleware,
         proposer::{self, ProposerApi},
@@ -108,6 +109,7 @@ pub fn build_router<A: Api>(
     bids_cache_v2: BidsCacheV2,
     delivered_payloads_cache: DeliveredPayloadsCache,
     delivered_payloads_cache_v2: DeliveredPayloadsCacheV2,
+    blacklist_cache: Arc<BlacklistCache>,
     known_validators_loaded: Arc<AtomicBool>,
     terminating: Arc<AtomicBool>,
 ) -> Router {
@@ -155,6 +157,7 @@ pub fn build_router<A: Api>(
             Route::DataAdjustments => get(DataApi::<A::ApiProvider>::data_adjustments),
             Route::MergedBlocks => get(DataApi::<A::ApiProvider>::merged_blocks),
             Route::RelayNetwork => any(RelayNetworkApi::connect),
+            Route::Blacklist => get(get_blacklist),
             Route::All | Route::BuilderApi | Route::ProposerApi | Route::DataApi => {
                 panic!(
                     "Route not implemented: {:?}, please add handling if there are new routes or resolve condensed routes before!",
@@ -237,6 +240,7 @@ pub fn build_router<A: Api>(
         .layer(Extension(bids_cache_v2))
         .layer(Extension(delivered_payloads_cache))
         .layer(Extension(delivered_payloads_cache_v2))
+        .layer(Extension(blacklist_cache))
         .layer(Extension(KnownValidatorsLoaded(known_validators_loaded)))
         .layer(Extension(Terminating(terminating)));
 

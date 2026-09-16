@@ -12,6 +12,7 @@ pub use service::start_api_service;
 pub use crate::auctioneer::{BidAdjustor, DefaultBidAdjustor};
 
 pub mod admin_service;
+pub mod blacklist;
 pub mod builder;
 pub mod extract;
 pub mod middleware;
