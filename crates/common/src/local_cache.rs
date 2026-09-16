@@ -128,7 +128,7 @@ impl LocalCache {
         let api_key_cache = Arc::new(DashMap::with_capacity(ESTIMATED_BUILDER_INFOS_UPPER_BOUND));
         let primev_proposers = Arc::new(DashSet::with_capacity(MAX_PRIMEV_PROPOSERS));
         let kill_switch = Arc::new(AtomicBool::new(false));
-        let serve_merged_headers = Arc::new(AtomicBool::new(false));
+        let serve_merged_headers = Arc::new(AtomicBool::new(true));
         let proposer_duties = Arc::new(RwLock::new(Vec::with_capacity(1000)));
         let merged_blocks = Arc::new(DashMap::with_capacity(1000));
         let validator_registration_cache = Arc::new(DashMap::with_capacity(1_800_000));
@@ -504,7 +504,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "known bug: merged headers not enabled by default, see gattaca-com/helix#487"]
     pub async fn test_serve_merged_headers() {
         let cache = LocalCache::new();
 
