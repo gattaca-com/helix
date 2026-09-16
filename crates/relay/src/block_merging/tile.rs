@@ -18,6 +18,11 @@ use helix_common::{
     BlockMergingTcpConfig,
     api::builder_api::{InclusionListWithMetadata, TopBidUpdate},
     chain_info::ChainInfo,
+    metrics::{
+        MERGE_ACTIVATION, MERGE_BUILDER_LATENCY, MERGE_CONNECTED, MERGE_ENABLED, MERGE_FORWARD,
+        MERGE_ORDERS_FORWARDED, MERGE_RECEIVED, MERGE_REJECT, MERGE_ROUND_TRIP, MERGE_SIM,
+        MERGE_SLOT_APPENDABLE, MERGE_TOP_BID_GAP, MERGE_TXS_SENT,
+    },
     simulator::BlockSimError,
     utils::alert_discord,
 };
@@ -118,6 +123,9 @@ struct SlotState {
     attrs: FxHashMap<B256, B256>,
     /// Appendable block hashes forwarded this slot.
     appendable: FxHashSet<B256>,
+    forwarded_ns: FxHashMap<B256, u64>,
+    activated_ns: FxHashMap<B256, u64>,
+    merged_seen: FxHashSet<B256>,
     /// Events replayed on re-handshake.
     replay_log: Vec<ReplayEvent>,
     /// Orders actually sent to the merge builder this slot, for the
@@ -135,6 +143,7 @@ enum ReplayEvent {
 struct SlotStats {
     /// Mergeable frames built from full submissions.
     forwarded_full: usize,
+    skipped_disabled: usize,
     /// Mergeable frames built from dehydrated submissions after hydration.
     forwarded_hydrated: usize,
     hydration_failed: usize,
@@ -244,6 +253,8 @@ impl Tile<HelixSpine> for BlockMergingTile {
         }
         if self.ping.fired() {
             self.send_pings();
+            MERGE_ENABLED.set(self.block_merging_enabled.load(Ordering::Relaxed) as i64);
+            MERGE_CONNECTED.set(self.conn.active as i64);
         }
 
         adapter.consume(|msg: SlotMsg, _| self.on_slot_msg(msg));
@@ -283,10 +294,12 @@ fn handle_merged_block(
     max_blobs_per_block: usize,
 ) -> Option<BlockMergeResponse> {
     if !enabled {
+        MERGE_RECEIVED.with_label_values(&["disabled"]).inc();
         return None;
     }
     if merged.slot != slot.bid_slot || !slot.appendable.contains(&merged.base_block_hash) {
         stats.merged_stale += 1;
+        MERGE_RECEIVED.with_label_values(&["stale"]).inc();
         debug!(
             ?token,
             slot = merged.slot,
@@ -295,9 +308,12 @@ fn handle_merged_block(
         );
         return None;
     }
+    let base_block_hash = merged.base_block_hash;
+    record_builder_latency(&merged.trace);
     let Some(response) = merged_block_to_response(merged, blob_sidecars, max_blobs_per_block)
     else {
         stats.merged_blob_missing += 1;
+        MERGE_RECEIVED.with_label_values(&["blob_missing"]).inc();
         warn!(
             ?token,
             "could not build merge response (missing blob sidecar or invalid payload), dropping \
@@ -321,6 +337,7 @@ fn handle_merged_block(
     );
     if !unbundled.is_empty() {
         stats.merged_unbundled += 1;
+        MERGE_RECEIVED.with_label_values(&["unbundled"]).inc();
         warn!(
             ?token,
             count = unbundled.len(),
@@ -329,7 +346,42 @@ fn handle_merged_block(
         return None;
     }
     stats.merged_blocks += 1;
+    MERGE_RECEIVED.with_label_values(&["accepted"]).inc();
+    record_round_trip(slot, base_block_hash);
     Some(response)
+}
+
+fn record_builder_latency(trace: &helix_tcp_types::merging::builder_to_relay::MergeTraceV1) {
+    let ms = |from: u64, to: u64| (from > 0 && to >= from).then(|| (to - from) as f64 / 1e6);
+    let stages = [
+        ("recv_to_sim", ms(trace.base_block_recv_ns, trace.sim_start_ns)),
+        ("sim", ms(trace.sim_start_ns, trace.sim_end_ns)),
+        ("sim_to_finalize", ms(trace.sim_end_ns, trace.finalize_ns)),
+        ("recv_to_finalize", ms(trace.base_block_recv_ns, trace.finalize_ns)),
+    ];
+    for (stage, value) in stages {
+        if let Some(value) = value {
+            MERGE_BUILDER_LATENCY.with_label_values(&[stage]).observe(value);
+        }
+    }
+}
+
+fn record_round_trip(slot: &mut SlotState, base_block_hash: B256) {
+    let now = Nanos::now().0;
+    let elapsed_ms = |then: Option<&u64>| then.map(|&then| now.saturating_sub(then) as f64 / 1e6);
+    let activated = elapsed_ms(slot.activated_ns.get(&base_block_hash));
+    if let Some(ms) = activated {
+        MERGE_ROUND_TRIP.with_label_values(&["activate_to_merge"]).observe(ms);
+    }
+    if !slot.merged_seen.insert(base_block_hash) {
+        return;
+    }
+    if let Some(ms) = elapsed_ms(slot.forwarded_ns.get(&base_block_hash)) {
+        MERGE_ROUND_TRIP.with_label_values(&["forward_to_first_merge"]).observe(ms);
+    }
+    if let Some(ms) = activated {
+        MERGE_ROUND_TRIP.with_label_values(&["activate_to_first_merge"]).observe(ms);
+    }
 }
 
 /// Builds the simulation request for a freshly accepted merged block, resolving
@@ -369,6 +421,21 @@ fn merged_validation_request(
 /// additionally excludes internal channel/queue failures, which are never the builder's
 /// fault even though `is_demotable()` -- calibrated for bid-submission demotion -- doesn't
 /// exclude them.
+fn reject_label(code: RejectCode) -> &'static str {
+    match code {
+        RejectCode::HeadMismatch => "head_mismatch",
+        RejectCode::NotSynced => "not_synced",
+        RejectCode::UnknownBaseBlock => "unknown_base_block",
+        RejectCode::InvalidPayment => "invalid_payment",
+        RejectCode::UnknownCollateral => "unknown_collateral",
+        RejectCode::InvalidOrder => "invalid_order",
+        RejectCode::StaleSlot => "stale_slot",
+        RejectCode::LimitExceeded => "limit_exceeded",
+        RejectCode::Busy => "busy",
+        RejectCode::InvalidBaseBlock => "invalid_base_block",
+    }
+}
+
 fn is_merge_builder_attributable(err: &BlockSimError) -> bool {
     err.is_demotable() &&
         !matches!(
@@ -732,6 +799,7 @@ impl BlockMergingTile {
         if self.token != Some(token) {
             return;
         }
+        MERGE_REJECT.with_label_values(&[reject_label(reject.code)]).inc();
         if matches!(reject.code, RejectCode::StaleSlot) || reject.slot > self.slot.bid_slot {
             self.conn.builder_ahead = true;
         }
@@ -837,6 +905,39 @@ impl BlockMergingTile {
             tx_refs_sent = stats.tx_refs_sent,
             "block merging slot stats"
         );
+        self.export_slot_stats(&stats);
+    }
+
+    fn export_slot_stats(&self, stats: &SlotStats) {
+        let forward = [
+            ("full", stats.forwarded_full),
+            ("hydrated", stats.forwarded_hydrated),
+            ("replayed", stats.replayed),
+            ("hydration_failed", stats.hydration_failed),
+            ("skipped_disabled", stats.skipped_disabled),
+            ("skipped_no_slot_start", stats.skipped_no_slot_start),
+            ("skipped_wrong_slot", stats.skipped_wrong_slot),
+            ("skipped_no_merging_data", stats.skipped_no_merging_data),
+            ("skipped_builder_ahead", stats.skipped_builder_ahead),
+            ("skipped_over_limits", stats.skipped_over_limits),
+        ];
+        for (outcome, count) in forward {
+            MERGE_FORWARD.with_label_values(&[outcome]).inc_by(count as u64);
+        }
+        let orders = [
+            ("forwarded", stats.orders_forwarded),
+            ("latest_only", stats.orders_forwarded_latest_only),
+            ("dropped", stats.orders_dropped),
+        ];
+        for (outcome, count) in orders {
+            MERGE_ORDERS_FORWARDED.with_label_values(&[outcome]).inc_by(count as u64);
+        }
+        MERGE_TXS_SENT.with_label_values(&["bytes"]).inc_by(stats.tx_bytes_sent as u64);
+        MERGE_TXS_SENT.with_label_values(&["reference"]).inc_by(stats.tx_refs_sent as u64);
+        MERGE_SIM
+            .with_label_values(&["skipped_slot_data"])
+            .inc_by(stats.merged_slot_data_missing as u64);
+        MERGE_SLOT_APPENDABLE.observe(self.slot.appendable.len() as f64);
     }
 
     /// Even when a submission is not forwarded, its full transactions and
@@ -853,6 +954,7 @@ impl BlockMergingTile {
     /// administratively disabled.
     fn forward_decoded(&mut self, ix: usize, only: Option<Token>) {
         if !self.block_merging_enabled.load(Ordering::Relaxed) {
+            self.stats.skipped_disabled += 1;
             return;
         }
         let is_replay = only.is_some();
@@ -1033,6 +1135,7 @@ impl BlockMergingTile {
             .extend(msg.merge_orders.iter().map(|o| OrderTxs::from_ref(o, &tx_hashes)));
         if msg.allow_appending {
             self.conn.forwarded.insert(block_hash);
+            self.slot.forwarded_ns.entry(block_hash).or_insert_with(|| Nanos::now().0);
         }
         self.connector.write_or_enqueue_with(SendBehavior::Single(token), |buf| {
             buf.extend_from_slice(frame);
@@ -1041,35 +1144,50 @@ impl BlockMergingTile {
 
     fn on_top_bid(&mut self, top_bid: TopBidUpdate) {
         if top_bid.slot != self.slot.bid_slot {
+            MERGE_ACTIVATION.with_label_values(&["wrong_slot"]).inc();
             return;
         }
         self.stats.top_bid_updates += 1;
         if self.stats.last_top_bid_ns > 0 {
-            self.stats
-                .top_bid_gaps_ns
-                .push(top_bid.timestamp.saturating_sub(self.stats.last_top_bid_ns));
+            let gap = top_bid.timestamp.saturating_sub(self.stats.last_top_bid_ns);
+            self.stats.top_bid_gaps_ns.push(gap);
+            MERGE_TOP_BID_GAP.observe(gap as f64 / 1e6);
         }
         self.stats.last_top_bid_ns = top_bid.timestamp;
 
         if !self.block_merging_enabled.load(Ordering::Relaxed) {
+            MERGE_ACTIVATION.with_label_values(&["disabled"]).inc();
             return;
         }
         if !self.slot.appendable.contains(&top_bid.block_hash) {
+            MERGE_ACTIVATION.with_label_values(&["not_appendable"]).inc();
             return;
         }
         // Activating past our slot is what produces the builder's `UnknownBaseBlock`.
         if self.conn.builder_ahead {
+            MERGE_ACTIVATION.with_label_values(&["builder_ahead"]).inc();
             return;
         }
-        let Some(token) = self.token else { return };
-        if !self.conn.active ||
-            !self.conn.forwarded.contains(&top_bid.block_hash) ||
-            self.conn.activated == Some(top_bid.block_hash)
-        {
+        let Some(token) = self.token else {
+            MERGE_ACTIVATION.with_label_values(&["no_connection"]).inc();
+            return;
+        };
+        if !self.conn.active {
+            MERGE_ACTIVATION.with_label_values(&["no_connection"]).inc();
+            return;
+        }
+        if !self.conn.forwarded.contains(&top_bid.block_hash) {
+            MERGE_ACTIVATION.with_label_values(&["not_forwarded"]).inc();
+            return;
+        }
+        if self.conn.activated == Some(top_bid.block_hash) {
+            MERGE_ACTIVATION.with_label_values(&["duplicate"]).inc();
             return;
         }
         self.conn.activated = Some(top_bid.block_hash);
+        self.slot.activated_ns.entry(top_bid.block_hash).or_insert_with(|| Nanos::now().0);
         self.stats.activations_sent += 1;
+        MERGE_ACTIVATION.with_label_values(&["sent"]).inc();
         let msg = ActivateBaseBlockV1 { slot: top_bid.slot, block_hash: top_bid.block_hash };
         self.connector.write_or_enqueue_with(SendBehavior::Single(token), |buf| {
             append_frame(buf, MergingMsgId::ActivateBaseBlockV1, &msg);
@@ -1088,6 +1206,13 @@ impl BlockMergingTile {
             return;
         };
         let SimResult::ValidateMerged((_, Some(inner))) = result.as_ref() else { return };
+        match &inner.result {
+            Ok(()) => MERGE_SIM.with_label_values(&["ok"]).inc(),
+            Err(err) if is_merge_builder_attributable(err) => {
+                MERGE_SIM.with_label_values(&["failed_builder"]).inc()
+            }
+            Err(_) => MERGE_SIM.with_label_values(&["failed_infra"]).inc(),
+        }
         let Some((block_hash, err)) = merge_sim_disable_check(inner, &self.merged_blocks) else {
             return;
         };
