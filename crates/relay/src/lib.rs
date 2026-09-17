@@ -41,7 +41,7 @@ pub use crate::{
     housekeeper::{HousekeeperTile, SlotUpdate},
     network::RelayNetworkManager,
     registration::{RegWorkerHandle, RegistrationTile},
-    simulator::{BlockMergeResponse, SimRequest, SimResult},
+    simulator::{BlockMergeResponse, SimPriority, SimRequest, SimResult},
     spine::{
         HelixSpine, HelixSpineConfig,
         messages::{NewBidSubmission, NewTcpBidSubmission, SlotMsg},
