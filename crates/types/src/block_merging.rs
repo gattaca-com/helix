@@ -177,16 +177,6 @@ impl OrderV2 {
     pub const KNOWN_FLAGS: u8 = Self::LATEST_ONLY | Self::ALL_REVERT;
 }
 
-impl TestRandom for OrderV2 {
-    fn random_for_test(rng: &mut impl rand::RngCore) -> Self {
-        Self {
-            start: rng.next_u32() as u16,
-            len: (rng.next_u32() % 12) as u8 + 1,
-            flags: (rng.next_u32() as u8) & Self::KNOWN_FLAGS,
-        }
-    }
-}
-
 /// Per-tx revert/drop codes for one `OrderV2` whose txs are not all alike.
 /// `order` indexes `BlockMergingDataV2::orders`; `codes` packs one 2-bit code
 /// per tx of that order, tx `i` at bits `2*(i%4)` of byte `i/4`:
@@ -220,35 +210,6 @@ pub struct BlockMergingDataV2 {
     pub builder_address: Address,
     pub orders: Vec<OrderV2>,
     pub tx_codes: Vec<OrderTxCodes>,
-}
-
-impl TestRandom for BlockMergingDataV2 {
-    fn random_for_test(rng: &mut impl rand::RngCore) -> Self {
-        let mut orders: Vec<OrderV2> = Vec::random_for_test(rng);
-        let mut tx_codes = Vec::new();
-        for (i, order) in orders.iter_mut().enumerate() {
-            if rng.next_u32() % 4 != 0 {
-                continue;
-            }
-            order.flags &= !OrderV2::ALL_REVERT;
-            let codes = (0..OrderTxCodes::codes_len(order.len))
-                .map(|_| {
-                    let mut byte = 0u8;
-                    for slot in 0..4 {
-                        byte |= ((rng.next_u32() % 3) as u8) << (2 * slot);
-                    }
-                    byte
-                })
-                .collect();
-            tx_codes.push(OrderTxCodes { order: i as u16, codes });
-        }
-        Self {
-            allow_appending: bool::random_for_test(rng),
-            builder_address: Address::random_for_test(rng),
-            orders,
-            tx_codes,
-        }
-    }
 }
 
 impl BlockMergingDataV2 {

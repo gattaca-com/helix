@@ -306,42 +306,20 @@ impl SubmissionDecoder {
             return Err(DecoderError::V2Unsupported);
         }
 
-        let (submission, adjustments, merging) =
-            match (self.dehydrated_v2, self.is_dehydrated, self.merging_v2) {
-                (true, _, true) => {
-                    let (s, a, m) =
-                        self.v2_body::<DehydratedBidSubmissionFulu, BlockMergingDataV2>(body)?;
-                    (Submission::Dehydrated(DehydratedBidSubmission::Fulu(s)), a, m)
-                }
-                (true, _, false) => {
-                    let (s, a, m) =
-                        self.v2_body::<DehydratedBidSubmissionFulu, BlockMergingData>(body)?;
-                    (Submission::Dehydrated(DehydratedBidSubmission::Fulu(s)), a, m.map(Into::into))
-                }
-                (false, true, true) => {
-                    let (s, a, m) =
-                        self.v2_body::<DehydratedBidSubmissionFuluV1, BlockMergingDataV2>(body)?;
-                    (Submission::Dehydrated(DehydratedBidSubmission::Fulu(s.into())), a, m)
-                }
-                (false, true, false) => {
-                    let (s, a, m) =
-                        self.v2_body::<DehydratedBidSubmissionFuluV1, BlockMergingData>(body)?;
-                    (
-                        Submission::Dehydrated(DehydratedBidSubmission::Fulu(s.into())),
-                        a,
-                        m.map(Into::into),
-                    )
-                }
-                (false, false, true) => {
-                    let (s, a, m) =
-                        self.v2_body::<SignedBidSubmission, BlockMergingDataV2>(body)?;
-                    (Submission::Full(s), a, m)
-                }
-                (false, false, false) => {
-                    let (s, a, m) = self.v2_body::<SignedBidSubmission, BlockMergingData>(body)?;
-                    (Submission::Full(s), a, m.map(Into::into))
-                }
-            };
+        let (submission, adjustments, merging) = match (self.dehydrated_v2, self.is_dehydrated) {
+            (true, _) => {
+                let (s, a, m) = self.v2_parts::<DehydratedBidSubmissionFulu>(body)?;
+                (Submission::Dehydrated(DehydratedBidSubmission::Fulu(s)), a, m)
+            }
+            (false, true) => {
+                let (s, a, m) = self.v2_parts::<DehydratedBidSubmissionFuluV1>(body)?;
+                (Submission::Dehydrated(DehydratedBidSubmission::Fulu(s.into())), a, m)
+            }
+            (false, false) => {
+                let (s, a, m) = self.v2_parts::<SignedBidSubmission>(body)?;
+                (Submission::Full(s), a, m)
+            }
+        };
 
         let merging_data = match self.merge_type {
             MergeType::Mergeable => merging,
@@ -358,6 +336,18 @@ impl SubmissionDecoder {
             MergeType::None | MergeType::Pause => None,
         };
         Ok((submission, merging_data, adjustments))
+    }
+
+    fn v2_parts<S: Decode>(
+        &self,
+        body: &[u8],
+    ) -> Result<(S, Option<BidAdjustmentData>, Option<BlockMergingDataV2>), DecoderError> {
+        if self.merging_v2 {
+            self.v2_body::<S, BlockMergingDataV2>(body)
+        } else {
+            let (s, a, m) = self.v2_body::<S, BlockMergingData>(body)?;
+            Ok((s, a, m.map(Into::into)))
+        }
     }
 
     fn v2_body<S: Decode, M: Decode>(
