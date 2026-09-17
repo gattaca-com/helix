@@ -19,7 +19,7 @@ use crate::{
 };
 
 /// A bid submission where transactions and blobs may be replaced by hashes instead of payload
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 pub enum DehydratedBidSubmission {
     Fulu(DehydratedBidSubmissionFulu),
@@ -36,8 +36,8 @@ impl ForkVersionDecode for DehydratedBidSubmission {
             ForkName::Electra |
             ForkName::Gloas |
             ForkName::Heze => Err(DecodeError::NoMatchingVariant),
-            ForkName::Fulu => DehydratedBidSubmissionFulu::from_ssz_bytes(bytes)
-                .map(DehydratedBidSubmission::Fulu),
+            ForkName::Fulu => DehydratedBidSubmissionFuluV1::from_ssz_bytes(bytes)
+                .map(|v1| DehydratedBidSubmission::Fulu(v1.into())),
         }
     }
 }
@@ -76,9 +76,6 @@ impl DehydratedBidSubmission {
 
     pub fn num_txs(&self) -> usize {
         match self {
-            DehydratedBidSubmission::Fulu(s) if s.tx_refs.is_empty() => {
-                s.execution_payload.transactions.len()
-            }
             DehydratedBidSubmission::Fulu(s) => s.tx_refs.len(),
         }
     }
@@ -169,24 +166,79 @@ impl DehydratedBidSubmission {
     }
 }
 
+/// v1 wire shape (HTTP JSON/SSZ and unflagged TCP): a cached tx is its 8-byte
+/// key inline in `transactions`, a cached blob its commitment. Converted into
+/// [`DehydratedBidSubmissionFulu`] on decode.
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
 #[serde(deny_unknown_fields)]
-pub struct DehydratedBidSubmissionFulu {
+pub struct DehydratedBidSubmissionFuluV1 {
     message: BidTrace,
     execution_payload: ExecutionPayload,
     blobs_bundle: DehydratedBlobsFulu,
     execution_requests: Arc<ExecutionRequests>,
     signature: BlsSignatureBytes,
     tx_root: Option<B256>,
-    /// Dehydration v2 only, never on the v1 wire: block order as cache keys,
-    /// `NEXT_FULL_ITEM` for the next entry of `transactions` / `new_items`.
-    /// Empty under v1, where refs sit inline as 8-byte transactions.
-    #[ssz(skip_serializing, skip_deserializing)]
-    #[serde(skip)]
+}
+
+/// The relay's dehydrated submission and the v2 TCP wire shape. `transactions`
+/// and `blobs_bundle.new_items` hold only what the relay has not seen;
+/// `tx_refs` and `blobs_bundle.refs` give block order as 8-byte cache keys,
+/// [`NEXT_FULL_ITEM`] meaning the next full entry. Field order is mirrored by
+/// the builder's encoder.
+#[derive(Debug, Clone, Deserialize, Encode, Decode)]
+#[serde(from = "DehydratedBidSubmissionFuluV1")]
+pub struct DehydratedBidSubmissionFulu {
+    message: BidTrace,
+    execution_payload: ExecutionPayload,
+    blobs_bundle: DehydratedBlobsFuluV2,
+    execution_requests: Arc<ExecutionRequests>,
+    signature: BlsSignatureBytes,
+    tx_root: Option<B256>,
     tx_refs: Vec<u64>,
-    #[ssz(skip_serializing, skip_deserializing)]
-    #[serde(skip)]
-    blob_refs: Vec<u64>,
+}
+
+#[derive(Debug, Clone, Encode, Decode)]
+pub struct DehydratedBlobsFuluV2 {
+    refs: Vec<u64>,
+    new_items: Vec<BlobItemFulu>,
+}
+
+/// Ref value for "the next full transaction / new blob".
+pub const NEXT_FULL_ITEM: u64 = 0;
+
+impl From<DehydratedBidSubmissionFuluV1> for DehydratedBidSubmissionFulu {
+    /// One pass over the tx list: keys become refs, full txs move to the
+    /// front. Blob refs are the commitment hashes; a v1 new blob is looked up
+    /// by hash too, so `0` never appears.
+    fn from(mut v1: DehydratedBidSubmissionFuluV1) -> Self {
+        let txs: Vec<Transaction> = std::mem::take(&mut v1.execution_payload.transactions).into();
+        let n_full = txs.iter().filter(|tx| tx.len() != std::mem::size_of::<u64>()).count();
+        let mut tx_refs = Vec::with_capacity(txs.len());
+        let mut full = Vec::with_capacity(n_full);
+        for tx in txs {
+            if tx.len() == std::mem::size_of::<u64>() {
+                tx_refs.push(u64::from_le_bytes(tx.as_ref().try_into().unwrap()));
+            } else {
+                tx_refs.push(NEXT_FULL_ITEM);
+                full.push(tx);
+            }
+        }
+        let mut execution_payload = v1.execution_payload;
+        execution_payload.transactions =
+            Transactions::new(full).expect("no longer than the v1 list");
+        Self {
+            message: v1.message,
+            execution_payload,
+            blobs_bundle: DehydratedBlobsFuluV2 {
+                refs: v1.blobs_bundle.commitments.iter().map(blob_cache_key).collect(),
+                new_items: v1.blobs_bundle.new_items,
+            },
+            execution_requests: v1.execution_requests,
+            signature: v1.signature,
+            tx_root: v1.tx_root,
+            tx_refs,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
@@ -203,16 +255,17 @@ pub struct DehydratedBidSubmissionFuluWithAdjustments {
 impl DehydratedBidSubmissionFuluWithAdjustments {
     pub fn split(self) -> (DehydratedBidSubmission, BidAdjustmentData) {
         (
-            DehydratedBidSubmission::Fulu(DehydratedBidSubmissionFulu {
-                message: self.message,
-                execution_payload: self.execution_payload,
-                blobs_bundle: self.blobs_bundle,
-                execution_requests: self.execution_requests,
-                signature: self.signature,
-                tx_root: self.tx_root,
-                tx_refs: Vec::new(),
-                blob_refs: Vec::new(),
-            }),
+            DehydratedBidSubmission::Fulu(
+                DehydratedBidSubmissionFuluV1 {
+                    message: self.message,
+                    execution_payload: self.execution_payload,
+                    blobs_bundle: self.blobs_bundle,
+                    execution_requests: self.execution_requests,
+                    signature: self.signature,
+                    tx_root: self.tx_root,
+                }
+                .into(),
+            ),
             self.bid_adjustment_data,
         )
     }
@@ -248,16 +301,17 @@ pub struct DehydratedBidSubmissionFuluWithMergingData {
 impl DehydratedBidSubmissionFuluWithMergingData {
     pub fn split(self) -> (DehydratedBidSubmission, BlockMergingData) {
         (
-            DehydratedBidSubmission::Fulu(DehydratedBidSubmissionFulu {
-                message: self.message,
-                execution_payload: self.execution_payload,
-                blobs_bundle: self.blobs_bundle,
-                execution_requests: self.execution_requests,
-                signature: self.signature,
-                tx_root: self.tx_root,
-                tx_refs: Vec::new(),
-                blob_refs: Vec::new(),
-            }),
+            DehydratedBidSubmission::Fulu(
+                DehydratedBidSubmissionFuluV1 {
+                    message: self.message,
+                    execution_payload: self.execution_payload,
+                    blobs_bundle: self.blobs_bundle,
+                    execution_requests: self.execution_requests,
+                    signature: self.signature,
+                    tx_root: self.tx_root,
+                }
+                .into(),
+            ),
             self.merging_data,
         )
     }
@@ -293,32 +347,6 @@ impl TestRandom for DehydratedBidSubmissionFuluWithMergingData {
     }
 }
 
-/// Dehydration v2 (TCP only). `transactions` and `new_items` carry only what
-/// the relay has not seen; `tx_refs` / `blobs_bundle.refs` give block order as
-/// fixed 8-byte cache keys, [`NEXT_FULL_ITEM`] meaning the next full entry.
-/// Field order is mirrored by the builder's encoder.
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
-#[serde(deny_unknown_fields)]
-pub struct DehydratedBidSubmissionFuluV2 {
-    message: BidTrace,
-    execution_payload: ExecutionPayload,
-    blobs_bundle: DehydratedBlobsFuluV2,
-    execution_requests: Arc<ExecutionRequests>,
-    signature: BlsSignatureBytes,
-    tx_root: Option<B256>,
-    tx_refs: Vec<u64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
-#[serde(deny_unknown_fields)]
-pub struct DehydratedBlobsFuluV2 {
-    refs: Vec<u64>,
-    new_items: Vec<BlobItemFulu>,
-}
-
-/// v2 ref value for "the next full transaction / new blob".
-pub const NEXT_FULL_ITEM: u64 = 0;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum InvalidDehydratedV2 {
     #[error("{refs} next-full tx refs for {full} full txs")]
@@ -327,64 +355,24 @@ pub enum InvalidDehydratedV2 {
     BlobRefs { refs: usize, new: usize },
 }
 
-impl TryFrom<DehydratedBidSubmissionFuluV2> for DehydratedBidSubmission {
-    type Error = InvalidDehydratedV2;
-
-    /// Field moves only; the v1 shape hydrates straight from the refs.
-    fn try_from(v2: DehydratedBidSubmissionFuluV2) -> Result<Self, Self::Error> {
-        let full = v2.execution_payload.transactions.len();
-        let refs = v2.tx_refs.iter().filter(|&&r| r == NEXT_FULL_ITEM).count();
+impl DehydratedBidSubmissionFulu {
+    /// v2 wire check: every full item is claimed by exactly one `0` ref.
+    pub fn validate_refs(&self) -> Result<(), InvalidDehydratedV2> {
+        let full = self.execution_payload.transactions.len();
+        let refs = self.tx_refs.iter().filter(|&&r| r == NEXT_FULL_ITEM).count();
         if refs != full {
             return Err(InvalidDehydratedV2::TxRefs { refs, full });
         }
-        let new = v2.blobs_bundle.new_items.len();
-        let refs = v2.blobs_bundle.refs.iter().filter(|&&r| r == NEXT_FULL_ITEM).count();
+        let new = self.blobs_bundle.new_items.len();
+        let refs = self.blobs_bundle.refs.iter().filter(|&&r| r == NEXT_FULL_ITEM).count();
         if refs != new {
             return Err(InvalidDehydratedV2::BlobRefs { refs, new });
         }
-        Ok(DehydratedBidSubmission::Fulu(DehydratedBidSubmissionFulu {
-            message: v2.message,
-            execution_payload: v2.execution_payload,
-            blobs_bundle: DehydratedBlobsFulu {
-                commitments: Vec::new(),
-                new_items: v2.blobs_bundle.new_items,
-            },
-            execution_requests: v2.execution_requests,
-            signature: v2.signature,
-            tx_root: v2.tx_root,
-            tx_refs: v2.tx_refs,
-            blob_refs: v2.blobs_bundle.refs,
-        }))
+        Ok(())
     }
 }
 
-impl From<DehydratedBidSubmissionFulu> for DehydratedBidSubmission {
-    fn from(s: DehydratedBidSubmissionFulu) -> Self {
-        DehydratedBidSubmission::Fulu(s)
-    }
-}
-
-impl ForkVersionDecode for DehydratedBidSubmissionFuluV2 {
-    fn from_ssz_bytes_by_fork(bytes: &[u8], fork: ForkName) -> Result<Self, DecodeError> {
-        match fork {
-            ForkName::Fulu => DehydratedBidSubmissionFuluV2::from_ssz_bytes(bytes),
-            _ => Err(DecodeError::NoMatchingVariant),
-        }
-    }
-}
-
-/// `[submission][merging_data]` container for the v2 TCP shapes, so each
-/// submission and merging encoding pairs without a struct per combination.
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
-#[serde(deny_unknown_fields)]
-pub struct WithMergingData<S: ssz::Encode + ssz::Decode, M: ssz::Encode + ssz::Decode> {
-    pub submission: S,
-    pub merging_data: M,
-}
-
-impl<S: ssz::Encode + ssz::Decode, M: ssz::Encode + ssz::Decode> ForkVersionDecode
-    for WithMergingData<S, M>
-{
+impl ForkVersionDecode for DehydratedBidSubmissionFulu {
     fn from_ssz_bytes_by_fork(bytes: &[u8], fork: ForkName) -> Result<Self, DecodeError> {
         match fork {
             ForkName::Fulu => Self::from_ssz_bytes(bytes),
@@ -393,28 +381,25 @@ impl<S: ssz::Encode + ssz::Decode, M: ssz::Encode + ssz::Decode> ForkVersionDeco
     }
 }
 
-impl TestRandom for DehydratedBidSubmissionFuluV2 {
+impl TestRandom for DehydratedBidSubmissionFuluV1 {
     fn random_for_test(rng: &mut impl rand::RngCore) -> Self {
-        let mut execution_payload = ExecutionPayload::random_for_test(rng);
-        execution_payload.transactions =
-            Transactions::new((1..=5).map(full_tx_for_test).collect()).unwrap();
         Self {
             message: BidTrace::random_for_test(rng),
-            blobs_bundle: DehydratedBlobsFuluV2 { refs: vec![], new_items: vec![] },
+            execution_payload: ExecutionPayload::random_for_test(rng),
+            blobs_bundle: DehydratedBlobsFulu { commitments: vec![], new_items: vec![] },
             execution_requests: Arc::new(ExecutionRequests::random_for_test(rng)),
             signature: BlsSignatureBytes::random(),
             tx_root: None,
-            tx_refs: vec![NEXT_FULL_ITEM; execution_payload.transactions.len()],
-            execution_payload,
         }
     }
 }
 
-impl<S: ssz::Encode + ssz::Decode + TestRandom, M: ssz::Encode + ssz::Decode + TestRandom>
-    TestRandom for WithMergingData<S, M>
-{
+impl TestRandom for DehydratedBidSubmissionFulu {
     fn random_for_test(rng: &mut impl rand::RngCore) -> Self {
-        Self { submission: S::random_for_test(rng), merging_data: M::random_for_test(rng) }
+        let mut v1 = DehydratedBidSubmissionFuluV1::random_for_test(rng);
+        v1.execution_payload.transactions =
+            Transactions::new((1..=5).map(full_tx_for_test).collect()).unwrap();
+        v1.into()
     }
 }
 
@@ -435,16 +420,17 @@ pub struct DehydratedBidSubmissionFuluWithAdjustmentsAndMergingData {
 impl DehydratedBidSubmissionFuluWithAdjustmentsAndMergingData {
     pub fn split(self) -> (DehydratedBidSubmission, BidAdjustmentData, BlockMergingData) {
         (
-            DehydratedBidSubmission::Fulu(DehydratedBidSubmissionFulu {
-                message: self.message,
-                execution_payload: self.execution_payload,
-                blobs_bundle: self.blobs_bundle,
-                execution_requests: self.execution_requests,
-                signature: self.signature,
-                tx_root: self.tx_root,
-                tx_refs: Vec::new(),
-                blob_refs: Vec::new(),
-            }),
+            DehydratedBidSubmission::Fulu(
+                DehydratedBidSubmissionFuluV1 {
+                    message: self.message,
+                    execution_payload: self.execution_payload,
+                    blobs_bundle: self.blobs_bundle,
+                    execution_requests: self.execution_requests,
+                    signature: self.signature,
+                    tx_root: self.tx_root,
+                }
+                .into(),
+            ),
             self.bid_adjustment_data,
             self.merging_data,
         )
@@ -514,14 +500,6 @@ pub fn blob_cache_key(commitment: &KzgCommitment) -> u64 {
 }
 
 impl DehydratedBidSubmissionFulu {
-    fn num_blobs(&self) -> usize {
-        if self.blob_refs.is_empty() {
-            self.blobs_bundle.commitments.len()
-        } else {
-            self.blob_refs.len()
-        }
-    }
-
     #[timed]
     fn can_hydrate_inner(
         &self,
@@ -529,44 +507,10 @@ impl DehydratedBidSubmissionFulu {
         blobs: &FxHashMap<u64, CachedBlob>,
         max_blobs_per_block: usize,
     ) -> bool {
-        if self.num_blobs() > max_blobs_per_block {
-            return false;
-        }
-
-        if self.tx_refs.is_empty() {
-            for tx in &self.execution_payload.transactions {
-                if tx.len() == std::mem::size_of::<u64>() {
-                    let bytes = tx.as_ref().try_into().unwrap();
-                    let hash = u64::from_le_bytes(bytes);
-                    if !txs.contains_key(&hash) {
-                        return false;
-                    }
-                } else if tx.len() < TX_KEY_SIZE {
-                    return false;
-                }
-            }
-        } else {
-            if self.tx_refs.iter().any(|&r| r != NEXT_FULL_ITEM && !txs.contains_key(&r)) {
-                return false;
-            }
-            if self.execution_payload.transactions.iter().any(|tx| tx.len() < TX_KEY_SIZE) {
-                return false;
-            }
-        }
-
-        if self.blob_refs.is_empty() {
-            for commitment in &self.blobs_bundle.commitments {
-                if !blobs.contains_key(&blob_cache_key(commitment)) &&
-                    !self.blobs_bundle.new_items.iter().any(|b| &b.commitment == commitment)
-                {
-                    return false;
-                }
-            }
-        } else if self.blob_refs.iter().any(|&r| r != NEXT_FULL_ITEM && !blobs.contains_key(&r)) {
-            return false;
-        }
-
-        true
+        self.blobs_bundle.refs.len() <= max_blobs_per_block &&
+            self.tx_refs.iter().all(|&r| r == NEXT_FULL_ITEM || txs.contains_key(&r)) &&
+            self.execution_payload.transactions.iter().all(|tx| tx.len() >= TX_KEY_SIZE) &&
+            self.blobs_bundle.refs.iter().all(|&r| r == NEXT_FULL_ITEM || blobs.contains_key(&r))
     }
 
     #[timed]
@@ -580,78 +524,46 @@ impl DehydratedBidSubmissionFulu {
         let mut last_err = Ok(());
         let mut tx_cache_hits = 0;
 
-        if self.tx_refs.is_empty() {
-            for (index, tx) in self.execution_payload.transactions.iter_mut().enumerate() {
-                if tx.len() == std::mem::size_of::<u64>() {
-                    // hashed transaction, hydrate it
-                    let bytes = tx.as_ref().try_into().unwrap();
-                    let hash = u64::from_le_bytes(bytes);
-                    let Some(cached_tx) = txs.get(&hash) else {
-                        last_err = Err(HydrationError::UnknownTxHash { index, hash });
-                        continue;
-                    };
-
-                    tx_cache_hits += 1;
-                    *tx = cached_tx.clone();
+        let full: Vec<Transaction> =
+            std::mem::take(&mut self.execution_payload.transactions).into();
+        let mut full = full.into_iter();
+        let mut hydrated = Vec::with_capacity(self.tx_refs.len());
+        for (index, &tx_ref) in self.tx_refs.iter().enumerate() {
+            if tx_ref == NEXT_FULL_ITEM {
+                let Some(tx) = full.next() else {
+                    last_err = Err(HydrationError::MissingFullTx { index });
+                    continue;
+                };
+                if tx.len() < TX_KEY_SIZE {
+                    last_err = Err(HydrationError::InvalidTxLength { length: tx.len(), index });
                 } else {
-                    if tx.len() < TX_KEY_SIZE {
-                        last_err = Err(HydrationError::InvalidTxLength { length: tx.len(), index });
-                        continue;
-                    }
-
-                    let hash = tx_cache_key(tx);
+                    let hash = tx_cache_key(&tx);
                     txs.insert(hash, tx.clone());
                     trace!("Inserted tx into cache: index {}, hash {}", index, hash);
-                };
-            }
-        } else {
-            // v2: same work as above, into a fresh list instead of in place.
-            let full: Vec<Transaction> =
-                std::mem::take(&mut self.execution_payload.transactions).into();
-            let mut full = full.into_iter();
-            let mut hydrated = Vec::with_capacity(self.tx_refs.len());
-            for (index, &tx_ref) in self.tx_refs.iter().enumerate() {
-                if tx_ref == NEXT_FULL_ITEM {
-                    let Some(tx) = full.next() else {
-                        last_err = Err(HydrationError::MissingFullTx { index });
-                        continue;
-                    };
-                    if tx.len() < TX_KEY_SIZE {
-                        last_err = Err(HydrationError::InvalidTxLength { length: tx.len(), index });
-                    } else {
-                        txs.insert(tx_cache_key(&tx), tx.clone());
-                    }
-                    hydrated.push(tx);
-                } else if let Some(cached_tx) = txs.get(&tx_ref) {
-                    tx_cache_hits += 1;
-                    hydrated.push(cached_tx.clone());
-                } else {
-                    last_err = Err(HydrationError::UnknownTxHash { index, hash: tx_ref });
                 }
+                hydrated.push(tx);
+            } else if let Some(cached_tx) = txs.get(&tx_ref) {
+                tx_cache_hits += 1;
+                hydrated.push(cached_tx.clone());
+            } else {
+                last_err = Err(HydrationError::UnknownTxHash { index, hash: tx_ref });
             }
-            self.execution_payload.transactions =
-                Transactions::new(hydrated).map_err(|_| HydrationError::TooManyTxs)?;
         }
+        self.execution_payload.transactions =
+            Transactions::new(hydrated).map_err(|_| HydrationError::TooManyTxs)?;
 
         // hydrate blobs
 
         let mut blob_cache_hits: usize = 0;
         let new_blobs = self.blobs_bundle.new_items.len();
-        let mut new_keys =
-            Vec::with_capacity(if self.blob_refs.is_empty() { 0 } else { new_blobs });
+        let mut new_keys = Vec::with_capacity(new_blobs);
         for blob_item in self.blobs_bundle.new_items {
             let key = blob_cache_key(&blob_item.commitment);
-            if !self.blob_refs.is_empty() {
-                new_keys.push(key);
-            }
+            new_keys.push(key);
             blobs.insert(key, (blob_item.commitment, blob_item.proof, blob_item.blob));
         }
 
-        let num_blobs = if self.blob_refs.is_empty() {
-            self.blobs_bundle.commitments.len()
-        } else {
-            self.blob_refs.len()
-        };
+        let num_blobs = self.blobs_bundle.refs.len();
         if num_blobs > max_blobs_per_block {
             last_err =
                 Err(HydrationError::TooManyBlobs { blobs: num_blobs, max: max_blobs_per_block });
@@ -660,15 +572,12 @@ impl DehydratedBidSubmissionFulu {
         last_err?;
 
         let mut sidecar = BlobsBundle::with_capacity(num_blobs);
-        let mut next_new = 0;
-        for index in 0..num_blobs {
-            let key = if self.blob_refs.is_empty() {
-                blob_cache_key(&self.blobs_bundle.commitments[index])
-            } else if self.blob_refs[index] == NEXT_FULL_ITEM {
-                next_new += 1;
-                new_keys[next_new - 1]
+        let mut new_keys = new_keys.into_iter();
+        for (index, &blob_ref) in self.blobs_bundle.refs.iter().enumerate() {
+            let key = if blob_ref == NEXT_FULL_ITEM {
+                new_keys.next().ok_or(HydrationError::MissingNewBlob { index })?
             } else {
-                self.blob_refs[index]
+                blob_ref
             };
             let Some((commitment, proofs, blob)) = blobs.get(&key) else {
                 return Err(HydrationError::UnknownBlobHashFulu { key, index });
@@ -706,10 +615,9 @@ impl DehydratedBidSubmissionFulu {
         blobs: &mut FxHashMap<u64, CachedBlob>,
     ) {
         for tx in &self.execution_payload.transactions {
-            if tx.len() == std::mem::size_of::<u64>() || tx.len() < TX_KEY_SIZE {
-                continue;
+            if tx.len() >= TX_KEY_SIZE {
+                txs.insert(tx_cache_key(tx), tx.clone());
             }
-            txs.insert(tx_cache_key(tx), tx.clone());
         }
         for blob_item in &self.blobs_bundle.new_items {
             blobs.insert(
@@ -910,6 +818,9 @@ pub enum HydrationError {
     #[error("tx ref {index} expects a full tx but none remain")]
     MissingFullTx { index: usize },
 
+    #[error("blob ref {index} expects a new blob but none remain")]
+    MissingNewBlob { index: usize },
+
     #[error("too many txs")]
     TooManyTxs,
 }
@@ -945,12 +856,9 @@ impl DehydratedBidSubmission {
 
 /// A dehydrated submission whose payload holds exactly `txs` and no blobs.
 pub fn dehydrated_submission_with_txs_for_test(txs: Vec<Transaction>) -> DehydratedBidSubmission {
-    let (dehydrated, _) =
-        DehydratedBidSubmissionFuluWithMergingData::random_for_test(&mut rand::rng()).split();
-    let DehydratedBidSubmission::Fulu(mut s) = dehydrated;
-    s.execution_payload.transactions = Transactions::new(txs).expect("tx list within limits");
-    s.blobs_bundle = DehydratedBlobsFulu { commitments: vec![], new_items: vec![] };
-    DehydratedBidSubmission::Fulu(s)
+    let mut v1 = DehydratedBidSubmissionFuluV1::random_for_test(&mut rand::rng());
+    v1.execution_payload.transactions = Transactions::new(txs).expect("tx list within limits");
+    DehydratedBidSubmission::Fulu(v1.into())
 }
 
 #[cfg(test)]
@@ -1071,20 +979,36 @@ mod tests {
         assert!(matches!(dehydrated, DehydratedBidSubmission::Fulu(_)));
     }
 
-    /// A v2 send hydrates from, and feeds, the same cache as v1: refs resolve
-    /// by key and full items are inserted under their key.
+    /// v1 keys become refs and full txs move to the front, in order.
     #[test]
-    fn dehydrated_v2_hydrates_from_refs() {
-        let mut v2 = DehydratedBidSubmissionFuluV2::random_for_test(&mut rand::rng());
+    fn v1_converts_to_refs() {
+        let (a, b) = (full_tx_for_test(0xa), full_tx_for_test(0xb));
+        let DehydratedBidSubmission::Fulu(s) = submission_with(vec![
+            tx_hash_ref_for_test(7),
+            a.clone(),
+            tx_hash_ref_for_test(9),
+            b.clone(),
+        ]);
+        assert_eq!(s.tx_refs, vec![7, NEXT_FULL_ITEM, 9, NEXT_FULL_ITEM]);
+        let full: Vec<Transaction> = s.execution_payload.transactions.iter().cloned().collect();
+        assert_eq!(full, vec![a, b]);
+        assert!(s.validate_refs().is_ok());
+    }
+
+    /// A v2 send hydrates from, and feeds, the same cache as a v1 one.
+    #[test]
+    fn v2_hydrates_from_refs() {
         let (a, b) = (full_tx_for_test(0xa), full_tx_for_test(0xb));
         let earlier = submission_with(vec![a.clone()]);
         let mut cache = HydrationCache::new();
         cache.feed(&earlier);
 
+        let mut v2 = DehydratedBidSubmissionFulu::random_for_test(&mut rand::rng());
         v2.message.builder_pubkey = *earlier.builder_pubkey();
         v2.execution_payload.transactions = Transactions::new(vec![b.clone()]).unwrap();
         v2.tx_refs = vec![tx_cache_key(&a), NEXT_FULL_ITEM, tx_cache_key(&a)];
-        let dehydrated = DehydratedBidSubmission::try_from(v2).unwrap();
+        v2.validate_refs().unwrap();
+        let dehydrated = DehydratedBidSubmission::Fulu(v2);
         assert_eq!(dehydrated.num_txs(), 3);
         assert!(cache.can_hydrate(&dehydrated, 6));
 
@@ -1094,20 +1018,19 @@ mod tests {
         assert_eq!(txs, vec![a.clone(), b.clone(), a]);
         assert_eq!(hydrated.tx_cache_hits, 2);
 
-        let later = submission_with(vec![tx_hash_ref_for_test(tx_cache_key(&b))]);
-        let mut later = later;
+        let mut later = submission_with(vec![tx_hash_ref_for_test(tx_cache_key(&b))]);
         later.set_builder_pubkey_for_test(*earlier.builder_pubkey());
         assert!(cache.can_hydrate(&later, 6), "v2 full tx was cached under its key");
     }
 
     #[test]
-    fn dehydrated_v2_rejects_ref_count_mismatch() {
-        let mut v2 = DehydratedBidSubmissionFuluV2::random_for_test(&mut rand::rng());
+    fn v2_rejects_ref_count_mismatch() {
+        let mut v2 = DehydratedBidSubmissionFulu::random_for_test(&mut rand::rng());
         v2.tx_refs.push(NEXT_FULL_ITEM);
         let full = v2.execution_payload.transactions.len();
-        assert_eq!(
-            DehydratedBidSubmission::try_from(v2).unwrap_err(),
-            InvalidDehydratedV2::TxRefs { refs: full + 1, full }
-        );
+        assert_eq!(v2.validate_refs().unwrap_err(), InvalidDehydratedV2::TxRefs {
+            refs: full + 1,
+            full
+        });
     }
 }
