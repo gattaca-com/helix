@@ -17,6 +17,7 @@ use prometheus::{
     register_gauge_vec_with_registry, register_gauge_with_registry,
     register_histogram_vec_with_registry, register_histogram_with_registry,
     register_int_counter_vec_with_registry, register_int_counter_with_registry,
+    register_int_gauge_with_registry,
 };
 use tokio::net::TcpListener;
 use tracing::{error, info};
@@ -487,6 +488,158 @@ lazy_static! {
         "Latency of block merge trace for each step",
         &["step"],
         vec![1., 5., 10., 15., 25., 50., 100., 250., 500., 1_000., 5_000., 10_000., 25_000., 50_000., 100_000., 500_000., 1_000_000., 5_000_000., 10_000_000., 50_000_000., 100_000_000.,],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    /// Why a merged block was or was not served at get_header. `stale` against
+    /// `served` says whether `max_merged_bid_age_ms` is the binding constraint.
+    pub static ref MERGED_BID_DECISION: IntCounterVec = register_int_counter_vec_with_registry!(
+        "block_merge_decision_total",
+        "get_header outcomes for the merged bid",
+        &["outcome"],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    /// Age of the merged bid's base block when the decision is made, measured
+    /// against `max_merged_bid_age_ms`.
+    pub static ref MERGED_BID_AGE: HistogramVec = register_histogram_vec_with_registry!(
+        "block_merge_bid_age_ms",
+        "Age of the merged bid's base block at the get_header decision",
+        &["outcome"],
+        vec![1., 5., 10., 25., 50., 75., 100., 150., 200., 250., 300., 400., 600., 1_000., 2_000.],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    /// How far the merged bid was ahead of, or behind, the original bid. The
+    /// `behind` distribution is the ratchet we failed to beat.
+    pub static ref MERGED_BID_MARGIN: HistogramVec = register_histogram_vec_with_registry!(
+        "block_merge_bid_margin_gwei",
+        "Merged bid value minus original bid value, by direction",
+        &["direction"],
+        vec![0., 1e3, 1e4, 1e5, 1e6, 5e6, 1e7, 5e7, 1e8, 5e8, 1e9, 5e9, 1e10, 5e10, 1e11],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    pub static ref MERGE_FORWARD: IntCounterVec = register_int_counter_vec_with_registry!(
+        "block_merge_forward_total",
+        "Base block forwarding attempts to the merge builder, by outcome",
+        &["outcome"],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    pub static ref MERGE_ORDERS_FORWARDED: IntCounterVec = register_int_counter_vec_with_registry!(
+        "block_merge_orders_total",
+        "Merge orders declared to the merge builder, by outcome",
+        &["outcome"],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    pub static ref MERGE_TXS_SENT: IntCounterVec = register_int_counter_vec_with_registry!(
+        "block_merge_txs_sent_total",
+        "Transactions sent to the merge builder, whole bytes against hash references",
+        &["kind"],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    pub static ref MERGE_ACTIVATION: IntCounterVec = register_int_counter_vec_with_registry!(
+        "block_merge_activation_total",
+        "ActivateBaseBlockV1 decisions on a top bid update, by outcome",
+        &["outcome"],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    pub static ref MERGE_TOP_BID_GAP: Histogram = register_histogram_with_registry!(
+        "block_merge_top_bid_gap_ms",
+        "Gap between consecutive top bid updates reaching the merging tile",
+        vec![1., 2., 5., 10., 25., 50., 100., 200., 400., 800., 1_600., 3_200.],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    pub static ref MERGE_REJECT: IntCounterVec = register_int_counter_vec_with_registry!(
+        "block_merge_reject_total",
+        "RejectV1 frames received from the merge builder, by code",
+        &["code"],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    pub static ref MERGE_RECEIVED: IntCounterVec = register_int_counter_vec_with_registry!(
+        "block_merge_received_total",
+        "Merged blocks received from the merge builder, by outcome",
+        &["outcome"],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    pub static ref MERGE_ROUND_TRIP: HistogramVec = register_histogram_vec_with_registry!(
+        "block_merge_round_trip_ms",
+        "Relay clock time from forwarding or activating a base block to a merged block for it",
+        &["stage"],
+        vec![10., 25., 50., 75., 100., 150., 200., 250., 300., 400., 600., 800., 1_200., 2_000., 4_000.],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    pub static ref MERGE_BUILDER_LATENCY: HistogramVec = register_histogram_vec_with_registry!(
+        "block_merge_builder_latency_ms",
+        "Builder-reported time inside the merge builder, by stage",
+        &["stage"],
+        vec![1., 5., 10., 25., 50., 75., 100., 150., 200., 250., 300., 400., 600., 1_000., 2_000.],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    pub static ref MERGE_SIM: IntCounterVec = register_int_counter_vec_with_registry!(
+        "block_merge_sim_total",
+        "Merged block simulation results, by outcome",
+        &["outcome"],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    pub static ref MERGE_STORE: IntCounterVec = register_int_counter_vec_with_registry!(
+        "block_merge_store_total",
+        "Merged payloads offered for storage, by outcome",
+        &["outcome"],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    pub static ref MERGE_STORE_DELTA: Histogram = register_histogram_with_registry!(
+        "block_merge_store_delta_gwei",
+        "Merged proposer value minus the original bid value at storage time",
+        vec![0., 1e3, 1e4, 1e5, 1e6, 5e6, 1e7, 5e7, 1e8, 5e8, 1e9, 5e9, 1e10, 5e10, 1e11],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    pub static ref MERGE_SLOT_APPENDABLE: Histogram = register_histogram_with_registry!(
+        "block_merge_slot_appendable",
+        "Distinct appendable base blocks forwarded in a slot",
+        vec![0., 1., 2., 5., 10., 25., 50., 100., 250., 500., 1_000., 2_500.],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    pub static ref MERGE_ENABLED: IntGauge = register_int_gauge_with_registry!(
+        "block_merge_enabled",
+        "Whether block merging is administratively enabled",
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    pub static ref MERGE_CONNECTED: IntGauge = register_int_gauge_with_registry!(
+        "block_merge_connected",
+        "Whether the merge builder connection has completed its handshake",
         &RELAY_METRICS_REGISTRY
     )
     .unwrap();
