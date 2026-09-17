@@ -22,7 +22,7 @@ COPY --from=planner /app/recipe.json recipe.json
 # members, so `cook` can't materialize a dummy for it. Its real source must
 # be present on disk before `cook` resolves the dependency graph.
 COPY crates/vendored ./crates/vendored
-RUN cargo chef cook --release --recipe-path recipe.json
+RUN cargo chef cook --release --recipe-path recipe.json -p helix-builder
 
 COPY . .
 RUN cargo build --release -p helix-builder
