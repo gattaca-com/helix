@@ -12,7 +12,8 @@ use tree_hash::TreeHash;
 
 use crate::{
     BidTrace, Blob, BlobsBundle, BlockMergingData, BlockMergingDataV2, BlockValidationError,
-    BlsPublicKeyBytes, BlsSignatureBytes, ExecutionPayload, SignedBidSubmission, TestRandom,
+    BlsPublicKeyBytes, BlsSignatureBytes, ExecutionPayload, InvalidMergingDataV2,
+    SignedBidSubmission, TestRandom,
     bid_adjustment_data::{BidAdjData, BidAdjustmentData, BidAdjustmentDataV1},
     bid_submission,
     fields::{ExecutionRequests, KzgCommitment, KzgProof, Transaction, Transactions},
@@ -289,8 +290,10 @@ pub struct DehydratedBidSubmissionFuluV2 {
 }
 
 impl DehydratedBidSubmissionFuluV2 {
-    pub fn split(self) -> (DehydratedBidSubmission, BlockMergingData) {
-        (
+    pub fn split(
+        self,
+    ) -> Result<(DehydratedBidSubmission, BlockMergingData), InvalidMergingDataV2> {
+        Ok((
             DehydratedBidSubmission::Fulu(DehydratedBidSubmissionFulu {
                 message: self.message,
                 execution_payload: self.execution_payload,
@@ -299,8 +302,8 @@ impl DehydratedBidSubmissionFuluV2 {
                 signature: self.signature,
                 tx_root: self.tx_root,
             }),
-            self.merging_data.into(),
-        )
+            self.merging_data.try_into()?,
+        ))
     }
 }
 
@@ -921,9 +924,9 @@ mod tests {
     #[test]
     fn dehydrated_v2_split_expands_merge_orders() {
         let submission = DehydratedBidSubmissionFuluV2::random_for_test(&mut rand::rng());
-        let expected: BlockMergingData = submission.merging_data.clone().into();
+        let expected = BlockMergingData::try_from(submission.merging_data.clone()).unwrap();
 
-        let (dehydrated, merging_data) = submission.split();
+        let (dehydrated, merging_data) = submission.split().unwrap();
 
         assert_eq!(merging_data, expected);
         assert!(matches!(dehydrated, DehydratedBidSubmission::Fulu(_)));

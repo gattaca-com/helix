@@ -10,8 +10,8 @@ use helix_types::{
     BidAdjustmentData, BlockMergingData, Compression, DehydratedBidSubmission,
     DehydratedBidSubmissionFuluV2, DehydratedBidSubmissionFuluWithAdjustments,
     DehydratedBidSubmissionFuluWithAdjustmentsAndMergingData,
-    DehydratedBidSubmissionFuluWithMergingData, ForkName, ForkVersionDecode, MergeType,
-    SignedBidSubmission, SignedBidSubmissionWithAdjustments,
+    DehydratedBidSubmissionFuluWithMergingData, ForkName, ForkVersionDecode, InvalidMergingDataV2,
+    MergeType, SignedBidSubmission, SignedBidSubmissionWithAdjustments,
     SignedBidSubmissionWithAdjustmentsAndMergingData, SignedBidSubmissionWithMergingData,
     Submission,
 };
@@ -54,6 +54,9 @@ pub enum DecoderError {
 
     #[error("dehydrated v2 requires a mergeable submission without adjustments")]
     DehydratedV2Unsupported,
+
+    #[error("invalid dehydrated v2 merging data: {0}")]
+    DehydratedV2Merging(#[from] InvalidMergingDataV2),
 }
 
 impl IntoResponse for DecoderError {
@@ -81,7 +84,8 @@ impl DecoderError {
             DecoderError::SszDecode(_) |
             DecoderError::IOError(_) |
             DecoderError::PayloadDecode |
-            DecoderError::DehydratedV2Unsupported => StatusCode::BAD_REQUEST,
+            DecoderError::DehydratedV2Unsupported |
+            DecoderError::DehydratedV2Merging(_) => StatusCode::BAD_REQUEST,
         }
     }
 }
@@ -295,7 +299,7 @@ impl SubmissionDecoder {
             return Err(DecoderError::DehydratedV2Unsupported);
         }
         let sub: DehydratedBidSubmissionFuluV2 = self.decode_by_fork(body, self.fork_name)?;
-        let (submission, merging_data) = sub.split();
+        let (submission, merging_data) = sub.split()?;
         Ok((Submission::Dehydrated(submission), Some(merging_data), None))
     }
 
@@ -1095,7 +1099,7 @@ mod tests {
         let (body, expected_merging_data) = (0..100)
             .find_map(|_| {
                 let submission = DehydratedBidSubmissionFuluV2::random_for_test(&mut rand::rng());
-                let (_, merging_data) = submission.clone().split();
+                let (_, merging_data) = submission.clone().split().unwrap();
                 if merging_data.merge_orders.is_empty() {
                     return None;
                 }

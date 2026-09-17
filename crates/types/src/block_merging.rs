@@ -163,75 +163,48 @@ impl TestRandom for BundleOrderV2 {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, PartialEq, Eq)]
-#[ssz(enum_behaviour = "union")]
-#[serde(untagged)]
-pub enum OrderV2 {
-    Tx(TransactionOrderV2),
-    Bundle(BundleOrderV3),
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, Encode, Decode, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct OrderV2 {
+    pub start: u16,
+    pub len: u8,
+    pub flags: u8,
 }
 
-impl From<OrderV2> for Order {
-    fn from(order: OrderV2) -> Self {
-        match order {
-            OrderV2::Tx(t) => {
-                Order::Tx(TransactionOrder { index: t.index as usize, can_revert: t.can_revert })
-            }
-            OrderV2::Bundle(b) => {
-                let start = b.start as usize;
-                Order::BundleV2(BundleOrderV2 {
-                    txs: (start..start + b.len as usize).collect(),
-                    reverting_txs: b.reverting_txs.iter().map(|&i| i as usize).collect(),
-                    dropping_txs: b.dropping_txs.iter().map(|&i| i as usize).collect(),
-                    flags: MergeOrderFlags::from_bits_retain(b.flags as u64),
-                })
-            }
-        }
-    }
+impl OrderV2 {
+    pub const LATEST_ONLY: u8 = 1 << 0;
+    pub const ALL_REVERT: u8 = 1 << 1;
+    pub const KNOWN_FLAGS: u8 = Self::LATEST_ONLY | Self::ALL_REVERT;
 }
 
 impl TestRandom for OrderV2 {
     fn random_for_test(rng: &mut impl rand::RngCore) -> Self {
-        if rng.next_u32() % 2 == 0 {
-            OrderV2::Tx(TransactionOrderV2::random_for_test(rng))
-        } else {
-            OrderV2::Bundle(BundleOrderV3::random_for_test(rng))
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Encode, Decode, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct TransactionOrderV2 {
-    pub index: u16,
-    pub can_revert: bool,
-}
-
-impl TestRandom for TransactionOrderV2 {
-    fn random_for_test(rng: &mut impl rand::RngCore) -> Self {
-        Self { index: rng.next_u32() as u16, can_revert: bool::random_for_test(rng) }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct BundleOrderV3 {
-    pub start: u16,
-    pub len: u8,
-    pub flags: u8,
-    pub reverting_txs: Vec<u8>,
-    pub dropping_txs: Vec<u8>,
-}
-
-impl TestRandom for BundleOrderV3 {
-    fn random_for_test(rng: &mut impl rand::RngCore) -> Self {
         Self {
             start: rng.next_u32() as u16,
-            len: u8::random_for_test(rng),
-            flags: u8::random_for_test(rng),
-            reverting_txs: Vec::random_for_test(rng),
-            dropping_txs: Vec::random_for_test(rng),
+            len: (rng.next_u32() % 12) as u8 + 1,
+            flags: (rng.next_u32() as u8) & Self::KNOWN_FLAGS,
         }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Encode, Decode, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct BundleException {
+    pub order: u16,
+    pub codes: Vec<u8>,
+}
+
+impl BundleException {
+    pub const NONE: u8 = 0;
+    pub const REVERT: u8 = 1;
+    pub const DROP: u8 = 2;
+
+    pub fn codes_len(bundle_len: u8) -> usize {
+        (bundle_len as usize).div_ceil(4)
+    }
+
+    pub fn code(&self, tx: usize) -> u8 {
+        (self.codes[tx / 4] >> (2 * (tx % 4))) & 0b11
     }
 }
 
@@ -240,26 +213,116 @@ impl TestRandom for BundleOrderV3 {
 pub struct BlockMergingDataV2 {
     pub allow_appending: bool,
     pub builder_address: Address,
-    pub merge_orders: Vec<OrderV2>,
-}
-
-impl From<BlockMergingDataV2> for BlockMergingData {
-    fn from(data: BlockMergingDataV2) -> Self {
-        Self {
-            allow_appending: data.allow_appending,
-            builder_address: data.builder_address,
-            merge_orders: data.merge_orders.into_iter().map(Order::from).collect(),
-        }
-    }
+    pub orders: Vec<OrderV2>,
+    pub exceptions: Vec<BundleException>,
 }
 
 impl TestRandom for BlockMergingDataV2 {
     fn random_for_test(rng: &mut impl rand::RngCore) -> Self {
+        let mut orders: Vec<OrderV2> = Vec::random_for_test(rng);
+        let mut exceptions = Vec::new();
+        for (i, order) in orders.iter_mut().enumerate() {
+            if rng.next_u32() % 4 != 0 {
+                continue;
+            }
+            order.flags &= !OrderV2::ALL_REVERT;
+            let codes = (0..BundleException::codes_len(order.len))
+                .map(|_| {
+                    let mut byte = 0u8;
+                    for slot in 0..4 {
+                        byte |= ((rng.next_u32() % 3) as u8) << (2 * slot);
+                    }
+                    byte
+                })
+                .collect();
+            exceptions.push(BundleException { order: i as u16, codes });
+        }
         Self {
             allow_appending: bool::random_for_test(rng),
             builder_address: Address::random_for_test(rng),
-            merge_orders: Vec::random_for_test(rng),
+            orders,
+            exceptions,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum InvalidMergingDataV2 {
+    #[error("order {0}: zero length")]
+    ZeroLength(u16),
+    #[error("order {0}: unknown flags {1:#x}")]
+    UnknownFlags(u16, u8),
+    #[error("exception references order {0}, only {1} orders")]
+    ExceptionOrder(u16, usize),
+    #[error("exception for order {0}: {1} code bytes, expected {2}")]
+    ExceptionCodes(u16, usize, usize),
+    #[error("exception for order {0}: ALL_REVERT set")]
+    ExceptionWithAllRevert(u16),
+    #[error("exception for order {0}: duplicate")]
+    DuplicateException(u16),
+    #[error("exception for order {0}, tx {1}: unknown code {2}")]
+    UnknownCode(u16, usize, u8),
+}
+
+impl TryFrom<BlockMergingDataV2> for BlockMergingData {
+    type Error = InvalidMergingDataV2;
+
+    fn try_from(data: BlockMergingDataV2) -> Result<Self, Self::Error> {
+        let mut merge_orders = Vec::with_capacity(data.orders.len());
+        for (i, order) in data.orders.iter().enumerate() {
+            if order.len == 0 {
+                return Err(InvalidMergingDataV2::ZeroLength(i as u16));
+            }
+            if order.flags & !OrderV2::KNOWN_FLAGS != 0 {
+                return Err(InvalidMergingDataV2::UnknownFlags(i as u16, order.flags));
+            }
+            let start = order.start as usize;
+            let len = order.len as usize;
+            let all_revert = order.flags & OrderV2::ALL_REVERT != 0;
+            let mut flags = MergeOrderFlags::empty();
+            flags.set(MergeOrderFlags::LATEST_ONLY, order.flags & OrderV2::LATEST_ONLY != 0);
+            merge_orders.push(Order::BundleV2(BundleOrderV2 {
+                txs: (start..start + len).collect(),
+                reverting_txs: if all_revert { (0..len).collect() } else { TxIndices::new() },
+                dropping_txs: TxIndices::new(),
+                flags,
+            }));
+        }
+        for exception in &data.exceptions {
+            let idx = exception.order;
+            let order = data
+                .orders
+                .get(idx as usize)
+                .ok_or(InvalidMergingDataV2::ExceptionOrder(idx, data.orders.len()))?;
+            let expected = BundleException::codes_len(order.len);
+            if exception.codes.len() != expected {
+                return Err(InvalidMergingDataV2::ExceptionCodes(
+                    idx,
+                    exception.codes.len(),
+                    expected,
+                ));
+            }
+            if order.flags & OrderV2::ALL_REVERT != 0 {
+                return Err(InvalidMergingDataV2::ExceptionWithAllRevert(idx));
+            }
+            let Order::BundleV2(bundle) = &mut merge_orders[idx as usize] else { unreachable!() };
+            if !bundle.reverting_txs.is_empty() || !bundle.dropping_txs.is_empty() {
+                return Err(InvalidMergingDataV2::DuplicateException(idx));
+            }
+            for tx in 0..order.len as usize {
+                match exception.code(tx) {
+                    BundleException::NONE => {}
+                    BundleException::REVERT => bundle.reverting_txs.push(tx),
+                    BundleException::DROP => bundle.dropping_txs.push(tx),
+                    code => return Err(InvalidMergingDataV2::UnknownCode(idx, tx, code)),
+                }
+            }
+        }
+        Ok(Self {
+            allow_appending: data.allow_appending,
+            builder_address: data.builder_address,
+            merge_orders,
+        })
     }
 }
 
@@ -641,38 +704,36 @@ mod tests {
         let decoded = BlockMergingDataV2::from_ssz_bytes(&data.as_ssz_bytes())
             .expect("SSZ decode should succeed");
         assert_eq!(data, decoded);
+        BlockMergingData::try_from(decoded).expect("random data is valid");
+    }
+
+    fn v2_sample() -> BlockMergingDataV2 {
+        BlockMergingDataV2 {
+            allow_appending: true,
+            builder_address: Address::repeat_byte(0x42),
+            orders: vec![
+                OrderV2 { start: 7, len: 1, flags: OrderV2::ALL_REVERT },
+                OrderV2 { start: 10, len: 3, flags: OrderV2::LATEST_ONLY },
+                OrderV2 { start: 300, len: 2, flags: 0 },
+            ],
+            // order 1: tx0 reverts, tx1 nothing, tx2 drops
+            exceptions: vec![BundleException { order: 1, codes: vec![0b10_00_01] }],
+        }
     }
 
     #[test]
     fn block_merging_data_v2_expands_to_v1_orders() {
-        let data = BlockMergingDataV2 {
-            allow_appending: true,
-            builder_address: Address::repeat_byte(0x42),
-            merge_orders: vec![
-                OrderV2::Tx(TransactionOrderV2 { index: 7, can_revert: true }),
-                OrderV2::Bundle(BundleOrderV3 {
-                    start: 10,
-                    len: 3,
-                    flags: MergeOrderFlags::LATEST_ONLY.bits() as u8,
-                    reverting_txs: vec![0],
-                    dropping_txs: vec![2],
-                }),
-                OrderV2::Bundle(BundleOrderV3 {
-                    start: 300,
-                    len: 1,
-                    flags: 0,
-                    reverting_txs: vec![],
-                    dropping_txs: vec![],
-                }),
-            ],
-        };
-
-        let expanded: BlockMergingData = data.into();
+        let expanded = BlockMergingData::try_from(v2_sample()).unwrap();
 
         assert!(expanded.allow_appending);
         assert_eq!(expanded.builder_address, Address::repeat_byte(0x42));
         assert_eq!(expanded.merge_orders, vec![
-            Order::Tx(TransactionOrder { index: 7, can_revert: true }),
+            Order::BundleV2(BundleOrderV2 {
+                txs: smallvec::smallvec![7],
+                reverting_txs: smallvec::smallvec![0],
+                dropping_txs: smallvec::smallvec![],
+                flags: MergeOrderFlags::empty(),
+            }),
             Order::BundleV2(BundleOrderV2 {
                 txs: smallvec::smallvec![10, 11, 12],
                 reverting_txs: smallvec::smallvec![0],
@@ -680,7 +741,7 @@ mod tests {
                 flags: MergeOrderFlags::LATEST_ONLY,
             }),
             Order::BundleV2(BundleOrderV2 {
-                txs: smallvec::smallvec![300],
+                txs: smallvec::smallvec![300, 301],
                 reverting_txs: smallvec::smallvec![],
                 dropping_txs: smallvec::smallvec![],
                 flags: MergeOrderFlags::empty(),
@@ -689,46 +750,73 @@ mod tests {
     }
 
     #[test]
-    fn bundle_order_v3_is_smaller_than_bundle_order_v2() {
-        let v3 = OrderV2::Bundle(BundleOrderV3 {
-            start: 10,
-            len: 2,
-            flags: 0,
-            reverting_txs: vec![],
-            dropping_txs: vec![],
-        });
-        let v2 = Order::BundleV2(BundleOrderV2 {
-            txs: smallvec::smallvec![10, 11],
-            reverting_txs: smallvec::smallvec![],
-            dropping_txs: smallvec::smallvec![],
-            flags: MergeOrderFlags::empty(),
-        });
-        assert_eq!(v3.ssz_bytes_len(), 1 + 2 + 1 + 1 + 4 + 4);
-        assert_eq!(v2.ssz_bytes_len(), 1 + 4 + 4 + 4 + 8 + 16);
+    fn block_merging_data_v2_rejects_invalid() {
+        let mut zero_len = v2_sample();
+        zero_len.orders[2].len = 0;
+        assert_eq!(BlockMergingData::try_from(zero_len), Err(InvalidMergingDataV2::ZeroLength(2)));
+
+        let mut unknown_flags = v2_sample();
+        unknown_flags.orders[0].flags = 0x80;
+        assert_eq!(
+            BlockMergingData::try_from(unknown_flags),
+            Err(InvalidMergingDataV2::UnknownFlags(0, 0x80))
+        );
+
+        let mut bad_order = v2_sample();
+        bad_order.exceptions[0].order = 3;
+        assert_eq!(
+            BlockMergingData::try_from(bad_order),
+            Err(InvalidMergingDataV2::ExceptionOrder(3, 3))
+        );
+
+        let mut bad_codes = v2_sample();
+        bad_codes.exceptions[0].codes.push(0);
+        assert_eq!(
+            BlockMergingData::try_from(bad_codes),
+            Err(InvalidMergingDataV2::ExceptionCodes(1, 2, 1))
+        );
+
+        let mut all_revert = v2_sample();
+        all_revert.orders[1].flags |= OrderV2::ALL_REVERT;
+        assert_eq!(
+            BlockMergingData::try_from(all_revert),
+            Err(InvalidMergingDataV2::ExceptionWithAllRevert(1))
+        );
+
+        let mut duplicate = v2_sample();
+        duplicate.exceptions.push(duplicate.exceptions[0].clone());
+        assert_eq!(
+            BlockMergingData::try_from(duplicate),
+            Err(InvalidMergingDataV2::DuplicateException(1))
+        );
+
+        let mut bad_code = v2_sample();
+        bad_code.exceptions[0].codes[0] = 0b11;
+        assert_eq!(
+            BlockMergingData::try_from(bad_code),
+            Err(InvalidMergingDataV2::UnknownCode(1, 0, 3))
+        );
+    }
+
+    #[test]
+    fn order_v2_is_fixed_size() {
+        assert!(<OrderV2 as Encode>::is_ssz_fixed_len());
+        assert_eq!(<OrderV2 as Encode>::ssz_fixed_len(), 4);
+        // Two orders cost 8 bytes with no per-item offsets.
+        let orders = vec![OrderV2::default(); 2];
+        assert_eq!(orders.ssz_bytes_len(), 8);
     }
 
     #[test]
     fn block_merging_data_v2_golden_bytes() {
-        let data = BlockMergingDataV2 {
-            allow_appending: true,
-            builder_address: Address::repeat_byte(0x42),
-            merge_orders: vec![
-                OrderV2::Tx(TransactionOrderV2 { index: 7, can_revert: true }),
-                OrderV2::Bundle(BundleOrderV3 {
-                    start: 10,
-                    len: 3,
-                    flags: 1,
-                    reverting_txs: vec![0],
-                    dropping_txs: vec![2],
-                }),
-            ],
-        };
+        let data = v2_sample();
         let mut expected = vec![1u8];
         expected.extend_from_slice(&[0x42; 20]);
-        expected.extend_from_slice(&[25, 0, 0, 0]);
-        expected.extend_from_slice(&[8, 0, 0, 0, 12, 0, 0, 0]);
-        expected.extend_from_slice(&[0, 7, 0, 1]);
-        expected.extend_from_slice(&[1, 10, 0, 3, 1, 12, 0, 0, 0, 13, 0, 0, 0, 0, 2]);
+        expected.extend_from_slice(&[29, 0, 0, 0]);
+        expected.extend_from_slice(&[41, 0, 0, 0]);
+        expected.extend_from_slice(&[7, 0, 1, 2, 10, 0, 3, 1, 44, 1, 2, 0]);
+        expected.extend_from_slice(&[4, 0, 0, 0]);
+        expected.extend_from_slice(&[1, 0, 6, 0, 0, 0, 0b10_00_01]);
         assert_eq!(data.as_ssz_bytes(), expected);
         assert_eq!(BlockMergingDataV2::from_ssz_bytes(&expected).unwrap(), data);
     }
