@@ -102,6 +102,11 @@ pub enum BlockSimError {
     /// this fork yet. See gattaca-com/helix#518.
     #[error("no validation RPC method for fork {0}")]
     UnsupportedFork(ForkName),
+
+    /// The simulator refused the request body as too large. Says nothing about the block or
+    /// about the node's health: every simulator with the same limit refuses it.
+    #[error("simulator refused the request body as too large")]
+    PayloadTooLarge,
 }
 
 impl BlockSimError {
@@ -123,6 +128,7 @@ impl BlockSimError {
             BlockSimError::NoSimulatorAvailable => true,
             BlockSimError::UnsupportedFork(_) => true,
             BlockSimError::RelayHydrationFailed => true,
+            BlockSimError::PayloadTooLarge => true,
             _ => false,
         }
     }
@@ -280,6 +286,17 @@ mod tests {
         let err = BlockSimError::BlockValidationFailed("insufficient balance".into());
 
         assert!(!err.is_sim_fault());
+    }
+
+    /// A 413 is our request meeting the simulator's body limit. The node answered in under a
+    /// millisecond, so it must not arm the breaker, and the block was never judged, so it must
+    /// not demote the builder.
+    #[test]
+    fn an_oversized_request_neither_demotes_nor_blames_the_simulator() {
+        let err = BlockSimError::PayloadTooLarge;
+
+        assert!(!err.is_sim_fault());
+        assert!(!err.is_demotable());
     }
 
     #[test]
