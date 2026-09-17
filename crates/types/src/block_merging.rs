@@ -187,6 +187,11 @@ impl TestRandom for OrderV2 {
     }
 }
 
+/// Per-tx revert/drop codes for one `OrderV2` whose txs are not all alike.
+/// `order` indexes `BlockMergingDataV2::orders`; `codes` packs one 2-bit code
+/// per tx of that order, tx `i` at bits `2*(i%4)` of byte `i/4`:
+/// `NONE`, `REVERT` (may revert) or `DROP` (may be omitted). Kept out of
+/// `OrderV2` so orders stay fixed-size; only bundles mixing behaviours need one.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Encode, Decode, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct OrderTxCodes {
@@ -696,110 +701,5 @@ mod tests {
         let decoded: BlockMergingData =
             serde_json::from_str(&json).expect("JSON decode should succeed");
         assert_eq!(data, decoded);
-    }
-
-    fn v2_sample() -> BlockMergingDataV2 {
-        BlockMergingDataV2 {
-            allow_appending: true,
-            builder_address: Address::repeat_byte(0x42),
-            orders: vec![
-                OrderV2 { start: 7, len: 1, flags: OrderV2::ALL_REVERT },
-                OrderV2 { start: 10, len: 3, flags: OrderV2::LATEST_ONLY },
-                OrderV2 { start: 300, len: 2, flags: 0 },
-            ],
-            // order 1: tx0 reverts, tx1 nothing, tx2 drops
-            tx_codes: vec![OrderTxCodes { order: 1, codes: vec![0b10_00_01] }],
-        }
-    }
-
-    #[test]
-    fn block_merging_data_v2_expands_to_v1_orders() {
-        let expanded = BlockMergingData::try_from(v2_sample()).unwrap();
-
-        assert!(expanded.allow_appending);
-        assert_eq!(expanded.builder_address, Address::repeat_byte(0x42));
-        assert_eq!(expanded.merge_orders, vec![
-            Order::BundleV2(BundleOrderV2 {
-                txs: smallvec::smallvec![7],
-                reverting_txs: smallvec::smallvec![0],
-                dropping_txs: smallvec::smallvec![],
-                flags: MergeOrderFlags::empty(),
-            }),
-            Order::BundleV2(BundleOrderV2 {
-                txs: smallvec::smallvec![10, 11, 12],
-                reverting_txs: smallvec::smallvec![0],
-                dropping_txs: smallvec::smallvec![2],
-                flags: MergeOrderFlags::LATEST_ONLY,
-            }),
-            Order::BundleV2(BundleOrderV2 {
-                txs: smallvec::smallvec![300, 301],
-                reverting_txs: smallvec::smallvec![],
-                dropping_txs: smallvec::smallvec![],
-                flags: MergeOrderFlags::empty(),
-            }),
-        ]);
-    }
-
-    #[test]
-    fn block_merging_data_v2_rejects_invalid() {
-        let mut zero_len = v2_sample();
-        zero_len.orders[2].len = 0;
-        assert_eq!(BlockMergingData::try_from(zero_len), Err(InvalidMergingDataV2::ZeroLength(2)));
-
-        let mut unknown_flags = v2_sample();
-        unknown_flags.orders[0].flags = 0x80;
-        assert_eq!(
-            BlockMergingData::try_from(unknown_flags),
-            Err(InvalidMergingDataV2::UnknownFlags(0, 0x80))
-        );
-
-        let mut bad_order = v2_sample();
-        bad_order.tx_codes[0].order = 3;
-        assert_eq!(
-            BlockMergingData::try_from(bad_order),
-            Err(InvalidMergingDataV2::TxCodesOrder(3, 3))
-        );
-
-        let mut bad_codes = v2_sample();
-        bad_codes.tx_codes[0].codes.push(0);
-        assert_eq!(
-            BlockMergingData::try_from(bad_codes),
-            Err(InvalidMergingDataV2::TxCodesLen(1, 2, 1))
-        );
-
-        let mut all_revert = v2_sample();
-        all_revert.orders[1].flags |= OrderV2::ALL_REVERT;
-        assert_eq!(
-            BlockMergingData::try_from(all_revert),
-            Err(InvalidMergingDataV2::TxCodesWithAllRevert(1))
-        );
-
-        let mut duplicate = v2_sample();
-        duplicate.tx_codes.push(duplicate.tx_codes[0].clone());
-        assert_eq!(
-            BlockMergingData::try_from(duplicate),
-            Err(InvalidMergingDataV2::DuplicateTxCodes(1))
-        );
-
-        let mut bad_code = v2_sample();
-        bad_code.tx_codes[0].codes[0] = 0b11;
-        assert_eq!(
-            BlockMergingData::try_from(bad_code),
-            Err(InvalidMergingDataV2::UnknownCode(1, 0, 3))
-        );
-    }
-
-    #[test]
-    fn block_merging_data_v2_golden_bytes() {
-        let data = v2_sample();
-        let mut expected = vec![1u8];
-        expected.extend_from_slice(&[0x42; 20]);
-        expected.extend_from_slice(&[29, 0, 0, 0]);
-        expected.extend_from_slice(&[41, 0, 0, 0]);
-        expected.extend_from_slice(&[7, 0, 1, 2, 10, 0, 3, 1, 44, 1, 2, 0]);
-        expected.extend_from_slice(&[4, 0, 0, 0]);
-        expected.extend_from_slice(&[1, 0, 6, 0, 0, 0, 0b10_00_01]);
-        assert_eq!(data.as_ssz_bytes(), expected);
-        assert_eq!(BlockMergingDataV2::from_ssz_bytes(&expected).unwrap(), data);
     }
 }

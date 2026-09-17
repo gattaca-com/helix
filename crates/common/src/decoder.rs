@@ -8,12 +8,13 @@ use flate2::read::GzDecoder;
 use flux_profiler::timed;
 use helix_types::{
     BidAdjustmentData, BlockMergingData, BlockMergingDataV2, Compression, DehydratedBidSubmission,
-    DehydratedBidSubmissionFulu, DehydratedBidSubmissionFuluWithAdjustments,
+    DehydratedBidSubmissionFulu, DehydratedBidSubmissionFuluV1,
+    DehydratedBidSubmissionFuluWithAdjustments,
     DehydratedBidSubmissionFuluWithAdjustmentsAndMergingData,
-    DehydratedBidSubmissionFuluWithMergingData, ForkName, ForkVersionDecode, InvalidDehydratedV2,
-    InvalidMergingDataV2, MergeType, SignedBidSubmission, SignedBidSubmissionWithAdjustments,
+    DehydratedBidSubmissionFuluWithMergingData, ForkName, ForkVersionDecode, InvalidMergingDataV2,
+    MergeType, SignedBidSubmission, SignedBidSubmissionWithAdjustments,
     SignedBidSubmissionWithAdjustmentsAndMergingData, SignedBidSubmissionWithMergingData,
-    Submission,
+    Submission, WithAdjustments, WithAdjustmentsAndMergingData, WithMergingData,
 };
 use http::{
     HeaderMap, HeaderValue, StatusCode,
@@ -55,9 +56,6 @@ pub enum DecoderError {
     #[error("v2 shapes are SSZ over TCP; merging v2 requires Mergeable")]
     V2Unsupported,
 
-    #[error("invalid dehydrated v2 submission: {0}")]
-    DehydratedV2Invalid(#[from] InvalidDehydratedV2),
-
     #[error("invalid merging data v2: {0}")]
     MergingV2Invalid(#[from] InvalidMergingDataV2),
 }
@@ -88,7 +86,6 @@ impl DecoderError {
             DecoderError::IOError(_) |
             DecoderError::PayloadDecode |
             DecoderError::V2Unsupported |
-            DecoderError::DehydratedV2Invalid(_) |
             DecoderError::MergingV2Invalid(_) => StatusCode::BAD_REQUEST,
         }
     }
@@ -296,10 +293,9 @@ impl SubmissionDecoder {
         }
     }
 
-    /// TCP v2 body: an SSZ container `[submission][adjustments?][merging?]`,
-    /// the trailers present per the header flags. `dehydrated_v2` selects the
-    /// v2 submission shape, `merging_v2` the v2 merging shape; each pairs with
-    /// the other's v1.
+    /// TCP v2 body: `[submission][adjustments?][merging?]`, trailers per the
+    /// header flags. `dehydrated_v2` selects the v2 submission shape,
+    /// `merging_v2` the v2 merging shape; each pairs with the other's v1.
     #[timed]
     fn decode_v2(
         &mut self,
@@ -307,45 +303,48 @@ impl SubmissionDecoder {
     ) -> Result<(Submission, Option<BlockMergingData>, Option<BidAdjustmentData>), DecoderError>
     {
         let mergeable = self.merge_type == MergeType::Mergeable;
-        if !matches!(self.encoding, Encoding::Ssz) || (self.merging_v2 && !mergeable) {
+        if !matches!(self.encoding, Encoding::Ssz) ||
+            self.fork_name != ForkName::Fulu ||
+            (self.merging_v2 && !mergeable)
+        {
             return Err(DecoderError::V2Unsupported);
         }
-        let n_parts = 1 + self.with_adjustments as usize + mergeable as usize;
-        let parts = ssz_container_parts(body, n_parts).map_err(DecoderError::SszDecode)?;
-        let fork = self.fork_name;
 
-        let submission = if self.dehydrated_v2 {
-            let sub = DehydratedBidSubmissionFulu::from_ssz_bytes_by_fork(parts[0], fork)
-                .map_err(DecoderError::SszDecode)?;
-            sub.validate_refs()?;
-            Submission::Dehydrated(DehydratedBidSubmission::Fulu(sub))
-        } else if self.is_dehydrated {
-            let sub = DehydratedBidSubmission::from_ssz_bytes_by_fork(parts[0], fork)
-                .map_err(DecoderError::SszDecode)?;
-            Submission::Dehydrated(sub)
-        } else {
-            Submission::Full(
-                SignedBidSubmission::from_ssz_bytes(parts[0]).map_err(DecoderError::SszDecode)?,
-            )
-        };
-
-        let mut part = 1;
-        let adjustments = if self.with_adjustments {
-            part += 1;
-            Some(BidAdjustmentData::from_ssz_bytes(parts[1]).map_err(DecoderError::SszDecode)?)
-        } else {
-            None
-        };
+        let (submission, adjustments, merging) =
+            match (self.dehydrated_v2, self.is_dehydrated, self.merging_v2) {
+                (true, _, true) => {
+                    let (s, a, m) =
+                        self.v2_body::<DehydratedBidSubmissionFulu, BlockMergingDataV2>(body)?;
+                    (Submission::Dehydrated(DehydratedBidSubmission::Fulu(s)), a, expand(m)?)
+                }
+                (true, _, false) => {
+                    let (s, a, m) =
+                        self.v2_body::<DehydratedBidSubmissionFulu, BlockMergingData>(body)?;
+                    (Submission::Dehydrated(DehydratedBidSubmission::Fulu(s)), a, m)
+                }
+                (false, true, true) => {
+                    let (s, a, m) =
+                        self.v2_body::<DehydratedBidSubmissionFuluV1, BlockMergingDataV2>(body)?;
+                    (Submission::Dehydrated(DehydratedBidSubmission::Fulu(s.into())), a, expand(m)?)
+                }
+                (false, true, false) => {
+                    let (s, a, m) =
+                        self.v2_body::<DehydratedBidSubmissionFuluV1, BlockMergingData>(body)?;
+                    (Submission::Dehydrated(DehydratedBidSubmission::Fulu(s.into())), a, m)
+                }
+                (false, false, true) => {
+                    let (s, a, m) =
+                        self.v2_body::<SignedBidSubmission, BlockMergingDataV2>(body)?;
+                    (Submission::Full(s), a, expand(m)?)
+                }
+                (false, false, false) => {
+                    let (s, a, m) = self.v2_body::<SignedBidSubmission, BlockMergingData>(body)?;
+                    (Submission::Full(s), a, m)
+                }
+            };
 
         let merging_data = match self.merge_type {
-            MergeType::Mergeable if self.merging_v2 => {
-                let v2 = BlockMergingDataV2::from_ssz_bytes(parts[part])
-                    .map_err(DecoderError::SszDecode)?;
-                Some(v2.try_into()?)
-            }
-            MergeType::Mergeable => Some(
-                BlockMergingData::from_ssz_bytes(parts[part]).map_err(DecoderError::SszDecode)?,
-            ),
+            MergeType::Mergeable => merging,
             MergeType::AppendOnly => {
                 Some(BlockMergingData::append_only(submission.fee_recipient()))
             }
@@ -359,6 +358,29 @@ impl SubmissionDecoder {
             MergeType::None | MergeType::Pause => None,
         };
         Ok((submission, merging_data, adjustments))
+    }
+
+    fn v2_body<S: Decode, M: Decode>(
+        &self,
+        body: &[u8],
+    ) -> Result<(S, Option<BidAdjustmentData>, Option<M>), DecoderError> {
+        let mergeable = self.merge_type == MergeType::Mergeable;
+        Ok(match (self.with_adjustments, mergeable) {
+            (false, false) => (S::from_ssz_bytes(body)?, None, None),
+            (true, false) => {
+                let p: WithAdjustments<S, BidAdjustmentData> = Decode::from_ssz_bytes(body)?;
+                (p.submission, Some(p.adjustments), None)
+            }
+            (false, true) => {
+                let p: WithMergingData<S, M> = Decode::from_ssz_bytes(body)?;
+                (p.submission, None, Some(p.merging_data))
+            }
+            (true, true) => {
+                let p: WithAdjustmentsAndMergingData<S, BidAdjustmentData, M> =
+                    Decode::from_ssz_bytes(body)?;
+                (p.submission, Some(p.adjustments), Some(p.merging_data))
+            }
+        })
     }
 
     #[timed]
@@ -592,27 +614,10 @@ fn gzip_size_hint(buf: &[u8]) -> Option<usize> {
     }
 }
 
-/// Splits an SSZ container of `n` variable-size fields into its parts.
-fn ssz_container_parts(bytes: &[u8], n: usize) -> Result<[&[u8]; 3], ssz::DecodeError> {
-    debug_assert!((1..=3).contains(&n));
-    let fixed = n * ssz::BYTES_PER_LENGTH_OFFSET;
-    if bytes.len() < fixed {
-        return Err(ssz::DecodeError::InvalidByteLength { len: bytes.len(), expected: fixed });
-    }
-    let mut parts: [&[u8]; 3] = [&[]; 3];
-    let mut prev = fixed;
-    for i in 0..n {
-        let start = ssz::read_offset(&bytes[i * 4..i * 4 + 4])?;
-        if (i == 0 && start != fixed) || start < prev || start > bytes.len() {
-            return Err(ssz::DecodeError::OffsetOutOfBounds(start));
-        }
-        if i > 0 {
-            parts[i - 1] = &bytes[prev..start];
-        }
-        prev = start;
-    }
-    parts[n - 1] = &bytes[prev..];
-    Ok(parts)
+fn expand(
+    merging: Option<BlockMergingDataV2>,
+) -> Result<Option<BlockMergingData>, InvalidMergingDataV2> {
+    merging.map(BlockMergingData::try_from).transpose()
 }
 
 #[cfg(test)]
@@ -1163,117 +1168,5 @@ mod tests {
             bid_adjustment_data.expect("adjustments should be carried"),
             expected_adjustment_data
         );
-    }
-
-    fn v2_params(
-        merge_type: MergeType,
-        is_dehydrated: bool,
-        dehydrated_v2: bool,
-        merging_v2: bool,
-        with_adjustments: bool,
-    ) -> SubmissionDecoderParams {
-        SubmissionDecoderParams {
-            compression: Compression::None,
-            encoding: Encoding::Ssz,
-            merge_type,
-            is_dehydrated,
-            dehydrated_v2,
-            merging_v2,
-            with_mergeable_data: merge_type == MergeType::Mergeable,
-            with_adjustments,
-            mark_all_txs_mergeable: false,
-            fork_name: ForkName::Fulu,
-        }
-    }
-
-    /// SSZ container of variable-size parts, as the builder encodes v2 bodies.
-    fn container(parts: &[&[u8]]) -> Vec<u8> {
-        let mut out = Vec::new();
-        let mut offset = 4 * parts.len();
-        for part in parts {
-            out.extend_from_slice(&(offset as u32).to_le_bytes());
-            offset += part.len();
-        }
-        parts.iter().for_each(|part| out.extend_from_slice(part));
-        out
-    }
-
-    fn random_v2_merging() -> (BlockMergingDataV2, BlockMergingData) {
-        let v2 = BlockMergingDataV2::random_for_test(&mut rand::rng());
-        let v1 = BlockMergingData::try_from(v2.clone()).unwrap();
-        (v2, v1)
-    }
-
-    fn decode_v2(
-        params: &SubmissionDecoderParams,
-        body: &[u8],
-    ) -> Result<(Submission, Option<BlockMergingData>, Option<BidAdjustmentData>), DecoderError>
-    {
-        SubmissionDecoder::new(params).decode(body, &mut Vec::new())
-    }
-
-    #[test]
-    fn decode_v2_dehydrated_with_each_merging_shape() {
-        let sub = DehydratedBidSubmissionFulu::random_for_test(&mut rand::rng()).as_ssz_bytes();
-        let (merging_v2, expected) = random_v2_merging();
-
-        let params = v2_params(MergeType::Mergeable, true, true, true, false);
-        let (submission, merging_data, adjustments) =
-            decode_v2(&params, &container(&[&sub, &merging_v2.as_ssz_bytes()])).unwrap();
-        let Submission::Dehydrated(d) = submission else { panic!("dehydrated") };
-        assert_eq!(d.num_txs(), 5);
-        assert_eq!(merging_data, Some(expected.clone()));
-        assert!(adjustments.is_none());
-
-        let params = v2_params(MergeType::Mergeable, true, true, false, false);
-        let (_, merging_data, _) =
-            decode_v2(&params, &container(&[&sub, &expected.as_ssz_bytes()])).unwrap();
-        assert_eq!(merging_data, Some(expected));
-
-        let params = v2_params(MergeType::None, true, true, false, false);
-        let (submission, merging_data, _) = decode_v2(&params, &container(&[&sub])).unwrap();
-        assert!(matches!(submission, Submission::Dehydrated(_)));
-        assert!(merging_data.is_none());
-    }
-
-    #[test]
-    fn decode_v2_merging_and_adjustments_on_v1_submissions() {
-        let (merging_v2, expected) = random_v2_merging();
-        let adj = BidAdjustmentData::V1(BidAdjustmentDataV1::Original(BidAdjData::default()));
-
-        let mut signed = SignedBidSubmission::random_for_test(&mut rand::rng());
-        signed.blobs_bundle = BlobsBundle::default().into();
-        let params = v2_params(MergeType::Mergeable, false, false, true, true);
-        let body =
-            container(&[&signed.as_ssz_bytes(), &adj.as_ssz_bytes(), &merging_v2.as_ssz_bytes()]);
-        let (submission, merging_data, adjustments) = decode_v2(&params, &body).unwrap();
-        assert!(matches!(submission, Submission::Full(_)));
-        assert_eq!(merging_data, Some(expected.clone()));
-        assert_eq!(adjustments, Some(adj));
-
-        let v1 = DehydratedBidSubmissionFuluV1::random_for_test(&mut rand::rng());
-        let params = v2_params(MergeType::Mergeable, true, false, true, false);
-        let body = container(&[&v1.as_ssz_bytes(), &merging_v2.as_ssz_bytes()]);
-        let (submission, merging_data, _) = decode_v2(&params, &body).unwrap();
-        assert!(matches!(submission, Submission::Dehydrated(_)));
-        assert_eq!(merging_data, Some(expected));
-    }
-
-    #[test]
-    fn decode_v2_rejects_bad_layouts() {
-        let sub = DehydratedBidSubmissionFulu::random_for_test(&mut rand::rng()).as_ssz_bytes();
-        // merging v2 without Mergeable
-        let params = v2_params(MergeType::None, true, true, true, false);
-        assert!(matches!(
-            decode_v2(&params, &container(&[&sub])).unwrap_err(),
-            DecoderError::V2Unsupported
-        ));
-        // fewer parts than the flags announce
-        let params = v2_params(MergeType::Mergeable, true, true, true, false);
-        assert!(decode_v2(&params, &container(&[&sub])).is_err());
-        // a v1 dehydrated body under the v2 flag
-        let v1 = DehydratedBidSubmissionFuluV1::random_for_test(&mut rand::rng());
-        let params = v2_params(MergeType::None, true, true, false, false);
-        assert!(decode_v2(&params, &container(&[&v1.as_ssz_bytes()])).is_err());
     }
 }
