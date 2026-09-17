@@ -252,15 +252,15 @@ pub enum InvalidMergingDataV2 {
     ZeroLength(u16),
     #[error("order {0}: unknown flags {1:#x}")]
     UnknownFlags(u16, u8),
-    #[error("entry references order {0}, only {1} orders")]
-    ExceptionOrder(u16, usize),
-    #[error("entry for order {0}: {1} code bytes, expected {2}")]
-    ExceptionCodes(u16, usize, usize),
-    #[error("entry for order {0}: ALL_REVERT set")]
-    ExceptionWithAllRevert(u16),
-    #[error("entry for order {0}: duplicate")]
-    DuplicateException(u16),
-    #[error("entry for order {0}, tx {1}: unknown code {2}")]
+    #[error("tx codes reference order {0}, only {1} orders")]
+    TxCodesOrder(u16, usize),
+    #[error("tx codes for order {0}: {1} bytes, expected {2}")]
+    TxCodesLen(u16, usize, usize),
+    #[error("tx codes for order {0} with ALL_REVERT set")]
+    TxCodesWithAllRevert(u16),
+    #[error("duplicate tx codes for order {0}")]
+    DuplicateTxCodes(u16),
+    #[error("tx codes for order {0}, tx {1}: unknown code {2}")]
     UnknownCode(u16, usize, u8),
 }
 
@@ -297,17 +297,17 @@ impl TryFrom<BlockMergingDataV2> for BlockMergingData {
             let order = data
                 .orders
                 .get(idx as usize)
-                .ok_or(InvalidMergingDataV2::ExceptionOrder(idx, data.orders.len()))?;
+                .ok_or(InvalidMergingDataV2::TxCodesOrder(idx, data.orders.len()))?;
             let expected = OrderTxCodes::codes_len(order.len);
             if entry.codes.len() != expected {
-                return Err(InvalidMergingDataV2::ExceptionCodes(idx, entry.codes.len(), expected));
+                return Err(InvalidMergingDataV2::TxCodesLen(idx, entry.codes.len(), expected));
             }
             if order.flags & OrderV2::ALL_REVERT != 0 {
-                return Err(InvalidMergingDataV2::ExceptionWithAllRevert(idx));
+                return Err(InvalidMergingDataV2::TxCodesWithAllRevert(idx));
             }
             let Order::BundleV2(bundle) = &mut merge_orders[idx as usize] else { unreachable!() };
             if !bundle.reverting_txs.is_empty() || !bundle.dropping_txs.is_empty() {
-                return Err(InvalidMergingDataV2::DuplicateException(idx));
+                return Err(InvalidMergingDataV2::DuplicateTxCodes(idx));
             }
             for tx in 0..order.len as usize {
                 match entry.code(tx) {
@@ -757,28 +757,28 @@ mod tests {
         bad_order.tx_codes[0].order = 3;
         assert_eq!(
             BlockMergingData::try_from(bad_order),
-            Err(InvalidMergingDataV2::ExceptionOrder(3, 3))
+            Err(InvalidMergingDataV2::TxCodesOrder(3, 3))
         );
 
         let mut bad_codes = v2_sample();
         bad_codes.tx_codes[0].codes.push(0);
         assert_eq!(
             BlockMergingData::try_from(bad_codes),
-            Err(InvalidMergingDataV2::ExceptionCodes(1, 2, 1))
+            Err(InvalidMergingDataV2::TxCodesLen(1, 2, 1))
         );
 
         let mut all_revert = v2_sample();
         all_revert.orders[1].flags |= OrderV2::ALL_REVERT;
         assert_eq!(
             BlockMergingData::try_from(all_revert),
-            Err(InvalidMergingDataV2::ExceptionWithAllRevert(1))
+            Err(InvalidMergingDataV2::TxCodesWithAllRevert(1))
         );
 
         let mut duplicate = v2_sample();
         duplicate.tx_codes.push(duplicate.tx_codes[0].clone());
         assert_eq!(
             BlockMergingData::try_from(duplicate),
-            Err(InvalidMergingDataV2::DuplicateException(1))
+            Err(InvalidMergingDataV2::DuplicateTxCodes(1))
         );
 
         let mut bad_code = v2_sample();
