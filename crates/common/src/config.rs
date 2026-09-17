@@ -72,6 +72,11 @@ pub struct RelayConfig {
     pub tcp_port: u16,
     #[serde(default = "default_usize::<512>")]
     pub tcp_max_connections: usize,
+    /// Serve the top-bid feed over reliable UDP as well, on `tcp_port`.
+    #[serde(default)]
+    pub udp_top_bid_enabled: bool,
+    #[serde(default = "default_usize::<256>")]
+    pub udp_top_bid_max_connections: usize,
     pub s3_config: Option<S3Config>,
     /// Directory for local cache snapshots (bincode). Enables fast startup.
     pub snapshot_dir: Option<PathBuf>,
@@ -124,6 +129,7 @@ impl RelayConfig {
                 decoder_tcp_only: vec![],
                 simulator: 5,
                 top_bid: 1,
+                udp_top_bid: Some(1),
                 data_gatherer: 3,
                 block_merging: 0,
                 housekeeper: None,
@@ -133,6 +139,8 @@ impl RelayConfig {
             api_port: 4040,
             tcp_port: 4041,
             tcp_max_connections: 512,
+            udp_top_bid_enabled: false,
+            udp_top_bid_max_connections: 256,
             s3_config: None,
             snapshot_dir: None,
             clickhouse: None,
@@ -187,6 +195,10 @@ pub struct CoresConfig {
     pub simulator: usize,
     #[serde(default)]
     pub top_bid: usize,
+    /// Required when `udp_top_bid_enabled`; left unset the tile would land on
+    /// core 0 alongside whatever already spins there.
+    #[serde(default)]
+    pub udp_top_bid: Option<usize>,
     #[serde(default)]
     pub data_gatherer: usize,
     #[serde(default)]

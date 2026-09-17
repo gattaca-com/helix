@@ -10,6 +10,7 @@ mod registration;
 mod simulator;
 mod spine;
 mod tcp_bid_recv;
+mod udp_top_bid;
 
 use std::time::Duration;
 
@@ -50,6 +51,7 @@ pub use crate::{
         BidSubmissionFlags, BidSubmissionHeader, BidSubmissionResponse, BidSubmissionTcpListener,
         RegistrationMsg,
     },
+    udp_top_bid::UdpTopBidTile,
 };
 
 pub fn spawn_tokio_monitoring() {
