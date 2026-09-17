@@ -1023,9 +1023,10 @@ impl BlockMergingTile {
         self.blob_sidecars.extend(submission_blob_sidecars(&signed.blobs_bundle()));
 
         let block_tx_count = signed.num_txs();
-        let mut merge_orders = Vec::with_capacity(merging.merge_orders.len());
-        for order in &merging.merge_orders {
-            match order_to_ref(order, block_tx_count) {
+        let mut merge_orders = Vec::with_capacity(merging.orders.len());
+        for (i, order) in merging.orders.iter().enumerate() {
+            let codes = merging.tx_codes.iter().find(|c| c.order as usize == i);
+            match order_to_ref(order, codes, block_tx_count) {
                 Some(r) => merge_orders.push(r),
                 None => self.stats.orders_dropped += 1,
             }
@@ -1273,7 +1274,7 @@ mod tests {
     };
     use helix_tcp_types::{MergeType, merging::builder_to_relay::MergeTraceV1};
     use helix_types::{
-        BlobsBundle, BlockMergingData, BlsPublicKeyBytes, BuilderInclusionResult, Compression,
+        BlobsBundle, BlockMergingDataV2, BlsPublicKeyBytes, BuilderInclusionResult, Compression,
         ExecutionPayload, ExecutionRequests, ForkName, MergedBlockTrace, SignedBidSubmission,
         SubmissionVersion, TestRandom, TestRandomSeed, dehydrated_submission_with_txs_for_test,
         full_tx_for_test,
@@ -1411,10 +1412,11 @@ mod tests {
         let submission_data = SubmissionData {
             submission_ref: SubmissionRef::Internal,
             submission: Submission::Full(signed),
-            merging_data: Some(BlockMergingData {
+            merging_data: Some(BlockMergingDataV2 {
                 allow_appending,
                 builder_address: Address::ZERO,
-                merge_orders: vec![],
+                orders: vec![],
+                tx_codes: vec![],
             }),
             bid_adjustment_data: None,
             version: SubmissionVersion::new(0, None),

@@ -251,83 +251,70 @@ impl TestRandom for BlockMergingDataV2 {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum InvalidMergingDataV2 {
-    #[error("order {0}: zero length")]
-    ZeroLength(u16),
-    #[error("order {0}: unknown flags {1:#x}")]
-    UnknownFlags(u16, u8),
-    #[error("tx codes reference order {0}, only {1} orders")]
-    TxCodesOrder(u16, usize),
-    #[error("tx codes for order {0}: {1} bytes, expected {2}")]
-    TxCodesLen(u16, usize, usize),
-    #[error("tx codes for order {0} with ALL_REVERT set")]
-    TxCodesWithAllRevert(u16),
-    #[error("duplicate tx codes for order {0}")]
-    DuplicateTxCodes(u16),
-    #[error("tx codes for order {0}, tx {1}: unknown code {2}")]
-    UnknownCode(u16, usize, u8),
+impl BlockMergingDataV2 {
+    pub fn allow_all(builder_address: Address, num_tx: usize) -> Self {
+        let orders = (0..num_tx)
+            .map(|i| OrderV2 { start: i as u16, len: 1, flags: OrderV2::ALL_REVERT })
+            .collect();
+        Self { allow_appending: true, builder_address, orders, tx_codes: vec![] }
+    }
+
+    pub fn append_only(builder_address: Address) -> Self {
+        Self { allow_appending: true, builder_address, orders: vec![], tx_codes: vec![] }
+    }
 }
 
-impl TryFrom<BlockMergingDataV2> for BlockMergingData {
-    type Error = InvalidMergingDataV2;
-
-    /// Runs in the decoder per submission: one `Vec<Order>` allocation plus an
-    /// O(orders) pass; bundle indices stay inline in `TxIndices`. Cheaper than
-    /// SSZ-decoding the v1 `BlockMergingData` it replaces.
-
-    fn try_from(data: BlockMergingDataV2) -> Result<Self, Self::Error> {
-        let mut merge_orders = Vec::with_capacity(data.orders.len());
-        for (i, order) in data.orders.iter().enumerate() {
-            if order.len == 0 {
-                return Err(InvalidMergingDataV2::ZeroLength(i as u16));
-            }
-            if order.flags & !OrderV2::KNOWN_FLAGS != 0 {
-                return Err(InvalidMergingDataV2::UnknownFlags(i as u16, order.flags));
-            }
-            let start = order.start as usize;
-            let len = order.len as usize;
-            let all_revert = order.flags & OrderV2::ALL_REVERT != 0;
-            let mut flags = MergeOrderFlags::empty();
-            flags.set(MergeOrderFlags::LATEST_ONLY, order.flags & OrderV2::LATEST_ONLY != 0);
-            merge_orders.push(Order::BundleV2(BundleOrderV2 {
-                txs: (start..start + len).collect(),
-                reverting_txs: if all_revert { (0..len).collect() } else { TxIndices::new() },
-                dropping_txs: TxIndices::new(),
-                flags,
-            }));
-        }
-        for entry in &data.tx_codes {
-            let idx = entry.order;
-            let order = data
-                .orders
-                .get(idx as usize)
-                .ok_or(InvalidMergingDataV2::TxCodesOrder(idx, data.orders.len()))?;
-            let expected = OrderTxCodes::codes_len(order.len);
-            if entry.codes.len() != expected {
-                return Err(InvalidMergingDataV2::TxCodesLen(idx, entry.codes.len(), expected));
-            }
-            if order.flags & OrderV2::ALL_REVERT != 0 {
-                return Err(InvalidMergingDataV2::TxCodesWithAllRevert(idx));
-            }
-            let Order::BundleV2(bundle) = &mut merge_orders[idx as usize] else { unreachable!() };
-            if !bundle.reverting_txs.is_empty() || !bundle.dropping_txs.is_empty() {
-                return Err(InvalidMergingDataV2::DuplicateTxCodes(idx));
-            }
-            for tx in 0..order.len as usize {
-                match entry.code(tx) {
-                    OrderTxCodes::NONE => {}
-                    OrderTxCodes::REVERT => bundle.reverting_txs.push(tx),
-                    OrderTxCodes::DROP => bundle.dropping_txs.push(tx),
-                    code => return Err(InvalidMergingDataV2::UnknownCode(idx, tx, code)),
+impl From<BlockMergingData> for BlockMergingDataV2 {
+    /// v1 senders' merging data, compacted once on decode. Bundles are always
+    /// contiguous; an order the compact form cannot hold (index over u16, len
+    /// over u8) is dropped, as `order_to_ref` would drop it anyway.
+    fn from(v1: BlockMergingData) -> Self {
+        let mut orders = Vec::with_capacity(v1.merge_orders.len());
+        let mut tx_codes = Vec::new();
+        for order in &v1.merge_orders {
+            let (txs, reverting, dropping, latest_only): (&[usize], &[usize], &[usize], bool) =
+                match order {
+                    Order::Tx(t) => {
+                        let Ok(start) = u16::try_from(t.index) else { continue };
+                        let flags = if t.can_revert { OrderV2::ALL_REVERT } else { 0 };
+                        orders.push(OrderV2 { start, len: 1, flags });
+                        continue;
+                    }
+                    Order::Bundle(b) => (&b.txs, &b.reverting_txs, &b.dropping_txs, false),
+                    Order::BundleV2(b) => (
+                        &b.txs,
+                        &b.reverting_txs,
+                        &b.dropping_txs,
+                        b.flags.contains(MergeOrderFlags::LATEST_ONLY),
+                    ),
+                };
+            let (Some(&first), Ok(len)) = (txs.first(), u8::try_from(txs.len())) else { continue };
+            let Ok(start) = u16::try_from(first) else { continue };
+            debug_assert!(txs.iter().enumerate().all(|(i, &tx)| tx == first + i));
+            let mut flags = if latest_only { OrderV2::LATEST_ONLY } else { 0 };
+            if dropping.is_empty() && reverting.len() == txs.len() {
+                flags |= OrderV2::ALL_REVERT;
+            } else if !(reverting.is_empty() && dropping.is_empty()) {
+                let mut codes = vec![0u8; OrderTxCodes::codes_len(len)];
+                for (idx, code) in reverting
+                    .iter()
+                    .map(|&i| (i, OrderTxCodes::REVERT))
+                    .chain(dropping.iter().map(|&i| (i, OrderTxCodes::DROP)))
+                {
+                    if idx < txs.len() {
+                        codes[idx / 4] |= code << (2 * (idx % 4));
+                    }
                 }
+                tx_codes.push(OrderTxCodes { order: orders.len() as u16, codes });
             }
+            orders.push(OrderV2 { start, len, flags });
         }
-        Ok(Self {
-            allow_appending: data.allow_appending,
-            builder_address: data.builder_address,
-            merge_orders,
-        })
+        Self {
+            allow_appending: v1.allow_appending,
+            builder_address: v1.builder_address,
+            orders,
+            tx_codes,
+        }
     }
 }
 

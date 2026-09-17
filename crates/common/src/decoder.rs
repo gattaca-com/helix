@@ -11,8 +11,8 @@ use helix_types::{
     DehydratedBidSubmissionFulu, DehydratedBidSubmissionFuluV1,
     DehydratedBidSubmissionFuluWithAdjustments,
     DehydratedBidSubmissionFuluWithAdjustmentsAndMergingData,
-    DehydratedBidSubmissionFuluWithMergingData, ForkName, ForkVersionDecode, InvalidMergingDataV2,
-    MergeType, SignedBidSubmission, SignedBidSubmissionWithAdjustments,
+    DehydratedBidSubmissionFuluWithMergingData, ForkName, ForkVersionDecode, MergeType,
+    SignedBidSubmission, SignedBidSubmissionWithAdjustments,
     SignedBidSubmissionWithAdjustmentsAndMergingData, SignedBidSubmissionWithMergingData,
     Submission, WithAdjustments, WithAdjustmentsAndMergingData, WithMergingData,
 };
@@ -55,9 +55,6 @@ pub enum DecoderError {
 
     #[error("v2 shapes are SSZ over TCP; merging v2 requires Mergeable")]
     V2Unsupported,
-
-    #[error("invalid merging data v2: {0}")]
-    MergingV2Invalid(#[from] InvalidMergingDataV2),
 }
 
 impl IntoResponse for DecoderError {
@@ -85,8 +82,7 @@ impl DecoderError {
             DecoderError::SszDecode(_) |
             DecoderError::IOError(_) |
             DecoderError::PayloadDecode |
-            DecoderError::V2Unsupported |
-            DecoderError::MergingV2Invalid(_) => StatusCode::BAD_REQUEST,
+            DecoderError::V2Unsupported => StatusCode::BAD_REQUEST,
         }
     }
 }
@@ -274,7 +270,7 @@ impl SubmissionDecoder {
         &mut self,
         payload: &[u8],
         buf: &mut Vec<u8>,
-    ) -> Result<(Submission, Option<BlockMergingData>, Option<BidAdjustmentData>), DecoderError>
+    ) -> Result<(Submission, Option<BlockMergingDataV2>, Option<BidAdjustmentData>), DecoderError>
     {
         let body: &[u8] = match self.decompress(payload, buf) {
             None => payload,
@@ -300,7 +296,7 @@ impl SubmissionDecoder {
     fn decode_v2(
         &mut self,
         body: &[u8],
-    ) -> Result<(Submission, Option<BlockMergingData>, Option<BidAdjustmentData>), DecoderError>
+    ) -> Result<(Submission, Option<BlockMergingDataV2>, Option<BidAdjustmentData>), DecoderError>
     {
         let mergeable = self.merge_type == MergeType::Mergeable;
         if !matches!(self.encoding, Encoding::Ssz) ||
@@ -315,45 +311,49 @@ impl SubmissionDecoder {
                 (true, _, true) => {
                     let (s, a, m) =
                         self.v2_body::<DehydratedBidSubmissionFulu, BlockMergingDataV2>(body)?;
-                    (Submission::Dehydrated(DehydratedBidSubmission::Fulu(s)), a, expand(m)?)
+                    (Submission::Dehydrated(DehydratedBidSubmission::Fulu(s)), a, m)
                 }
                 (true, _, false) => {
                     let (s, a, m) =
                         self.v2_body::<DehydratedBidSubmissionFulu, BlockMergingData>(body)?;
-                    (Submission::Dehydrated(DehydratedBidSubmission::Fulu(s)), a, m)
+                    (Submission::Dehydrated(DehydratedBidSubmission::Fulu(s)), a, m.map(Into::into))
                 }
                 (false, true, true) => {
                     let (s, a, m) =
                         self.v2_body::<DehydratedBidSubmissionFuluV1, BlockMergingDataV2>(body)?;
-                    (Submission::Dehydrated(DehydratedBidSubmission::Fulu(s.into())), a, expand(m)?)
+                    (Submission::Dehydrated(DehydratedBidSubmission::Fulu(s.into())), a, m)
                 }
                 (false, true, false) => {
                     let (s, a, m) =
                         self.v2_body::<DehydratedBidSubmissionFuluV1, BlockMergingData>(body)?;
-                    (Submission::Dehydrated(DehydratedBidSubmission::Fulu(s.into())), a, m)
+                    (
+                        Submission::Dehydrated(DehydratedBidSubmission::Fulu(s.into())),
+                        a,
+                        m.map(Into::into),
+                    )
                 }
                 (false, false, true) => {
                     let (s, a, m) =
                         self.v2_body::<SignedBidSubmission, BlockMergingDataV2>(body)?;
-                    (Submission::Full(s), a, expand(m)?)
+                    (Submission::Full(s), a, m)
                 }
                 (false, false, false) => {
                     let (s, a, m) = self.v2_body::<SignedBidSubmission, BlockMergingData>(body)?;
-                    (Submission::Full(s), a, m)
+                    (Submission::Full(s), a, m.map(Into::into))
                 }
             };
 
         let merging_data = match self.merge_type {
             MergeType::Mergeable => merging,
             MergeType::AppendOnly => {
-                Some(BlockMergingData::append_only(submission.fee_recipient()))
+                Some(BlockMergingDataV2::append_only(submission.fee_recipient()))
             }
             MergeType::None if self.mark_all_txs_mergeable => {
                 let num_txs = match &submission {
                     Submission::Dehydrated(d) => d.num_txs(),
                     Submission::Full(s) => s.num_txs(),
                 };
-                Some(BlockMergingData::allow_all(submission.fee_recipient(), num_txs))
+                Some(BlockMergingDataV2::allow_all(submission.fee_recipient(), num_txs))
             }
             MergeType::None | MergeType::Pause => None,
         };
@@ -387,7 +387,7 @@ impl SubmissionDecoder {
     fn decode_dehydrated(
         &mut self,
         body: &[u8],
-    ) -> Result<(Submission, Option<BlockMergingData>, Option<BidAdjustmentData>), DecoderError>
+    ) -> Result<(Submission, Option<BlockMergingDataV2>, Option<BidAdjustmentData>), DecoderError>
     {
         if self.merge_type == MergeType::Mergeable {
             if self.with_adjustments {
@@ -397,7 +397,7 @@ impl SubmissionDecoder {
 
                 return Ok((
                     Submission::Dehydrated(submission),
-                    Some(merging_data),
+                    Some(merging_data.into()),
                     Some(adjustment_data),
                 ));
             }
@@ -406,7 +406,7 @@ impl SubmissionDecoder {
                 self.decode_by_fork(body, self.fork_name)?;
             let (submission, merging_data) = sub_with_merging.split();
 
-            return Ok((Submission::Dehydrated(submission), Some(merging_data), None));
+            return Ok((Submission::Dehydrated(submission), Some(merging_data.into()), None));
         }
 
         let (submission, bid_adjustment) = if self.with_adjustments {
@@ -424,11 +424,11 @@ impl SubmissionDecoder {
         let merging_data = match self.merge_type {
             MergeType::Mergeable => unreachable!("handled above"),
             MergeType::AppendOnly => {
-                Some(BlockMergingData::append_only(submission.fee_recipient()))
+                Some(BlockMergingDataV2::append_only(submission.fee_recipient()))
             }
             MergeType::None => {
                 if self.mark_all_txs_mergeable {
-                    Some(BlockMergingData::allow_all(
+                    Some(BlockMergingDataV2::allow_all(
                         submission.fee_recipient(),
                         submission.num_txs(),
                     ))
@@ -446,7 +446,7 @@ impl SubmissionDecoder {
     fn decode_merge(
         &mut self,
         body: &[u8],
-    ) -> Result<(Submission, Option<BlockMergingData>, Option<BidAdjustmentData>), DecoderError>
+    ) -> Result<(Submission, Option<BlockMergingDataV2>, Option<BidAdjustmentData>), DecoderError>
     {
         let (submission, merging_data, bid_adjustment) = if self.with_adjustments {
             let sub: SignedBidSubmissionWithAdjustmentsAndMergingData = self._decode(body)?;
@@ -473,14 +473,14 @@ impl SubmissionDecoder {
             MergeType::None => Some(merging_data),
             MergeType::Pause => None,
         };
-        Ok((Submission::Full(submission), merging_data, bid_adjustment))
+        Ok((Submission::Full(submission), merging_data.map(Into::into), bid_adjustment))
     }
 
     #[timed]
     fn decode_default(
         &mut self,
         body: &[u8],
-    ) -> Result<(Submission, Option<BlockMergingData>, Option<BidAdjustmentData>), DecoderError>
+    ) -> Result<(Submission, Option<BlockMergingDataV2>, Option<BidAdjustmentData>), DecoderError>
     {
         let (submission, bid_adjustment) = if self.with_adjustments {
             let sub_with_adjustment: SignedBidSubmissionWithAdjustments = self._decode(body)?;
@@ -500,11 +500,11 @@ impl SubmissionDecoder {
                 None
             }
             MergeType::AppendOnly => {
-                Some(BlockMergingData::append_only(submission.fee_recipient()))
+                Some(BlockMergingDataV2::append_only(submission.fee_recipient()))
             }
             MergeType::None => {
                 if self.mark_all_txs_mergeable {
-                    Some(BlockMergingData::allow_all(
+                    Some(BlockMergingDataV2::allow_all(
                         submission.fee_recipient(),
                         submission.num_txs(),
                     ))
@@ -614,12 +614,6 @@ fn gzip_size_hint(buf: &[u8]) -> Option<usize> {
     }
 }
 
-fn expand(
-    merging: Option<BlockMergingDataV2>,
-) -> Result<Option<BlockMergingData>, InvalidMergingDataV2> {
-    merging.map(BlockMergingData::try_from).transpose()
-}
-
 #[cfg(test)]
 mod tests {
     use helix_types::{
@@ -714,7 +708,7 @@ mod tests {
         assert!(bid_adjustment_data.is_none());
         assert_eq!(
             merging_data.expect("mergeable submission should carry merging data"),
-            expected_merging_data
+            expected_merging_data.into()
         );
     }
 
@@ -851,7 +845,7 @@ mod tests {
         assert!(bid_adjustment.is_none());
         assert_eq!(
             decoded_merging_data.expect("mergeable submission should carry merging data"),
-            merging_data
+            merging_data.into()
         );
     }
 
@@ -898,7 +892,7 @@ mod tests {
         assert!(matches!(decoded_submission, Submission::Full(_)));
         assert_eq!(
             decoded_merging_data.expect("mergeable submission should carry merging data"),
-            merging_data
+            merging_data.into()
         );
     }
 
@@ -940,7 +934,7 @@ mod tests {
 
         assert!(matches!(decoded_submission, Submission::Full(_)));
         let merging_data = merging_data.expect("append-only should still carry merging data");
-        assert!(merging_data.merge_orders.is_empty());
+        assert!(merging_data.orders.is_empty());
         assert_eq!(merging_data.allow_appending, expected_allow_appending);
         assert_eq!(merging_data.builder_address, expected_builder_address);
     }
@@ -1070,7 +1064,7 @@ mod tests {
         assert!(matches!(decoded_submission, Submission::Dehydrated(_)));
         assert_eq!(
             merging_data.expect("combined submission should carry merging data"),
-            expected_merging_data
+            expected_merging_data.into()
         );
         assert_eq!(
             bid_adjustment_data.expect("combined submission should carry adjustment data"),
@@ -1109,7 +1103,7 @@ mod tests {
         }
         assert_eq!(
             merging_data.expect("combined submission should carry merging data"),
-            expected_merging_data
+            expected_merging_data.into()
         );
         assert_eq!(
             bid_adjustment_data.expect("combined submission should carry adjustment data"),
@@ -1161,7 +1155,7 @@ mod tests {
 
         assert!(matches!(decoded_submission, Submission::Full(_)));
         let merging_data = merging_data.expect("append-only should still carry merging data");
-        assert!(merging_data.merge_orders.is_empty());
+        assert!(merging_data.orders.is_empty());
         assert_eq!(merging_data.allow_appending, expected_allow_appending);
         assert_eq!(merging_data.builder_address, expected_builder_address);
         assert_eq!(
