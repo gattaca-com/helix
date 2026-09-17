@@ -146,7 +146,11 @@ impl SimulatorClient {
             200 => Ok(()),
             400 => Err(BlockSimError::BlockValidationFailed(res.text().await.unwrap_or_default())),
             424 => Err(BlockSimError::HydrationMiss),
-            _ => Err(BlockSimError::RpcError),
+            status => {
+                let body = res.text().await.unwrap_or_default();
+                error!(status, body, "ssz simulation rejected by the simulator");
+                Err(BlockSimError::RpcError)
+            }
         }
     }
 

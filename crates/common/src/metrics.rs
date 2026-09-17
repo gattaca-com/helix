@@ -232,6 +232,14 @@ lazy_static! {
     )
     .unwrap();
 
+    static ref SIMULATOR_BUILDER_OUTCOME: IntCounterVec = register_int_counter_vec_with_registry!(
+        "simulator_builder_outcome_total",
+        "Simulation outcomes per builder and dispatch class",
+        &["builder", "tier", "outcome"],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
     static ref SIMULATOR_LATENCY: HistogramVec = register_histogram_vec_with_registry!(
         "sim_latency_secs",
         "Latency of simulations",
@@ -1006,6 +1014,10 @@ impl SimulatorMetrics {
 
     pub fn sim_status(is_success: bool) {
         SIMULATOR_STATUS.with_label_values(&[is_success.to_string().as_str()]).inc();
+    }
+
+    pub fn sim_builder_outcome(builder: &str, tier: &str, outcome: &str) {
+        SIMULATOR_BUILDER_OUTCOME.with_label_values(&[builder, tier, outcome]).inc();
     }
 
     pub fn timer(simulator: &str) -> HistogramTimer {

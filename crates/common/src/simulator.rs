@@ -119,6 +119,7 @@ impl BlockSimError {
             },
             BlockSimError::Timeout => true,
             BlockSimError::RpcError => true,
+            BlockSimError::SimulationDropped => true,
             BlockSimError::NoSimulatorAvailable => true,
             BlockSimError::UnsupportedFork(_) => true,
             BlockSimError::RelayHydrationFailed => true,
@@ -278,6 +279,15 @@ mod tests {
     fn a_rejected_block_is_no_sim_fault() {
         let err = BlockSimError::BlockValidationFailed("insufficient balance".into());
 
+        assert!(!err.is_sim_fault());
+    }
+
+    #[test]
+    fn a_dropped_simulation_never_demotes() {
+        let err = BlockSimError::SimulationDropped;
+
+        assert!(err.is_temporary());
+        assert!(!err.is_demotable());
         assert!(!err.is_sim_fault());
     }
 

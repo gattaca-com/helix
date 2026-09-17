@@ -43,7 +43,10 @@ use crate::{
     HelixSpine, SimRequest, ValidationRequest,
     auctioneer::Bid,
     bid_decoder::SubmissionDataWithSpan,
-    simulator::{BlockMergeResponse, MergedValidationRequest, SimResult, client::SimulatorClient},
+    simulator::{
+        BlockMergeResponse, MergedValidationRequest, SimPriority, SimResult,
+        client::SimulatorClient,
+    },
     spine::{
         HelixSpineProducers,
         messages::{FromSimMsg, ToSimKind, ToSimMsg},
@@ -70,6 +73,8 @@ pub struct SimulatorTile {
     merged_blocks: Arc<SharedVector<BlockMergeResponse>>,
     hydration_cache: SimHydrationCache,
     chain_info: ChainInfo,
+    /// Sampled-so-far and seen-so-far counts per builder for the current slot.
+    sample_state: FxHashMap<BlsPublicKeyBytes, SampleState>,
     /// If we have any synced simulator
     pub accept_optimistic: Arc<AtomicBool>,
     /// If we failed to demote a builder in the DB
@@ -112,7 +117,7 @@ impl Tile<HelixSpine> for SimulatorTile {
                 None => error!(?msg, "sim inbound payload not found"),
             },
             ToSimKind::NewSlot => {
-                self.on_new_slot(msg.bid_slot);
+                self.on_new_slot(msg.bid_slot, producers);
             }
             ToSimKind::FeedCache => {
                 self.handle_feed_cache(msg.ix, msg.bid_slot);
@@ -204,6 +209,7 @@ impl SimulatorTile {
             merged_blocks,
             hydration_cache: SimHydrationCache::new(),
             chain_info,
+            sample_state: FxHashMap::default(),
             accept_optimistic: accept_optimistic.clone(),
             failsafe_triggered: failsafe_triggered.clone(),
         };
@@ -213,13 +219,61 @@ impl SimulatorTile {
 
     fn handle_sync_status(&mut self, id: usize, reported: Option<bool>) {
         self.simulators[id].record_sync(reported);
-        let now = Instant::now();
+        self.refresh_accept_optimistic(Instant::now());
+    }
+
+    fn refresh_accept_optimistic(&self, now: Instant) {
         let new = self.simulators.iter().any(|s| s.can_simulate_light(now));
-        let prev = self.accept_optimistic.load(Ordering::Relaxed);
+        let prev = self.accept_optimistic.swap(new, Ordering::Relaxed);
         if new != prev {
-            warn!(prev, new, "changing accept_optimistic simulation status");
+            let synced = self.simulators.iter().filter(|s| s.is_synced).count();
+            let answering = self.simulators.iter().filter(|s| s.answered_recently(now)).count();
+            warn!(
+                prev,
+                new,
+                synced,
+                answering,
+                sims = self.simulators.len(),
+                "changing accept_optimistic simulation status"
+            );
         }
-        self.accept_optimistic.store(new, Ordering::Relaxed);
+    }
+
+    /// Whether this builder's next sampled bid should run. Every builder gets
+    /// `SAMPLE_FLOOR` simulations a slot however little it submits, then one in
+    /// `SAMPLE_EVERY` after that.
+    fn take_sample(&mut self, builder_pubkey: BlsPublicKeyBytes) -> bool {
+        let state = self.sample_state.entry(builder_pubkey).or_default();
+        state.seen += 1;
+        if state.sampled < SAMPLE_FLOOR || state.seen.is_multiple_of(SAMPLE_EVERY) {
+            state.sampled += 1;
+            return true;
+        }
+        false
+    }
+
+    /// Answers a request no simulator will ever run, so the builder never waits on a
+    /// result that is not coming. A dropped simulation never demotes. An optimistic
+    /// submission was answered when it was sorted, so only the other ones need this.
+    fn answer_dropped(
+        &mut self,
+        req: &crate::simulator::ValidationRequest,
+        producers: &mut HelixSpineProducers,
+    ) {
+        if req.is_optimistic {
+            return;
+        }
+
+        let result_ix = self.sim_results.push(SimResult::Validate((
+            0,
+            Some(SimulationResultInner {
+                submission_ref: req.submission_ref,
+                optimistic_version: req.optimistic_version(),
+                bid: None,
+                result: Err(BlockSimError::SimulationDropped),
+            }),
+        )));
+        producers.produce(FromSimMsg { ix: result_ix });
     }
 
     #[timed]
@@ -246,6 +300,12 @@ impl SimulatorTile {
 
         self.local_telemetry.sims_reqs += 1;
 
+        if req.priority == SimPriority::Sample && !self.take_sample(builder_pubkey) {
+            self.local_telemetry.sample_skipped += 1;
+            self.answer_dropped(&req, producers);
+            return;
+        }
+
         let sim_id = self.select_simulator();
 
         if let Some(id) = sim_id {
@@ -255,10 +315,13 @@ impl SimulatorTile {
             self.local_telemetry.queued += 1;
             // Every request feeds the cache on arrival, so an evicted one has
             // already contributed its transactions.
-            if fast_track {
-                self.priority_requests.store(req, builder_pubkey, &mut self.local_telemetry);
+            let dropped = if fast_track {
+                self.priority_requests.store(req, builder_pubkey, &mut self.local_telemetry)
             } else {
-                self.requests.store(req, builder_pubkey, &mut self.local_telemetry);
+                self.requests.store(req, builder_pubkey, &mut self.local_telemetry)
+            };
+            if let Some(dropped) = dropped {
+                self.answer_dropped(&dropped, producers);
             }
         }
     }
@@ -305,7 +368,7 @@ impl SimulatorTile {
             Some(err) => sim.record_failure(&err, now),
             None => {
                 if let Some(elapsed) = elapsed {
-                    sim.record_success(elapsed);
+                    sim.record_success(elapsed, now);
                 }
             }
         }
@@ -315,6 +378,8 @@ impl SimulatorTile {
             stats.count += 1;
             stats.total_time += elapsed;
         }
+
+        self.refresh_accept_optimistic(now);
 
         producers.produce(FromSimMsg { ix: result_ix });
 
@@ -515,6 +580,11 @@ impl SimulatorTile {
 
             let error = res.as_ref().err().cloned();
             let bid = Bid::new(version, &submission);
+            SimulatorMetrics::sim_builder_outcome(
+                &bid.builder_pubkey.to_string(),
+                req.priority.label(),
+                sim_outcome(error.as_ref()),
+            );
             let inner = SimulationResultInner {
                 submission_ref,
                 result: res.map(|()| trace),
@@ -670,16 +740,19 @@ impl SimulatorTile {
             .map(|(i, _)| i)
     }
 
-    fn on_new_slot(&mut self, bid_slot: u64) {
+    fn on_new_slot(&mut self, bid_slot: u64, producers: &mut HelixSpineProducers) {
         if self.last_bid_slot > 0 {
             self.report();
         }
 
         self.last_bid_slot = bid_slot;
-        self.requests.clear();
-        self.priority_requests.clear();
+        let left = [self.requests.drain(), self.priority_requests.drain()].concat();
+        for req in left {
+            self.answer_dropped(&req, producers);
+        }
         self.merge_requests.clear();
         self.hydration_cache.clear();
+        self.sample_state.clear();
     }
 
     fn report(&mut self) {
@@ -688,6 +761,7 @@ impl SimulatorTile {
 
         SimulatorMetrics::sim_mananger_count("sims_sent_immediately", tel.sims_sent_immediately);
         SimulatorMetrics::sim_mananger_count("sims_reqs_dropped", tel.sims_reqs_dropped);
+        SimulatorMetrics::sim_mananger_count("sample_skipped", tel.sample_skipped);
         SimulatorMetrics::sim_mananger_count("stale_sim_reqs", tel.stale_sim_reqs);
         SimulatorMetrics::sim_manager_gauge("max_pending", tel.max_pending);
         SimulatorMetrics::sim_manager_gauge("max_in_flight", tel.max_in_flight);
@@ -729,6 +803,7 @@ impl SimulatorTile {
             queued = tel.queued,
             sims_sent_from_queue = tel.sims_sent_from_queue,
             sims_reqs_dropped = tel.sims_reqs_dropped,
+            sample_skipped = tel.sample_skipped,
             queue_left,
             stale_sim_reqs = tel.stale_sim_reqs,
             max_pending = tel.max_pending,
@@ -778,6 +853,8 @@ struct SimEntry {
     client: SimulatorClient,
     is_synced: bool,
     breaker: Breaker,
+    /// When this node last answered a simulation. `None` until it answers one.
+    last_success: Option<Instant>,
     /// Adaptive concurrency limit, bounded by `max_concurrent_tasks`.
     limit: usize,
     /// Consecutive sim faults, reset by any answer from the node.
@@ -795,6 +872,7 @@ impl SimEntry {
             client,
             is_synced: false,
             breaker: Breaker::Closed,
+            last_success: None,
             limit,
             faults: 0,
             sync_failures: 0,
@@ -816,9 +894,15 @@ impl SimEntry {
         }
     }
 
-    /// A lighter check to decide whether we should accept optimistic submissions
+    /// A lighter check to decide whether we should accept optimistic submissions. A breaker
+    /// backoff is not a loss of capability, so it only closes this once the node has gone
+    /// `OPTIMISTIC_GRACE` without answering a simulation.
     fn can_simulate_light(&self, now: Instant) -> bool {
-        self.is_synced && self.effective_limit(now) > 0
+        self.is_synced && (matches!(self.breaker, Breaker::Closed) || self.answered_recently(now))
+    }
+
+    fn answered_recently(&self, now: Instant) -> bool {
+        self.last_success.is_some_and(|at| now.saturating_duration_since(at) < OPTIMISTIC_GRACE)
     }
 
     fn can_simulate_at(&self, now: Instant) -> bool {
@@ -845,9 +929,10 @@ impl SimEntry {
     }
 
     /// The node answered. Close the breaker, then let the latency move the limit.
-    fn record_success(&mut self, elapsed: Duration) {
+    fn record_success(&mut self, elapsed: Duration, now: Instant) {
         self.faults = 0;
         self.breaker = Breaker::Closed;
+        self.last_success = Some(now);
         self.limit = if elapsed <= LATENCY_TARGET {
             (self.limit + 1).min(self.ceiling())
         } else {
@@ -900,6 +985,14 @@ const LATENCY_TARGET: Duration = Duration::from_millis(300);
 const MIN_LIMIT: usize = 1;
 const UTILIZATION_SCALE: usize = 1_000;
 const SIM_FAULTS_TO_OPEN: usize = 3;
+/// How long every simulator must go without answering a simulation before the relay stops
+/// accepting optimistic submissions. Longer than `BREAKER_BACKOFF_START`, shorter than
+/// `BREAKER_BACKOFF_MAX`, so a backoff is ridden out but a real outage is not.
+const OPTIMISTIC_GRACE: Duration = Duration::from_secs(30);
+/// Simulations every builder gets each slot, however few bids it sends.
+const SAMPLE_FLOOR: u32 = 3;
+/// After the floor, one bid in this many joins the sample.
+const SAMPLE_EVERY: u32 = 64;
 const BREAKER_BACKOFF_START: Duration = Duration::from_secs(12);
 const BREAKER_BACKOFF_MAX: Duration = Duration::from_secs(60);
 const SYNC_FAILURES_TO_UNSYNC: usize = 3;
@@ -914,6 +1007,9 @@ struct LocalTelemetry {
     max_pending: usize,
     // waiting for result
     max_in_flight: usize,
+    /// Optimistic bids that could not win and were not drawn into their builder's
+    /// validity sample, so no simulator ran them.
+    sample_skipped: usize,
     /// Requests with no simulator free at intake, queued for later dispatch.
     /// `sims_reqs == sims_sent_immediately + queued`.
     queued: usize,
@@ -974,6 +1070,13 @@ pub(super) enum SimTileInternalEvent {
     },
 }
 
+/// Per-builder sampling counters for the current slot.
+#[derive(Default, Clone, Copy)]
+struct SampleState {
+    seen: u32,
+    sampled: u32,
+}
+
 #[derive(Default, Clone, Copy)]
 struct SimSlotStats {
     count: u32,
@@ -990,7 +1093,9 @@ impl PendingRequests {
         Self { reqs: Vec::with_capacity(capacity) }
     }
 
-    /// Returns the evicted request if a newer one replaced it.
+    /// Returns the request this store dropped: the one it replaced, or `req` itself when
+    /// the queue already holds a fresher one. Either way that request is never simulated,
+    /// so the caller must answer it.
     fn store(
         &mut self,
         req: crate::simulator::ValidationRequest,
@@ -1000,10 +1105,9 @@ impl PendingRequests {
         if let Some(i) = self.reqs.iter().position(|(_, pk)| *pk == builder_pubkey) {
             local_telemetry.sims_reqs_dropped += 1;
             if req.on_receive_ns() > self.reqs[i].0.on_receive_ns() {
-                let evicted = std::mem::replace(&mut self.reqs[i].0, req);
-                return Some(evicted);
+                return Some(std::mem::replace(&mut self.reqs[i].0, req));
             }
-            return None;
+            return Some(req);
         }
         self.reqs.push((req, builder_pubkey));
         local_telemetry.max_pending = local_telemetry.max_pending.max(self.reqs.len());
@@ -1016,10 +1120,11 @@ impl PendingRequests {
         Some(self.reqs.swap_remove(i).0)
     }
 
-    /// Clear backlog of simulations from the previous bid slot.
+    /// Takes the backlog of simulations from the previous bid slot. They are never
+    /// simulated, so the caller must answer them.
     /// All pending requests are always for `last_bid_slot` (asserted on intake).
-    fn clear(&mut self) {
-        self.reqs.clear();
+    fn drain(&mut self) -> Vec<crate::simulator::ValidationRequest> {
+        self.reqs.drain(..).map(|(req, _)| req).collect()
     }
 }
 
@@ -1054,6 +1159,17 @@ impl PendingMergeRequests {
     /// Clear backlog of simulations from the previous bid slot.
     fn clear(&mut self) {
         self.reqs.clear();
+    }
+}
+
+/// Metric label for what a simulation said, so a builder's invalid-block rate can be read
+/// apart from simulator trouble.
+fn sim_outcome(error: Option<&BlockSimError>) -> &'static str {
+    match error {
+        None => "valid",
+        Some(err) if err.is_sim_fault() => "sim_fault",
+        Some(err) if err.is_temporary() => "temporary",
+        Some(_) => "invalid",
     }
 }
 
@@ -1219,6 +1335,7 @@ mod tests {
             merged_blocks: Arc::new(SharedVector::default()),
             hydration_cache: SimHydrationCache::new(),
             chain_info: ChainInfo::default(),
+            sample_state: FxHashMap::default(),
             accept_optimistic: Arc::new(AtomicBool::new(true)),
             failsafe_triggered: Arc::new(AtomicBool::new(false)),
         }
@@ -1286,6 +1403,7 @@ mod tests {
 
     fn validation_request(decoded_ix: usize) -> ValidationRequest {
         ValidationRequest {
+            priority: SimPriority::Low,
             is_top_bid: false,
             is_optimistic: false,
             apply_blacklist: false,
@@ -1400,11 +1518,12 @@ mod tests {
 
     #[test]
     fn a_fast_success_raises_the_limit_up_to_the_ceiling() {
+        let now = Instant::now();
         let mut sim = fast_sim(4);
         sim.limit = 1;
 
         for _ in 0..10 {
-            sim.record_success(LATENCY_TARGET / 2);
+            sim.record_success(LATENCY_TARGET / 2, now);
         }
 
         assert_eq!(sim.limit, 4, "the limit must stop at the configured cap");
@@ -1412,21 +1531,23 @@ mod tests {
 
     #[test]
     fn a_slow_success_halves_the_limit() {
+        let now = Instant::now();
         let mut sim = fast_sim(32);
         sim.limit = 32;
 
-        sim.record_success(LATENCY_TARGET * 2);
+        sim.record_success(LATENCY_TARGET * 2, now);
 
         assert_eq!(sim.limit, 16);
     }
 
     #[test]
     fn the_limit_never_falls_below_one() {
+        let now = Instant::now();
         let mut sim = fast_sim(32);
         sim.limit = 32;
 
         for _ in 0..20 {
-            sim.record_success(LATENCY_TARGET * 2);
+            sim.record_success(LATENCY_TARGET * 2, now);
         }
 
         assert_eq!(sim.limit, 1, "a sim must keep one slot to prove it recovered");
@@ -1465,7 +1586,7 @@ mod tests {
         for _ in 0..SIM_FAULTS_TO_OPEN - 1 {
             sim.record_failure(&BlockSimError::RpcError, now);
         }
-        sim.record_success(LATENCY_TARGET / 2);
+        sim.record_success(LATENCY_TARGET / 2, now);
         sim.record_failure(&BlockSimError::RpcError, now);
 
         assert!(sim.can_simulate_at(now), "the run must restart after a success");
@@ -1494,7 +1615,7 @@ mod tests {
         open_breaker(&mut sim, now);
         let probe_time = now + BREAKER_BACKOFF_START;
 
-        sim.record_success(LATENCY_TARGET / 2);
+        sim.record_success(LATENCY_TARGET / 2, now);
 
         assert!(sim.effective_limit(probe_time) > 1, "a healthy sim must return at once");
         sim.pending = 1;
@@ -1753,6 +1874,169 @@ mod tests {
         assert_eq!(submission.blobs_bundle.commitments[0], blob.commitment);
         assert_eq!(submission.blobs_bundle.proofs, blob.proofs);
         assert_eq!(submission.blobs_bundle.blobs.len(), 1);
+    }
+
+    fn queued(priority: SimPriority, receive_ns: u64) -> crate::simulator::ValidationRequest {
+        let mut req = validation_request(0);
+        req.priority = priority;
+        req.receive_ns = receive_ns;
+        req
+    }
+
+    /// gattaca-com/helix: a request the queue drops is never simulated, so `store` must
+    /// hand it back for the caller to answer. Otherwise the builder waits for a result
+    /// that is not coming, and the bid never enters the auction.
+    #[test]
+    fn store_returns_the_request_it_dropped() {
+        let mut pending = PendingRequests::with_capacity(4);
+        let builder = BlsPublicKeyBytes::default();
+        let mut tel = LocalTelemetry::default();
+
+        assert!(pending.store(queued(SimPriority::Low, 10), builder, &mut tel).is_none());
+
+        let dropped = pending.store(queued(SimPriority::Low, 20), builder, &mut tel);
+        assert_eq!(dropped.map(|r| r.on_receive_ns()), Some(10));
+
+        let dropped = pending.store(queued(SimPriority::Low, 15), builder, &mut tel);
+        assert_eq!(dropped.map(|r| r.on_receive_ns()), Some(15));
+
+        assert_eq!(pending.next_req().map(|r| r.on_receive_ns()), Some(20));
+    }
+
+    #[test]
+    fn drain_takes_every_request_left_at_the_slot_boundary() {
+        let mut pending = PendingRequests::with_capacity(4);
+        let mut tel = LocalTelemetry::default();
+        for i in 0..3u8 {
+            let mut builder = BlsPublicKeyBytes::default();
+            builder.0[0] = i;
+            pending.store(queued(SimPriority::Low, i as u64), builder, &mut tel);
+        }
+
+        assert_eq!(pending.drain().len(), 3);
+        assert!(pending.next_req().is_none());
+    }
+
+    #[test]
+    fn next_req_drains_by_priority_class_first() {
+        let mut pending = PendingRequests::with_capacity(4);
+        let mut tel = LocalTelemetry::default();
+        for (i, priority) in
+            [SimPriority::Low, SimPriority::Top, SimPriority::Sample].into_iter().enumerate()
+        {
+            let mut builder = BlsPublicKeyBytes::default();
+            builder.0[0] = i as u8;
+            pending.store(queued(priority, 100), builder, &mut tel);
+        }
+
+        assert_eq!(pending.next_req().map(|r| r.priority), Some(SimPriority::Top));
+        assert_eq!(pending.next_req().map(|r| r.priority), Some(SimPriority::Sample));
+        assert_eq!(pending.next_req().map(|r| r.priority), Some(SimPriority::Low));
+    }
+
+    /// Within one class the oldest request still goes first, so a bid never starves.
+    #[test]
+    fn next_req_keeps_fifo_within_a_class() {
+        let mut pending = PendingRequests::with_capacity(4);
+        let mut tel = LocalTelemetry::default();
+        for (i, receive_ns) in [30u64, 10, 20].into_iter().enumerate() {
+            let mut builder = BlsPublicKeyBytes::default();
+            builder.0[0] = i as u8;
+            pending.store(queued(SimPriority::Sample, receive_ns), builder, &mut tel);
+        }
+
+        assert_eq!(pending.next_req().map(|r| r.on_receive_ns()), Some(10));
+        assert_eq!(pending.next_req().map(|r| r.on_receive_ns()), Some(20));
+        assert_eq!(pending.next_req().map(|r| r.on_receive_ns()), Some(30));
+    }
+
+    /// Every builder is covered each slot however little it submits, so a bad small
+    /// builder is caught as fast as a bad large one.
+    #[test]
+    fn every_builder_gets_the_sample_floor() {
+        let mut tile = test_tile();
+        let mut quiet = BlsPublicKeyBytes::default();
+        quiet.0[0] = 9;
+
+        for _ in 0..SAMPLE_FLOOR {
+            assert!(tile.take_sample(quiet));
+        }
+        assert!(!tile.take_sample(quiet));
+    }
+
+    #[test]
+    fn a_busy_builder_is_sampled_one_in_sample_every() {
+        let mut tile = test_tile();
+        let builder = BlsPublicKeyBytes::default();
+        let bids = SAMPLE_EVERY * 10;
+
+        let sampled = (0..bids).filter(|_| tile.take_sample(builder)).count() as u32;
+
+        assert_eq!(sampled, SAMPLE_FLOOR + 10);
+    }
+
+    #[test]
+    fn sampling_is_tracked_per_builder() {
+        let mut tile = test_tile();
+        let mut first = BlsPublicKeyBytes::default();
+        first.0[0] = 1;
+        let mut second = BlsPublicKeyBytes::default();
+        second.0[0] = 2;
+
+        for _ in 0..SAMPLE_EVERY {
+            tile.take_sample(first);
+        }
+
+        for _ in 0..SAMPLE_FLOOR {
+            assert!(tile.take_sample(second));
+        }
+    }
+
+    /// A breaker opens for 12s at the first fault. Demoting every builder for a whole slot
+    /// over a backoff, on a node that is synced and answering, costs far more than it saves.
+    #[test]
+    fn a_breaker_backoff_alone_keeps_optimistic_acceptance() {
+        let now = Instant::now();
+        let mut sim = fast_sim(8);
+        sim.is_synced = true;
+        sim.record_success(LATENCY_TARGET / 2, now);
+        open_breaker(&mut sim, now);
+
+        assert_eq!(sim.health(now), SimHealth::Open);
+        assert!(sim.can_simulate_light(now));
+    }
+
+    #[test]
+    fn a_sustained_outage_stops_optimistic_acceptance() {
+        let now = Instant::now();
+        let mut sim = fast_sim(8);
+        sim.is_synced = true;
+        sim.record_success(LATENCY_TARGET / 2, now);
+        open_breaker(&mut sim, now);
+
+        assert!(!sim.can_simulate_light(now + OPTIMISTIC_GRACE));
+    }
+
+    #[test]
+    fn an_unsynced_sim_never_holds_optimistic_acceptance_open() {
+        let now = Instant::now();
+        let mut sim = fast_sim(8);
+        sim.record_success(LATENCY_TARGET / 2, now);
+
+        assert!(!sim.can_simulate_light(now));
+    }
+
+    #[test]
+    fn a_success_rearms_optimistic_acceptance() {
+        let now = Instant::now();
+        let mut sim = fast_sim(8);
+        sim.is_synced = true;
+        open_breaker(&mut sim, now);
+        assert!(!sim.can_simulate_light(now + OPTIMISTIC_GRACE));
+
+        sim.record_success(LATENCY_TARGET / 2, now);
+
+        assert!(sim.can_simulate_light(now + OPTIMISTIC_GRACE));
     }
 
     #[test]
