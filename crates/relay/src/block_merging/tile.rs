@@ -1284,6 +1284,7 @@ mod tests {
         // this submission carries no blobs so it isn't touched.
         signed.blobs_bundle = Arc::new(Default::default());
         let submission_data = SubmissionData {
+            base_id: None,
             submission_ref: SubmissionRef::Internal,
             submission: Submission::Full(signed),
             merging_data: Some(BlockMergingData {

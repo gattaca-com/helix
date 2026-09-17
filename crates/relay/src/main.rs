@@ -326,6 +326,7 @@ async fn run(
                 sock_addr,
                 local_cache.api_key_cache.clone(),
                 config.tcp_max_connections,
+                local_cache.rebid_cache.clone(),
                 spine.spine.dcache_ptr_for::<NewTcpBidSubmission>(),
                 http_submissions.clone(),
                 slot_events.clone(),

@@ -409,7 +409,7 @@ impl SimulatorTile {
 
         let version = decoded_data.submission_data.version;
         let trace = decoded_data.submission_data.trace;
-        let submission_ref = decoded_data.submission_data.submission_ref;
+        let submission_ref = req.submission_ref;
 
         let sim = &mut self.simulators[id];
         let dispatch = if let Some(url) = &sim.client.ssz_url {
@@ -1262,6 +1262,7 @@ mod tests {
 
     fn decoded_from(dehydrated: DehydratedBidSubmission) -> SubmissionDataWithSpan {
         let submission_data = SubmissionData {
+            base_id: None,
             submission_ref: SubmissionRef::Internal,
             submission: Submission::Dehydrated(dehydrated),
             merging_data: None,

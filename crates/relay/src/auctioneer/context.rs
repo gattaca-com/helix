@@ -242,6 +242,7 @@ impl<B: BidAdjustor> Context<B> {
 
         self.version.clear();
         self.hydration_cache.clear();
+        self.cache.rebid_cache.new_slot(bid_slot.as_u64());
 
         producers.produce(ToSimMsg {
             kind: ToSimKind::NewSlot,

@@ -1,4 +1,5 @@
 pub mod merging;
+pub mod rebid;
 
 use std::fmt::{self, Display};
 
@@ -183,6 +184,8 @@ bitflags::bitflags! {
         const WITH_ADJUSTMENTS = 1 << 1;
         const ZSTD_COMPRESSED = 1 << 2;
         const PESSIMISTIC = 1 << 3;
+        const CACHE_BASE = 1 << 4;
+        const REBID = 1 << 5;
     }
 }
 

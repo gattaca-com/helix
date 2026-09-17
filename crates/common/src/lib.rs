@@ -16,6 +16,7 @@ pub mod local_cache;
 pub mod metrics;
 pub mod payment;
 pub mod proposer;
+pub mod rebid;
 pub mod signing;
 pub mod simulator;
 pub mod slot_info;

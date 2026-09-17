@@ -18,11 +18,16 @@ use helix_common::{
     record_submission_step, record_submission_step_ns,
     utils::utcnow_ns,
 };
+use helix_tcp_types::{
+    BidSubmissionFlags,
+    rebid::{BASE_PREFIX_LEN, RebidError, RebidV1},
+};
 use helix_types::{
     BidAdjustmentData, BlockMergingData, BlsPublicKeyBytes, MergeType, SignedBidSubmission,
     Submission, SubmissionVersion,
 };
 use rustc_hash::FxHashMap;
+use ssz::Decode;
 use tracing::{info, trace};
 
 use crate::{
@@ -188,7 +193,7 @@ impl DecoderTile {
                         &self.config,
                         &new_bid.submission_ref,
                         &new_bid.header,
-                        &payload,
+                        &payload[new_bid.payload_offset..],
                         &mut self.buffer.borrow_mut(),
                         new_bid.trace,
                         sent_at,
@@ -327,10 +332,12 @@ impl DecoderTile {
             merging_data,
             bid_adjustment_data,
             decoder_params,
+            base_id,
         ) = Self::try_handle_block_submission(
             cache,
             chain_info,
             config,
+            submission_ref,
             header,
             expected_pubkey,
             payload,
@@ -368,6 +375,7 @@ impl DecoderTile {
         };
 
         let submission_data = SubmissionData {
+            base_id,
             submission_ref: *submission_ref,
             submission,
             version,
@@ -388,6 +396,7 @@ impl DecoderTile {
         cache: &LocalCache,
         chain_info: &ChainInfo,
         config: &RelayConfig,
+        submission_ref: &SubmissionRef,
         header: &InternalBidSubmissionHeader,
         expected_pubkey: Option<&BlsPublicKeyBytes>,
         payload: &[u8],
@@ -401,6 +410,7 @@ impl DecoderTile {
             Option<BlockMergingData>,
             Option<BidAdjustmentData>,
             SubmissionDecoderParams,
+            Option<[u8; 32]>,
         ),
         BuilderApiError,
     > {
@@ -419,9 +429,42 @@ impl DecoderTile {
             fork_name: chain_info.current_fork_name(),
         };
 
-        let mut decoder = SubmissionDecoder::new(&decoder_params);
-        let (mut submission, merging_data, bid_adjustment_data) =
-            decoder.decode(payload, buffer)?;
+        let is_base = header.flags.contains(BidSubmissionFlags::CACHE_BASE);
+        let is_rebid = header.flags.contains(BidSubmissionFlags::REBID);
+        let mut base_id = None;
+        let (mut submission, merging_data, bid_adjustment_data) = if is_base || is_rebid {
+            let SubmissionRef::Tcp { generation, .. } = submission_ref else {
+                return Err(BuilderApiError::Rebid(RebidError::InvalidPatch));
+            };
+            let pubkey = expected_pubkey.ok_or(BuilderApiError::InvalidApiKey)?;
+            if is_base && is_rebid || chain_info.current_fork_name() != helix_types::ForkName::Fulu
+            {
+                return Err(BuilderApiError::Rebid(RebidError::InvalidPatch));
+            }
+            if is_base {
+                if payload.len() < BASE_PREFIX_LEN || payload[0] != 1 {
+                    return Err(BuilderApiError::Rebid(RebidError::InvalidPatch));
+                }
+                base_id = Some(payload[1..BASE_PREFIX_LEN].try_into().unwrap());
+                SubmissionDecoder::new(&decoder_params)
+                    .decode(&payload[BASE_PREFIX_LEN..], buffer)?
+            } else {
+                if is_dehydrated || header.compression != helix_types::Compression::None {
+                    return Err(BuilderApiError::Rebid(RebidError::InvalidPatch));
+                }
+                let patch = RebidV1::from_ssz_bytes(payload).map_err(BuilderApiError::SszDecode)?;
+                let base = cache
+                    .rebid_cache
+                    .get(*generation, patch.base_id, patch.slot, pubkey)
+                    .map_err(BuilderApiError::Rebid)?;
+                let (submission, adjustment) = base
+                    .apply(&patch, header.merge_type, with_adjustments)
+                    .map_err(BuilderApiError::Rebid)?;
+                (Submission::Full(submission), base.merging_data.clone(), adjustment)
+            }
+        } else {
+            SubmissionDecoder::new(&decoder_params).decode(payload, buffer)?
+        };
 
         trace.decoded_ns = Nanos::now();
         record_submission_step_ns("recv_decoded", trace.receive_ns.0, trace.decoded_ns.0);
@@ -468,6 +511,7 @@ impl DecoderTile {
             merging_data,
             bid_adjustment_data,
             decoder_params,
+            base_id,
         ))
     }
 
@@ -528,4 +572,147 @@ fn verify_and_validate(
     }
     submission.validate_payload_ssz_lengths(chain_info.max_blobs_per_block())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod rebid_tests {
+    use helix_common::rebid::CachedRebidBase;
+    use helix_types::{
+        SimHydrationCache, dehydrated_submission_with_txs_for_test, full_tx_for_test,
+    };
+    use ssz::Encode;
+    use uuid::Uuid;
+
+    use super::*;
+
+    #[test]
+    fn rebid_decoder_requires_registered_base_and_preserves_identity() {
+        let cache = LocalCache::new();
+        cache.rebid_cache.new_slot(42);
+        let generation = cache.rebid_cache.connect();
+        let mut chain = ChainInfo::default();
+        chain.spec.fulu_fork_epoch = Some(0u64.into());
+        chain.spec.gloas_fork_epoch = None;
+        let config = RelayConfig::empty_for_test();
+        let mut original = SimHydrationCache::new()
+            .hydrate(
+                dehydrated_submission_with_txs_for_test(vec![
+                    full_tx_for_test(1),
+                    full_tx_for_test(2),
+                ]),
+                chain.max_blobs_per_block(),
+            )
+            .unwrap()
+            .submission;
+        original.message.slot = 42;
+        let pubkey = original.message.builder_pubkey;
+        let id = [3; 32];
+        let mut header = InternalBidSubmissionHeader::from_tcp_header(
+            Uuid::nil(),
+            helix_tcp_types::BidSubmissionHeader {
+                sequence_number: 2,
+                merge_type: MergeType::None,
+                flags: BidSubmissionFlags::REBID,
+            },
+        );
+        let sub_ref = SubmissionRef::Tcp {
+            id: Uuid::nil(),
+            token: 1,
+            seq_num: 2,
+            generation,
+            rebid_protocol: true,
+            base_ready: false,
+        };
+        let patch = RebidV1 {
+            version: 1,
+            slot: 42,
+            base_id: id,
+            value: [0; 32],
+            block_hash: [4; 32],
+            state_root: [5; 32],
+            signature: [6; 96],
+            payment_transaction: vec![7; 100],
+            adjustment: vec![],
+        };
+        let bytes = patch.as_ssz_bytes();
+        let mut buffer = vec![];
+        let mut trace = SubmissionTrace::default();
+        assert!(matches!(
+            DecoderTile::try_handle_block_submission(
+                &cache,
+                &chain,
+                &config,
+                &sub_ref,
+                &header,
+                Some(&pubkey),
+                &bytes,
+                &mut buffer,
+                &mut trace
+            ),
+            Err(BuilderApiError::Rebid(RebidError::MissingBase))
+        ));
+        cache
+            .rebid_cache
+            .insert(generation, id, CachedRebidBase {
+                submission: original.clone(),
+                merging_data: None,
+                merge_type: MergeType::None,
+                with_adjustments: false,
+                adjustment_version: 0,
+            })
+            .unwrap();
+        let decoded = DecoderTile::try_handle_block_submission(
+            &cache,
+            &chain,
+            &config,
+            &sub_ref,
+            &header,
+            Some(&pubkey),
+            &bytes,
+            &mut buffer,
+            &mut trace,
+        )
+        .unwrap();
+        let Submission::Full(rebuilt) = decoded.0 else {
+            panic!("rebid must be hydrated");
+        };
+        assert_eq!(rebuilt.message.builder_pubkey, pubkey);
+        assert_eq!(rebuilt.message.proposer_pubkey, original.message.proposer_pubkey);
+        assert_eq!(
+            rebuilt.execution_payload.transactions[0],
+            original.execution_payload.transactions[0]
+        );
+        assert_eq!(rebuilt.execution_payload.transactions[1].as_ref(), &[7; 100]);
+        assert_eq!(rebuilt.message.block_hash, B256::repeat_byte(4));
+        assert!(decoded.6.is_none());
+        assert!(matches!(
+            DecoderTile::try_handle_block_submission(
+                &cache,
+                &chain,
+                &config,
+                &sub_ref,
+                &header,
+                Some(&BlsPublicKeyBytes::ZERO),
+                &bytes,
+                &mut buffer,
+                &mut trace
+            ),
+            Err(BuilderApiError::Rebid(RebidError::MissingBase))
+        ));
+        header.flags.insert(BidSubmissionFlags::CACHE_BASE);
+        assert!(matches!(
+            DecoderTile::try_handle_block_submission(
+                &cache,
+                &chain,
+                &config,
+                &sub_ref,
+                &header,
+                Some(&pubkey),
+                &bytes,
+                &mut buffer,
+                &mut trace
+            ),
+            Err(BuilderApiError::Rebid(RebidError::InvalidPatch))
+        ));
+    }
 }

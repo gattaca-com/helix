@@ -44,6 +44,7 @@ impl NewBidSubmission {
 pub struct SubmissionResultWithRef {
     pub sub_ref: SubmissionRef,
     pub tcp_status: Status,
+    pub rebid_error: helix_tcp_types::rebid::RebidError,
     // `http::StatusCode` has no repr attribute, so it can't cross the spine's
     // extern "C" queues; stored as the raw code instead.
     pub http_status_code: u16,
@@ -57,6 +58,7 @@ impl SubmissionResultWithRef {
             Ok(()) => Self {
                 sub_ref,
                 tcp_status: Status::Okay,
+                rebid_error: Default::default(),
                 http_status_code: StatusCode::OK.as_u16(),
                 error_msg: ArrayStr::default(),
                 should_report: false,
@@ -71,6 +73,10 @@ impl SubmissionResultWithRef {
                 Self {
                     sub_ref,
                     tcp_status,
+                    rebid_error: match e {
+                        BuilderApiError::Rebid(e) => *e,
+                        _ => Default::default(),
+                    },
                     http_status_code: e.http_status().as_u16(),
                     error_msg: ArrayStr::from_str_truncate(&e.to_string()),
                     should_report: e.should_report(),

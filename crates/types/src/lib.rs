@@ -28,7 +28,7 @@ pub use clock::*;
 pub use error::*;
 pub use execution_payload::*;
 pub use fields::*;
-pub use helix_tcp_types::{Compression, MergeType};
+pub use helix_tcp_types::{Compression, MergeType, rebid};
 pub use hydration::*;
 pub use lh_kzg::{KzgCommitment, KzgProof};
 pub use lh_types::{

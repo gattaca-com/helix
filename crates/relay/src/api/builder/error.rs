@@ -6,6 +6,8 @@ use http::StatusCode;
 
 #[derive(Debug, thiserror::Error)]
 pub enum BuilderApiError {
+    #[error("rebid: {0:?}")]
+    Rebid(helix_tcp_types::rebid::RebidError),
     #[error("json decode error: {0}")]
     JsonDecodeError(#[from] serde_json::Error),
 
@@ -78,6 +80,7 @@ impl IntoResponse for &BuilderApiError {
 impl BuilderApiError {
     pub fn http_status(&self) -> StatusCode {
         match self {
+            BuilderApiError::Rebid(_) |
             BuilderApiError::JsonDecodeError(_) |
             BuilderApiError::IOError(_) |
             BuilderApiError::SszDecode(_) |

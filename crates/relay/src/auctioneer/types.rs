@@ -45,7 +45,14 @@ pub enum SubmissionRef {
     // `token` is a `flux_network::Token` (mio::Token) stored as its inner usize:
     // mio::Token has no repr, so keeping it here would make this type FFI-unsafe
     // for the spine's extern "C" queue functions.
-    Tcp { id: Uuid, token: usize, seq_num: u32 },
+    Tcp {
+        id: Uuid,
+        token: usize,
+        seq_num: u32,
+        generation: u64,
+        rebid_protocol: bool,
+        base_ready: bool,
+    },
     Internal,
 }
 
@@ -212,6 +219,7 @@ pub struct GetPayloadResultData {
 
 #[derive(Clone, Debug)]
 pub struct SubmissionData {
+    pub base_id: Option<[u8; 32]>,
     pub submission_ref: SubmissionRef,
     pub submission: Submission,
     pub merging_data: Option<BlockMergingData>,

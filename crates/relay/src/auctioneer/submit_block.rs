@@ -36,11 +36,50 @@ impl<B: BidAdjustor> Context<B> {
         slot_data: &SlotData,
         producers: &mut HelixSpineProducers,
     ) {
-        let submission_ref = submission_data.submission_ref;
+        let mut submission_ref = submission_data.submission_ref;
 
         let builder_info = self.builder_info(submission_data.submission.builder_pubkey());
         tracing::Span::current()
             .record("builder_id", tracing::field::display(builder_info.builder_id()));
+
+        let cached_submission = if let Some(base_id) = submission_data.base_id {
+            let crate::auctioneer::SubmissionRef::Tcp { generation, .. } = submission_ref else {
+                return;
+            };
+            let hydrated = match self.hydrate(submission_data.submission.clone()) {
+                Ok(hydrated) => hydrated,
+                Err(e) => {
+                    send_submission_result(producers, &self.future_results, submission_ref, Err(e));
+                    return;
+                }
+            };
+            let base = helix_common::rebid::CachedRebidBase {
+                submission: hydrated.0.clone(),
+                merging_data: submission_data.merging_data.clone(),
+                merge_type: submission_data.decoder_params.merge_type,
+                with_adjustments: submission_data.decoder_params.with_adjustments,
+                adjustment_version: match &submission_data.bid_adjustment_data {
+                    None => 0,
+                    Some(helix_types::BidAdjustmentData::V1(_)) => 1,
+                    Some(helix_types::BidAdjustmentData::V2(_)) => 2,
+                },
+            };
+            if let Err(e) = self.cache.rebid_cache.insert(generation, base_id, base) {
+                send_submission_result(
+                    producers,
+                    &self.future_results,
+                    submission_ref,
+                    Err(BuilderApiError::Rebid(e)),
+                );
+                return;
+            }
+            if let crate::auctioneer::SubmissionRef::Tcp { base_ready, .. } = &mut submission_ref {
+                *base_ready = true;
+            }
+            Some(hydrated)
+        } else {
+            None
+        };
 
         trace!("validating submission");
         let start_val = Nanos::now();
@@ -51,7 +90,9 @@ impl<B: BidAdjustor> Context<B> {
                     // Both hydration caches must still learn this submission's txs, otherwise
                     // subsequent submissions referencing them fail: the auctioneer's here, and
                     // the sim tile's, which never sees a submission it is not asked to simulate.
-                    let _ = self.hydrate(submission_data.submission.clone());
+                    if cached_submission.is_none() {
+                        let _ = self.hydrate(submission_data.submission.clone());
+                    }
                     self.feed_sim_cache(
                         decoded_ix,
                         submission_data.submission.bid_slot(),
@@ -70,7 +111,6 @@ impl<B: BidAdjustor> Context<B> {
         trace!("validated");
 
         let mut submission_data = submission_data.clone();
-
         let (optimistic_version, is_top_bid) = if self.accept_optimistic.load(Ordering::Relaxed) &&
             !self.failsafe_triggered.load(Ordering::Relaxed) &&
             self.should_process_optimistically(&submission_data, &builder_info, slot_data)
@@ -103,23 +143,24 @@ impl<B: BidAdjustor> Context<B> {
 
         self.send_to_sim(req, false, producers);
 
-        let (submission, maybe_tx_root) = match self.hydrate(submission_data.submission) {
-            Ok(v) => v,
-            Err(e) => {
-                error!(?e, "hydration failed after pre-check passed");
-                // Optimistic submissions already received Ok(()) above; only non-optimistic
-                // builders are still waiting for a response at this point.
-                if !is_optimistic {
-                    send_submission_result(
-                        producers,
-                        &self.future_results,
-                        submission_ref,
-                        Err(BuilderApiError::InternalError),
-                    );
+        let (submission, maybe_tx_root) =
+            match cached_submission.map_or_else(|| self.hydrate(submission_data.submission), Ok) {
+                Ok(v) => v,
+                Err(e) => {
+                    error!(?e, "hydration failed after pre-check passed");
+                    // Optimistic submissions already received Ok(()) above; only non-optimistic
+                    // builders are still waiting for a response at this point.
+                    if !is_optimistic {
+                        send_submission_result(
+                            producers,
+                            &self.future_results,
+                            submission_ref,
+                            Err(BuilderApiError::InternalError),
+                        );
+                    }
+                    return;
                 }
-                return;
-            }
-        };
+            };
 
         let entry = PayloadEntry::new_submission(
             submission,

@@ -58,6 +58,8 @@ pub struct BidSubmissionTcpListener {
 
     to_disconnect: Vec<Token>,
     registered: FxHashMap<Token, BlsPublicKeyBytes>,
+    generations: FxHashMap<Token, u64>,
+    rebid_cache: Arc<helix_common::rebid::RebidCache>,
     submission_errors: Vec<SubmissionError>,
 
     // dcache bypass: stage a stable copy of the payload, the dcache slot can be
@@ -74,6 +76,7 @@ impl BidSubmissionTcpListener {
         listener_addr: SocketAddr,
         api_key_cache: Arc<DashMap<String, Vec<BlsPublicKeyBytes>>>,
         max_connections: usize,
+        rebid_cache: Arc<helix_common::rebid::RebidCache>,
         dcache_ptr: DCachePtr,
         http_submissions: Arc<SharedVector<Bytes>>,
         slot_events: Arc<SharedVector<SlotUpdate>>,
@@ -90,6 +93,8 @@ impl BidSubmissionTcpListener {
 
         Self {
             listener,
+            generations: FxHashMap::default(),
+            rebid_cache,
             api_key_cache,
             to_disconnect: Vec::with_capacity(max_connections),
             registered: FxHashMap::with_capacity_and_hasher(max_connections, Default::default()),
@@ -151,6 +156,9 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
             PollEvent::Disconnect { token } => {
                 tracing::trace!("disconnected from peer with token {:?}", token);
                 self.registered.remove(&token);
+                if let Some(generation) = self.generations.remove(&token) {
+                    self.rebid_cache.disconnect(generation);
+                }
                 self.stats.disconnected += 1;
                 None
             }
@@ -183,8 +191,16 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                     )
                     .entered();
 
-                    let submission_ref =
-                        SubmissionRef::Tcp { id, token: token.0, seq_num: header.sequence_number };
+                    let submission_ref = SubmissionRef::Tcp {
+                        id,
+                        token: token.0,
+                        seq_num: header.sequence_number,
+                        generation: self.generations[&token],
+                        base_ready: false,
+                        rebid_protocol: header
+                            .flags
+                            .intersects(BidSubmissionFlags::CACHE_BASE | BidSubmissionFlags::REBID),
+                    };
 
                     let now = utcnow_ns();
                     SUB_CLIENT_TO_SERVER_LATENCY
@@ -220,6 +236,7 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                                 (is_local_dev() && self.api_key_cache.contains_key(&api_key))
                             {
                                 self.registered.insert(token, msg.builder_pubkey);
+                                self.generations.insert(token, self.rebid_cache.connect());
                                 self.stats.registration_ok += 1;
                             } else {
                                 tracing::error!(
@@ -245,6 +262,9 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
         for token in self.to_disconnect.drain(..) {
             self.listener.disconnect(token);
             self.registered.remove(&token);
+            if let Some(generation) = self.generations.remove(&token) {
+                self.rebid_cache.disconnect(generation);
+            }
         }
 
         for (token, seq_num, request_id, err) in self.submission_errors.drain(..) {
@@ -254,13 +274,32 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
         }
 
         adapter.consume(|r: SubmissionResultWithRef, _producers| {
-            let SubmissionRef::Tcp { id, token, seq_num } = r.sub_ref else { return };
+            let SubmissionRef::Tcp { id, token, seq_num, generation, rebid_protocol, base_ready } =
+                r.sub_ref
+            else {
+                return
+            };
+            if self.generations.get(&Token(token)) != Some(&generation) {
+                return;
+            }
             let response =
                 response_from_submission_result(seq_num, id, r.tcp_status, r.error_msg.as_str());
             tracing::debug!("submission result: {}", response);
             self.stats.results_sent += 1;
             self.listener.write_or_enqueue_with(SendBehavior::Single(Token(token)), |buffer| {
-                response.ssz_append(buffer);
+                if rebid_protocol {
+                    helix_tcp_types::rebid::RebidResponse {
+                        sequence_number: seq_num,
+                        request_id: id.into_bytes(),
+                        status: r.tcp_status,
+                        error: r.rebid_error,
+                        base_ready,
+                        error_msg: r.error_msg.as_bytes().to_vec(),
+                    }
+                    .ssz_append(buffer);
+                } else {
+                    response.ssz_append(buffer);
+                }
             });
         });
     }

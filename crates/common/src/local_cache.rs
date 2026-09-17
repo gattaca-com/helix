@@ -97,6 +97,7 @@ impl IntoResponse for AuctioneerError {
 
 #[derive(Clone)]
 pub struct LocalCache {
+    pub rebid_cache: Arc<crate::rebid::RebidCache>,
     // TODO: this should be an ArcSwap
     pub inclusion_list: Arc<RwLock<Option<InclusionListWithKey>>>,
     builder_info_cache: Arc<DashMap<BlsPublicKeyBytes, BuilderInfo>>,
@@ -141,6 +142,7 @@ impl LocalCache {
         let adjustments_failsafe_trigger = Arc::new(AtomicBool::new(false));
 
         Self {
+            rebid_cache: Arc::default(),
             inclusion_list: Default::default(),
             builder_info_cache,
             operator_builder_collateral,
