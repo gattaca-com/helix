@@ -7,13 +7,14 @@ use axum::response::{IntoResponse, Response};
 use flate2::read::GzDecoder;
 use flux_profiler::timed;
 use helix_types::{
-    BidAdjustmentData, BlockMergingData, Compression, DehydratedBidSubmission,
-    DehydratedBidSubmissionFuluV2, DehydratedBidSubmissionFuluWithAdjustments,
+    BidAdjustmentData, BlockMergingData, BlockMergingDataV2, Compression, DehydratedBidSubmission,
+    DehydratedBidSubmissionFulu, DehydratedBidSubmissionFuluV2,
+    DehydratedBidSubmissionFuluWithAdjustments,
     DehydratedBidSubmissionFuluWithAdjustmentsAndMergingData,
     DehydratedBidSubmissionFuluWithMergingData, ForkName, ForkVersionDecode, InvalidDehydratedV2,
-    MergeType, SignedBidSubmission, SignedBidSubmissionWithAdjustments,
+    InvalidMergingDataV2, MergeType, SignedBidSubmission, SignedBidSubmissionWithAdjustments,
     SignedBidSubmissionWithAdjustmentsAndMergingData, SignedBidSubmissionWithMergingData,
-    Submission,
+    Submission, WithMergingData,
 };
 use http::{
     HeaderMap, HeaderValue, StatusCode,
@@ -52,11 +53,14 @@ pub enum DecoderError {
     #[error("failed to decode payload")]
     PayloadDecode,
 
-    #[error("dehydrated v2 requires a mergeable submission without adjustments")]
-    DehydratedV2Unsupported,
+    #[error("v2 shapes exclude adjustments; merging v2 requires Mergeable")]
+    V2Unsupported,
 
     #[error("invalid dehydrated v2 submission: {0}")]
     DehydratedV2Invalid(#[from] InvalidDehydratedV2),
+
+    #[error("invalid merging data v2: {0}")]
+    MergingV2Invalid(#[from] InvalidMergingDataV2),
 }
 
 impl IntoResponse for DecoderError {
@@ -84,8 +88,9 @@ impl DecoderError {
             DecoderError::SszDecode(_) |
             DecoderError::IOError(_) |
             DecoderError::PayloadDecode |
-            DecoderError::DehydratedV2Unsupported |
-            DecoderError::DehydratedV2Invalid(_) => StatusCode::BAD_REQUEST,
+            DecoderError::V2Unsupported |
+            DecoderError::DehydratedV2Invalid(_) |
+            DecoderError::MergingV2Invalid(_) => StatusCode::BAD_REQUEST,
         }
     }
 }
@@ -176,6 +181,7 @@ pub struct SubmissionDecoderParams {
     pub merge_type: MergeType,
     pub is_dehydrated: bool,
     pub dehydrated_v2: bool,
+    pub merging_v2: bool,
     pub with_mergeable_data: bool,
     pub with_adjustments: bool,
     pub mark_all_txs_mergeable: bool,
@@ -189,6 +195,7 @@ pub struct SubmissionDecoder {
     merge_type: MergeType,
     is_dehydrated: bool,
     dehydrated_v2: bool,
+    merging_v2: bool,
     with_mergeable_data: bool,
     with_adjustments: bool,
     mark_all_txs_mergeable: bool,
@@ -210,6 +217,7 @@ impl SubmissionDecoder {
             merge_type: params.merge_type,
             is_dehydrated: params.is_dehydrated,
             dehydrated_v2: params.dehydrated_v2,
+            merging_v2: params.merging_v2,
             with_mergeable_data: params.with_mergeable_data,
             with_adjustments: params.with_adjustments,
             mark_all_txs_mergeable: params.mark_all_txs_mergeable,
@@ -278,8 +286,8 @@ impl SubmissionDecoder {
             Some(Err(e)) => return Err(e),
         };
 
-        if self.dehydrated_v2 {
-            self.decode_dehydrated_v2(body)
+        if self.dehydrated_v2 || self.merging_v2 {
+            self.decode_v2(body)
         } else if self.is_dehydrated {
             self.decode_dehydrated(body)
         } else if self.with_mergeable_data {
@@ -289,18 +297,66 @@ impl SubmissionDecoder {
         }
     }
 
+    /// TCP v2 shapes. `dehydrated_v2` and `merging_v2` are independent: either
+    /// side of the `[submission][merging_data]` pair may be v1 or v2. Merging
+    /// v2 needs `Mergeable`; neither combines with adjustments.
     #[timed]
-    fn decode_dehydrated_v2(
+    fn decode_v2(
         &mut self,
         body: &[u8],
     ) -> Result<(Submission, Option<BlockMergingData>, Option<BidAdjustmentData>), DecoderError>
     {
-        if self.merge_type != MergeType::Mergeable || self.with_adjustments {
-            return Err(DecoderError::DehydratedV2Unsupported);
+        let mergeable = self.merge_type == MergeType::Mergeable;
+        if self.with_adjustments || (self.merging_v2 && !mergeable) {
+            return Err(DecoderError::V2Unsupported);
         }
-        let sub: DehydratedBidSubmissionFuluV2 = self.decode_by_fork(body, self.fork_name)?;
-        let (submission, merging_data) = sub.split()?;
-        Ok((Submission::Dehydrated(submission), Some(merging_data), None))
+        let fork = self.fork_name;
+        match (self.dehydrated_v2, mergeable, self.merging_v2) {
+            (true, false, _) => {
+                let sub: DehydratedBidSubmissionFuluV2 = self.decode_by_fork(body, fork)?;
+                let submission = DehydratedBidSubmission::try_from(sub)?;
+                let merging_data = match self.merge_type {
+                    MergeType::AppendOnly => {
+                        Some(BlockMergingData::append_only(submission.fee_recipient()))
+                    }
+                    MergeType::None if self.mark_all_txs_mergeable => {
+                        Some(BlockMergingData::allow_all(
+                            submission.fee_recipient(),
+                            submission.num_txs(),
+                        ))
+                    }
+                    MergeType::None | MergeType::Pause => None,
+                    MergeType::Mergeable => unreachable!("matched above"),
+                };
+                Ok((Submission::Dehydrated(submission), merging_data, None))
+            }
+            (true, true, false) => {
+                let p: WithMergingData<DehydratedBidSubmissionFuluV2, BlockMergingData> =
+                    self.decode_by_fork(body, fork)?;
+                let submission = DehydratedBidSubmission::try_from(p.submission)?;
+                Ok((Submission::Dehydrated(submission), Some(p.merging_data), None))
+            }
+            (true, true, true) => {
+                let p: WithMergingData<DehydratedBidSubmissionFuluV2, BlockMergingDataV2> =
+                    self.decode_by_fork(body, fork)?;
+                let submission = DehydratedBidSubmission::try_from(p.submission)?;
+                Ok((Submission::Dehydrated(submission), Some(p.merging_data.try_into()?), None))
+            }
+            (false, _, _) if self.is_dehydrated => {
+                let p: WithMergingData<DehydratedBidSubmissionFulu, BlockMergingDataV2> =
+                    self.decode_by_fork(body, fork)?;
+                Ok((
+                    Submission::Dehydrated(p.submission.into()),
+                    Some(p.merging_data.try_into()?),
+                    None,
+                ))
+            }
+            (false, _, _) => {
+                let p: WithMergingData<SignedBidSubmission, BlockMergingDataV2> =
+                    self.decode_by_fork(body, fork)?;
+                Ok((Submission::Full(p.submission), Some(p.merging_data.try_into()?), None))
+            }
+        }
     }
 
     #[timed]
@@ -613,6 +669,7 @@ mod tests {
             merge_type: MergeType::Mergeable,
             is_dehydrated: true,
             dehydrated_v2: false,
+            merging_v2: false,
             with_mergeable_data: false,
             with_adjustments: false,
             mark_all_txs_mergeable: false,
@@ -645,6 +702,7 @@ mod tests {
             merge_type: MergeType::Pause,
             is_dehydrated: false,
             dehydrated_v2: false,
+            merging_v2: false,
             with_mergeable_data: false,
             with_adjustments: false,
             // Even with this testing override on, Pause must still suppress merge data.
@@ -675,6 +733,7 @@ mod tests {
             merge_type: MergeType::Pause,
             is_dehydrated: true,
             dehydrated_v2: false,
+            merging_v2: false,
             with_mergeable_data: false,
             with_adjustments: false,
             // Even with this testing override on, Pause must still suppress merge data.
@@ -720,6 +779,7 @@ mod tests {
             merge_type: MergeType::None,
             is_dehydrated: false,
             dehydrated_v2: false,
+            merging_v2: false,
             with_mergeable_data: false,
             with_adjustments: true,
             mark_all_txs_mergeable: false,
@@ -750,6 +810,7 @@ mod tests {
             merge_type: MergeType::Mergeable,
             is_dehydrated: false,
             dehydrated_v2: false,
+            merging_v2: false,
             with_mergeable_data: true,
             with_adjustments: false,
             mark_all_txs_mergeable: false,
@@ -797,6 +858,7 @@ mod tests {
             merge_type: MergeType::Mergeable,
             is_dehydrated: false,
             dehydrated_v2: false,
+            merging_v2: false,
             with_mergeable_data: true,
             with_adjustments: false,
             mark_all_txs_mergeable: false,
@@ -839,6 +901,7 @@ mod tests {
             merge_type: MergeType::AppendOnly,
             is_dehydrated: false,
             dehydrated_v2: false,
+            merging_v2: false,
             with_mergeable_data: true,
             with_adjustments: false,
             mark_all_txs_mergeable: false,
@@ -882,6 +945,7 @@ mod tests {
             merge_type: MergeType::None,
             is_dehydrated: true,
             dehydrated_v2: false,
+            merging_v2: false,
             with_mergeable_data: false,
             with_adjustments: true,
             mark_all_txs_mergeable: false,
@@ -909,6 +973,7 @@ mod tests {
             merge_type: MergeType::None,
             is_dehydrated: false,
             dehydrated_v2: false,
+            merging_v2: false,
             with_mergeable_data: false,
             with_adjustments: false,
             mark_all_txs_mergeable: false,
@@ -937,6 +1002,7 @@ mod tests {
             merge_type: MergeType::None,
             is_dehydrated: true,
             dehydrated_v2: false,
+            merging_v2: false,
             with_mergeable_data: false,
             with_adjustments: false,
             mark_all_txs_mergeable: false,
@@ -966,6 +1032,7 @@ mod tests {
             merge_type: MergeType::Mergeable,
             is_dehydrated: true,
             dehydrated_v2: false,
+            merging_v2: false,
             with_mergeable_data: false,
             with_adjustments: true,
             mark_all_txs_mergeable: false,
@@ -1001,6 +1068,7 @@ mod tests {
             merge_type: MergeType::Mergeable,
             is_dehydrated: false,
             dehydrated_v2: false,
+            merging_v2: false,
             with_mergeable_data: true,
             with_adjustments: true,
             mark_all_txs_mergeable: false,
@@ -1056,6 +1124,7 @@ mod tests {
             merge_type: MergeType::AppendOnly,
             is_dehydrated: false,
             dehydrated_v2: false,
+            merging_v2: false,
             with_mergeable_data: true,
             with_adjustments: true,
             mark_all_txs_mergeable: false,
@@ -1077,72 +1146,116 @@ mod tests {
         );
     }
 
-    fn dehydrated_v2_params(
+    fn v2_params(
         merge_type: MergeType,
+        is_dehydrated: bool,
+        dehydrated_v2: bool,
+        merging_v2: bool,
         with_adjustments: bool,
     ) -> SubmissionDecoderParams {
         SubmissionDecoderParams {
             compression: Compression::None,
             encoding: Encoding::Ssz,
             merge_type,
-            is_dehydrated: true,
-            dehydrated_v2: true,
-            with_mergeable_data: false,
+            is_dehydrated,
+            dehydrated_v2,
+            merging_v2,
+            with_mergeable_data: merge_type == MergeType::Mergeable,
             with_adjustments,
             mark_all_txs_mergeable: false,
             fork_name: ForkName::Fulu,
         }
     }
 
-    #[test]
-    fn decode_dehydrated_v2_expands_merge_orders() {
-        let (body, expected_merging_data) = (0..100)
-            .find_map(|_| {
-                let submission = DehydratedBidSubmissionFuluV2::random_for_test(&mut rand::rng());
-                let (_, merging_data) = submission.clone().split().unwrap();
-                if merging_data.merge_orders.is_empty() {
-                    return None;
-                }
-                Some((submission.as_ssz_bytes(), merging_data))
-            })
-            .expect("should produce a submission with non-empty merge_orders within 100 tries");
-
-        let mut decoder =
-            SubmissionDecoder::new(&dehydrated_v2_params(MergeType::Mergeable, false));
-        let mut buf = Vec::new();
-        let (decoded_submission, merging_data, bid_adjustment_data) =
-            decoder.decode(&body, &mut buf).expect("decode should succeed");
-
-        assert!(matches!(decoded_submission, Submission::Dehydrated(_)));
-        assert!(bid_adjustment_data.is_none());
-        assert_eq!(merging_data.expect("merging data"), expected_merging_data);
+    fn random_v2_merging() -> (BlockMergingDataV2, BlockMergingData) {
+        // Random merging data is valid by construction; the expansion is the oracle.
+        let v2 = BlockMergingDataV2::random_for_test(&mut rand::rng());
+        let v1 = BlockMergingData::try_from(v2.clone()).unwrap();
+        (v2, v1)
     }
 
     #[test]
-    fn decode_dehydrated_v2_rejects_non_mergeable_and_adjustments() {
-        let body = DehydratedBidSubmissionFuluV2::random_for_test(&mut rand::rng()).as_ssz_bytes();
-        let mut buf = Vec::new();
+    fn decode_v2_dehydrated_with_merging_v2() {
+        let sub = DehydratedBidSubmissionFuluV2::random_for_test(&mut rand::rng());
+        let (merging_v2, expected) = random_v2_merging();
+        let body =
+            WithMergingData { submission: sub.clone(), merging_data: merging_v2 }.as_ssz_bytes();
+        let params = v2_params(MergeType::Mergeable, true, true, true, false);
+        let (submission, merging_data, adjustments) =
+            SubmissionDecoder::new(&params).decode(&body, &mut Vec::new()).unwrap();
+        let Submission::Dehydrated(d) = submission else { panic!("dehydrated") };
+        assert_eq!(d.num_txs(), 5);
+        assert_eq!(merging_data, Some(expected));
+        assert!(adjustments.is_none());
+    }
 
+    #[test]
+    fn decode_v2_dehydrated_without_merging_and_with_merging_v1() {
+        let sub = DehydratedBidSubmissionFuluV2::random_for_test(&mut rand::rng());
+        let params = v2_params(MergeType::None, true, true, false, false);
+        let (submission, merging_data, _) =
+            SubmissionDecoder::new(&params).decode(&sub.as_ssz_bytes(), &mut Vec::new()).unwrap();
+        assert!(matches!(submission, Submission::Dehydrated(_)));
+        assert!(merging_data.is_none());
+
+        let (_, merging_v1) = random_v2_merging();
+        let body =
+            WithMergingData { submission: sub, merging_data: merging_v1.clone() }.as_ssz_bytes();
+        let params = v2_params(MergeType::Mergeable, true, true, false, false);
+        let (_, merging_data, _) =
+            SubmissionDecoder::new(&params).decode(&body, &mut Vec::new()).unwrap();
+        assert_eq!(merging_data, Some(merging_v1));
+    }
+
+    #[test]
+    fn decode_v2_merging_on_v1_submissions() {
+        let (merging_v2, expected) = random_v2_merging();
+        let mut signed = SignedBidSubmission::random_for_test(&mut rand::rng());
+        signed.blobs_bundle = BlobsBundle::default().into();
+        let body =
+            WithMergingData { submission: signed, merging_data: merging_v2.clone() }.as_ssz_bytes();
+        let params = v2_params(MergeType::Mergeable, false, false, true, false);
+        let (submission, merging_data, _) =
+            SubmissionDecoder::new(&params).decode(&body, &mut Vec::new()).unwrap();
+        assert!(matches!(submission, Submission::Full(_)));
+        assert_eq!(merging_data, Some(expected.clone()));
+
+        let (dehydrated, _) =
+            DehydratedBidSubmissionFuluWithMergingData::random_for_test(&mut rand::rng()).split();
+        let DehydratedBidSubmission::Fulu(dehydrated) = dehydrated;
+        let body =
+            WithMergingData { submission: dehydrated, merging_data: merging_v2 }.as_ssz_bytes();
+        let params = v2_params(MergeType::Mergeable, true, false, true, false);
+        let (submission, merging_data, _) =
+            SubmissionDecoder::new(&params).decode(&body, &mut Vec::new()).unwrap();
+        assert!(matches!(submission, Submission::Dehydrated(_)));
+        assert_eq!(merging_data, Some(expected));
+    }
+
+    #[test]
+    fn decode_v2_rejects_adjustments_and_non_mergeable_merging_v2() {
+        let body = DehydratedBidSubmissionFuluV2::random_for_test(&mut rand::rng()).as_ssz_bytes();
         for params in [
-            dehydrated_v2_params(MergeType::None, false),
-            dehydrated_v2_params(MergeType::AppendOnly, false),
-            dehydrated_v2_params(MergeType::Mergeable, true),
+            v2_params(MergeType::None, true, true, false, true),
+            v2_params(MergeType::None, true, true, true, false),
+            v2_params(MergeType::Mergeable, false, false, true, true),
         ] {
-            let err = SubmissionDecoder::new(&params)
-                .decode(&body, &mut buf)
-                .expect_err("dehydrated v2 must be rejected");
-            assert!(matches!(err, DecoderError::DehydratedV2Unsupported));
+            let err = SubmissionDecoder::new(&params).decode(&body, &mut Vec::new()).unwrap_err();
+            assert!(matches!(err, DecoderError::V2Unsupported), "{params:?}: {err}");
         }
     }
 
+    /// A v1 dehydrated body under the v2 flag must fail, not mis-decode.
     #[test]
     fn decode_dehydrated_v1_body_with_v2_flag_fails() {
-        let body = DehydratedBidSubmissionFuluWithMergingData::random_for_test(&mut rand::rng())
-            .as_ssz_bytes();
-        let mut buf = Vec::new();
-        let err = SubmissionDecoder::new(&dehydrated_v2_params(MergeType::Mergeable, false))
-            .decode(&body, &mut buf)
-            .expect_err("v1 bytes must not decode as v2");
-        assert!(matches!(err, DecoderError::SszDecode(_)));
+        let (dehydrated, _) =
+            DehydratedBidSubmissionFuluWithMergingData::random_for_test(&mut rand::rng()).split();
+        let DehydratedBidSubmission::Fulu(dehydrated) = dehydrated;
+        let params = v2_params(MergeType::None, true, true, false, false);
+        assert!(
+            SubmissionDecoder::new(&params)
+                .decode(&dehydrated.as_ssz_bytes(), &mut Vec::new())
+                .is_err()
+        );
     }
 }

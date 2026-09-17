@@ -184,6 +184,8 @@ bitflags::bitflags! {
         const ZSTD_COMPRESSED = 1 << 2;
         const PESSIMISTIC = 1 << 3;
         const DEHYDRATED_V2 = 1 << 4;
+        /// Merging data is `BlockMergingDataV2` (dehydration v2 shapes).
+        const MERGING_V2 = 1 << 5;
     }
 }
 
@@ -202,6 +204,10 @@ impl BidSubmissionFlags {
     }
     pub fn dehydrated_v2(&self) -> bool {
         self.contains(Self::DEHYDRATED_V2)
+    }
+
+    pub fn merging_v2(&self) -> bool {
+        self.contains(Self::MERGING_V2)
     }
 }
 
