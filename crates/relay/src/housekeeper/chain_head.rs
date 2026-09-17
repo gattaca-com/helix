@@ -153,6 +153,7 @@ impl ChainHead {
     }
     pub fn mark_payload_attrs_done(&mut self) {
         self.payload_attributes_done = true;
+        self.sent_was_complete = false;
     }
     pub fn mark_il_done(&mut self) {
         self.inclusion_list_done = true;
