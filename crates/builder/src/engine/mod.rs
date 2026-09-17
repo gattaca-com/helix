@@ -36,13 +36,14 @@ use tracing::{debug, info, warn};
 use crate::{
     engine::{
         error::MergeError,
-        replay::{ReplayJob, ReplayPool},
+        replay::{Dispatch, ReplayJob, ReplayPool},
         session::{EmitOutcome, MergeSession},
         types::{
             DecodedTx, EngineConfig, MAX_PARKED_SESSIONS, MAX_REPLAY_CHECKPOINTS, PreparedBlock,
             PreparedOrder, SlotState,
         },
     },
+    metrics,
     node::HeadInfo,
 };
 
@@ -242,7 +243,25 @@ impl MergeEngine {
                 spec_evicted = state.spec.evicted,
                 spec_hits = state.spec.hits,
                 spec_misses = state.spec.misses,
+                spec_skipped_not_top_k = state.spec.skipped_not_top_k,
+                spec_superseded = state.spec.superseded,
                 prebuilt_unused = state.prebuilt.len(),
+                emissions_ahead = state.emissions_ahead,
+                emissions_behind = state.emissions_behind,
+                rebases = state.rebases,
+                builders = state.submissions.len(),
+                top_builder_rise_gwei = state
+                    .top_builders(1)
+                    .first()
+                    .and_then(|b| state.submissions.get(b))
+                    .map(|s| metrics::gwei(s.total_rise))
+                    .unwrap_or_default(),
+                top_builder_span_ms = state
+                    .top_builders(1)
+                    .first()
+                    .and_then(|b| state.submissions.get(b))
+                    .map(|s| s.span_ms())
+                    .unwrap_or_default(),
                 "merge slot ended"
             );
         }
@@ -300,6 +319,7 @@ impl MergeEngine {
                 match self.ingest_mergeable_block(&body, recv_ns) {
                     Ok(()) => true,
                     Err((slot, block_hash, err)) => {
+                        metrics::rejection("ingest", err.metric_label());
                         warn!(%err, "mergeable block rejected");
                         if let Some((code, subject)) = err.reject(block_hash) {
                             let _ = self.out.send(EngineOutput::reject(
@@ -356,16 +376,42 @@ impl MergeEngine {
                 }
                 let Some(session) = session else {
                     state.spec.failed += 1;
+                    metrics::speculation("failed");
                     return waiting;
                 };
                 state.spec.completed += 1;
+                metrics::speculation("completed");
                 if checkpoint_hit {
                     state.checkpoint_hits += 1;
                 } else {
                     state.checkpoint_misses += 1;
                 }
                 let max = self.config.max_prebuilt_per_builder;
-                state.spec.evicted += state.insert_prebuilt(beneficiary, *session, max) as u64;
+                let base_index = session.base_index;
+                let block_hash = session.base_block_hash;
+                let evicted = state.insert_prebuilt(beneficiary, *session, max) as u64;
+                state.spec.evicted += evicted;
+                metrics::speculation_by("evicted", evicted);
+
+                // The live session's base is now stale by at least one
+                // submission. Swap to this fresher base: the relay accepts any
+                // appendable base, keeps only the latest merge per builder, and
+                // drops merges whose base is older than its staleness gate.
+                let is_live_builder = state.live_builder == Some(beneficiary);
+                let live_is_older =
+                    state.session.as_ref().is_some_and(|live| live.base_index < base_index);
+                if is_live_builder && live_is_older && state.pending_activation.is_none() {
+                    if let Some(fresh) = state.take_prebuilt(&block_hash) {
+                        if let Some(stale) = state.session.replace(fresh) {
+                            // Superseded by a later base from the same builder,
+                            // so it can never be activated again.
+                            stale.log_stats("rebased");
+                        }
+                        state.rebases += 1;
+                        metrics::rebase();
+                        return true;
+                    }
+                }
                 waiting
             }
         }
@@ -379,9 +425,20 @@ impl MergeEngine {
         // collateral or distribution policy than the inline path would.
         let Some(relay_config) = state.relay_config.clone() else { return };
         let block_hash = base.block_hash;
-        if state.prebuilt.contains_key(&block_hash) || !state.speculating.insert(block_hash) {
+        if state.prebuilt.contains_key(&block_hash) || state.speculating.contains(&block_hash) {
             return;
         }
+        // Only the builders that can plausibly win the slot are worth warming.
+        // Everything else was being replayed and then evicted unused.
+        let beneficiary = base.beneficiary();
+        let top_k = self.config.speculation_top_k;
+        let is_live = state.live_builder == Some(beneficiary);
+        if top_k > 0 && !is_live && !state.top_builders(top_k).contains(&beneficiary) {
+            state.spec.skipped_not_top_k += 1;
+            metrics::speculation("skipped_not_top_k");
+            return;
+        }
+        state.speculating.insert(block_hash);
         let head = *self.head.borrow();
         if !head.is_synced || convert::b256(head.hash) != state.parent_hash {
             state.speculating.remove(&block_hash);
@@ -393,12 +450,26 @@ impl MergeEngine {
             relay_config,
             generation: self.generation,
         };
-        let beneficiary = base.beneficiary();
-        if pool.dispatch(beneficiary, job) {
-            state.spec.dispatched += 1;
-        } else {
-            state.speculating.remove(&block_hash);
-            state.spec.queue_full += 1;
+        match pool.dispatch(beneficiary, job) {
+            Dispatch::Accepted => {
+                state.spec.dispatched += 1;
+                metrics::speculation("dispatched");
+            }
+            Dispatch::Superseded(stale) => {
+                // The replaced job will never produce a `Prebuilt`, so it must
+                // stop counting as in flight or `merge_pass` waits on it
+                // forever.
+                state.speculating.remove(&stale);
+                state.spec.dispatched += 1;
+                state.spec.superseded += 1;
+                metrics::speculation("dispatched");
+                metrics::speculation("superseded");
+            }
+            Dispatch::Refused => {
+                state.speculating.remove(&block_hash);
+                state.spec.queue_full += 1;
+                metrics::speculation("refused");
+            }
         }
     }
 
@@ -528,6 +599,7 @@ impl MergeEngine {
                             activated = true;
                         }
                         Err(err) => {
+                            metrics::rejection("activation", err.metric_label());
                             warn!(%err, base_block_hash = %block_hash, "activation failed");
                             if let Some((code, subject)) = err.reject(Some(block_hash)) {
                                 let _ = self.out.send(EngineOutput::reject(
@@ -543,6 +615,16 @@ impl MergeEngine {
                 }
 
                 if activated {
+                    state.live_builder = Some(beneficiary_alloy);
+                    metrics::activation_source(source);
+                    metrics::stage_latency(
+                        "activate_queue",
+                        crate::utils::utcnow_ns().saturating_sub(activate_recv_ns) / 1000,
+                    );
+                    metrics::base_age(
+                        "activate",
+                        activate_recv_ns.saturating_sub(base.recv_ns) / 1_000_000,
+                    );
                     info!(
                         slot = state.slot,
                         base_block_hash = %block_hash,
@@ -561,21 +643,90 @@ impl MergeEngine {
             }
         }
 
-        let SlotState { slot, proposer_fee_recipient, orders, session, excluded, .. } = state;
-        let Some(session) = session.as_mut() else { return };
-
-        let changed = session.try_extend(orders, excluded);
-        if !changed && !session.pending_emission && !session.has_pending_revenue() {
+        if state.session.is_none() {
             return;
         }
+        let slot = &state.slot;
+        let proposer_fee_recipient = &state.proposer_fee_recipient;
+        let changed = {
+            let SlotState { orders, session, excluded, .. } = state;
+            let session = session.as_mut().expect("checked above");
+            session.try_extend(orders, excluded)
+        };
+        let pending =
+            state.session.as_ref().is_some_and(|s| s.pending_emission || s.has_pending_revenue());
+        if !changed && !pending {
+            return;
+        }
+        let session = state.session.as_mut().expect("checked above");
+        let base_index_for_emission = session.base_index;
+        let base_value_for_emission = session.base_bid_value;
+        let base_recv_for_emission = session.base_recv_ns();
         match session.emit(*slot, *proposer_fee_recipient, &relay_config, &self.config) {
             Ok(EmitOutcome::Emitted(msg)) => {
+                // The comparison the relay will make at get_header, evaluated
+                // now: our merged bid against this builder's own best bid.
+                let beneficiary = msg.execution_payload.payload_inner.payload_inner.fee_recipient;
+                // The exact win condition, evaluated here rather than
+                // reconstructed from aggregates: delta and the uplift are
+                // negatively correlated, so a ratio of means flatters us.
+                let (own_latest, own_best) = state.reference_bids(&beneficiary);
+                let beats_latest = msg.proposer_value > own_latest;
+                metrics::beats_own_bid("latest", beats_latest);
+                metrics::beats_own_bid("best", msg.proposer_value > own_best);
+                if beats_latest {
+                    state.emissions_ahead += 1;
+                } else {
+                    state.emissions_behind += 1;
+                }
+
+                let base_index = base_index_for_emission;
+                let base_value = base_value_for_emission;
+                let delta = msg.proposer_value.saturating_sub(base_value);
+                let uplift = own_latest.saturating_sub(base_value);
+                let latest_index =
+                    state.submissions.get(&beneficiary).map(|s| s.count - 1).unwrap_or_default();
+                let (budget_steps, budget_ms, deadline_seen) = state
+                    .submissions
+                    .get(&beneficiary)
+                    .map(|s| s.budget(base_index, base_value, delta))
+                    .unwrap_or_default();
+                let steps_behind = latest_index.saturating_sub(base_index);
+                let base_age_ms =
+                    crate::utils::utcnow_ns().saturating_sub(base_recv_for_emission) / 1_000_000;
+                metrics::emission_verdict(
+                    beats_latest,
+                    steps_behind,
+                    base_age_ms,
+                    budget_steps,
+                    budget_ms,
+                    deadline_seen,
+                );
+                info!(
+                    base_block_hash = %msg.base_block_hash,
+                    builder = %beneficiary,
+                    base_index,
+                    latest_index,
+                    steps_behind,
+                    base_age_ms,
+                    delta_gwei = metrics::gwei(delta),
+                    uplift_gwei = metrics::gwei(uplift),
+                    margin_gwei = metrics::gwei(delta) - metrics::gwei(uplift),
+                    budget_steps,
+                    budget_ms,
+                    deadline_seen,
+                    won = beats_latest,
+                    "merged block emitted"
+                );
                 let _ = self.out.send(EngineOutput::Merged { generation: self.generation, msg });
             }
             // Throttled sets `pending_emission`; the worker loop retries after
             // the spacing window.
             Ok(EmitOutcome::Throttled) | Ok(EmitOutcome::NotImproved) => {}
-            Err(err) => warn!(%err, "emission failed"),
+            Err(err) => {
+                metrics::rejection("emission", err.metric_label());
+                warn!(%err, "emission failed")
+            }
         }
     }
 
@@ -605,6 +756,11 @@ impl MergeEngine {
         if state.blocks.contains_key(&block_hash) {
             // Same block re-forwarded (e.g. handshake replay): nothing new.
             return Ok(());
+        }
+        let (submission_index, ratchet) =
+            state.record_submission(msg.builder_address, msg.block_value, recv_ns);
+        if let Some((delta, interval_ms, rising)) = ratchet {
+            metrics::ratchet(delta, interval_ms, rising);
         }
         if state.blocks.len() >= self.config.max_blocks_per_slot {
             return Err(fail(MergeError::LimitExceeded("max blocks per slot".into())));
@@ -690,6 +846,7 @@ impl MergeEngine {
             payload: msg.execution_payload,
             txs,
             recv_ns,
+            submission_index,
         });
         state.blocks.insert(block_hash, prepared.clone());
 

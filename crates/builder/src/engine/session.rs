@@ -34,8 +34,31 @@ use crate::{
             EngineConfig, OriginRevenue, PreparedBlock, PreparedOrder, SimulatedOrder, SlotContext,
         },
     },
+    metrics,
     utils::utcnow_ns,
 };
+
+/// Upper bound on the priority fee an order can pay, used to size the value
+/// lost to each screening outcome. Real payment is lower; this is a ceiling.
+fn order_headroom(order: &PreparedOrder, base_fee: Option<u64>) -> U256 {
+    let base_fee = base_fee.unwrap_or_default();
+    order.txs.iter().fold(U256::ZERO, |acc, tx| {
+        let tip = au256(tx.tx.effective_gas_tip(Some(base_fee)).unwrap_or_default());
+        acc.saturating_add(tip.saturating_mul(U256::from(tx.gas_limit)))
+    })
+}
+
+fn sim_error_label(err: &SimulationError) -> &'static str {
+    match err {
+        SimulationError::ZeroBuilderPayment => "zero_payment",
+        SimulationError::OutOfBlockGas => "out_of_gas",
+        SimulationError::OutOfBlockBlobs => "out_of_blobs",
+        SimulationError::DuplicateTransaction => "duplicate",
+        SimulationError::RevertNotAllowed(_) => "revert_not_allowed",
+        SimulationError::DropNotAllowed(_) => "drop_not_allowed",
+        SimulationError::Execution(_) => "execution_error",
+    }
+}
 
 /// Result of an emission attempt.
 pub enum EmitOutcome {
@@ -165,9 +188,17 @@ pub struct MergeSession {
     /// spacing window even with no further inbound events.
     pub pending_emission: bool,
     stats: MergeStats,
+    /// Last screening outcome per order, with its priority-fee headroom. Kept
+    /// per order rather than per screening: `try_extend` re-screens the same
+    /// order every pass, so counting each screening would multiply-count it.
+    order_outcomes: FxHashMap<B256, (&'static str, U256)>,
     trace: MergeTraceV1,
     /// Wall time the base replay in `activate` took, for the activation log.
     pub replay_us: u64,
+    /// `i` in the win condition: the base's index in its builder's stream.
+    pub base_index: u64,
+    /// Value of the base bid, `V(b_i)`.
+    pub base_bid_value: U256,
 }
 
 impl MergeSession {
@@ -419,9 +450,17 @@ impl MergeSession {
             last_emit: None,
             pending_emission: false,
             stats: MergeStats::default(),
+            order_outcomes: FxHashMap::default(),
             trace: MergeTraceV1 { base_block_recv_ns: base.recv_ns, ..Default::default() },
             replay_us: started.elapsed().as_micros() as u64,
+            base_index: base.submission_index,
+            base_bid_value: base.block_value,
         };
+        metrics::stage_latency(
+            if checkpoint_hit { "replay_checkpoint_hit" } else { "replay_full" },
+            session.replay_us,
+        );
+        metrics::base_age("replay", utcnow_ns().saturating_sub(base.recv_ns) / 1_000_000);
         Ok((session, new_checkpoint, checkpoint_hit))
     }
 
@@ -432,8 +471,13 @@ impl MergeSession {
         self.trace.sim_start_ns = utcnow_ns();
         let header = self.ctx.payload.header.clone();
 
+        let base_fee = header.base_fee_per_gas;
         self.stats.orders_excluded_skipped =
             orders.iter().filter(|order| excluded.contains(&order.order_hash)).count() as u64;
+        for order in orders.iter().filter(|order| excluded.contains(&order.order_hash)) {
+            self.order_outcomes
+                .insert(order.order_id, ("excluded", order_headroom(order, base_fee)));
+        }
 
         let candidates: Vec<usize> = (0..orders.len())
             .filter(|&ix| {
@@ -484,6 +528,9 @@ impl MergeSession {
                 Ok(order) => simulated.push(order),
                 Err(err) => {
                     self.stats.count_sim_error(&err);
+                    let headroom = order_headroom(&orders[ix], base_fee);
+                    self.order_outcomes
+                        .insert(orders[ix].order_id, (sim_error_label(&err), headroom));
                     debug!(order = %orders[ix].order_id, %err, "order presim discarded");
                 }
             }
@@ -495,16 +542,27 @@ impl MergeSession {
         let mut changed = false;
         for candidate in simulated {
             let order = &orders[candidate.order_ix];
+            let headroom = order_headroom(order, base_fee);
             match self.try_apply(order, &header) {
-                Ok(true) => changed = true,
-                Ok(false) => {}
+                Ok(true) => {
+                    changed = true;
+                    self.order_outcomes.insert(order.order_id, ("applied", headroom));
+                }
+                Ok(false) => {
+                    self.order_outcomes.insert(order.order_id, ("apply_rejected", headroom));
+                }
                 Err(err) => {
+                    self.order_outcomes.insert(order.order_id, ("apply_error", headroom));
                     debug!(order = %order.order_id, %err, "order apply skipped");
                 }
             }
         }
 
         self.trace.sim_end_ns = utcnow_ns();
+        metrics::stage_latency(
+            "extend",
+            self.trace.sim_end_ns.saturating_sub(self.trace.sim_start_ns) / 1000,
+        );
         changed
     }
 
@@ -635,6 +693,7 @@ impl MergeSession {
         relay_config: &RelayConfigV1,
         engine_config: &EngineConfig,
     ) -> Result<EmitOutcome, MergeError> {
+        let emit_start_ns = utcnow_ns();
         self.pending_emission = false;
         let total_revenue: U256 = self.revenues.values().map(|v| v.revenue).sum();
         if total_revenue.is_zero() {
@@ -774,6 +833,12 @@ impl MergeSession {
             .map_err(|e| MergeError::Internal(format!("finalize payload: {e}")))?;
 
         self.trace.finalize_ns = utcnow_ns();
+        metrics::emit_value(total_revenue, proposer_added_value);
+        metrics::base_age(
+            "emit",
+            self.trace.finalize_ns.saturating_sub(self.trace.base_block_recv_ns) / 1_000_000,
+        );
+        metrics::stage_latency("emit", self.trace.finalize_ns.saturating_sub(emit_start_ns) / 1000);
 
         let execution_payload = block_to_payload_v3(&ctx.payload);
         let execution_requests = requests_to_v4(ctx.requests.as_deref().unwrap_or_default())
@@ -837,6 +902,11 @@ impl MergeSession {
     /// Whether this live session already applied `order_id` — if so, a
     /// revocation of that order can't be reflected without rebuilding from
     /// the base, since there's no way to un-apply a committed tx.
+    /// Arrival time of the base block on the builder's clock.
+    pub fn base_recv_ns(&self) -> u64 {
+        self.trace.base_block_recv_ns
+    }
+
     pub fn has_applied(&self, order_id: &B256) -> bool {
         self.applied_orders.contains(order_id)
     }
@@ -854,6 +924,20 @@ impl MergeSession {
     /// One structured summary line, emitted when the session is finally
     /// discarded (slot end, connection reset, parked-eviction).
     pub fn log_stats(&self, reason: &str) {
+        let mut applied = U256::ZERO;
+        let mut lost_revert = U256::ZERO;
+        let mut lost_total = U256::ZERO;
+        for (outcome, headroom) in self.order_outcomes.values() {
+            metrics::order_outcome(outcome, *headroom);
+            match *outcome {
+                "applied" => applied = applied.saturating_add(*headroom),
+                "revert_not_allowed" => {
+                    lost_revert = lost_revert.saturating_add(*headroom);
+                    lost_total = lost_total.saturating_add(*headroom);
+                }
+                _ => lost_total = lost_total.saturating_add(*headroom),
+            }
+        }
         info!(
             reason,
             base_block_hash = %self.base_block_hash,
@@ -873,6 +957,10 @@ impl MergeSession {
             emit_not_improved = self.stats.emit_not_improved,
             emit_no_revenue = self.stats.emit_no_revenue,
             emit_throttled = self.stats.emit_throttled,
+            orders_seen = self.order_outcomes.len(),
+            value_applied_gwei = metrics::gwei(applied),
+            value_lost_revert_gwei = metrics::gwei(lost_revert),
+            value_lost_total_gwei = metrics::gwei(lost_total),
             "merge session stats"
         );
     }
