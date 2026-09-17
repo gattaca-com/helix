@@ -1,8 +1,8 @@
 use std::{convert::TryFrom, task::Poll};
 
 use alloy_primitives::U256;
+use alloy_sol_types::{SolCall, sol};
 use bytes::Bytes;
-use ethers::abi::{Abi, Token};
 use helix_common::{
     BuilderConfig, BuilderInfo, PrimevConfig, ProposerDuty,
     http::client::{HttpClient, PendingResponse},
@@ -15,17 +15,15 @@ use url::Url;
 
 pub const PRIMEV_BUILDER_ID: &str = "PrimevBuilder";
 
-const VALIDATOR_ABI: &str = r#"[{
-    "type": "function",
-    "name": "areValidatorsOptedIn",
-    "inputs": [{"name": "valBLSPubKeys", "type": "bytes[]", "internalType": "bytes[]"}],
-    "outputs": [{"components": [
-        {"name": "isVanillaOptedIn", "type": "bool", "internalType": "bool"},
-        {"name": "isAvsOptedIn", "type": "bool", "internalType": "bool"},
-        {"name": "isMiddlewareOptedIn", "type": "bool", "internalType": "bool"}
-    ], "name": "", "type": "tuple[]", "internalType": "struct IValidatorOptInRouter.OptInStatus[]"}],
-    "stateMutability": "view"
-}]"#;
+sol! {
+    struct OptInStatus {
+        bool isVanillaOptedIn;
+        bool isAvsOptedIn;
+        bool isMiddlewareOptedIn;
+    }
+
+    function areValidatorsOptedIn(bytes[] valBLSPubKeys) external view returns (OptInStatus[]);
+}
 
 #[derive(Deserialize)]
 struct EthJsonRpcResult<T> {
@@ -105,7 +103,6 @@ impl PrimevBuildersFetch {
 
 pub struct PrimevValidatorsFetch {
     req: PendingResponse,
-    func: ethers::abi::Function,
     duties: Vec<ProposerDuty>,
 }
 
@@ -118,19 +115,20 @@ impl PrimevValidatorsFetch {
         if duties.is_empty() {
             return None;
         }
-        let abi: Abi = serde_json::from_str(VALIDATOR_ABI).ok()?;
-        let func = abi.function("areValidatorsOptedIn").ok()?.clone();
-        let pubkeys: Vec<Token> =
-            duties.iter().map(|d| Token::Bytes(d.pubkey.0.to_vec())).collect();
-        let call_data = func.encode_input(&[Token::Array(pubkeys)]).ok()?;
-        let hex_data = format!("0x{}", alloy_primitives::hex::encode(&call_data));
+        let call = areValidatorsOptedInCall {
+            valBLSPubKeys: duties
+                .iter()
+                .map(|d| alloy_primitives::Bytes::copy_from_slice(&d.pubkey.0))
+                .collect(),
+        };
+        let hex_data = alloy_primitives::hex::encode_prefixed(call.abi_encode());
         let body = format!(
             r#"{{"jsonrpc":"2.0","id":1,"method":"eth_call","params":[{{"to":"{}","data":"{}"}},"latest"]}}"#,
             config.validator_contract, hex_data
         );
         let url = Url::parse(&config.validator_url).ok()?;
         let req = http_client.post(&url, Bytes::from(body)).ok()?;
-        Some(Self { req, func, duties })
+        Some(Self { req, duties })
     }
 
     pub fn poll(&mut self) -> Poll<Vec<BlsPublicKeyBytes>> {
@@ -149,34 +147,27 @@ impl PrimevValidatorsFetch {
                             return Poll::Ready(vec![]);
                         }
                     };
-                let decoded = match self.func.decode_output(&result_bytes) {
-                    Ok(d) => d,
+                let statuses = match areValidatorsOptedInCall::abi_decode_returns(&result_bytes) {
+                    Ok(s) => s,
                     Err(e) => {
                         error!(%e, "validators ABI decode");
                         return Poll::Ready(vec![]);
                     }
                 };
-                Poll::Ready(extract_opted_in(&decoded, &self.duties))
+                Poll::Ready(extract_opted_in(&statuses, &self.duties))
             }
         }
     }
 }
 
-fn extract_opted_in(decoded: &[Token], duties: &[ProposerDuty]) -> Vec<BlsPublicKeyBytes> {
-    let tuples = match decoded.first() {
-        Some(Token::Array(v)) => v,
-        _ => return vec![],
-    };
-    tuples
+fn extract_opted_in(statuses: &[OptInStatus], duties: &[ProposerDuty]) -> Vec<BlsPublicKeyBytes> {
+    statuses
         .iter()
-        .enumerate()
-        .filter_map(|(i, token)| {
-            if let Token::Tuple(values) = token {
-                let opted_in = values.iter().any(|t| matches!(t, Token::Bool(true)));
-                if opted_in { duties.get(i).map(|d| d.pubkey) } else { None }
-            } else {
-                None
-            }
+        .zip(duties)
+        .filter_map(|(status, duty)| {
+            let opted_in =
+                status.isVanillaOptedIn || status.isAvsOptedIn || status.isMiddlewareOptedIn;
+            opted_in.then_some(duty.pubkey)
         })
         .collect()
 }

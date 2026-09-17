@@ -39,7 +39,6 @@ derive_more = { version = "2", default-features = false, features = ["full"] }
 ethereum_serde_utils = "0.8"
 ethereum_ssz = "0.10"
 ethereum_ssz_derive = "0.10"
-ethers = "2.0.14"
 
 # ethrex embedded node (helix-builder), pinned by rev.
 # NOTE: the `ethrex` cmd-lib is deliberately NOT a dependency: it force-enables
