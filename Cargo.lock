@@ -6253,6 +6253,7 @@ dependencies = [
  "httpmock",
  "hyper 1.11.0",
  "hyper-util",
+ "mio",
  "mockito",
  "moka",
  "num-format",

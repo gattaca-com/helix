@@ -107,6 +107,7 @@ lh-types = { package = "types", git = "https://github.com/sigp/lighthouse", rev 
 libp2p = { version = "0.56", features = ["macros", "ping", "quic", "gossipsub", "secp256k1", "tokio"] }
 metrics = "0.24.0"
 mime_guess = "2"
+mio = { version = "1.2", features = ["os-poll", "os-ext"] }
 mockito = "1.1.1"
 moka = { version = "0.12.10", features = ["sync"] }
 num-format = "0.4.4"

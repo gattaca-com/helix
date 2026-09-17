@@ -41,6 +41,7 @@ helix-operator.workspace = true
 helix-website.workspace = true
 helix-tcp-types.workspace = true
 helix-types.workspace = true
+mio.workspace = true
 http.workspace = true
 http-body.workspace = true
 http-body-util.workspace = true
