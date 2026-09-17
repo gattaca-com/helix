@@ -13,7 +13,49 @@ permissions:
   packages: write
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      relay: ${{ steps.filter.outputs.relay }}
+      data-api: ${{ steps.filter.outputs.data-api }}
+      simulator: ${{ steps.filter.outputs.simulator }}
+      builder: ${{ steps.filter.outputs.builder }}
+
+    steps:
+      - name: Select images to build
+        id: filter
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # No diff to compare (manual run, new branch, or a force push the API
+          # cannot resolve): build everything.
+          if [[ "${{ github.event_name }}" != "push" || "${{ github.event.before }}" == "0000000000000000000000000000000000000000" ]]; then
+            FILES=ALL
+          else
+            FILES=$(gh api "repos/${{ github.repository }}/compare/${{ github.event.before }}...${{ github.sha }}" --jq '.files[].filename') || FILES=ALL
+          fi
+
+          # Members every image links: helix-common, helix-types, helix-tcp-types.
+          SHARED='^(Cargo\.(toml|lock)|rust-toolchain\.toml|\.github/workflows/build\.yml|crates/(common|types|tcp-types|vendored)/)'
+
+          match() {
+            if [[ "$FILES" == ALL ]] || grep -qE "$SHARED|$1" <<< "$FILES"; then
+              echo true
+            else
+              echo false
+            fi
+          }
+
+          {
+            echo "relay=$(match '^(relay\.Dockerfile|crates/(relay|database|data-api|operator|website)/)')"
+            echo "data-api=$(match '^(data-api\.Dockerfile|crates/(data-api|database)/)')"
+            echo "simulator=$(match '^(simulator\.Dockerfile|crates/simulator/)')"
+            echo "builder=$(match '^(builder\.Dockerfile|crates/builder/)')"
+          } >> "$GITHUB_OUTPUT"
+
   build-relay:
+    needs: changes
+    if: needs.changes.outputs.relay == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -53,6 +95,8 @@ jobs:
           cache-to: type=registry,ref=ghcr.io/${{ github.repository_owner }}/helix-relay:buildcache,mode=max
 
   build-data-api:
+    needs: changes
+    if: needs.changes.outputs.data-api == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -92,6 +136,8 @@ jobs:
           cache-to: type=registry,ref=ghcr.io/${{ github.repository_owner }}/helix-data:buildcache,mode=max
 
   build-simulator:
+    needs: changes
+    if: needs.changes.outputs.simulator == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -131,6 +177,8 @@ jobs:
           cache-to: type=registry,ref=ghcr.io/${{ github.repository_owner }}/helix-simulator:buildcache,mode=max
 
   build-builder:
+    needs: changes
+    if: needs.changes.outputs.builder == 'true'
     runs-on: ubuntu-latest
 
     steps:
