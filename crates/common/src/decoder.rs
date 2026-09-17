@@ -10,7 +10,7 @@ use helix_types::{
     BidAdjustmentData, BlockMergingData, Compression, DehydratedBidSubmission,
     DehydratedBidSubmissionFuluV2, DehydratedBidSubmissionFuluWithAdjustments,
     DehydratedBidSubmissionFuluWithAdjustmentsAndMergingData,
-    DehydratedBidSubmissionFuluWithMergingData, ForkName, ForkVersionDecode, InvalidMergingDataV2,
+    DehydratedBidSubmissionFuluWithMergingData, ForkName, ForkVersionDecode, InvalidDehydratedV2,
     MergeType, SignedBidSubmission, SignedBidSubmissionWithAdjustments,
     SignedBidSubmissionWithAdjustmentsAndMergingData, SignedBidSubmissionWithMergingData,
     Submission,
@@ -55,8 +55,8 @@ pub enum DecoderError {
     #[error("dehydrated v2 requires a mergeable submission without adjustments")]
     DehydratedV2Unsupported,
 
-    #[error("invalid dehydrated v2 merging data: {0}")]
-    DehydratedV2Merging(#[from] InvalidMergingDataV2),
+    #[error("invalid dehydrated v2 submission: {0}")]
+    DehydratedV2Invalid(#[from] InvalidDehydratedV2),
 }
 
 impl IntoResponse for DecoderError {
@@ -85,7 +85,7 @@ impl DecoderError {
             DecoderError::IOError(_) |
             DecoderError::PayloadDecode |
             DecoderError::DehydratedV2Unsupported |
-            DecoderError::DehydratedV2Merging(_) => StatusCode::BAD_REQUEST,
+            DecoderError::DehydratedV2Invalid(_) => StatusCode::BAD_REQUEST,
         }
     }
 }
