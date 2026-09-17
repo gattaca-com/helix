@@ -5243,8 +5243,8 @@ dependencies = [
 
 [[package]]
 name = "flux"
-version = "0.0.38"
-source = "git+https://github.com/gattaca-com/flux?rev=ce40087#ce4008707681052b5c9de0afc89da8822de7f387"
+version = "0.3.0"
+source = "git+https://github.com/gattaca-com/flux?rev=e59fe83be3d31f29b5a149d736bc0c5cb399cbea#e59fe83be3d31f29b5a149d736bc0c5cb399cbea"
 dependencies = [
  "bitcode",
  "core_affinity",
@@ -5263,12 +5263,13 @@ dependencies = [
 
 [[package]]
 name = "flux-communication"
-version = "0.0.27"
-source = "git+https://github.com/gattaca-com/flux?rev=ce40087#ce4008707681052b5c9de0afc89da8822de7f387"
+version = "0.3.0"
+source = "git+https://github.com/gattaca-com/flux?rev=e59fe83be3d31f29b5a149d736bc0c5cb399cbea#e59fe83be3d31f29b5a149d736bc0c5cb399cbea"
 dependencies = [
  "directories",
  "flux-timing",
  "flux-utils",
+ "libc",
  "rand 0.9.5",
  "shared_memory",
  "thiserror 1.0.69",
@@ -5277,13 +5278,14 @@ dependencies = [
 
 [[package]]
 name = "flux-network"
-version = "0.0.8"
-source = "git+https://github.com/gattaca-com/flux?rev=ce40087#ce4008707681052b5c9de0afc89da8822de7f387"
+version = "0.3.0"
+source = "git+https://github.com/gattaca-com/flux?rev=e59fe83be3d31f29b5a149d736bc0c5cb399cbea#e59fe83be3d31f29b5a149d736bc0c5cb399cbea"
 dependencies = [
  "flux",
  "flux-communication",
  "flux-timing",
  "flux-utils",
+ "httparse",
  "libc",
  "mio",
  "serde",
@@ -5292,8 +5294,8 @@ dependencies = [
 
 [[package]]
 name = "flux-profiler"
-version = "0.0.1"
-source = "git+https://github.com/gattaca-com/flux?rev=ce40087#ce4008707681052b5c9de0afc89da8822de7f387"
+version = "0.3.0"
+source = "git+https://github.com/gattaca-com/flux?rev=e59fe83be3d31f29b5a149d736bc0c5cb399cbea#e59fe83be3d31f29b5a149d736bc0c5cb399cbea"
 dependencies = [
  "bytesize",
  "clap",
@@ -5311,8 +5313,8 @@ dependencies = [
 
 [[package]]
 name = "flux-profiler-macros"
-version = "0.0.1"
-source = "git+https://github.com/gattaca-com/flux?rev=ce40087#ce4008707681052b5c9de0afc89da8822de7f387"
+version = "0.3.0"
+source = "git+https://github.com/gattaca-com/flux?rev=e59fe83be3d31f29b5a149d736bc0c5cb399cbea#e59fe83be3d31f29b5a149d736bc0c5cb399cbea"
 dependencies = [
  "quote",
  "syn 2.0.119",
@@ -5320,8 +5322,8 @@ dependencies = [
 
 [[package]]
 name = "flux-timing"
-version = "0.0.16"
-source = "git+https://github.com/gattaca-com/flux?rev=ce40087#ce4008707681052b5c9de0afc89da8822de7f387"
+version = "0.3.0"
+source = "git+https://github.com/gattaca-com/flux?rev=e59fe83be3d31f29b5a149d736bc0c5cb399cbea#e59fe83be3d31f29b5a149d736bc0c5cb399cbea"
 dependencies = [
  "bitcode",
  "chrono",
@@ -5337,8 +5339,8 @@ dependencies = [
 
 [[package]]
 name = "flux-utils"
-version = "0.0.23"
-source = "git+https://github.com/gattaca-com/flux?rev=ce40087#ce4008707681052b5c9de0afc89da8822de7f387"
+version = "0.3.0"
+source = "git+https://github.com/gattaca-com/flux?rev=e59fe83be3d31f29b5a149d736bc0c5cb399cbea#e59fe83be3d31f29b5a149d736bc0c5cb399cbea"
 dependencies = [
  "core_affinity",
  "directories",
@@ -15724,8 +15726,8 @@ dependencies = [
 
 [[package]]
 name = "spine-derive"
-version = "0.0.10"
-source = "git+https://github.com/gattaca-com/flux?rev=ce40087#ce4008707681052b5c9de0afc89da8822de7f387"
+version = "0.3.0"
+source = "git+https://github.com/gattaca-com/flux?rev=e59fe83be3d31f29b5a149d736bc0c5cb399cbea#e59fe83be3d31f29b5a149d736bc0c5cb399cbea"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -17143,13 +17145,13 @@ dependencies = [
 
 [[package]]
 name = "type-hash"
-version = "0.0.1"
-source = "git+https://github.com/gattaca-com/flux?rev=ce40087#ce4008707681052b5c9de0afc89da8822de7f387"
+version = "0.3.0"
+source = "git+https://github.com/gattaca-com/flux?rev=e59fe83be3d31f29b5a149d736bc0c5cb399cbea#e59fe83be3d31f29b5a149d736bc0c5cb399cbea"
 
 [[package]]
 name = "type-hash-derive"
-version = "0.0.4"
-source = "git+https://github.com/gattaca-com/flux?rev=ce40087#ce4008707681052b5c9de0afc89da8822de7f387"
+version = "0.3.0"
+source = "git+https://github.com/gattaca-com/flux?rev=e59fe83be3d31f29b5a149d736bc0c5cb399cbea#e59fe83be3d31f29b5a149d736bc0c5cb399cbea"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",

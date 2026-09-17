@@ -2,7 +2,6 @@ use clap::Parser;
 use flux::{
     spine::FluxSpine,
     tile::{TileConfig, attach_tile},
-    utils::ThreadPriority,
 };
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -157,7 +156,7 @@ fn main() -> eyre::Result<()> {
         BuilderSpine::remove_all_files();
         let spine = BuilderSpine::new(None);
         let server_tile_config = match merging_config.cores.server_tile {
-            Some(core) => TileConfig::new(core, ThreadPriority::OSDefault),
+            Some(core) => TileConfig::new(core, None),
             None => TileConfig::background(None, None),
         };
         spine.start(None, None, |spine| {

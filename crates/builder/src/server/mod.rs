@@ -13,10 +13,7 @@ use std::time::{Duration, Instant};
 use codec::{append_frame, append_frame_maybe_zstd, decompress};
 use crossbeam_channel::{Receiver, Sender, TrySendError};
 use flux::{tile::Tile, timing::Repeater};
-use flux_network::{
-    Token,
-    tcp::{PollEvent, SendBehavior, TcpConnector, TcpTelemetry},
-};
+use flux_network::{NetworkDriver, PollEvent, SendBehavior, Token, tcp::TcpTelemetry};
 use helix_tcp_types::{
     Status,
     merging::{
@@ -50,7 +47,7 @@ enum Reply {
 }
 
 pub struct MergingServerTile {
-    listener: TcpConnector,
+    listener: NetworkDriver,
 
     api_keys: Vec<[u8; 16]>,
     max_orders_per_slot: u32,
@@ -85,7 +82,7 @@ impl MergingServerTile {
     ) -> Self {
         // Telemetry disabled: per-connection shm queue leak, see the note in
         // the relay's tcp_bid_recv.
-        let mut listener = TcpConnector::default()
+        let mut listener = NetworkDriver::default()
             .with_telemetry(TcpTelemetry::Disabled)
             .with_socket_buf_size(config.socket_buf_size);
         listener

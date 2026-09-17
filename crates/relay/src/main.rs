@@ -11,7 +11,6 @@ use bytes::Bytes;
 use flux::{
     spine::FluxSpine,
     tile::{TileConfig, TileName, attach_tile},
-    utils::ThreadPriority,
 };
 use flux_utils::SharedVector;
 use helix_common::{
@@ -279,12 +278,12 @@ async fn run(
                     reg_worker_rx.clone(),
                     slot_events.clone(),
                 );
-                attach_tile(tile, spine, TileConfig::new(core, ThreadPriority::OSDefault));
+                attach_tile(tile, spine, TileConfig::new(core, None));
             }
         }
 
         attach_tile(housekeeper_tile, spine, match config.cores.housekeeper {
-            Some(core) => TileConfig::new(core, ThreadPriority::OSDefault),
+            Some(core) => TileConfig::new(core, None),
             None => TileConfig::background(None, Some(flux::timing::Duration::from_millis(20))),
         });
 
@@ -299,7 +298,7 @@ async fn run(
                 attach_tile(
                     data_gatherer,
                     spine,
-                    TileConfig::new(config.cores.data_gatherer, ThreadPriority::OSDefault),
+                    TileConfig::new(config.cores.data_gatherer, None),
                 );
             }
 
@@ -317,7 +316,7 @@ async fn run(
                     core,
                     lane,
                 );
-                attach_tile(decoder_tile, spine, TileConfig::new(core, ThreadPriority::OSDefault));
+                attach_tile(decoder_tile, spine, TileConfig::new(core, None));
             }
 
             let sock_addr =
@@ -333,13 +332,13 @@ async fn run(
             attach_tile(
                 block_submission_tcp_listener,
                 spine,
-                TileConfig::new(config.cores.tcp_bid_submissions_tile, ThreadPriority::OSDefault),
+                TileConfig::new(config.cores.tcp_bid_submissions_tile, None),
             );
 
             attach_tile(
                 TopBidTile::new(web_socket_recv),
                 spine,
-                TileConfig::new(config.cores.top_bid, ThreadPriority::OSDefault),
+                TileConfig::new(config.cores.top_bid, None),
             );
 
             let sim_requests =
@@ -359,7 +358,7 @@ async fn run(
             );
 
             let sim_core = config.cores.simulator;
-            attach_tile(sim_tile, spine, TileConfig::new(sim_core, ThreadPriority::OSDefault));
+            attach_tile(sim_tile, spine, TileConfig::new(sim_core, None));
 
             if config.block_merging_config.is_enabled &&
                 let Some(merging_tcp) = config.block_merging_config.tcp.clone()
@@ -375,11 +374,7 @@ async fn run(
                     chain_info.as_ref().clone(),
                     block_merging_enabled.clone(),
                 );
-                attach_tile(
-                    merging_tile,
-                    spine,
-                    TileConfig::new(config.cores.block_merging, ThreadPriority::OSDefault),
-                );
+                attach_tile(merging_tile, spine, TileConfig::new(config.cores.block_merging, None));
             }
 
             let auctioneer_core = config.cores.auctioneer;
@@ -404,11 +399,7 @@ async fn run(
                 alert_manager.clone(),
                 operator_api.clone(),
             );
-            attach_tile(
-                auctioneer,
-                spine,
-                TileConfig::new(auctioneer_core, ThreadPriority::OSDefault),
-            );
+            attach_tile(auctioneer, spine, TileConfig::new(auctioneer_core, None));
         }
     });
 

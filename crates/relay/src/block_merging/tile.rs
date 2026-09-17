@@ -9,10 +9,7 @@ use flux::{
     tile::Tile,
     timing::{Duration, Nanos, Repeater},
 };
-use flux_network::{
-    Token,
-    tcp::{PollEvent, SendBehavior, TcpConnector, TcpTelemetry},
-};
+use flux_network::{NetworkDriver, PollEvent, SendBehavior, Token, tcp::TcpTelemetry};
 use flux_utils::SharedVector;
 use helix_common::{
     BlockMergingTcpConfig,
@@ -185,7 +182,7 @@ struct SlotStats {
 }
 
 pub struct BlockMergingTile {
-    connector: TcpConnector,
+    connector: NetworkDriver,
     relay_id: Vec<u8>,
     relay_config_msg: RelayConfigV1,
 
@@ -503,7 +500,7 @@ impl BlockMergingTile {
 
         // TODO: enable telemetry once the per-connection shm queue leak is fixed
         // Disabled: per-connection shm queue leak, see tcp_bid_recv/mod.rs.
-        let connector = TcpConnector::default()
+        let connector = NetworkDriver::default()
             .with_telemetry(TcpTelemetry::Disabled)
             .with_socket_buf_size(64 * 1024 * 1024)
             // Otherwise a stale message queued for the dead socket (e.g. an
