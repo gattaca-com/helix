@@ -8,6 +8,11 @@ RUN npm run build
 FROM lukemathwalker/cargo-chef:latest-rust-1.96 AS chef
 WORKDIR /app
 
+# Pin the toolchain before `cook`: the base image defaults to a different patch
+# release, and a rustc change invalidates every cooked fingerprint.
+COPY rust-toolchain.toml .
+RUN cargo --version
+
 FROM chef AS planner
 COPY . .
 RUN cargo chef prepare --recipe-path recipe.json

@@ -7,6 +7,11 @@ RUN apt-get update && apt-get install -y \
   protobuf-compiler \
   && rm -rf /var/lib/apt/lists/*
 
+# Pin the toolchain before `cook`: the base image defaults to a different patch
+# release, and a rustc change invalidates every cooked fingerprint.
+COPY rust-toolchain.toml .
+RUN cargo --version
+
 FROM chef AS planner
 COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
