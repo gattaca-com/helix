@@ -1274,6 +1274,7 @@ mod tests {
                 encoding: Encoding::Ssz,
                 merge_type: MergeType::default(),
                 is_dehydrated: true,
+                dehydrated_v2: false,
                 with_mergeable_data: false,
                 with_adjustments: false,
                 mark_all_txs_mergeable: false,

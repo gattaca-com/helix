@@ -11,8 +11,8 @@ use tracing::trace;
 use tree_hash::TreeHash;
 
 use crate::{
-    BidTrace, Blob, BlobsBundle, BlockMergingData, BlockValidationError, BlsPublicKeyBytes,
-    BlsSignatureBytes, ExecutionPayload, SignedBidSubmission, TestRandom,
+    BidTrace, Blob, BlobsBundle, BlockMergingData, BlockMergingDataV2, BlockValidationError,
+    BlsPublicKeyBytes, BlsSignatureBytes, ExecutionPayload, SignedBidSubmission, TestRandom,
     bid_adjustment_data::{BidAdjData, BidAdjustmentData, BidAdjustmentDataV1},
     bid_submission,
     fields::{ExecutionRequests, KzgCommitment, KzgProof, Transaction, Transactions},
@@ -273,6 +273,63 @@ impl TestRandom for DehydratedBidSubmissionFuluWithMergingData {
             signature: BlsSignatureBytes::random(),
             tx_root: None,
             merging_data: BlockMergingData::random_for_test(rng),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
+pub struct DehydratedBidSubmissionFuluV2 {
+    message: BidTrace,
+    execution_payload: ExecutionPayload,
+    blobs_bundle: DehydratedBlobsFulu,
+    execution_requests: Arc<ExecutionRequests>,
+    signature: BlsSignatureBytes,
+    tx_root: Option<B256>,
+    merging_data: BlockMergingDataV2,
+}
+
+impl DehydratedBidSubmissionFuluV2 {
+    pub fn split(self) -> (DehydratedBidSubmission, BlockMergingData) {
+        (
+            DehydratedBidSubmission::Fulu(DehydratedBidSubmissionFulu {
+                message: self.message,
+                execution_payload: self.execution_payload,
+                blobs_bundle: self.blobs_bundle,
+                execution_requests: self.execution_requests,
+                signature: self.signature,
+                tx_root: self.tx_root,
+            }),
+            self.merging_data.into(),
+        )
+    }
+}
+
+impl ForkVersionDecode for DehydratedBidSubmissionFuluV2 {
+    fn from_ssz_bytes_by_fork(bytes: &[u8], fork: ForkName) -> Result<Self, DecodeError> {
+        match fork {
+            ForkName::Base |
+            ForkName::Altair |
+            ForkName::Bellatrix |
+            ForkName::Capella |
+            ForkName::Deneb |
+            ForkName::Gloas |
+            ForkName::Heze |
+            ForkName::Electra => Err(DecodeError::NoMatchingVariant),
+            ForkName::Fulu => DehydratedBidSubmissionFuluV2::from_ssz_bytes(bytes),
+        }
+    }
+}
+
+impl TestRandom for DehydratedBidSubmissionFuluV2 {
+    fn random_for_test(rng: &mut impl rand::RngCore) -> Self {
+        Self {
+            message: BidTrace::random_for_test(rng),
+            execution_payload: ExecutionPayload::random_for_test(rng),
+            blobs_bundle: DehydratedBlobsFulu { commitments: vec![], new_items: vec![] },
+            execution_requests: Arc::new(ExecutionRequests::random_for_test(rng)),
+            signature: BlsSignatureBytes::random(),
+            tx_root: None,
+            merging_data: BlockMergingDataV2::random_for_test(rng),
         }
     }
 }
@@ -846,6 +903,29 @@ mod tests {
         let (dehydrated, split_merging_data) = submission.split();
 
         assert_eq!(split_merging_data, expected_merging_data);
+        assert!(matches!(dehydrated, DehydratedBidSubmission::Fulu(_)));
+    }
+
+    #[test]
+    fn dehydrated_v2_ssz_round_trip() {
+        let submission = DehydratedBidSubmissionFuluV2::random_for_test(&mut rand::rng());
+
+        let bytes = submission.as_ssz_bytes();
+        let decoded = DehydratedBidSubmissionFuluV2::from_ssz_bytes(&bytes)
+            .expect("SSZ decode should succeed");
+
+        assert_eq!(submission.merging_data, decoded.merging_data);
+        assert_eq!(submission.message, decoded.message);
+    }
+
+    #[test]
+    fn dehydrated_v2_split_expands_merge_orders() {
+        let submission = DehydratedBidSubmissionFuluV2::random_for_test(&mut rand::rng());
+        let expected: BlockMergingData = submission.merging_data.clone().into();
+
+        let (dehydrated, merging_data) = submission.split();
+
+        assert_eq!(merging_data, expected);
         assert!(matches!(dehydrated, DehydratedBidSubmission::Fulu(_)));
     }
 

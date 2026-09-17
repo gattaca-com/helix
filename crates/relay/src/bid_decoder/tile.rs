@@ -407,11 +407,13 @@ impl DecoderTile {
         let with_mergeable_data = header.merge_type.is_some();
         let with_adjustments = header.flags.with_adjustments();
         let is_dehydrated = header.flags.is_dehydrated();
+        let dehydrated_v2 = header.flags.dehydrated_v2();
 
         let decoder_params = SubmissionDecoderParams {
             compression: header.compression,
             encoding: header.encoding,
             is_dehydrated,
+            dehydrated_v2,
             merge_type: header.merge_type,
             with_mergeable_data,
             with_adjustments,

@@ -183,6 +183,7 @@ bitflags::bitflags! {
         const WITH_ADJUSTMENTS = 1 << 1;
         const ZSTD_COMPRESSED = 1 << 2;
         const PESSIMISTIC = 1 << 3;
+        const DEHYDRATED_V2 = 1 << 4;
     }
 }
 
@@ -198,6 +199,9 @@ impl BidSubmissionFlags {
     }
     pub fn pessimistic(&self) -> bool {
         self.contains(Self::PESSIMISTIC)
+    }
+    pub fn dehydrated_v2(&self) -> bool {
+        self.contains(Self::DEHYDRATED_V2)
     }
 }
 

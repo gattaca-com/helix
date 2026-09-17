@@ -8,7 +8,7 @@ use flate2::read::GzDecoder;
 use flux_profiler::timed;
 use helix_types::{
     BidAdjustmentData, BlockMergingData, Compression, DehydratedBidSubmission,
-    DehydratedBidSubmissionFuluWithAdjustments,
+    DehydratedBidSubmissionFuluV2, DehydratedBidSubmissionFuluWithAdjustments,
     DehydratedBidSubmissionFuluWithAdjustmentsAndMergingData,
     DehydratedBidSubmissionFuluWithMergingData, ForkName, ForkVersionDecode, MergeType,
     SignedBidSubmission, SignedBidSubmissionWithAdjustments,
@@ -51,6 +51,9 @@ pub enum DecoderError {
 
     #[error("failed to decode payload")]
     PayloadDecode,
+
+    #[error("dehydrated v2 requires a mergeable submission without adjustments")]
+    DehydratedV2Unsupported,
 }
 
 impl IntoResponse for DecoderError {
@@ -77,7 +80,8 @@ impl DecoderError {
             DecoderError::JsonDecodeError(_) |
             DecoderError::SszDecode(_) |
             DecoderError::IOError(_) |
-            DecoderError::PayloadDecode => StatusCode::BAD_REQUEST,
+            DecoderError::PayloadDecode |
+            DecoderError::DehydratedV2Unsupported => StatusCode::BAD_REQUEST,
         }
     }
 }
@@ -167,6 +171,7 @@ pub struct SubmissionDecoderParams {
     pub encoding: Encoding,
     pub merge_type: MergeType,
     pub is_dehydrated: bool,
+    pub dehydrated_v2: bool,
     pub with_mergeable_data: bool,
     pub with_adjustments: bool,
     pub mark_all_txs_mergeable: bool,
@@ -179,6 +184,7 @@ pub struct SubmissionDecoder {
     encoding: Encoding,
     merge_type: MergeType,
     is_dehydrated: bool,
+    dehydrated_v2: bool,
     with_mergeable_data: bool,
     with_adjustments: bool,
     mark_all_txs_mergeable: bool,
@@ -199,6 +205,7 @@ impl SubmissionDecoder {
             encoding: params.encoding,
             merge_type: params.merge_type,
             is_dehydrated: params.is_dehydrated,
+            dehydrated_v2: params.dehydrated_v2,
             with_mergeable_data: params.with_mergeable_data,
             with_adjustments: params.with_adjustments,
             mark_all_txs_mergeable: params.mark_all_txs_mergeable,
@@ -267,13 +274,29 @@ impl SubmissionDecoder {
             Some(Err(e)) => return Err(e),
         };
 
-        if self.is_dehydrated {
+        if self.dehydrated_v2 {
+            self.decode_dehydrated_v2(body)
+        } else if self.is_dehydrated {
             self.decode_dehydrated(body)
         } else if self.with_mergeable_data {
             self.decode_merge(body)
         } else {
             self.decode_default(body)
         }
+    }
+
+    #[timed]
+    fn decode_dehydrated_v2(
+        &mut self,
+        body: &[u8],
+    ) -> Result<(Submission, Option<BlockMergingData>, Option<BidAdjustmentData>), DecoderError>
+    {
+        if self.merge_type != MergeType::Mergeable || self.with_adjustments {
+            return Err(DecoderError::DehydratedV2Unsupported);
+        }
+        let sub: DehydratedBidSubmissionFuluV2 = self.decode_by_fork(body, self.fork_name)?;
+        let (submission, merging_data) = sub.split();
+        Ok((Submission::Dehydrated(submission), Some(merging_data), None))
     }
 
     #[timed]
@@ -511,7 +534,7 @@ fn gzip_size_hint(buf: &[u8]) -> Option<usize> {
 mod tests {
     use helix_types::{
         BidAdjData, BidAdjustmentDataV1, BlobsBundle, BundleOrder, DehydratedBidSubmission,
-        DehydratedBidSubmissionFuluWithAdjustmentsAndMergingData,
+        DehydratedBidSubmissionFuluV2, DehydratedBidSubmissionFuluWithAdjustmentsAndMergingData,
         DehydratedBidSubmissionFuluWithMergingData, MergeType, Order,
         SignedBidSubmissionWithAdjustmentsAndMergingData, TestRandom,
     };
@@ -585,6 +608,7 @@ mod tests {
             encoding: Encoding::Ssz,
             merge_type: MergeType::Mergeable,
             is_dehydrated: true,
+            dehydrated_v2: false,
             with_mergeable_data: false,
             with_adjustments: false,
             mark_all_txs_mergeable: false,
@@ -616,6 +640,7 @@ mod tests {
             encoding: Encoding::Ssz,
             merge_type: MergeType::Pause,
             is_dehydrated: false,
+            dehydrated_v2: false,
             with_mergeable_data: false,
             with_adjustments: false,
             // Even with this testing override on, Pause must still suppress merge data.
@@ -645,6 +670,7 @@ mod tests {
             encoding: Encoding::Ssz,
             merge_type: MergeType::Pause,
             is_dehydrated: true,
+            dehydrated_v2: false,
             with_mergeable_data: false,
             with_adjustments: false,
             // Even with this testing override on, Pause must still suppress merge data.
@@ -689,6 +715,7 @@ mod tests {
             encoding: Encoding::Ssz,
             merge_type: MergeType::None,
             is_dehydrated: false,
+            dehydrated_v2: false,
             with_mergeable_data: false,
             with_adjustments: true,
             mark_all_txs_mergeable: false,
@@ -718,6 +745,7 @@ mod tests {
             encoding: Encoding::Ssz,
             merge_type: MergeType::Mergeable,
             is_dehydrated: false,
+            dehydrated_v2: false,
             with_mergeable_data: true,
             with_adjustments: false,
             mark_all_txs_mergeable: false,
@@ -764,6 +792,7 @@ mod tests {
             encoding: Encoding::Ssz,
             merge_type: MergeType::Mergeable,
             is_dehydrated: false,
+            dehydrated_v2: false,
             with_mergeable_data: true,
             with_adjustments: false,
             mark_all_txs_mergeable: false,
@@ -805,6 +834,7 @@ mod tests {
             encoding: Encoding::Ssz,
             merge_type: MergeType::AppendOnly,
             is_dehydrated: false,
+            dehydrated_v2: false,
             with_mergeable_data: true,
             with_adjustments: false,
             mark_all_txs_mergeable: false,
@@ -847,6 +877,7 @@ mod tests {
             encoding: Encoding::Ssz,
             merge_type: MergeType::None,
             is_dehydrated: true,
+            dehydrated_v2: false,
             with_mergeable_data: false,
             with_adjustments: true,
             mark_all_txs_mergeable: false,
@@ -873,6 +904,7 @@ mod tests {
             encoding: Encoding::Json,
             merge_type: MergeType::None,
             is_dehydrated: false,
+            dehydrated_v2: false,
             with_mergeable_data: false,
             with_adjustments: false,
             mark_all_txs_mergeable: false,
@@ -900,6 +932,7 @@ mod tests {
             encoding: Encoding::Json,
             merge_type: MergeType::None,
             is_dehydrated: true,
+            dehydrated_v2: false,
             with_mergeable_data: false,
             with_adjustments: false,
             mark_all_txs_mergeable: false,
@@ -928,6 +961,7 @@ mod tests {
             encoding: Encoding::Ssz,
             merge_type: MergeType::Mergeable,
             is_dehydrated: true,
+            dehydrated_v2: false,
             with_mergeable_data: false,
             with_adjustments: true,
             mark_all_txs_mergeable: false,
@@ -962,6 +996,7 @@ mod tests {
             encoding: Encoding::Ssz,
             merge_type: MergeType::Mergeable,
             is_dehydrated: false,
+            dehydrated_v2: false,
             with_mergeable_data: true,
             with_adjustments: true,
             mark_all_txs_mergeable: false,
@@ -1016,6 +1051,7 @@ mod tests {
             encoding: Encoding::Ssz,
             merge_type: MergeType::AppendOnly,
             is_dehydrated: false,
+            dehydrated_v2: false,
             with_mergeable_data: true,
             with_adjustments: true,
             mark_all_txs_mergeable: false,
@@ -1035,5 +1071,74 @@ mod tests {
             bid_adjustment_data.expect("adjustments should be carried"),
             expected_adjustment_data
         );
+    }
+
+    fn dehydrated_v2_params(
+        merge_type: MergeType,
+        with_adjustments: bool,
+    ) -> SubmissionDecoderParams {
+        SubmissionDecoderParams {
+            compression: Compression::None,
+            encoding: Encoding::Ssz,
+            merge_type,
+            is_dehydrated: true,
+            dehydrated_v2: true,
+            with_mergeable_data: false,
+            with_adjustments,
+            mark_all_txs_mergeable: false,
+            fork_name: ForkName::Fulu,
+        }
+    }
+
+    #[test]
+    fn decode_dehydrated_v2_expands_merge_orders() {
+        let (body, expected_merging_data) = (0..100)
+            .find_map(|_| {
+                let submission = DehydratedBidSubmissionFuluV2::random_for_test(&mut rand::rng());
+                let (_, merging_data) = submission.clone().split();
+                if merging_data.merge_orders.is_empty() {
+                    return None;
+                }
+                Some((submission.as_ssz_bytes(), merging_data))
+            })
+            .expect("should produce a submission with non-empty merge_orders within 100 tries");
+
+        let mut decoder =
+            SubmissionDecoder::new(&dehydrated_v2_params(MergeType::Mergeable, false));
+        let mut buf = Vec::new();
+        let (decoded_submission, merging_data, bid_adjustment_data) =
+            decoder.decode(&body, &mut buf).expect("decode should succeed");
+
+        assert!(matches!(decoded_submission, Submission::Dehydrated(_)));
+        assert!(bid_adjustment_data.is_none());
+        assert_eq!(merging_data.expect("merging data"), expected_merging_data);
+    }
+
+    #[test]
+    fn decode_dehydrated_v2_rejects_non_mergeable_and_adjustments() {
+        let body = DehydratedBidSubmissionFuluV2::random_for_test(&mut rand::rng()).as_ssz_bytes();
+        let mut buf = Vec::new();
+
+        for params in [
+            dehydrated_v2_params(MergeType::None, false),
+            dehydrated_v2_params(MergeType::AppendOnly, false),
+            dehydrated_v2_params(MergeType::Mergeable, true),
+        ] {
+            let err = SubmissionDecoder::new(&params)
+                .decode(&body, &mut buf)
+                .expect_err("dehydrated v2 must be rejected");
+            assert!(matches!(err, DecoderError::DehydratedV2Unsupported));
+        }
+    }
+
+    #[test]
+    fn decode_dehydrated_v1_body_with_v2_flag_fails() {
+        let body = DehydratedBidSubmissionFuluWithMergingData::random_for_test(&mut rand::rng())
+            .as_ssz_bytes();
+        let mut buf = Vec::new();
+        let err = SubmissionDecoder::new(&dehydrated_v2_params(MergeType::Mergeable, false))
+            .decode(&body, &mut buf)
+            .expect_err("v1 bytes must not decode as v2");
+        assert!(matches!(err, DecoderError::SszDecode(_)));
     }
 }
