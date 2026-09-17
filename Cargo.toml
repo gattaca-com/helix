@@ -10,6 +10,16 @@ repository = "https://github.com/gattaca-com/helix"
 rust-version = "1.96.0"
 version = "0.0.1"
 
+# Runtime speed over build time. Used by relay.Dockerfile only.
+[profile.release-prod]
+codegen-units = 1
+debug = false
+inherits = "release"
+lto = "fat"
+opt-level = 3
+panic = "abort"
+split-debuginfo = "off"
+
 [workspace.dependencies]
 alloy-consensus = { version = "2.1.1", default-features = false, features = ["k256"] }
 alloy-eips = { version = "2.1.1", default-features = false, features = ["kzg"] }
