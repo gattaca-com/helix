@@ -204,6 +204,7 @@ impl MergeEngine {
                 top_builder_span_ms = top_span,
                 "merge slot ended"
             );
+            metrics::slot_pool(state.blocks.len(), orders, builders);
         }
     }
 
@@ -300,10 +301,13 @@ impl MergeEngine {
                 // Advisory only. We cannot know which builder holds the top bid
                 // when get_header is called, so every candidate builder gets a
                 // stream regardless; this just records the relay's current view.
-                if let Some(base) = state.blocks.get(&block_hash) {
-                    let beneficiary = base.beneficiary();
-                    state.top_builder = Some(beneficiary);
-                    metrics::activation_source("advisory");
+                match state.blocks.get(&block_hash) {
+                    Some(base) => {
+                        let beneficiary = base.beneficiary();
+                        state.top_builder = Some(beneficiary);
+                        metrics::activation_source("advisory");
+                    }
+                    None => metrics::activation_source("unknown_base_block"),
                 }
                 false
             }
@@ -334,6 +338,7 @@ impl MergeEngine {
 
         let head = *self.head.borrow();
         if !head.is_synced || convert::b256(head.hash) != state.parent_hash {
+            metrics::speculation("head_not_ready");
             return;
         }
 

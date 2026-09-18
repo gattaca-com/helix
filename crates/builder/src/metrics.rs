@@ -10,9 +10,9 @@ use alloy_primitives::U256;
 use axum::{Router, http::StatusCode, routing::get};
 use lazy_static::lazy_static;
 use prometheus::{
-    Encoder, Histogram, HistogramVec, IntCounterVec, Registry, TextEncoder,
+    Encoder, Histogram, HistogramVec, IntCounterVec, IntGauge, Registry, TextEncoder,
     register_histogram_vec_with_registry, register_histogram_with_registry,
-    register_int_counter_vec_with_registry,
+    register_int_counter_vec_with_registry, register_int_gauge_with_registry,
 };
 use tokio::net::TcpListener;
 use tracing::{error, info};
@@ -254,6 +254,68 @@ lazy_static! {
         &BUILDER_METRICS_REGISTRY
     )
     .unwrap();
+
+    static ref INGEST: IntCounterVec = register_int_counter_vec_with_registry!(
+        "merge_ingest_total",
+        "Frames accepted from the relay, by kind",
+        &["kind"],
+        &BUILDER_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    static ref REJECT_SENT: IntCounterVec = register_int_counter_vec_with_registry!(
+        "merge_reject_sent_total",
+        "RejectV1 and FatalV1 frames sent to the relay, by code",
+        &["code", "severity"],
+        &BUILDER_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    static ref QUEUE_DROP: IntCounterVec = register_int_counter_vec_with_registry!(
+        "merge_queue_drop_total",
+        "Work dropped because an internal queue was full",
+        &["queue"],
+        &BUILDER_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    static ref SLOT_POOL: HistogramVec = register_histogram_vec_with_registry!(
+        "merge_slot_pool",
+        "Size of the merge pool at slot teardown, by kind",
+        &["kind"],
+        vec![0., 1., 2., 4., 8., 16., 32., 64., 128., 256., 512., 1_024., 2_048., 4_096.],
+        &BUILDER_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    static ref RELAY_CONNECTED: IntGauge = register_int_gauge_with_registry!(
+        "merge_relay_connected",
+        "Whether a relay has completed the merging handshake",
+        &BUILDER_METRICS_REGISTRY
+    )
+    .unwrap();
+}
+
+pub fn ingest(kind: &str) {
+    INGEST.with_label_values(&[kind]).inc();
+}
+
+pub fn reject_sent(code: &str, fatal: bool) {
+    REJECT_SENT.with_label_values(&[code, if fatal { "fatal" } else { "reject" }]).inc();
+}
+
+pub fn queue_drop(queue: &str) {
+    QUEUE_DROP.with_label_values(&[queue]).inc();
+}
+
+pub fn slot_pool(blocks: usize, orders: usize, builders: usize) {
+    SLOT_POOL.with_label_values(&["blocks"]).observe(blocks as f64);
+    SLOT_POOL.with_label_values(&["orders"]).observe(orders as f64);
+    SLOT_POOL.with_label_values(&["builders"]).observe(builders as f64);
+}
+
+pub fn relay_connected(connected: bool) {
+    RELAY_CONNECTED.set(connected as i64);
 }
 
 /// U256 wei as gwei, saturating rather than panicking on an absurd value.
