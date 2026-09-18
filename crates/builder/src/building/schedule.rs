@@ -10,20 +10,19 @@ use crate::building::slot::SlotContext;
 /// Every entry is relative to the same instant, so a caller must sleep to an
 /// absolute deadline rather than sleeping each in turn.
 ///
-/// A slot learned about late still gets one immediate attempt: dropping it
-/// would mean no bid at all for that slot.
+/// Empty once every offset has passed. Whether that still deserves an immediate
+/// attempt is the caller's call, because it depends on whether the slot has been
+/// bid on already.
 pub fn delays(slot_timestamp: u64, offsets: &[u64], now_ms: u64) -> Vec<Duration> {
     let start_ms = slot_timestamp * 1_000;
     let mut sorted: Vec<u64> = offsets.to_vec();
     sorted.sort_unstable();
 
-    let upcoming: Vec<Duration> = sorted
+    sorted
         .iter()
         .filter_map(|offset| start_ms.checked_add(*offset)?.checked_sub(now_ms))
         .map(Duration::from_millis)
-        .collect();
-
-    if upcoming.is_empty() { vec![Duration::ZERO] } else { upcoming }
+        .collect()
 }
 
 /// Runs one slot's attempts, one per delay, measured from a single instant.
@@ -53,12 +52,25 @@ pub async fn drive<F, Fut, N>(
     N: Fn() -> u64,
 {
     let mut current: Option<tokio::task::JoinHandle<()>> = None;
+    let mut scheduled_slot: Option<u64> = None;
 
     while let Some(slot) = contexts.recv().await {
+        let mut delays = delays(slot.timestamp, offsets, now_ms());
+        if delays.is_empty() {
+            if scheduled_slot == Some(slot.slot) {
+                // A new head this late only replaces a bid already sent, and the
+                // relay has moved on to the next bid slot by now, so an immediate
+                // attempt is refused as a submission for the wrong slot.
+                continue;
+            }
+            // Nothing has been sent for this slot, so one late attempt beats none.
+            delays.push(Duration::ZERO);
+        }
+
         if let Some(handle) = current.take() {
             handle.abort();
         }
-        let delays = delays(slot.timestamp, offsets, now_ms());
+        scheduled_slot = Some(slot.slot);
         current = Some(tokio::spawn(run_schedule(slot, delays, attempt.clone())));
     }
 
@@ -172,6 +184,30 @@ mod tests {
 
     /// The fallback in `delays` still has to hold: a slot learned about after
     /// every offset has passed gets one attempt rather than none.
+    /// The head moved again after the last offset had passed. The relay has moved
+    /// on to the next bid slot by then, so submitting produced a steady stream of
+    /// "submission for wrong slot" -- and a bid was already sent for this slot
+    /// anyway.
+    #[tokio::test]
+    async fn a_late_replacement_does_not_attempt() {
+        let attempts = attempts_for(
+            vec![
+                context(1, 0xa1, SLOT_TIMESTAMP),
+                // Arrives once both offsets are long past.
+                context(1, 0xb2, SLOT_TIMESTAMP),
+            ],
+            &[20, 40],
+            START_MS + 9_000,
+        )
+        .await;
+
+        assert_eq!(
+            attempts,
+            vec![B256::repeat_byte(0xa1)],
+            "the first context still earns its one late attempt; the replacement adds nothing",
+        );
+    }
+
     #[tokio::test]
     async fn a_slot_learned_about_late_still_attempts_once() {
         let attempts =
@@ -208,15 +244,15 @@ mod tests {
         assert_eq!(delays, vec![Duration::from_millis(1000)], "only the 2000ms offset is ahead");
     }
 
+    /// Whether a passed slot still deserves an attempt depends on whether anything
+    /// has been sent for it, which only the driver knows -- see
+    /// `a_slot_learned_about_late_still_attempts_once` and
+    /// `a_late_replacement_does_not_attempt`.
     #[test]
-    fn a_late_event_still_gets_one_attempt() {
+    fn every_offset_past_leaves_no_delays() {
         let delays = delays(SLOT_TIMESTAMP, &[500, 2000], START_MS + 5_000);
 
-        assert_eq!(
-            delays,
-            vec![Duration::ZERO],
-            "a late payload_attributes must not mean no bid for the slot",
-        );
+        assert!(delays.is_empty());
     }
 
     #[test]
