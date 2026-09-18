@@ -879,6 +879,7 @@ struct SimEntry {
     faults: usize,
     /// Consecutive failed sync polls, reset by any answer from the node.
     sync_failures: usize,
+    last_decrease: Option<Instant>,
     /// Current number of pending tasks (validation or merging)
     pending: usize,
 }
@@ -894,12 +895,27 @@ impl SimEntry {
             limit,
             faults: 0,
             sync_failures: 0,
+            last_decrease: None,
             pending: 0,
         }
     }
 
     fn ceiling(&self) -> usize {
         self.client.config.max_concurrent_tasks.max(MIN_LIMIT)
+    }
+
+    fn floor(&self) -> usize {
+        DECREASE_FLOOR.min(self.ceiling())
+    }
+
+    fn decrease(&mut self, now: Instant) {
+        if self.last_decrease.is_some_and(|at| now.saturating_duration_since(at) < DECREASE_WINDOW)
+        {
+            return;
+        }
+
+        self.last_decrease = Some(now);
+        self.limit = (self.limit * 4 / 5).min(self.limit.saturating_sub(1)).max(self.floor());
     }
 
     /// How many tasks this sim may hold now: none while the breaker is open, one probe once
@@ -951,11 +967,11 @@ impl SimEntry {
         self.faults = 0;
         self.breaker = Breaker::Closed;
         self.last_success = Some(now);
-        self.limit = if elapsed <= LATENCY_TARGET {
-            (self.limit + 1).min(self.ceiling())
+        if elapsed <= LATENCY_TARGET {
+            self.limit = (self.limit + 1).min(self.ceiling());
         } else {
-            (self.limit / 2).max(MIN_LIMIT)
-        };
+            self.decrease(now);
+        }
     }
 
     fn record_failure(&mut self, err: &BlockSimError, now: Instant) {
@@ -964,7 +980,7 @@ impl SimEntry {
         }
 
         self.faults += 1;
-        self.limit = (self.limit / 2).max(MIN_LIMIT);
+        self.decrease(now);
 
         self.breaker = match self.breaker {
             Breaker::Open { backoff, .. } => {
@@ -999,8 +1015,10 @@ impl SimEntry {
 pub(crate) const SIMULATOR_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// A simulation slower than this means the node is over its comfortable load.
-const LATENCY_TARGET: Duration = Duration::from_millis(300);
+const LATENCY_TARGET: Duration = Duration::from_millis(500);
 const MIN_LIMIT: usize = 1;
+const DECREASE_FLOOR: usize = 4;
+const DECREASE_WINDOW: Duration = Duration::from_millis(250);
 const UTILIZATION_SCALE: usize = 1_000;
 const SIM_FAULTS_TO_OPEN: usize = 3;
 /// How long every simulator must go without answering a simulation before the relay stops
@@ -1563,27 +1581,93 @@ mod tests {
     }
 
     #[test]
-    fn a_slow_success_halves_the_limit() {
+    fn a_slow_success_lowers_the_limit_by_a_fifth() {
         let now = Instant::now();
         let mut sim = fast_sim(32);
         sim.limit = 32;
 
         sim.record_success(LATENCY_TARGET * 2, now);
 
-        assert_eq!(sim.limit, 16);
+        assert_eq!(sim.limit, 25);
     }
 
     #[test]
-    fn the_limit_never_falls_below_one() {
+    fn a_burst_of_slow_answers_lowers_the_limit_once() {
         let now = Instant::now();
         let mut sim = fast_sim(32);
         sim.limit = 32;
 
-        for _ in 0..20 {
+        for _ in 0..10 {
             sim.record_success(LATENCY_TARGET * 2, now);
         }
 
-        assert_eq!(sim.limit, 1, "a sim must keep one slot to prove it recovered");
+        assert_eq!(sim.limit, 25, "correlated slow answers must not compound");
+    }
+
+    #[test]
+    fn a_slow_answer_after_the_window_lowers_the_limit_again() {
+        let now = Instant::now();
+        let mut sim = fast_sim(32);
+        sim.limit = 32;
+
+        sim.record_success(LATENCY_TARGET * 2, now);
+        sim.record_success(LATENCY_TARGET * 2, now + DECREASE_WINDOW);
+
+        assert_eq!(sim.limit, 20);
+    }
+
+    #[test]
+    fn the_limit_never_falls_below_the_floor() {
+        let mut now = Instant::now();
+        let mut sim = fast_sim(32);
+        sim.limit = 32;
+
+        for _ in 0..40 {
+            sim.record_success(LATENCY_TARGET * 2, now);
+            now += DECREASE_WINDOW;
+        }
+
+        assert_eq!(sim.limit, DECREASE_FLOOR, "recovery must not be serialised behind one request");
+    }
+
+    #[test]
+    fn every_decrease_moves_the_limit() {
+        let mut now = Instant::now();
+        let mut sim = fast_sim(32);
+        sim.limit = DECREASE_FLOOR + 1;
+
+        sim.record_success(LATENCY_TARGET * 2, now);
+        now += DECREASE_WINDOW;
+
+        assert_eq!(sim.limit, DECREASE_FLOOR, "a fifth of a small limit must still round down");
+    }
+
+    #[test]
+    fn the_floor_never_passes_a_small_ceiling() {
+        let mut now = Instant::now();
+        let mut sim = fast_sim(1);
+
+        for _ in 0..10 {
+            sim.record_success(LATENCY_TARGET * 2, now);
+            now += DECREASE_WINDOW;
+        }
+
+        assert_eq!(sim.limit, 1, "a configured cap of one must stay one");
+    }
+
+    #[test]
+    fn a_run_of_sim_faults_respects_the_decrease_window() {
+        let now = Instant::now();
+        let mut sim = fast_sim(32);
+        sim.is_synced = true;
+        sim.limit = 32;
+
+        for _ in 0..SIM_FAULTS_TO_OPEN {
+            sim.record_failure(&BlockSimError::RpcError, now);
+        }
+
+        assert_eq!(sim.limit, 25, "the breaker removes the sim, the limit need not collapse too");
+        assert_eq!(sim.effective_limit(now), 0);
     }
 
     /// Today one error removes a sim for five slots. It must take a run of them.
