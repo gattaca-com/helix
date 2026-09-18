@@ -223,25 +223,25 @@ impl HousekeeperTile {
             return;
         }
 
+        let chain_info = self.chain_head.chain_info();
         let synthesized = synthesize_duty_feed(
             &self.duties,
             &self.proposer_prefs,
             from_slot,
             &self.validator_preferences,
+            chain_info,
         );
 
-        // Signature checking is reported, not enforced: the domain has not been
-        // confirmed against live gossip yet, and refusing wrongly stops every bid.
-        let chain_info = self.chain_head.chain_info();
-        let checked = self
+        let offered = self
             .duties
             .iter()
-            .filter(|duty| duty.slot >= from_slot && self.proposer_prefs.get(duty.slot).is_some());
-        let (signed_ok, total) = checked.fold((0u32, 0u32), |(ok, total), duty| {
-            (ok + u32::from(self.proposer_prefs.check_signature(duty, chain_info)), total + 1)
-        });
-        if total > 0 {
-            info!(signed_ok, total, "proposer preference signatures checked");
+            .filter(|duty| duty.slot >= from_slot && self.proposer_prefs.get(duty.slot).is_some())
+            .count();
+        if offered > synthesized.len() {
+            warn!(
+                refused = offered - synthesized.len(),
+                offered, "proposer preferences refused: wrong proposer or bad signature",
+            );
         }
 
         if synthesized.is_empty() {
@@ -645,7 +645,10 @@ fn send_slot_event(
             .iter()
             .find(|d| d.slot.as_u64() == bid_slot.as_u64())
             .zip(proposer_prefs.get(bid_slot))
-            .filter(|(duty, prefs)| prefs_match_duty(duty, prefs))
+            .filter(|(duty, prefs)| {
+                prefs_match_duty(duty, prefs) &&
+                    proposer_prefs.check_signature(duty, chain_head.chain_info())
+            })
             .map(|(duty, prefs)| synthesize_registration(duty, prefs, validator_preferences));
     }
     let next_payload_attributes: Vec<PayloadAttributesUpdate> = known_payload_attributes

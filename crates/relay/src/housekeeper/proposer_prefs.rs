@@ -38,9 +38,7 @@ impl ProposerPreferencesStore {
         self.by_slot.retain(|slot, _| *slot >= bid_slot);
     }
 
-    /// Reports whether the slot's preferences carry the proposer's own signature.
-    /// Logged rather than enforced for now: the signing domain has not yet been
-    /// confirmed against live gossip, and refusing wrongly would stop every bid.
+    /// Whether the slot's preferences carry the proposer's own signature.
     pub fn check_signature(&self, duty: &ProposerDuty, chain_info: &ChainInfo) -> bool {
         let Some(signed) = self.get_signed(duty.slot) else {
             return false;
@@ -95,10 +93,12 @@ pub fn synthesize_duty_feed(
     prefs: &ProposerPreferencesStore,
     from_slot: Slot,
     defaults: &ValidatorPreferences,
+    chain_info: &ChainInfo,
 ) -> Vec<BuilderGetValidatorsResponseEntry> {
     beacon_duties
         .iter()
         .filter(|duty| duty.slot >= from_slot)
+        .filter(|duty| prefs.check_signature(duty, chain_info))
         .filter_map(|duty| {
             prefs
                 .get(duty.slot)
@@ -245,38 +245,71 @@ mod tests {
         assert_eq!(store.len(), 1);
     }
 
-    fn duty(slot: u64, index: u64) -> ProposerDuty {
+    /// Duties now have to carry a real key: the feed only accepts preferences the
+    /// proposer actually signed.
+    fn duty_signed_by(keypair: &helix_types::BlsKeypair, slot: u64, index: u64) -> ProposerDuty {
         ProposerDuty {
-            pubkey: helix_types::BlsPublicKeyBytes::from([index as u8; 48]),
+            pubkey: keypair.pk.serialize().into(),
             validator_index: index,
             slot: Slot::new(slot),
         }
     }
 
-    /// `(slot, proposer index)` pairs, matching how `duty` numbers them.
-    fn store_with(entries: &[(u64, u64)]) -> ProposerPreferencesStore {
+    fn sign_event(
+        keypair: &helix_types::BlsKeypair,
+        chain_info: &ChainInfo,
+        mut ev: ProposerPreferencesEvent,
+    ) -> ProposerPreferencesEvent {
+        use helix_types::{EthSpec, MainnetEthSpec, SignedRoot};
+        let epoch = ev.data.message.proposal_slot.epoch(MainnetEthSpec::slots_per_epoch());
+        let fork = chain_info.spec.fork_at_epoch(epoch);
+        let domain = chain_info.spec.get_domain(
+            epoch,
+            helix_types::Domain::ProposerPreferences,
+            &fork,
+            chain_info.genesis_validators_root,
+        );
+        ev.data.signature =
+            keypair.sk.sign(ev.data.message.signing_root(domain)).serialize().into();
+        ev
+    }
+
+    /// Builds duties and a matching, properly signed store for `(slot, index)` pairs.
+    fn duties_and_store(
+        entries: &[(u64, u64)],
+        chain_info: &ChainInfo,
+    ) -> (Vec<ProposerDuty>, ProposerPreferencesStore) {
+        helix_common::utils::install_default_crypto_provider();
+        let mut duties = Vec::new();
         let mut store = ProposerPreferencesStore::default();
         for (slot, index) in entries {
-            store.process(
-                Slot::new(0),
-                event_from(
-                    *slot,
-                    *index,
-                    address!("00000000000000000000000000000000000000aa"),
-                    45_000_000,
-                ),
+            let keypair = helix_types::BlsKeypair::random();
+            duties.push(duty_signed_by(&keypair, *slot, *index));
+            let ev = event_from(
+                *slot,
+                *index,
+                address!("00000000000000000000000000000000000000aa"),
+                45_000_000,
             );
+            store.process(Slot::new(0), sign_event(&keypair, chain_info, ev));
         }
-        store
+        (duties, store)
     }
 
     #[test]
     fn serves_only_the_slots_with_a_gossiped_preference() {
-        let duties = [duty(101, 1), duty(102, 2), duty(103, 3)];
-        let store = store_with(&[(101, 1), (103, 3)]);
+        let chain_info = ChainInfo::default();
+        let (mut duties, store) = duties_and_store(&[(101, 1), (103, 3)], &chain_info);
+        duties.push(duty_signed_by(&helix_types::BlsKeypair::random(), 102, 2));
+        duties.sort_by_key(|d| d.slot);
 
-        let feed =
-            synthesize_duty_feed(&duties, &store, Slot::new(101), &ValidatorPreferences::default());
+        let feed = synthesize_duty_feed(
+            &duties,
+            &store,
+            Slot::new(101),
+            &ValidatorPreferences::default(),
+            &chain_info,
+        );
 
         let slots: Vec<u64> = feed.iter().map(|e| e.slot.as_u64()).collect();
         assert_eq!(slots, vec![101, 103], "a slot without preferences cannot be served");
@@ -286,11 +319,16 @@ mod tests {
 
     #[test]
     fn drops_duties_before_the_bid_slot() {
-        let duties = [duty(100, 1), duty(101, 2)];
-        let store = store_with(&[(100, 1), (101, 2)]);
+        let chain_info = ChainInfo::default();
+        let (duties, store) = duties_and_store(&[(100, 1), (101, 2)], &chain_info);
 
-        let feed =
-            synthesize_duty_feed(&duties, &store, Slot::new(101), &ValidatorPreferences::default());
+        let feed = synthesize_duty_feed(
+            &duties,
+            &store,
+            Slot::new(101),
+            &ValidatorPreferences::default(),
+            &chain_info,
+        );
 
         let slots: Vec<u64> = feed.iter().map(|e| e.slot.as_u64()).collect();
         assert_eq!(slots, vec![101], "builders cannot build a slot that has started");
@@ -301,13 +339,24 @@ mod tests {
     /// payment. Nothing else binds the two.
     #[test]
     fn refuses_preferences_gossiped_by_another_validator() {
-        let attacker = address!("00000000000000000000000000000000000000ff");
-        let duties = [duty(101, 1)];
-        let mut store = ProposerPreferencesStore::default();
-        store.process(Slot::new(0), event_from(101, 999, attacker, 45_000_000));
+        helix_common::utils::install_default_crypto_provider();
+        let chain_info = ChainInfo::default();
+        let attacker_key = helix_types::BlsKeypair::random();
+        let attacker_address = address!("00000000000000000000000000000000000000ff");
+        let duties = [duty_signed_by(&helix_types::BlsKeypair::random(), 101, 1)];
 
-        let feed =
-            synthesize_duty_feed(&duties, &store, Slot::new(101), &ValidatorPreferences::default());
+        // Correctly signed, but by someone who does not propose this slot.
+        let mut store = ProposerPreferencesStore::default();
+        let ev = event_from(101, 999, attacker_address, 45_000_000);
+        store.process(Slot::new(0), sign_event(&attacker_key, &chain_info, ev));
+
+        let feed = synthesize_duty_feed(
+            &duties,
+            &store,
+            Slot::new(101),
+            &ValidatorPreferences::default(),
+            &chain_info,
+        );
 
         assert!(feed.is_empty(), "a slot must not be served on someone else's preferences");
     }
