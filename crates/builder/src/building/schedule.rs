@@ -1,6 +1,9 @@
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, future::Future, time::Duration};
 
 use alloy_primitives::{B256, U256};
+use tokio::sync::mpsc;
+
+use crate::building::slot::SlotContext;
 
 /// How long to wait before each build attempt, measured from `now_ms`.
 ///
@@ -21,6 +24,47 @@ pub fn delays(slot_timestamp: u64, offsets: &[u64], now_ms: u64) -> Vec<Duration
         .collect();
 
     if upcoming.is_empty() { vec![Duration::ZERO] } else { upcoming }
+}
+
+/// Runs one slot's attempts, one per delay, measured from a single instant.
+async fn run_schedule<F, Fut>(slot: SlotContext, delays: Vec<Duration>, attempt: F)
+where
+    F: Fn(SlotContext) -> Fut,
+    Fut: Future<Output = ()>,
+{
+    let base = tokio::time::Instant::now();
+    for delay in delays {
+        tokio::time::sleep_until(base + delay).await;
+        attempt(slot.clone()).await;
+    }
+}
+
+/// Drives one schedule at a time. A new context supersedes the one in flight:
+/// the head moved, so every remaining attempt would bid on a parent the relay
+/// has already replaced.
+pub async fn drive<F, Fut, N>(
+    mut contexts: mpsc::Receiver<SlotContext>,
+    offsets: &[u64],
+    now_ms: N,
+    attempt: F,
+) where
+    F: Fn(SlotContext) -> Fut + Clone + Send + 'static,
+    Fut: Future<Output = ()> + Send + 'static,
+    N: Fn() -> u64,
+{
+    let mut current: Option<tokio::task::JoinHandle<()>> = None;
+
+    while let Some(slot) = contexts.recv().await {
+        if let Some(handle) = current.take() {
+            handle.abort();
+        }
+        let delays = delays(slot.timestamp, offsets, now_ms());
+        current = Some(tokio::spawn(run_schedule(slot, delays, attempt.clone())));
+    }
+
+    if let Some(handle) = current.take() {
+        let _ = handle.await;
+    }
 }
 
 /// The best bid already sent, per slot and parent.
@@ -58,7 +102,83 @@ impl BestBid {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use helix_types::{BlsPublicKeyBytes, Withdrawals};
+
     use super::*;
+
+    fn context(slot: u64, parent: u8, timestamp: u64) -> SlotContext {
+        SlotContext {
+            slot,
+            parent_hash: B256::repeat_byte(parent),
+            parent_block_number: Some(slot.saturating_sub(1)),
+            timestamp,
+            prev_randao: B256::ZERO,
+            withdrawals: Withdrawals::default(),
+            parent_beacon_block_root: B256::ZERO,
+            proposer_pubkey: BlsPublicKeyBytes::default(),
+            proposer_fee_recipient: alloy_primitives::Address::ZERO,
+            registered_gas_limit: 30_000_000,
+        }
+    }
+
+    /// Drives `contexts` and reports the parent of every attempt, in order.
+    async fn attempts_for(contexts: Vec<SlotContext>, offsets: &[u64], now_ms: u64) -> Vec<B256> {
+        let (tx, rx) = mpsc::channel(16);
+        for context in contexts {
+            tx.send(context).await.unwrap();
+        }
+        drop(tx);
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let recorder = seen.clone();
+        drive(
+            rx,
+            offsets,
+            move || now_ms,
+            move |slot: SlotContext| {
+                let recorder = recorder.clone();
+                async move {
+                    recorder.lock().unwrap().push(slot.parent_hash);
+                }
+            },
+        )
+        .await;
+
+        let attempts = seen.lock().unwrap().clone();
+        attempts
+    }
+
+    /// The head moved, so the first context's remaining attempts would bid on a
+    /// parent the relay has already replaced. Before the driver they ran anyway,
+    /// late and all at once, and the relay answered "unknown parent hash" or
+    /// "submission for wrong slot".
+    #[tokio::test]
+    async fn a_superseded_context_never_attempts() {
+        let attempts = attempts_for(
+            vec![context(1, 0xa1, SLOT_TIMESTAMP), context(1, 0xb2, SLOT_TIMESTAMP)],
+            &[20, 40],
+            START_MS,
+        )
+        .await;
+
+        assert_eq!(
+            attempts,
+            vec![B256::repeat_byte(0xb2), B256::repeat_byte(0xb2)],
+            "only the newest parent may be bid on",
+        );
+    }
+
+    /// The fallback in `delays` still has to hold: a slot learned about after
+    /// every offset has passed gets one attempt rather than none.
+    #[tokio::test]
+    async fn a_slot_learned_about_late_still_attempts_once() {
+        let attempts =
+            attempts_for(vec![context(1, 0xa1, SLOT_TIMESTAMP)], &[20, 40], START_MS + 9_000).await;
+
+        assert_eq!(attempts, vec![B256::repeat_byte(0xa1)]);
+    }
 
     const SLOT_TIMESTAMP: u64 = 1_700_000_000;
     const START_MS: u64 = SLOT_TIMESTAMP * 1_000;

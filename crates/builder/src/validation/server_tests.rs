@@ -5,9 +5,7 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use helix_common::{
-    api::builder_api::MAX_PAYLOAD_LENGTH, simulator::SszMergedValidationRequest,
-};
+use helix_common::{api::builder_api::MAX_PAYLOAD_LENGTH, simulator::SszMergedValidationRequest};
 use ssz::Encode;
 use tower::ServiceExt;
 

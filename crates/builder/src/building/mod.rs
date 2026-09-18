@@ -46,30 +46,27 @@ pub async fn build_blocks(
     payout_signer: PrivateKeySigner,
     signing: RelaySigningContext,
     chain_id: u64,
-    mut contexts: mpsc::Receiver<SlotContext>,
+    contexts: mpsc::Receiver<SlotContext>,
 ) {
-    let submitter = submit::Submitter::new(&config.relay_url, config.api_key.clone(), signing);
-    let mut best = BestBid::default();
+    let submitter =
+        Arc::new(submit::Submitter::new(&config.relay_url, config.api_key.clone(), signing));
+    let best = Arc::new(std::sync::Mutex::new(BestBid::default()));
+    let offsets = config.submit_offsets_ms.clone();
 
-    while let Some(slot) = contexts.recv().await {
-        best.prune(slot.slot);
-
-        // Each delay is measured from the same instant, so they must not be
-        // slept end to end.
-        let base = tokio::time::Instant::now();
-        for delay in schedule::delays(slot.timestamp, &config.submit_offsets_ms, now_ms()) {
-            tokio::time::sleep_until(base + delay).await;
-
-            let (build_config, store, blockchain, signer, build_slot) = (
-                config.clone(),
-                store.clone(),
-                blockchain.clone(),
-                payout_signer.clone(),
-                slot.clone(),
-            );
+    let attempt = move |slot: SlotContext| {
+        let (config, store, blockchain, signer, submitter, best) = (
+            config.clone(),
+            store.clone(),
+            blockchain.clone(),
+            payout_signer.clone(),
+            submitter.clone(),
+            best.clone(),
+        );
+        async move {
+            let build_slot = slot.clone();
             // Building is CPU-bound and must not stall the runtime.
             let built = tokio::task::spawn_blocking(move || {
-                assemble::build(&store, &blockchain, &build_slot, &build_config, &signer, chain_id)
+                assemble::build(&store, &blockchain, &build_slot, &config, &signer, chain_id)
             })
             .await;
 
@@ -77,24 +74,28 @@ pub async fn build_blocks(
                 Ok(Ok(built)) => built,
                 Ok(Err(e)) => {
                     warn!(slot = slot.slot, err = %e, "skipping slot");
-                    continue;
+                    return;
                 }
                 Err(e) => {
                     error!(slot = slot.slot, err = %e, "build task panicked");
-                    continue;
+                    return;
                 }
             };
 
-            if !best.improves(slot.slot, slot.parent_hash, built.value) {
-                debug!(slot = slot.slot, value = %built.value, "not an improvement");
-                continue;
+            {
+                let mut best = best.lock().expect("bid tracker mutex");
+                best.prune(slot.slot);
+                if !best.improves(slot.slot, slot.parent_hash, built.value) {
+                    debug!(slot = slot.slot, value = %built.value, "not an improvement");
+                    return;
+                }
             }
 
             let bid = match submitter.sign(&built, &slot) {
                 Ok(bid) => bid,
                 Err(e) => {
                     warn!(slot = slot.slot, err = %e, "cannot sign the block");
-                    continue;
+                    return;
                 }
             };
 
@@ -110,7 +111,9 @@ pub async fn build_blocks(
                 Err(e) => warn!(slot = slot.slot, err = %e, "the relay refused the block"),
             }
         }
-    }
+    };
+
+    schedule::drive(contexts, &offsets, now_ms, attempt).await;
 }
 
 fn now_ms() -> u64 {
