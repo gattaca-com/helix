@@ -11,6 +11,7 @@ pub(super) struct PayloadCache {
 impl PayloadCache {
     pub fn insert(&mut self, payload: &Payload) -> bool {
         if payload.slot > self.slot {
+            self.slot = payload.slot;
             self.cache.clear();
         }
         self.cache.insert(payload.execution_payload.execution_payload.block_hash)
