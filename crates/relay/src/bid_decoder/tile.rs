@@ -3,7 +3,7 @@ use std::{cell::RefCell, sync::Arc};
 use alloy_primitives::B256;
 use bytes::Bytes;
 use flux::{
-    spine::{DCacheRead, SpineDCacheConsumer, SpineProducers},
+    spine::{SpineDCacheConsumer, SpineProducers},
     tile::Tile,
     timing::{InternalMessage, Nanos},
 };
@@ -150,8 +150,8 @@ impl DecoderTile {
                     new_bid.expected_pubkey(),
                 )
             },
-            |res, producers| match res {
-                DCacheRead::Ok((msg, result)) => {
+            |msg, result, producers| match result {
+                Some(result) => {
                     let new_bid = msg.bid();
                     self.record_decode_result(&result);
                     let sent_at = msg.tracking_timestamp().publish_t();
@@ -164,7 +164,7 @@ impl DecoderTile {
                         producers,
                     );
                 }
-                DCacheRead::NoRef(msg) => {
+                None => {
                     let new_bid = msg.bid();
                     let Some(payload) = self.http_submissions.get(new_bid.http_submission_ix)
                     else {
@@ -204,24 +204,6 @@ impl DecoderTile {
                         producers,
                     );
                 }
-                DCacheRead::Lost(msg) => {
-                    let new_bid = msg.bid();
-                    tracing::error!(
-                        "dcache read failed for bid submission with id {}",
-                        new_bid.header.id
-                    );
-                    self.record_decode_result(&Err(BuilderApiError::InternalError));
-                    send_submission_result(
-                        producers,
-                        &self.future_results,
-                        new_bid.submission_ref,
-                        Err(BuilderApiError::InternalError),
-                    );
-                }
-                DCacheRead::SpedPast => {
-                    tracing::error!("submissions consumer got sped past");
-                }
-                DCacheRead::Empty => {}
             },
         );
     }

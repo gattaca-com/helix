@@ -14,7 +14,7 @@ use std::{
 
 use alloy_primitives::{Address, B256, FixedBytes, U256};
 use clap::Parser;
-use flux_network::tcp::{PollEvent, SendBehavior, TcpConnector};
+use flux_network::{NetworkDriver, PollEvent, SendBehavior};
 use helix_common::{beacon::types::PayloadAttributesEvent, http::client::HttpClient};
 use helix_tcp_types::{
     BidSubmissionFlags, BidSubmissionHeader, BidSubmissionResponse, MergeType, RegistrationMsg,
@@ -60,7 +60,7 @@ struct Args {
 }
 
 struct Builder {
-    conn: TcpConnector,
+    conn: NetworkDriver,
     token: flux_network::Token,
     pubkey: BlsPublicKeyBytes,
     key: BlsSecretKey,
@@ -213,7 +213,7 @@ fn main() {
                 api_key: args.api_key.into_bytes(),
                 builder_pubkey: pubkey.into(),
             };
-            let mut conn = TcpConnector::default()
+            let mut conn = NetworkDriver::default()
                 .with_socket_buf_size(8 * 1024 * 1024)
                 .with_on_connect_msg(reg.as_ssz_bytes());
             let token = if args.http {

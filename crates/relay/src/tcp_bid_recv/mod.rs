@@ -3,10 +3,7 @@ use std::{net::SocketAddr, sync::Arc};
 use bytes::Bytes;
 use dashmap::DashMap;
 use flux::{tile::Tile, timing::Nanos};
-use flux_network::{
-    Token,
-    tcp::{PollEvent, SendBehavior, TcpConnector, TcpTelemetry},
-};
+use flux_network::{NetworkDriver, PollEvent, SendBehavior, Token, tcp::TcpTelemetry};
 use flux_utils::{DCachePtr, SharedVector};
 use helix_common::{
     SubmissionTrace, is_local_dev, metrics::SUB_CLIENT_TO_SERVER_LATENCY, utils::utcnow_ns,
@@ -52,7 +49,7 @@ struct Stats {
 }
 
 pub struct BidSubmissionTcpListener {
-    listener: TcpConnector,
+    listener: NetworkDriver,
 
     api_key_cache: Arc<DashMap<String, Vec<BlsPublicKeyBytes>>>,
 
@@ -82,7 +79,7 @@ impl BidSubmissionTcpListener {
         // Telemetry creates 4 shm queues per accepted connection keyed by peer
         // addr incl. ephemeral port; never freed, so reconnect churn leaks
         // /dev/shm until the fix lands in flux.
-        let mut listener = TcpConnector::default()
+        let mut listener = NetworkDriver::default()
             .with_telemetry(TcpTelemetry::Disabled)
             .with_socket_buf_size(64 * 1024 * 1024) // 64MB
             .with_dcache(dcache_ptr);

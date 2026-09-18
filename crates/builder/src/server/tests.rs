@@ -10,7 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use flux_network::tcp::{PollEvent, SendBehavior, TcpConnector, TcpTelemetry};
+use flux_network::{NetworkDriver, PollEvent, SendBehavior, tcp::TcpTelemetry};
 use helix_tcp_types::merging::{
     MERGING_HEADER_SIZE, MERGING_PROTOCOL_VERSION, MergingFrameHeader, MergingMsgId,
     builder_to_relay::{RejectCode, RejectV1},
@@ -66,13 +66,13 @@ impl Drop for TestServer {
 }
 
 struct Client {
-    connector: TcpConnector,
+    connector: NetworkDriver,
     token: flux_network::Token,
 }
 
 impl Client {
     fn connect(addr: SocketAddr) -> Self {
-        let mut connector = TcpConnector::default().with_telemetry(TcpTelemetry::Disabled);
+        let mut connector = NetworkDriver::default().with_telemetry(TcpTelemetry::Disabled);
         let deadline = Instant::now() + Duration::from_secs(5);
         let token = loop {
             if let Some(token) = connector.connect(addr) {
