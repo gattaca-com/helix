@@ -5,7 +5,7 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use helix_common::simulator::SszMergedValidationRequest;
+use helix_common::{api::builder_api::MAX_PAYLOAD_LENGTH, simulator::SszMergedValidationRequest};
 use ssz::Encode;
 use tower::ServiceExt;
 
@@ -25,6 +25,28 @@ async fn post(fixture: &Fixture, route: &str, body: Vec<u8>) -> (StatusCode, Str
     let status = response.status();
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
     (status, String::from_utf8_lossy(&bytes).to_string())
+}
+
+/// The relay accepts submissions up to `MAX_PAYLOAD_LENGTH` and forwards every one of them
+/// here, so anything it takes in must not meet a smaller limit on this side. Axum's default
+/// body limit is 2MiB, which produced a steady stream of 413s the relay counted as simulator
+/// faults.
+#[tokio::test]
+async fn a_request_over_the_default_body_limit_is_not_refused() {
+    let fixture = Fixture::new().await;
+
+    let (status, body) = post(&fixture, "/validate", vec![0u8; 4 * 1024 * 1024]).await;
+
+    assert_ne!(status, StatusCode::PAYLOAD_TOO_LARGE, "{body}");
+}
+
+#[tokio::test]
+async fn a_request_over_the_relay_submit_limit_is_refused() {
+    let fixture = Fixture::new().await;
+
+    let (status, _) = post(&fixture, "/validate", vec![0u8; MAX_PAYLOAD_LENGTH + 1]).await;
+
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
 }
 
 #[tokio::test]

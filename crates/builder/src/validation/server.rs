@@ -4,13 +4,14 @@ use alloy_primitives::Address;
 use alloy_rpc_types::beacon::relay::SignedBidSubmissionV5;
 use axum::{
     Router,
-    extract::State,
+    extract::{DefaultBodyLimit, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::post,
 };
 use dashmap::DashSet;
 use helix_common::{
+    api::builder_api::MAX_PAYLOAD_LENGTH,
     blacklist::{changed_disallow_hash, parse_disallow_list},
     decoder::{DecoderError, SubmissionDecoder, SubmissionDecoderParams},
     simulator::{SszMergedValidationRequest, SszValidationRequest},
@@ -35,6 +36,7 @@ pub fn router(validator: BlockValidator, max_concurrent: usize) -> Router {
     Router::new()
         .route("/validate", post(validate))
         .route("/validate_merged", post(validate_merged))
+        .layer(DefaultBodyLimit::max(MAX_PAYLOAD_LENGTH))
         .with_state(ServerState {
             validator,
             permits: Arc::new(Semaphore::new(max_concurrent.max(1))),
