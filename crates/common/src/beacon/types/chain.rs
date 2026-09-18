@@ -1,5 +1,5 @@
-use alloy_primitives::{B256, hex};
-use helix_types::{Slot, Withdrawals};
+use alloy_primitives::{Address, B256, hex};
+use helix_types::{BlsSignatureBytes, Slot, Withdrawals};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -68,6 +68,31 @@ pub struct HeadEventData {
     pub slot: Slot,
     pub block: B256,
     pub state: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ProposerPreferencesEvent {
+    pub version: String,
+    pub data: SignedProposerPreferences,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SignedProposerPreferences {
+    pub message: ProposerPreferences,
+    pub signature: BlsSignatureBytes,
+}
+
+/// Gossiped once per proposal slot, per
+/// <https://github.com/ethereum/consensus-specs/blob/master/specs/gloas/p2p-interface.md#new-signedproposerpreferences>.
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq)]
+pub struct ProposerPreferences {
+    pub dependent_root: B256,
+    pub proposal_slot: Slot,
+    #[serde(with = "serde_utils::quoted_u64")]
+    pub validator_index: u64,
+    pub fee_recipient: Address,
+    #[serde(with = "serde_utils::quoted_u64")]
+    pub target_gas_limit: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]

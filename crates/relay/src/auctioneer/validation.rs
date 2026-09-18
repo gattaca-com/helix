@@ -1,7 +1,9 @@
 use alloy_primitives::B256;
 use flux_profiler::timed;
 use helix_common::{BuilderInfo, PayloadAttributesUpdate};
-use helix_types::{BlockValidationError, BlsPublicKeyBytes, Submission, SubmissionVersion};
+use helix_types::{
+    BlockValidationError, BlsPublicKeyBytes, ForkName, Submission, SubmissionVersion,
+};
 
 use crate::auctioneer::{
     bid_adjustor::BidAdjustor,
@@ -44,6 +46,7 @@ impl<B: BidAdjustor> Context<B> {
         self.staleness_check(submission.builder_pubkey(), submission_data.version)?;
         self.validate_submission_data(
             submission,
+            submission_data.decoder_params.fork_name,
             &submission_data.withdrawals_root,
             slot_data,
             payload_attributes,
@@ -57,15 +60,12 @@ impl<B: BidAdjustor> Context<B> {
     fn validate_submission_data(
         &self,
         payload: &Submission,
+        decoded_fork: ForkName,
         withdrawals_root: &B256,
         slot_data: &SlotData,
         payload_attributes: &PayloadAttributesUpdate,
     ) -> Result<(), BlockValidationError> {
-        if slot_data.current_fork != payload.fork_name() {
-            return Err(BlockValidationError::InvalidPayloadType {
-                fork_name: slot_data.current_fork,
-            });
-        }
+        check_submission_fork(decoded_fork, slot_data.current_fork)?;
 
         // checks internal consistency of the payload
         payload.validate()?;
@@ -159,6 +159,18 @@ pub fn check_if_trusted_builder(
     }
 }
 
+/// The decoder records the fork it decoded with; a submission shaped for another fork cannot be
+/// validated against this slot.
+pub(super) fn check_submission_fork(
+    decoded: ForkName,
+    slot_fork: ForkName,
+) -> Result<(), BlockValidationError> {
+    if decoded != slot_fork {
+        return Err(BlockValidationError::InvalidPayloadType { fork_name: slot_fork });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use helix_common::{
@@ -167,9 +179,12 @@ mod tests {
             builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
         },
     };
-    use helix_types::ForkName;
+    use helix_types::{BlockValidationError, ForkName};
 
-    use crate::auctioneer::{types::SlotData, validation::check_if_trusted_builder};
+    use crate::auctioneer::{
+        types::SlotData,
+        validation::{check_if_trusted_builder, check_submission_fork},
+    };
 
     #[test]
     fn test_check_if_trusted_builder_empty_list() {
@@ -267,5 +282,26 @@ mod tests {
         };
 
         assert!(check_if_trusted_builder(&builder_info, &slot_data).is_err());
+    }
+
+    #[test]
+    fn a_gloas_submission_passes_the_fork_gate_on_a_gloas_slot() {
+        assert!(
+            check_submission_fork(ForkName::Gloas, ForkName::Gloas).is_ok(),
+            "the decoder decoded a Gloas submission for a Gloas slot",
+        );
+    }
+
+    #[test]
+    fn a_submission_decoded_for_another_fork_is_refused() {
+        let result = check_submission_fork(ForkName::Fulu, ForkName::Gloas);
+
+        assert!(
+            matches!(
+                result,
+                Err(BlockValidationError::InvalidPayloadType { fork_name: ForkName::Gloas })
+            ),
+            "the slot's fork is the one the submission had to match",
+        );
     }
 }

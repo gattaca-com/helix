@@ -5,7 +5,7 @@ use axum::{
 };
 use helix_common::{beacon::BeaconClientError, local_cache::AuctioneerError};
 use helix_database::error::DatabaseError;
-use helix_types::{SigError, Slot, SszError};
+use helix_types::{BlsPublicKeyBytes, SigError, Slot, SszError};
 use hyper::StatusCode;
 use ssz::DecodeError;
 use thiserror::Error;
@@ -26,6 +26,12 @@ pub enum ProposerApiError {
 
     #[error("not the expected proposer index. expected {expected}, got {actual}")]
     UnexpectedProposerIndex { expected: u64, actual: u64 },
+
+    #[error("bid requested for slot {actual}, the relay is bidding for {expected}")]
+    BidRequestSlotMismatch { expected: u64, actual: u64 },
+
+    #[error("bid requested by {actual}, the proposer for the slot is {expected}")]
+    UnexpectedProposerPubkey { expected: BlsPublicKeyBytes, actual: BlsPublicKeyBytes },
 
     #[error("no validators could be registered")]
     NoValidatorsCouldBeRegistered,
@@ -169,6 +175,8 @@ impl IntoResponse for ProposerApiError {
                 ProposerApiError::AxumError(_) |
                 ProposerApiError::ToStrError(_) |
                 ProposerApiError::UnexpectedProposerIndex { .. } |
+                ProposerApiError::BidRequestSlotMismatch { .. } |
+                ProposerApiError::UnexpectedProposerPubkey { .. } |
                 ProposerApiError::NoValidatorsCouldBeRegistered |
                 ProposerApiError::InvalidFork |
                 ProposerApiError::SerdeDecodeError(_) |

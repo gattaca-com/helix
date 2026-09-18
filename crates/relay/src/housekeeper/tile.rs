@@ -12,17 +12,20 @@ use flux::{
 use flux_utils::SharedVector;
 use helix_common::{
     CurrentSlotInfo, InclusionListConfig, PayloadAttributesUpdate, PrimevConfig, ProposerDuty,
-    RelayConfig, SlotDuties, ValidatorSummary,
+    RelayConfig, SlotDuties, ValidatorPreferences, ValidatorSummary,
     api::builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
     beacon::{
         MultiBeaconClient,
-        types::{BeaconResponse, HeadEventData, PayloadAttributesEvent, SyncStatus},
+        types::{
+            BeaconResponse, HeadEventData, PayloadAttributesEvent, ProposerPreferencesEvent,
+            SyncStatus,
+        },
     },
     chain_info::ChainInfo,
     http::client::{HttpClient, PendingResponse, SseStream},
     local_cache::LocalCache,
 };
-use helix_types::Slot;
+use helix_types::{ForkName, Slot};
 use tracing::{debug, error, info, warn};
 
 use crate::{
@@ -36,6 +39,7 @@ use crate::{
             PRIMEV_BUILDER_ID, PrimevBuildersFetch, PrimevValidatorsFetch,
             build_primev_builder_configs,
         },
+        proposer_prefs::{ProposerPreferencesStore, synthesize_duty_feed, synthesize_registration},
     },
     network::RelayNetworkManager,
     spine::messages::SlotMsg,
@@ -63,6 +67,8 @@ struct HousekeeperStats {
     head_sse_events: u32,
     head_sse_parse_errors: u32,
     payload_attr_sse_events: u32,
+    proposer_prefs_sse_events: u32,
+    proposer_prefs_parse_errors: u32,
     payload_attr_parse_errors: u32,
     duties_fetch_ok: u32,
     duties_fetch_empty: u32,
@@ -90,7 +96,10 @@ pub struct HousekeeperTile {
     beacon_client: Arc<MultiBeaconClient>,
     head_sse: Vec<SseStream>,
     payload_attr_sse: Vec<SseStream>,
+    proposer_prefs_sse: Vec<SseStream>,
+    proposer_prefs: ProposerPreferencesStore,
     primev_config: Option<PrimevConfig>,
+    validator_preferences: ValidatorPreferences,
     il_config: Option<InclusionListConfig>,
 
     // Output
@@ -159,13 +168,26 @@ impl HousekeeperTile {
             })
             .collect();
 
+        let proposer_prefs_sse = beacon_client
+            .beacon_clients
+            .iter()
+            .map(|c| {
+                let mut url = c.config.url.join("/eth/v1/events").unwrap();
+                url.set_query(Some("topics=proposer_preferences"));
+                http_client.sse_stream(url)
+            })
+            .collect();
+
         let tile = Self {
             chain_head,
             http_client,
             beacon_client,
             head_sse,
             payload_attr_sse,
+            proposer_prefs_sse,
+            proposer_prefs: ProposerPreferencesStore::default(),
             primev_config: config.primev_config.clone(),
+            validator_preferences: config.validator_preferences.clone(),
             il_config: config.inclusion_list.clone(),
             slot_events,
             local_cache,
@@ -190,9 +212,37 @@ impl HousekeeperTile {
         (tile, curr_slot_info)
     }
 
+    /// Gloas proposers never register, so the feed builders poll is filled from the beacon
+    /// duties and the gossiped preferences, without displacing a real registration.
+    fn refresh_gloas_duty_feed(&self) {
+        let from_slot = self.chain_head.head() + 1;
+        if self.chain_head.chain_info().fork_at_slot(from_slot) != ForkName::Gloas {
+            return;
+        }
+
+        let synthesized = synthesize_duty_feed(
+            &self.duties,
+            &self.proposer_prefs,
+            from_slot,
+            &self.validator_preferences,
+        );
+        if synthesized.is_empty() {
+            return;
+        }
+
+        let mut feed = self.local_cache.get_proposer_duties();
+        let known: rustc_hash::FxHashSet<u64> = feed.iter().map(|e| e.slot.as_u64()).collect();
+        feed.extend(synthesized.into_iter().filter(|e| !known.contains(&e.slot.as_u64())));
+        feed.sort_by_key(|e| e.slot.as_u64());
+        self.local_cache.update_proposer_duties(feed);
+    }
+
     fn on_new_slot(&mut self) {
         let slot = self.chain_head.head();
         info!(%slot, "new slot started");
+
+        self.proposer_prefs.on_new_slot(slot + 1);
+        self.refresh_gloas_duty_feed();
 
         self.fetch_duties();
         self.maybe_fetch_il();
@@ -281,6 +331,19 @@ impl Tile<HelixSpine> for HousekeeperTile {
             // or same iteration). is_new_slot() returned false for this slot.
             self.on_new_slot();
         }
+        for stream in &mut self.proposer_prefs_sse {
+            if let Poll::Ready(ev) = stream.poll() {
+                self.stats.proposer_prefs_sse_events += 1;
+                match serde_json::from_str::<ProposerPreferencesEvent>(&ev.data) {
+                    Ok(data) => self.proposer_prefs.process(self.chain_head.head(), data),
+                    Err(e) => {
+                        self.stats.proposer_prefs_parse_errors += 1;
+                        error!(err = %e, "proposer_preferences SSE parse error");
+                    }
+                }
+            }
+        }
+
         for stream in &mut self.payload_attr_sse {
             if let Poll::Ready(ev) = stream.poll() {
                 self.stats.payload_attr_sse_events += 1;
@@ -315,6 +378,7 @@ impl Tile<HelixSpine> for HousekeeperTile {
                     self.stats.duties_fetch_ok += 1;
                     process_duties(&proposer_duties, &self.local_cache, &self.db);
                     self.duties = proposer_duties;
+                    self.refresh_gloas_duty_feed();
                     self.chain_head.mark_duties_done();
                     self.maybe_fetch_primev();
                 }
@@ -512,6 +576,9 @@ impl Tile<HelixSpine> for HousekeeperTile {
                 &self.curr_slot_info,
                 &self.slot_events,
                 &self.known_payload_attributes,
+                &self.proposer_prefs,
+                &self.duties,
+                &self.validator_preferences,
                 self.pending_il.take(),
                 std::mem::take(&mut self.stats),
             );
@@ -531,6 +598,9 @@ fn send_slot_event(
     curr_slot_info: &CurrentSlotInfo,
     slot_events: &SharedVector<SlotUpdate>,
     known_payload_attributes: &HashMap<(B256, Slot), PayloadAttributesUpdate>,
+    proposer_prefs: &ProposerPreferencesStore,
+    beacon_duties: &[ProposerDuty],
+    validator_preferences: &ValidatorPreferences,
     il: Option<InclusionListWithMetadata>,
     stats: HousekeeperStats,
 ) {
@@ -549,7 +619,16 @@ fn send_slot_event(
         }
     }
 
-    let next_duty = new_duties.iter().find(|d| d.slot.as_u64() == bid_slot.as_u64()).cloned();
+    let mut next_duty = new_duties.iter().find(|d| d.slot.as_u64() == bid_slot.as_u64()).cloned();
+
+    // Gloas drops `registerValidator`, so the entry comes from the duty and the gossiped prefs.
+    if next_duty.is_none() && chain_head.chain_info().fork_at_slot(bid_slot) == ForkName::Gloas {
+        next_duty = beacon_duties
+            .iter()
+            .find(|d| d.slot.as_u64() == bid_slot.as_u64())
+            .zip(proposer_prefs.get(bid_slot))
+            .map(|(duty, prefs)| synthesize_registration(duty, prefs, validator_preferences));
+    }
     let next_payload_attributes: Vec<PayloadAttributesUpdate> = known_payload_attributes
         .iter()
         .filter_map(
@@ -562,10 +641,13 @@ fn send_slot_event(
         duties_available = !new_duties.is_empty(),
         has_next_duty = next_duty.is_some(),
         has_payload_attrs = !next_payload_attributes.is_empty(),
+        has_proposer_prefs = proposer_prefs.get(bid_slot).is_some(),
         head_sse_events = stats.head_sse_events,
         head_sse_parse_errors = stats.head_sse_parse_errors,
         payload_attr_sse_events = stats.payload_attr_sse_events,
         payload_attr_parse_errors = stats.payload_attr_parse_errors,
+        proposer_prefs_sse_events = stats.proposer_prefs_sse_events,
+        proposer_prefs_parse_errors = stats.proposer_prefs_parse_errors,
         duties_fetch_ok = stats.duties_fetch_ok,
         duties_fetch_empty = stats.duties_fetch_empty,
         duties_fetch_err = stats.duties_fetch_err,

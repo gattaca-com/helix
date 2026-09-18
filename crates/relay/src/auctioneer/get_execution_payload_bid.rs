@@ -43,6 +43,21 @@ pub(super) fn check_execution_payload_bid_liveness(
     params: &GetExecutionPayloadBidParams,
     slot_data: &SlotData,
 ) -> Result<(), ProposerApiError> {
+    if params.slot != slot_data.bid_slot.as_u64() {
+        return Err(ProposerApiError::BidRequestSlotMismatch {
+            expected: slot_data.bid_slot.as_u64(),
+            actual: params.slot,
+        });
+    }
+
+    let expected_proposer = *slot_data.proposer_pubkey();
+    if params.proposer_pubkey != expected_proposer {
+        return Err(ProposerApiError::UnexpectedProposerPubkey {
+            expected: expected_proposer,
+            actual: params.proposer_pubkey,
+        });
+    }
+
     let Some(attrs) = slot_data.payload_attributes_map.get(&params.parent_hash) else {
         warn!(
             req =% params.parent_hash,
@@ -111,19 +126,27 @@ pub(super) fn build_signed_bid(
 mod tests {
     use alloy_primitives::B256;
     use helix_common::PayloadAttributesUpdate;
-    use helix_types::{Domain, EthSpec, ForkName, SignedRoot, TestRandomSeed};
+    use helix_types::{BlsPublicKeyBytes, Domain, EthSpec, ForkName, SignedRoot, TestRandomSeed};
     use rustc_hash::FxHashMap;
 
     use super::*;
 
+    const BID_SLOT: u64 = 1;
+
     fn slot_data(payload_attributes_map: FxHashMap<B256, PayloadAttributesUpdate>) -> SlotData {
         SlotData {
-            bid_slot: Default::default(),
+            bid_slot: Slot::new(BID_SLOT),
             registration_data: Default::default(),
             current_fork: ForkName::Gloas,
             payload_attributes_map,
             il: Default::default(),
         }
+    }
+
+    fn live_slot_data(parent_hash: B256, parent_root: B256) -> SlotData {
+        let mut map = FxHashMap::default();
+        map.insert(parent_hash, attrs_update(parent_hash, Some(parent_root)));
+        slot_data(map)
     }
 
     fn attrs_update(
@@ -308,5 +331,52 @@ mod tests {
                 .signature
                 .verify(&identity.keypair.pk, signed_bid.message.signing_root(domain))
         );
+    }
+
+    #[test]
+    fn refuses_a_bid_request_for_another_slot() {
+        let parent_hash = B256::repeat_byte(0x11);
+        let parent_root = B256::repeat_byte(0x22);
+        let data = live_slot_data(parent_hash, parent_root);
+        let mut params = params(parent_hash, parent_root);
+        params.slot = BID_SLOT + 1;
+
+        let result = check_execution_payload_bid_liveness(&params, &data);
+
+        assert!(
+            matches!(
+                result,
+                Err(ProposerApiError::BidRequestSlotMismatch { expected, actual })
+                    if expected == BID_SLOT && actual == BID_SLOT + 1
+            ),
+            "the relay must not sign a bid for a slot it is not bidding for",
+        );
+    }
+
+    #[test]
+    fn refuses_a_bid_request_from_another_proposer() {
+        let parent_hash = B256::repeat_byte(0x11);
+        let parent_root = B256::repeat_byte(0x22);
+        let data = live_slot_data(parent_hash, parent_root);
+        let mut params = params(parent_hash, parent_root);
+        params.proposer_pubkey = BlsPublicKeyBytes::from([7u8; 48]);
+
+        let result = check_execution_payload_bid_liveness(&params, &data);
+
+        assert!(
+            matches!(result, Err(ProposerApiError::UnexpectedProposerPubkey { .. })),
+            "a valid request auth proves the key, not the right to this slot",
+        );
+    }
+
+    #[test]
+    fn accepts_the_slots_own_proposer() {
+        let parent_hash = B256::repeat_byte(0x11);
+        let parent_root = B256::repeat_byte(0x22);
+        let data = live_slot_data(parent_hash, parent_root);
+
+        let result = check_execution_payload_bid_liveness(&params(parent_hash, parent_root), &data);
+
+        assert!(result.is_ok(), "the expected slot and proposer must pass");
     }
 }
