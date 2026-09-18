@@ -21,7 +21,10 @@ use ssz::{Decode, Encode};
 use tokio::time::Instant;
 
 use super::{Operator, OperatorError};
-use crate::utils::{PromotionState, PromotionStates};
+use crate::{
+    PayloadCache,
+    utils::{PromotionState, PromotionStates},
+};
 
 const MAX_OPERATOR_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
 /// gossipsub checks `max_transmit_size` against the payload on publish, but against the whole
@@ -153,6 +156,9 @@ pub(super) async fn run_operator_connection(
     let mut connected_peers = FxHashSet::default();
     let mut redial_deadline = Instant::now() + QUIC_REDIAL_INTERVAL;
 
+    // Payload deduplication
+    let mut payload_cache = PayloadCache::default();
+
     loop {
         tokio::select! {
             to_send = outgoing.recv() => match to_send {
@@ -171,7 +177,7 @@ pub(super) async fn run_operator_connection(
 
                             record_builder_collateral(&mut builder_collateral, id, collateral.clone())
                         }
-                        _ => true,
+                        OperatorMessage::Payload(payload) => payload_cache.insert(payload),
                     };
                     if transmit && !connected_peers.is_empty() {
                         publish_operator_message(

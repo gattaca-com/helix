@@ -20,13 +20,14 @@ use libp2p::{BehaviourBuilderError, TransportError, gossipsub, identity::Keypair
 use thiserror::Error;
 use tokio::task::AbortHandle;
 
+mod payload;
 mod pubsub;
 mod utils;
 
 pub use libp2p::identity::Keypair as OperatorKeypair;
 pub use utils::keypair_from_bytes;
 
-use crate::utils::load_operator_keypair;
+use crate::{payload::PayloadCache, utils::load_operator_keypair};
 
 #[derive(Debug, Error)]
 pub enum OperatorError {
