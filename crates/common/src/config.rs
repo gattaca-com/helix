@@ -918,3 +918,40 @@ mod tests {
         assert!(!config.is_builder_collateralized(other));
     }
 }
+
+#[cfg(test)]
+mod logging_config_tests {
+    use super::*;
+
+    /// A config the relay cannot parse crash-loops it on start, so the exact YAML
+    /// shape the deployed file uses has to be pinned here.
+    #[test]
+    fn the_file_logging_shape_parses() {
+        let yaml = "
+type: File
+dir_path: /app/logs
+file_name: titan_relay.log
+otlp_server: null
+";
+        let parsed: LoggingConfig = serde_yaml::from_str(yaml).expect("deployed shape must parse");
+
+        match parsed {
+            LoggingConfig::File { dir_path, file_name, otlp_server } => {
+                assert_eq!(dir_path, PathBuf::from("/app/logs"));
+                assert_eq!(file_name, "titan_relay.log");
+                assert!(otlp_server.is_none());
+            }
+            LoggingConfig::Console => panic!("parsed as Console"),
+        }
+    }
+
+    /// `config.example.yml` carries the externally tagged `!File` form, which this
+    /// internally tagged enum cannot read. Pinned so the example gets fixed rather
+    /// than copied into a deployment.
+    #[test]
+    fn the_externally_tagged_shape_does_not_parse() {
+        let yaml = "!File\ndir_path: /app/logs\nfile_name: titan_relay.log\notlp_server: null\n";
+
+        assert!(serde_yaml::from_str::<LoggingConfig>(yaml).is_err());
+    }
+}

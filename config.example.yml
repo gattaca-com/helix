@@ -56,7 +56,8 @@ primev_config: null
 discord_webhook_url: null
 is_submission_instance: true
 is_registration_instance: true
-logging: !File
+logging:
+  type: File
   dir_path: /app/logs
   file_name: titan_relay.log
   otlp_server: http://localhost:4317

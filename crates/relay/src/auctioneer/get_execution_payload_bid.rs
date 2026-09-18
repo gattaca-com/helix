@@ -32,7 +32,13 @@ impl<B: BidAdjustor> Context<B> {
                 .ok_or(ProposerApiError::NoBidPrepared)?;
             let entry =
                 self.payloads.get(&best_block_hash).ok_or(ProposerApiError::NoBidPrepared)?;
-            build_signed_bid(entry, &params, &self.gloas_builder_identity, &self.chain_info)
+            build_signed_bid(
+                entry,
+                &params,
+                &self.gloas_builder_identity,
+                &self.chain_info,
+                slot_data,
+            )
         });
         let _ = res_tx.send(result);
     }
@@ -86,6 +92,7 @@ pub(super) fn build_signed_bid(
     params: &GetExecutionPayloadBidParams,
     identity: &GloasBuilderIdentity,
     chain_info: &ChainInfo,
+    slot_data: &SlotData,
 ) -> Result<SignedExecutionPayloadBid, ProposerApiError> {
     let slot = Slot::new(params.slot);
 
@@ -111,7 +118,10 @@ pub(super) fn build_signed_bid(
         parent_block_root: params.parent_root,
         block_hash: ExecutionBlockHash(*entry.block_hash()),
         prev_randao: payload.prev_randao,
-        fee_recipient: payload.fee_recipient,
+        // The proposer's, not the payload's: the builder keeps the coinbase and pays
+        // the proposer in-block, and consensus pays any enshrined amount to whatever
+        // this names. Announcing the coinbase names the builder.
+        fee_recipient: slot_data.registration_data.entry.registration.message.fee_recipient,
         gas_limit: payload.gas_limit,
         builder_index: identity.builder_index,
         slot,
@@ -318,8 +328,9 @@ mod tests {
         let entry = payload_entry(block_hash, 42 * WEI_PER_GWEI);
         let identity = bid_identity(7);
         let params = params(parent_hash, parent_root);
+        let data = live_slot_data(parent_hash, parent_root);
 
-        let signed_bid = build_signed_bid(&entry, &params, &identity, &chain_info).unwrap();
+        let signed_bid = build_signed_bid(&entry, &params, &identity, &chain_info, &data).unwrap();
 
         assert_eq!(signed_bid.message.block_hash.0, block_hash);
         assert_eq!(signed_bid.message.parent_block_hash.0, parent_hash);
@@ -327,6 +338,11 @@ mod tests {
         assert_eq!(signed_bid.message.builder_index, 7);
         assert_eq!(signed_bid.message.value, 0, "the proposer is paid in-block");
         assert_eq!(signed_bid.message.execution_payment, 42, "wei converts to gwei");
+        assert_eq!(
+            signed_bid.message.fee_recipient,
+            data.registration_data.entry.registration.message.fee_recipient,
+            "consensus pays any enshrined amount here, so it must be the proposer's",
+        );
 
         let epoch = signed_bid.message.slot.epoch(helix_types::MainnetEthSpec::slots_per_epoch());
         let fork = chain_info.spec.fork_at_epoch(epoch);
