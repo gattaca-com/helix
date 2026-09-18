@@ -75,6 +75,14 @@ pub struct NodeOptions {
     pub skip_genesis_validation: bool,
     #[arg(long = "log.level", default_value_t = Level::INFO, value_name = "LOG_LEVEL", help = "info, debug, trace, warn or error", env = "ETHREX_LOG_LEVEL", help_heading = "Node options")]
     pub log_level: Level,
+    #[arg(
+        long = "log.dir",
+        value_name = "PATH",
+        help = "Write daily-rotated logs here instead of stdout, so a redeploy keeps the record.",
+        env = "HELIX_LOG_DIR",
+        help_heading = "Node options"
+    )]
+    pub log_dir: Option<std::path::PathBuf>,
 
     #[arg(
         long = "http.addr",

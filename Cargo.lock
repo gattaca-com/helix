@@ -6547,6 +6547,7 @@ dependencies = [
  "tokio-util",
  "tower 0.5.3",
  "tracing",
+ "tracing-appender",
  "tracing-subscriber 0.3.23",
  "uuid 1.24.1",
  "zstd 0.13.3",

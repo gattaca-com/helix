@@ -35,7 +35,7 @@ fn main() -> eyre::Result<()> {
     install_default_crypto_provider();
 
     let cli = BuilderCli::parse();
-    init_tracing(&cli);
+    let _log_guard = init_tracing(&cli);
 
     let merging_config = cli.merging_config.as_deref().map(MergingConfig::load).transpose()?;
     let simulation_config = cli.sim_config.as_deref().map(SimulationConfig::load).transpose()?;
@@ -168,8 +168,23 @@ fn main() -> eyre::Result<()> {
     Ok(())
 }
 
-fn init_tracing(cli: &BuilderCli) {
+/// Returns the appender guard, which has to outlive the process's logging.
+fn init_tracing(cli: &BuilderCli) -> Option<tracing_appender::non_blocking::WorkerGuard> {
     let filter =
         EnvFilter::builder().with_default_directive(cli.node.log_level.into()).from_env_lossy();
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+
+    let Some(dir) = cli.node.log_dir.as_ref() else {
+        tracing_subscriber::fmt().with_env_filter(filter).init();
+        return None;
+    };
+
+    let appender = tracing_appender::rolling::Builder::new()
+        .filename_prefix("helix_builder.log")
+        .max_log_files(14)
+        .rotation(tracing_appender::rolling::Rotation::DAILY)
+        .build(dir)
+        .expect("failed to create the log appender");
+    let (writer, guard) = tracing_appender::non_blocking(appender);
+    tracing_subscriber::fmt().with_env_filter(filter).with_writer(writer).with_ansi(false).init();
+    Some(guard)
 }
