@@ -163,6 +163,122 @@ impl TestRandom for BundleOrderV2 {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, Encode, Decode, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct OrderV2 {
+    pub start: u16,
+    pub len: u8,
+    pub flags: u8,
+}
+
+impl OrderV2 {
+    pub const LATEST_ONLY: u8 = 1 << 0;
+    pub const ALL_REVERT: u8 = 1 << 1;
+    pub const KNOWN_FLAGS: u8 = Self::LATEST_ONLY | Self::ALL_REVERT;
+}
+
+/// Per-tx revert/drop codes for one `OrderV2` whose txs are not all alike.
+/// `order` indexes `BlockMergingDataV2::orders`; `codes` packs one 2-bit code
+/// per tx of that order, tx `i` at bits `2*(i%4)` of byte `i/4`:
+/// `NONE`, `REVERT` (may revert) or `DROP` (may be omitted). Kept out of
+/// `OrderV2` so orders stay fixed-size; only bundles mixing behaviours need one.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Encode, Decode, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct OrderTxCodes {
+    pub order: u16,
+    pub codes: Vec<u8>,
+}
+
+impl OrderTxCodes {
+    pub const NONE: u8 = 0;
+    pub const REVERT: u8 = 1;
+    pub const DROP: u8 = 2;
+
+    pub fn codes_len(bundle_len: u8) -> usize {
+        (bundle_len as usize).div_ceil(4)
+    }
+
+    pub fn code(&self, tx: usize) -> u8 {
+        (self.codes[tx / 4] >> (2 * (tx % 4))) & 0b11
+    }
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, Encode, Decode, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct BlockMergingDataV2 {
+    pub allow_appending: bool,
+    pub builder_address: Address,
+    pub orders: Vec<OrderV2>,
+    pub tx_codes: Vec<OrderTxCodes>,
+}
+
+impl BlockMergingDataV2 {
+    pub fn allow_all(builder_address: Address, num_tx: usize) -> Self {
+        let orders = (0..num_tx)
+            .map(|i| OrderV2 { start: i as u16, len: 1, flags: OrderV2::ALL_REVERT })
+            .collect();
+        Self { allow_appending: true, builder_address, orders, tx_codes: vec![] }
+    }
+
+    pub fn append_only(builder_address: Address) -> Self {
+        Self { allow_appending: true, builder_address, orders: vec![], tx_codes: vec![] }
+    }
+}
+
+impl From<BlockMergingData> for BlockMergingDataV2 {
+    /// v1 senders' merging data, compacted once on decode. Bundles are always
+    /// contiguous; an order the compact form cannot hold (index over u16, len
+    /// over u8) is dropped, as `order_to_ref` would drop it anyway.
+    fn from(v1: BlockMergingData) -> Self {
+        let mut orders = Vec::with_capacity(v1.merge_orders.len());
+        let mut tx_codes = Vec::new();
+        for order in &v1.merge_orders {
+            let (txs, reverting, dropping, latest_only): (&[usize], &[usize], &[usize], bool) =
+                match order {
+                    Order::Tx(t) => {
+                        let Ok(start) = u16::try_from(t.index) else { continue };
+                        let flags = if t.can_revert { OrderV2::ALL_REVERT } else { 0 };
+                        orders.push(OrderV2 { start, len: 1, flags });
+                        continue;
+                    }
+                    Order::Bundle(b) => (&b.txs, &b.reverting_txs, &b.dropping_txs, false),
+                    Order::BundleV2(b) => (
+                        &b.txs,
+                        &b.reverting_txs,
+                        &b.dropping_txs,
+                        b.flags.contains(MergeOrderFlags::LATEST_ONLY),
+                    ),
+                };
+            let (Some(&first), Ok(len)) = (txs.first(), u8::try_from(txs.len())) else { continue };
+            let Ok(start) = u16::try_from(first) else { continue };
+            debug_assert!(txs.iter().enumerate().all(|(i, &tx)| tx == first + i));
+            let mut flags = if latest_only { OrderV2::LATEST_ONLY } else { 0 };
+            if dropping.is_empty() && reverting.len() == txs.len() {
+                flags |= OrderV2::ALL_REVERT;
+            } else if !(reverting.is_empty() && dropping.is_empty()) {
+                let mut codes = vec![0u8; OrderTxCodes::codes_len(len)];
+                for (idx, code) in reverting
+                    .iter()
+                    .map(|&i| (i, OrderTxCodes::REVERT))
+                    .chain(dropping.iter().map(|&i| (i, OrderTxCodes::DROP)))
+                {
+                    if idx < txs.len() {
+                        codes[idx / 4] |= code << (2 * (idx % 4));
+                    }
+                }
+                tx_codes.push(OrderTxCodes { order: orders.len() as u16, codes });
+            }
+            orders.push(OrderV2 { start, len, flags });
+        }
+        Self {
+            allow_appending: v1.allow_appending,
+            builder_address: v1.builder_address,
+            orders,
+            tx_codes,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct InvalidTxIndex;
 

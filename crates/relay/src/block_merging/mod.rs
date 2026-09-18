@@ -16,7 +16,7 @@ use helix_tcp_types::merging::{
 };
 use helix_types::{
     BlobWithMetadata, BlobsBundle, BuilderInclusionResult, ExecutionPayload, KzgCommitment,
-    MergeOrderFlags, MergedBlockTrace, Order, payload_from_v3, requests_from_v4,
+    MergedBlockTrace, OrderTxCodes, OrderV2, payload_from_v3, requests_from_v4,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 use ssz::Encode;
@@ -34,29 +34,53 @@ fn append_frame<T: Encode>(buf: &mut Vec<u8>, msg_id: MergingMsgId, msg: &T) {
     msg.ssz_append(buf);
 }
 
-/// Index-based submission order -> wire ref. `None` if an index exceeds u16.
-/// `None` for an order the merge builder would reject, including one whose indices fall
-/// outside the block it came from: forwarding it costs the whole block, not just the order.
-fn order_to_ref(order: &Order, block_tx_count: usize) -> Option<MergeOrderRef> {
-    fn idx(i: usize) -> Option<u16> {
-        u16::try_from(i).ok()
+/// Compact submission order -> wire ref. `None` for an order the merge builder
+/// would reject, including one whose indices fall outside the block it came
+/// from: forwarding it costs the whole block, not just the order. A one-tx
+/// order without codes or `LATEST_ONLY` goes as a tx ref, so a solo tx keeps
+/// its tx-hash identity in the merge builder.
+fn order_to_ref(
+    order: &OrderV2,
+    codes: Option<&OrderTxCodes>,
+    block_tx_count: usize,
+) -> Option<MergeOrderRef> {
+    if order.len == 0 || order.flags & !OrderV2::KNOWN_FLAGS != 0 {
+        return None;
     }
-    let order_ref = match order {
-        Order::Tx(tx) => {
-            MergeOrderRef::Tx(TxOrderRef { index: idx(tx.index)?, can_revert: tx.can_revert })
+    let all_revert = order.flags & OrderV2::ALL_REVERT != 0;
+    let latest_only = order.flags & OrderV2::LATEST_ONLY != 0;
+    let end = order.start.checked_add(order.len as u16)?;
+    let order_ref = match codes {
+        None if order.len == 1 && !latest_only => {
+            MergeOrderRef::Tx(TxOrderRef { index: order.start, can_revert: all_revert })
         }
-        Order::Bundle(bundle) => MergeOrderRef::Bundle(BundleOrderRef {
-            txs: bundle.txs.iter().map(|&i| idx(i)).collect::<Option<_>>()?,
-            reverting_txs: bundle.reverting_txs.iter().map(|&i| idx(i)).collect::<Option<_>>()?,
-            dropping_txs: bundle.dropping_txs.iter().map(|&i| idx(i)).collect::<Option<_>>()?,
-            latest_only: false,
+        None => MergeOrderRef::Bundle(BundleOrderRef {
+            txs: (order.start..end).collect(),
+            reverting_txs: if all_revert { (0..order.len as u16).collect() } else { vec![] },
+            dropping_txs: vec![],
+            latest_only,
         }),
-        Order::BundleV2(bundle) => MergeOrderRef::Bundle(BundleOrderRef {
-            txs: bundle.txs.iter().map(|&i| idx(i)).collect::<Option<_>>()?,
-            reverting_txs: bundle.reverting_txs.iter().map(|&i| idx(i)).collect::<Option<_>>()?,
-            dropping_txs: bundle.dropping_txs.iter().map(|&i| idx(i)).collect::<Option<_>>()?,
-            latest_only: bundle.flags.contains(MergeOrderFlags::LATEST_ONLY),
-        }),
+        Some(codes) => {
+            if all_revert || codes.codes.len() != OrderTxCodes::codes_len(order.len) {
+                return None;
+            }
+            let mut reverting_txs = Vec::new();
+            let mut dropping_txs = Vec::new();
+            for tx in 0..order.len as usize {
+                match codes.code(tx) {
+                    OrderTxCodes::NONE => {}
+                    OrderTxCodes::REVERT => reverting_txs.push(tx as u16),
+                    OrderTxCodes::DROP => dropping_txs.push(tx as u16),
+                    _ => return None,
+                }
+            }
+            MergeOrderRef::Bundle(BundleOrderRef {
+                txs: (order.start..end).collect(),
+                reverting_txs,
+                dropping_txs,
+                latest_only,
+            })
+        }
     };
     order_ref.validate(block_tx_count).ok()?;
     Some(order_ref)
@@ -203,29 +227,23 @@ fn calculate_versioned_hash(commitment: Bytes48) -> B256 {
 
 #[cfg(test)]
 mod tests {
-    use helix_types::{BundleOrder, BundleOrderV2, MergeOrderFlags, TransactionOrder, TxIndices};
-
     use super::*;
 
-    fn indices(v: &[usize]) -> TxIndices {
-        v.iter().copied().collect()
+    fn order(start: u16, len: u8, flags: u8) -> OrderV2 {
+        OrderV2 { start, len, flags }
     }
 
     #[test]
     fn order_conversion() {
-        let tx = Order::Tx(TransactionOrder { index: 7, can_revert: true });
         assert_eq!(
-            order_to_ref(&tx, 8),
+            order_to_ref(&order(7, 1, OrderV2::ALL_REVERT), None, 8),
             Some(MergeOrderRef::Tx(TxOrderRef { index: 7, can_revert: true }))
         );
 
-        let bundle = Order::Bundle(BundleOrder {
-            txs: indices(&[1, 2]),
-            reverting_txs: indices(&[0]),
-            dropping_txs: indices(&[1]),
-        });
+        // txs 1,2: tx 0 reverts, tx 1 drops
+        let codes = OrderTxCodes { order: 0, codes: vec![0b10_01] };
         assert_eq!(
-            order_to_ref(&bundle, 8),
+            order_to_ref(&order(1, 2, 0), Some(&codes), 8),
             Some(MergeOrderRef::Bundle(BundleOrderRef {
                 txs: vec![1, 2],
                 reverting_txs: vec![0],
@@ -234,41 +252,29 @@ mod tests {
             }))
         );
 
-        let bundle_v2 = Order::BundleV2(BundleOrderV2 {
-            txs: indices(&[1, 2]),
-            reverting_txs: indices(&[0]),
-            dropping_txs: indices(&[1]),
-            flags: MergeOrderFlags::LATEST_ONLY,
-        });
         assert_eq!(
-            order_to_ref(&bundle_v2, 8),
+            order_to_ref(&order(1, 2, OrderV2::LATEST_ONLY | OrderV2::ALL_REVERT), None, 8),
             Some(MergeOrderRef::Bundle(BundleOrderRef {
                 txs: vec![1, 2],
-                reverting_txs: vec![0],
-                dropping_txs: vec![1],
+                reverting_txs: vec![0, 1],
+                dropping_txs: vec![],
                 latest_only: true,
             }))
         );
 
-        let oob = Order::Tx(TransactionOrder { index: u16::MAX as usize + 1, can_revert: false });
-        assert_eq!(order_to_ref(&oob, 8), None);
+        assert_eq!(order_to_ref(&order(u16::MAX, 2, 0), None, 8), None, "index overflow");
+        assert_eq!(order_to_ref(&order(1, 2, OrderV2::ALL_REVERT), Some(&codes), 8), None);
     }
 
     /// The merge builder rejects a whole block over one bad order ref, so the relay must
     /// drop the order instead of forwarding it.
     #[test]
     fn orders_outside_the_block_are_dropped() {
-        let tx = Order::Tx(TransactionOrder { index: 1, can_revert: false });
-        assert!(order_to_ref(&tx, 2).is_some());
-        assert_eq!(order_to_ref(&tx, 1), None);
+        assert!(order_to_ref(&order(1, 1, 0), None, 2).is_some());
+        assert_eq!(order_to_ref(&order(1, 1, 0), None, 1), None);
 
-        let bundle = Order::Bundle(BundleOrder {
-            txs: indices(&[0, 3]),
-            reverting_txs: indices(&[]),
-            dropping_txs: indices(&[]),
-        });
-        assert!(order_to_ref(&bundle, 4).is_some());
-        assert_eq!(order_to_ref(&bundle, 3), None);
+        assert!(order_to_ref(&order(0, 4, 0), None, 4).is_some());
+        assert_eq!(order_to_ref(&order(0, 4, 0), None, 3), None);
     }
 
     #[test]
