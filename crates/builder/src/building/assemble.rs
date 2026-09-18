@@ -173,6 +173,19 @@ pub fn build(
         return Err(BuildError::PayoutReverted);
     }
 
+    // EIP-7928: the requests and withdrawals phase records under index n+1, and every
+    // withdrawal recipient counts as touched. Mirrors ethrex's `build_payload`.
+    if is_amsterdam {
+        let post_tx_index =
+            u32::try_from(ctx.payload.body.transactions.len() + 1).unwrap_or(u32::MAX);
+        ctx.vm.set_bal_index(post_tx_index);
+        if let Some(recorder) = ctx.vm.db.bal_recorder_mut() &&
+            let Some(withdrawals) = &ctx.payload.body.withdrawals
+        {
+            recorder.extend_touched_addresses(withdrawals.iter().map(|w| w.address));
+        }
+    }
+
     blockchain
         .extract_requests(&mut ctx)
         .map_err(|e| BuildError::Internal(format!("extract requests: {e}")))?;

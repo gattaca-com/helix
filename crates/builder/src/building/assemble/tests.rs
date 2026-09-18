@@ -561,18 +561,17 @@ async fn a_recipient_created_earlier_in_the_block_needs_no_extra_reserve() {
 /// The strongest check available without a relay: build a block, submit it the
 /// way the relay would receive it, and validate it with our own simulation
 /// role. A disagreement between steps 3 and 4 shows up here and nowhere else.
-async fn our_simulator_accepts_our_own_block(fixture: &Fixture) {
+async fn our_simulator_accepts_our_own_block(fixture: &Fixture, slot: &SlotContext) {
     use axum::http::StatusCode;
     use tower::ServiceExt;
 
-    let slot = fixture.slot();
-    let built = fixture.build(&slot, &fixture.config()).unwrap();
+    let built = fixture.build(slot, &fixture.config()).unwrap();
     let bid = crate::building::submit::Submitter::new(
         "http://localhost:1",
         "key".to_string(),
         fixture.signing(),
     )
-    .sign(&built, &slot)
+    .sign(&built, slot)
     .expect("a block we built must be submittable");
 
     let request = helix_common::simulator::SszValidationRequest {
@@ -600,10 +599,28 @@ async fn our_simulator_accepts_our_own_block(fixture: &Fixture) {
 
 #[tokio::test]
 async fn our_simulation_role_accepts_our_gloas_block() {
-    our_simulator_accepts_our_own_block(&Fixture::amsterdam().await).await;
+    let fixture = Fixture::amsterdam().await;
+    let slot = fixture.slot();
+    our_simulator_accepts_our_own_block(&fixture, &slot).await;
 }
 
 #[tokio::test]
 async fn our_simulation_role_accepts_our_fulu_block() {
-    our_simulator_accepts_our_own_block(&Fixture::new().await).await;
+    let fixture = Fixture::new().await;
+    let slot = fixture.slot();
+    our_simulator_accepts_our_own_block(&fixture, &slot).await;
+}
+
+#[tokio::test]
+async fn our_simulation_role_accepts_our_gloas_block_with_withdrawals() {
+    let fixture = Fixture::amsterdam().await;
+    let mut slot = fixture.slot();
+    slot.withdrawals = Withdrawals::new(vec![Withdrawal {
+        index: 1,
+        validator_index: 2,
+        address: Address::repeat_byte(0x66),
+        amount: 32_000_000_000,
+    }])
+    .unwrap();
+    our_simulator_accepts_our_own_block(&fixture, &slot).await;
 }
