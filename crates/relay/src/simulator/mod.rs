@@ -22,8 +22,8 @@ use helix_common::{
     validator_preferences::{Filtering, ValidatorPreferences},
 };
 use helix_types::{
-    BidTrace, BlobsBundle, BlockAccessListBytes, BlsPublicKeyBytes, BlsSignatureBytes,
-    BuilderInclusionResult, ExecutionPayload, ExecutionRequests, ForkName, MergedBlockTrace,
+    BidTrace, BlobsBundle, BlsPublicKeyBytes, BlsSignatureBytes, BuilderInclusionResult,
+    ExecutionPayload, ExecutionRequests, ForkName, GloasSubmissionData, MergedBlockTrace,
     SignedBidSubmission, SignedBidSubmissionGloas, SubmissionVersion,
 };
 use rustc_hash::FxHashMap;
@@ -76,7 +76,7 @@ pub struct ValidationRequest {
     pub parent_beacon_block_root: B256,
     pub inclusion_list: InclusionListWithMetadata,
     pub submission: SignedBidSubmission,
-    pub block_access_list: Option<BlockAccessListBytes>,
+    pub gloas_data: Option<GloasSubmissionData>,
     pub tx_root: Option<B256>,
     pub version: SubmissionVersion,
     pub trace: SubmissionTrace,
@@ -1412,7 +1412,7 @@ fn create_ssz_request(
         req.parent_beacon_block_root,
         req.inclusion_list.clone(),
         submission,
-        req.block_access_list.clone(),
+        req.gloas_data.clone(),
     )
 }
 
@@ -1426,12 +1426,12 @@ fn ssz_request(
     parent_beacon_block_root: B256,
     inclusion_list: InclusionListWithMetadata,
     submission: &SignedBidSubmission,
-    block_access_list: Option<BlockAccessListBytes>,
+    gloas_data: Option<GloasSubmissionData>,
 ) -> SszValidationRequest {
-    let (decoder_params, signed_bid_submission) = match block_access_list {
-        Some(bal) => (
+    let (decoder_params, signed_bid_submission) = match gloas_data {
+        Some(gloas_data) => (
             Some(SubmissionDecoderParams::plain(ForkName::Gloas)),
-            SignedBidSubmissionGloas::join(submission.clone(), bal).as_ssz_bytes(),
+            SignedBidSubmissionGloas::join(submission.clone(), gloas_data).as_ssz_bytes(),
         ),
         None => (None, submission.as_ssz_bytes()),
     };
@@ -1477,10 +1477,16 @@ mod tests {
     fn a_gloas_ssz_request_carries_the_block_access_list() {
         let mut submission = SignedBidSubmission::test_random();
         submission.blobs_bundle = Default::default();
-        let bal = BlockAccessListBytes(vec![7u8; 48].into());
+        let bal = helix_types::BlockAccessListBytes(vec![7u8; 48].into());
 
-        let request =
-            ssz_request(false, 0, B256::ZERO, Default::default(), &submission, Some(bal.clone()));
+        let request = ssz_request(
+            false,
+            0,
+            B256::ZERO,
+            Default::default(),
+            &submission,
+            Some(GloasSubmissionData { block_access_list: bal.clone(), ..Default::default() }),
+        );
 
         let params = request.decoder_params.expect("a Gloas request names its shape");
         assert_eq!(params.fork_name, ForkName::Gloas);
@@ -1488,7 +1494,7 @@ mod tests {
         let (_, _, _, decoded) = helix_common::decoder::SubmissionDecoder::new(&params)
             .decode(&request.signed_bid_submission, &mut buf)
             .expect("the simulator must be able to decode what the relay sends");
-        assert_eq!(decoded.expect("the list must survive the re-encode"), bal);
+        assert_eq!(decoded.expect("the list must survive the re-encode").block_access_list, bal);
     }
 
     /// Every other fork keeps the bare shape, so no simulator sees a new one.
