@@ -10,11 +10,12 @@ use crate::{ExecutionRequestsGloas, SszError, TestRandom, ssz_bytes_wrapper};
 pub type Withdrawal = lh_types::Withdrawal;
 pub type Withdrawals = lh_types::Withdrawals<MainnetEthSpec>;
 // `ExecutionRequests` is a fork-versioned superstruct as of Gloas (which adds
-// `builder_deposits`/`builder_exits`, EIP-8282). helix's active fork is still pre-Gloas, so --
-// mirroring how `ExecutionPayload` is pinned to a flat, non-fork-versioned shape elsewhere in
-// this crate -- we pin to the Electra shape here too. Revisit once helix actually needs to
-// serve Gloas submissions.
+// `builder_deposits`/`builder_exits`, EIP-8282). The three pre-Gloas lists keep the Electra
+// shape; a Gloas submission carries the two builder lists beside it, the way it carries the
+// block access list, so the pre-Gloas bytes never move.
 pub type ExecutionRequests = lh_types::ExecutionRequestsElectra<MainnetEthSpec>;
+pub type BuilderDepositRequests = ProgressiveVariableList<lh_types::BuilderDepositRequest>;
+pub type BuilderExitRequests = ProgressiveVariableList<lh_types::BuilderExitRequest>;
 pub type KzgCommitment = alloy_consensus::Bytes48;
 pub type KzgCommitments =
     VariableList<KzgCommitment, <MainnetEthSpec as EthSpec>::MaxBlobCommitmentsPerBlock>;
@@ -50,16 +51,19 @@ pub fn convert_kzg_commitments_to_progressive(
     ProgressiveVariableList::new(commitments.iter().map(|c| lh_types::KzgCommitment(c.0)).collect())
 }
 
-/// Converts helix's Electra-shaped builder-submission execution requests into the real,
-/// progressive-list Gloas shape. `builder_deposits`/`builder_exits` are left empty --
-/// TODO(gloas): populate once EIP-8282 builder deposit/exit submission exists.
-pub fn execution_requests_to_gloas(requests: &ExecutionRequests) -> ExecutionRequestsGloas {
+/// Converts helix's Electra-shaped builder-submission execution requests, plus the EIP-8282
+/// builder lists a Gloas submission carries beside them, into the real Gloas shape.
+pub fn execution_requests_to_gloas(
+    requests: &ExecutionRequests,
+    builder_deposits: &BuilderDepositRequests,
+    builder_exits: &BuilderExitRequests,
+) -> ExecutionRequestsGloas {
     ExecutionRequestsGloas {
         deposits: requests.deposits.iter().cloned().collect(),
         withdrawals: requests.withdrawals.iter().cloned().collect(),
         consolidations: requests.consolidations.iter().cloned().collect(),
-        builder_deposits: Default::default(),
-        builder_exits: Default::default(),
+        builder_deposits: builder_deposits.iter().cloned().collect(),
+        builder_exits: builder_exits.iter().cloned().collect(),
         _phantom: PhantomData,
     }
 }
@@ -202,16 +206,30 @@ mod tests {
         }
     }
 
+    /// EIP-8282's builder deposits and exits reach the consensus shape the proposer signs.
+    /// While they were dropped here, a block carrying one could not be bid at all.
     #[test]
-    fn execution_requests_to_gloas_preserves_lists_and_defaults_builder_requests() {
+    fn execution_requests_to_gloas_carries_every_list() {
         let requests = ExecutionRequests::random_for_test(&mut rand::rng());
+        let builder_deposits: BuilderDepositRequests = vec![lh_types::BuilderDepositRequest {
+            pubkey: lh_bls::PublicKeyBytes::empty(),
+            withdrawal_credentials: alloy_primitives::B256::repeat_byte(0x11),
+            amount: 32_000_000_000,
+            signature: lh_bls::SignatureBytes::empty(),
+        }]
+        .into();
+        let builder_exits: BuilderExitRequests = vec![lh_types::BuilderExitRequest {
+            source_address: alloy_primitives::Address::repeat_byte(0x22),
+            pubkey: lh_bls::PublicKeyBytes::empty(),
+        }]
+        .into();
 
-        let gloas = execution_requests_to_gloas(&requests);
+        let gloas = execution_requests_to_gloas(&requests, &builder_deposits, &builder_exits);
 
         assert!(gloas.deposits.iter().eq(requests.deposits.iter()));
         assert!(gloas.withdrawals.iter().eq(requests.withdrawals.iter()));
         assert!(gloas.consolidations.iter().eq(requests.consolidations.iter()));
-        assert!(gloas.builder_deposits.is_empty());
-        assert!(gloas.builder_exits.is_empty());
+        assert!(gloas.builder_deposits.iter().eq(builder_deposits.iter()));
+        assert!(gloas.builder_exits.iter().eq(builder_exits.iter()));
     }
 }

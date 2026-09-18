@@ -56,9 +56,11 @@ impl Built {
     }
 
     pub(crate) fn amsterdam(&self) -> Option<Amsterdam<'_>> {
-        self.block_access_list
-            .as_deref()
-            .map(|block_access_list| Amsterdam { block_access_list, slot: self.slot })
+        self.block_access_list.as_deref().map(|block_access_list| Amsterdam {
+            block_access_list,
+            slot: self.slot,
+            ..Default::default()
+        })
     }
 }
 
@@ -1736,7 +1738,10 @@ impl Fixture {
         let bal = built.block_access_list.clone().expect("a Gloas request carries a list");
         let gloas = helix_types::SignedBidSubmissionGloas::join(
             submission,
-            helix_types::BlockAccessListBytes(bal.into()),
+            helix_types::GloasSubmissionData {
+                block_access_list: helix_types::BlockAccessListBytes(bal.into()),
+                ..Default::default()
+            },
         );
         helix_common::simulator::SszValidationRequest {
             apply_blacklist: false,
@@ -1952,7 +1957,7 @@ async fn a_fork_and_payload_that_disagree_are_rejected() {
             &built.requests,
             &empty_bundle(),
             false,
-            Some(Amsterdam { block_access_list: &[0xc0], slot: SLOT }),
+            Some(Amsterdam { block_access_list: &[0xc0], slot: SLOT, ..Default::default() }),
         )
         .expect_err("a Fulu block carrying Amsterdam fields must be rejected");
     assert!(matches!(error, ValidationError::BlockHashMismatch { .. }), "{error}");

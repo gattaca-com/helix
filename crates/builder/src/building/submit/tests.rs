@@ -276,7 +276,7 @@ fn a_gloas_submission_carries_the_block_access_list() {
     let (_, _, _, decoded) = helix_common::decoder::SubmissionDecoder::new(&params)
         .decode(&bid.as_ssz_bytes(), &mut buf)
         .expect("the relay must be able to decode what we send");
-    assert_eq!(decoded.expect("Gloas carries a list").to_vec(), bal);
+    assert_eq!(decoded.expect("Gloas carries a list").block_access_list.to_vec(), bal);
 }
 
 #[test]

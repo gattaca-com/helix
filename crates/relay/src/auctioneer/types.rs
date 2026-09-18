@@ -13,11 +13,11 @@ use helix_common::{
 };
 use helix_tcp_types::{BidSubmissionFlags, BidSubmissionHeader};
 use helix_types::{
-    BidAdjustmentData, BlockAccessListBytes, BlockMergingData, BlsPublicKeyBytes, BuilderBid,
-    Compression, ExecutionPayload, ForkName, GetPayloadResponse, MergeType, PayloadAndBlobs,
-    PayloadBidData, PayloadBidDataRef, SignedBidSubmission, SignedBlindedBeaconBlock,
-    SignedExecutionPayloadBid, Slot, Submission, SubmissionVersion, VersionedSignedProposal,
-    mock_public_key_bytes,
+    BidAdjustmentData, BlockMergingData, BlsPublicKeyBytes, BuilderBid, Compression,
+    ExecutionPayload, ForkName, GetPayloadResponse, GloasSubmissionData, MergeType,
+    PayloadAndBlobs, PayloadBidData, PayloadBidDataRef, SignedBidSubmission,
+    SignedBlindedBeaconBlock, SignedExecutionPayloadBid, Slot, Submission, SubmissionVersion,
+    VersionedSignedProposal, mock_public_key_bytes,
 };
 use http::{
     HeaderMap, HeaderValue,
@@ -220,7 +220,7 @@ pub struct SubmissionData {
     pub submission: Submission,
     pub merging_data: Option<BlockMergingData>,
     pub bid_adjustment_data: Option<BidAdjustmentData>,
-    pub block_access_list: Option<BlockAccessListBytes>,
+    pub gloas_data: Option<GloasSubmissionData>,
     pub version: SubmissionVersion,
     pub withdrawals_root: B256,
     pub trace: SubmissionTrace,
@@ -248,8 +248,9 @@ pub struct SubmissionPayload {
     pub withdrawals_root: B256,
     pub tx_root: Option<B256>,
     pub bid_adjustment_data: Option<BidAdjustmentData>,
-    /// The builder's EIP-7928 list, present only for Gloas submissions.
-    pub block_access_list: Option<BlockAccessListBytes>,
+    /// The builder's EIP-7928 list and EIP-8282 builder requests, present only
+    /// for Gloas submissions.
+    pub gloas_data: Option<GloasSubmissionData>,
     pub is_adjusted: bool,
     pub submission_version: SubmissionVersion,
     pub submission_trace: SubmissionTrace,
@@ -270,13 +271,13 @@ impl PayloadEntry {
         withdrawals_root: B256,
         tx_root: Option<B256>,
         bid_adjustment_data: Option<BidAdjustmentData>,
-        block_access_list: Option<BlockAccessListBytes>,
+        gloas_data: Option<GloasSubmissionData>,
         submission_version: SubmissionVersion,
         submission_trace: SubmissionTrace,
         parent_beacon_block_root: Option<B256>,
     ) -> Self {
         Self::Submission(SubmissionPayload {
-            block_access_list,
+            gloas_data,
             signed_bid_submission,
             withdrawals_root,
             tx_root,
@@ -341,13 +342,14 @@ impl PayloadEntry {
         }
     }
 
-    /// The submitted EIP-7928 list. Empty when the fork does not carry one, in
-    /// which case a Gloas conversion would produce an invalid payload -- the
-    /// caller is expected to only reach this on a Gloas submission.
-    pub fn block_access_list(&self) -> BlockAccessListBytes {
+    /// The submitted Gloas sidecar: the EIP-7928 list and the EIP-8282 builder
+    /// requests. Empty when the fork does not carry one, in which case a Gloas
+    /// conversion would produce an invalid payload -- the caller is expected to
+    /// only reach this on a Gloas submission.
+    pub fn gloas_data(&self) -> GloasSubmissionData {
         match self {
-            Self::Submission(bid) => bid.block_access_list.clone().unwrap_or_default(),
-            Self::Gossip(_) => BlockAccessListBytes::default(),
+            Self::Submission(bid) => bid.gloas_data.clone().unwrap_or_default(),
+            Self::Gossip(_) => GloasSubmissionData::default(),
         }
     }
 

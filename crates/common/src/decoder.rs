@@ -7,11 +7,11 @@ use axum::response::{IntoResponse, Response};
 use flate2::read::GzDecoder;
 use flux_profiler::timed;
 use helix_types::{
-    BidAdjustmentData, BlockAccessListBytes, BlockMergingData, Compression,
-    DehydratedBidSubmission, DehydratedBidSubmissionFuluWithAdjustments,
+    BidAdjustmentData, BlockMergingData, Compression, DehydratedBidSubmission,
+    DehydratedBidSubmissionFuluWithAdjustments,
     DehydratedBidSubmissionFuluWithAdjustmentsAndMergingData,
-    DehydratedBidSubmissionFuluWithMergingData, ForkName, ForkVersionDecode, MergeType,
-    SignedBidSubmission, SignedBidSubmissionGloas, SignedBidSubmissionWithAdjustments,
+    DehydratedBidSubmissionFuluWithMergingData, ForkName, ForkVersionDecode, GloasSubmissionData,
+    MergeType, SignedBidSubmission, SignedBidSubmissionGloas, SignedBidSubmissionWithAdjustments,
     SignedBidSubmissionWithAdjustmentsAndMergingData, SignedBidSubmissionWithMergingData,
     Submission,
 };
@@ -41,7 +41,7 @@ use crate::{
 /// What one submission decodes into: the submission itself plus the sidecars
 /// only some forks and headers carry.
 pub type DecodedParts =
-    (Submission, Option<BlockMergingData>, Option<BidAdjustmentData>, Option<BlockAccessListBytes>);
+    (Submission, Option<BlockMergingData>, Option<BidAdjustmentData>, Option<GloasSubmissionData>);
 
 #[derive(Debug, thiserror::Error)]
 pub enum DecoderError {
@@ -401,7 +401,7 @@ impl SubmissionDecoder {
     #[timed]
     fn decode_default(&mut self, body: &[u8]) -> Result<DecodedParts, DecoderError> {
         let is_gloas = self.fork_name == ForkName::Gloas;
-        let (submission, bid_adjustment, block_access_list) = if self.with_adjustments {
+        let (submission, bid_adjustment, gloas_data) = if self.with_adjustments {
             if is_gloas {
                 // Refused rather than decoded into the wrong shape. Adjustments
                 // are a BuilderNet feature and Gloas does not need them yet.
@@ -412,11 +412,12 @@ impl SubmissionDecoder {
 
             (sub, Some(adjustment_data), None)
         } else if is_gloas {
-            // Gloas carries the builder's EIP-7928 block access list.
+            // Gloas carries the builder's EIP-7928 block access list and its
+            // EIP-8282 builder deposit and exit requests.
             let gloas: SignedBidSubmissionGloas = self._decode(body)?;
-            let (submission, block_access_list) = gloas.split();
+            let (submission, gloas_data) = gloas.split();
 
-            (submission, None, Some(block_access_list))
+            (submission, None, Some(gloas_data))
         } else {
             let submission: SignedBidSubmission = self._decode(body)?;
 
@@ -445,7 +446,7 @@ impl SubmissionDecoder {
             MergeType::Pause => None,
         };
         // Gloas merging data comes with the merge builder's own step.
-        Ok((Submission::Full(submission), merging_data, bid_adjustment, block_access_list))
+        Ok((Submission::Full(submission), merging_data, bid_adjustment, gloas_data))
     }
 
     // TODO: pass a buffer pool to avoid allocations
@@ -591,7 +592,7 @@ mod tests {
     fn the_decoder_selects_the_gloas_shape_by_fork() {
         let mut submission = SignedBidSubmissionGloas::test_random();
         submission.blobs_bundle = Default::default();
-        submission.block_access_list = BlockAccessListBytes(vec![3u8; 32].into());
+        submission.block_access_list = helix_types::BlockAccessListBytes(vec![3u8; 32].into());
         let body = submission.as_ssz_bytes();
 
         let params = SubmissionDecoderParams::plain(ForkName::Gloas);
@@ -600,10 +601,13 @@ mod tests {
             .decode(&body, &mut buf)
             .expect("a Gloas submission must decode");
 
-        assert_eq!(block_access_list.expect("Gloas carries a block access list").to_vec(), vec![
-            3u8;
-            32
-        ],);
+        assert_eq!(
+            block_access_list
+                .expect("Gloas carries a block access list")
+                .block_access_list
+                .to_vec(),
+            vec![3u8; 32],
+        );
     }
 
     #[test]

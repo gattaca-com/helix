@@ -16,7 +16,7 @@ use helix_common::{
     decoder::{DecoderError, SubmissionDecoder, SubmissionDecoderParams},
     simulator::{SszMergedValidationRequest, SszValidationRequest},
 };
-use helix_types::{BlockAccessListBytes, ForkName, Submission};
+use helix_types::{ForkName, GloasSubmissionData, Submission};
 use ssz::Decode;
 use tokio::{net::TcpListener, sync::Semaphore, time};
 use tracing::{error, info, warn};
@@ -79,8 +79,8 @@ fn unsupported_fork(params: &Option<SubmissionDecoderParams>) -> Response {
     (StatusCode::NOT_IMPLEMENTED, format!("unsupported fork: {fork:?}")).into_response()
 }
 
-/// A decoded submission, with the block access list a Gloas one carries.
-type Decoded = (SignedBidSubmissionV5, Option<BlockAccessListBytes>);
+/// A decoded submission, with the Gloas-only data a Gloas one carries.
+type Decoded = (SignedBidSubmissionV5, Option<GloasSubmissionData>);
 
 /// A dehydrated submission needs transactions this simulator does not cache.
 /// The relay answers a 424 by retrying with full SSZ bytes.
@@ -91,10 +91,10 @@ fn decode_submission(
     match params {
         Some(params) => {
             let mut buf = Vec::new();
-            let (submission, _, _, bal) =
+            let (submission, _, _, gloas_data) =
                 SubmissionDecoder::new(&params).decode(bytes, &mut buf)?;
             match submission {
-                Submission::Full(submission) => Ok(Some((submission.into(), bal))),
+                Submission::Full(submission) => Ok(Some((submission.into(), gloas_data))),
                 Submission::Dehydrated(_) => Ok(None),
             }
         }
@@ -110,7 +110,7 @@ async fn validate(State(state): State<ServerState>, body: axum::body::Bytes) -> 
     if !supported_fork(&request.decoder_params) {
         return unsupported_fork(&request.decoder_params);
     }
-    let (submission, bal) =
+    let (submission, gloas_data) =
         match decode_submission(request.decoder_params, &request.signed_bid_submission) {
             Ok(Some(decoded)) => decoded,
             Ok(None) => return StatusCode::FAILED_DEPENDENCY.into_response(),
@@ -125,16 +125,22 @@ async fn validate(State(state): State<ServerState>, body: axum::body::Bytes) -> 
             &submission.execution_requests,
             &eblobs(&submission.blobs_bundle),
             request.apply_blacklist,
-            amsterdam(bal.as_ref(), submission.message.slot),
+            amsterdam(gloas_data.as_ref(), submission.message.slot),
         )
     })
     .await
 }
 
-/// A block access list marks the submission as Amsterdam, and the slot number
-/// the header needs is the one the trace already carries.
-fn amsterdam(block_access_list: Option<&BlockAccessListBytes>, slot: u64) -> Option<Amsterdam<'_>> {
-    block_access_list.map(|bal| Amsterdam { block_access_list: &bal.0, slot })
+/// Gloas data marks the submission as Amsterdam, and the slot number the header
+/// needs is the one the trace already carries. The builder request lists go in
+/// too: the `requests_hash` the block hash commits to covers them.
+fn amsterdam(gloas_data: Option<&GloasSubmissionData>, slot: u64) -> Option<Amsterdam<'_>> {
+    gloas_data.map(|data| Amsterdam {
+        block_access_list: &data.block_access_list.0,
+        slot,
+        builder_deposits: Some(&data.builder_deposits),
+        builder_exits: Some(&data.builder_exits),
+    })
 }
 
 async fn validate_merged(State(state): State<ServerState>, body: axum::body::Bytes) -> Response {

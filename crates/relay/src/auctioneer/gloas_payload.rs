@@ -18,9 +18,10 @@ impl<B: BidAdjustor> Context<B> {
         res_tx: oneshot::Sender<Option<HeldGloasPayload>>,
     ) {
         let held = self.payloads.get(&block_hash).and_then(|entry| {
+            let gloas_data = entry.gloas_data();
             let payload = match entry
                 .execution_payload()
-                .to_lighthouse_gloas_payload(slot, &entry.block_access_list())
+                .to_lighthouse_gloas_payload(slot, &gloas_data.block_access_list)
             {
                 Ok(payload) => payload,
                 Err(err) => {
@@ -28,8 +29,11 @@ impl<B: BidAdjustor> Context<B> {
                     return None;
                 }
             };
-            let execution_requests =
-                execution_requests_to_gloas(entry.bid_data_ref().execution_requests);
+            let execution_requests = execution_requests_to_gloas(
+                entry.bid_data_ref().execution_requests,
+                &gloas_data.builder_deposits,
+                &gloas_data.builder_exits,
+            );
             Some(HeldGloasPayload { payload, execution_requests })
         });
 

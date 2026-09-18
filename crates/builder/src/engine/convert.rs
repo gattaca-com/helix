@@ -17,6 +17,8 @@ use ethrex_common::{
     },
 };
 use ethrex_crypto::NativeCrypto;
+use helix_types::{BuilderDepositRequests, BuilderExitRequests, ExecutionRequests, RequestType};
+use ssz::Encode;
 
 use crate::validation::error::ValidationError;
 
@@ -95,14 +97,18 @@ pub fn block_to_payload_v3(block: &Block) -> ExecutionPayloadV3 {
     }
 }
 
-/// The Amsterdam header fields no `ExecutionPayloadV3` carries: the EIP-7928
-/// block access list and the EIP-7843 slot number. `None` for an earlier fork.
-#[derive(Clone, Copy)]
+/// The Amsterdam header inputs no `ExecutionPayloadV3` carries: the EIP-7928
+/// block access list, the EIP-7843 slot number, and the EIP-8282 builder
+/// request lists that the `requests_hash` commits to. `None` for an earlier
+/// fork.
+#[derive(Clone, Copy, Default)]
 pub struct Amsterdam<'a> {
     /// The list as the builder encoded it. It is hashed as received and never
     /// re-encoded, because the block hash commits to these exact bytes.
     pub block_access_list: &'a [u8],
     pub slot: u64,
+    pub builder_deposits: Option<&'a BuilderDepositRequests>,
+    pub builder_exits: Option<&'a BuilderExitRequests>,
 }
 
 /// Inverse of [`block_to_payload_v3`]. The roots the payload omits are
@@ -154,7 +160,7 @@ pub fn payload_v3_to_block(
         blob_gas_used: Some(payload.blob_gas_used),
         excess_blob_gas: Some(payload.excess_blob_gas),
         parent_beacon_block_root: Some(h256(parent_beacon_block_root)),
-        requests_hash: Some(compute_requests_hash(&encoded_requests(requests))),
+        requests_hash: Some(compute_requests_hash(&encoded_requests_all(requests, amsterdam))),
         block_access_list_hash: amsterdam
             .map(|a| ethrex_common::utils::keccak(a.block_access_list)),
         slot_number: amsterdam.map(|a| a.slot),
@@ -196,6 +202,32 @@ fn encoded_requests(requests: &ExecutionRequestsV4) -> Vec<EncodedRequests> {
     requests.to_requests().iter().map(|request| EncodedRequests(request.clone().0.into())).collect()
 }
 
+/// The flat EIP-7685 list the header's `requests_hash` commits to. EIP-8282's
+/// builder lists carry types 3 and 4, so they follow the three alloy encodes,
+/// and an empty list is omitted exactly as the EIP requires.
+fn encoded_requests_all(
+    requests: &ExecutionRequestsV4,
+    amsterdam: Option<Amsterdam<'_>>,
+) -> Vec<EncodedRequests> {
+    let mut list = encoded_requests(requests);
+    let mut push = |request_type: RequestType, body: Vec<u8>, is_empty: bool| {
+        if is_empty {
+            return;
+        }
+        let mut bytes = Vec::with_capacity(1 + body.len());
+        bytes.push(request_type.to_u8());
+        bytes.extend_from_slice(&body);
+        list.push(EncodedRequests(bytes.into()));
+    };
+    if let Some(deposits) = amsterdam.and_then(|a| a.builder_deposits) {
+        push(RequestType::BuilderDeposit, deposits.as_ssz_bytes(), deposits.is_empty());
+    }
+    if let Some(exits) = amsterdam.and_then(|a| a.builder_exits) {
+        push(RequestType::BuilderExit, exits.as_ssz_bytes(), exits.is_empty());
+    }
+    list
+}
+
 /// Converts ethrex's encoded EIP-7685 requests into the wire
 /// `ExecutionRequestsV4`, dropping empty requests per the EIP.
 pub fn requests_to_v4(encoded: &[EncodedRequests]) -> Result<ExecutionRequestsV4, String> {
@@ -203,6 +235,56 @@ pub fn requests_to_v4(encoded: &[EncodedRequests]) -> Result<ExecutionRequestsV4
         encoded.iter().filter(|r| !r.is_empty()).map(|r| r.0.clone().to_vec().into()).collect(),
     );
     ExecutionRequestsV4::try_from(&requests).map_err(|e| e.to_string())
+}
+
+/// Every execution request the node produced, split by EIP-7685 type prefix.
+/// The three pre-Gloas lists keep the shape a submission has always carried;
+/// EIP-8282's builder deposits and exits ride beside them.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct DecodedRequests {
+    pub requests: ExecutionRequests,
+    pub builder_deposits: BuilderDepositRequests,
+    pub builder_exits: BuilderExitRequests,
+}
+
+/// Decodes the node's flat EIP-7685 list. Each entry is a one-byte type prefix
+/// followed by the SSZ list for that type.
+///
+/// This does not go through alloy's `ExecutionRequestsV4`: that type knows only
+/// prefixes 0 to 2 and rejects EIP-8282's 3 and 4, which cost the builder every
+/// block carrying one.
+pub fn decode_execution_requests(encoded: &[EncodedRequests]) -> Result<DecodedRequests, String> {
+    let mut decoded = DecodedRequests::default();
+
+    for entry in encoded.iter().filter(|r| !r.is_empty()) {
+        let (prefix, body) = entry.0.split_first().ok_or("empty execution request")?;
+        let request_type = RequestType::from_u8(*prefix)
+            .ok_or_else(|| format!("unknown request_type prefix: {prefix}"))?;
+
+        match request_type {
+            RequestType::Deposit => {
+                decoded.requests.deposits = ssz_decode(body, "deposits")?;
+            }
+            RequestType::Withdrawal => {
+                decoded.requests.withdrawals = ssz_decode(body, "withdrawals")?;
+            }
+            RequestType::Consolidation => {
+                decoded.requests.consolidations = ssz_decode(body, "consolidations")?;
+            }
+            RequestType::BuilderDeposit => {
+                decoded.builder_deposits = ssz_decode(body, "builder deposits")?;
+            }
+            RequestType::BuilderExit => {
+                decoded.builder_exits = ssz_decode(body, "builder exits")?;
+            }
+        }
+    }
+
+    Ok(decoded)
+}
+
+fn ssz_decode<T: ssz::Decode>(body: &[u8], what: &str) -> Result<T, String> {
+    T::from_ssz_bytes(body).map_err(|e| format!("{what}: {e:?}"))
 }
 
 #[cfg(test)]
@@ -215,6 +297,48 @@ mod tests {
             assert_eq!(au256(EU256::from(v)), AU256::from(v));
         }
         assert_eq!(au256(EU256::max_value()), AU256::MAX);
+    }
+
+    /// Production shape: the node emits EIP-8282 builder deposits and exits, and
+    /// the block was unbiddable while the decoder rejected prefix 3.
+    #[test]
+    fn the_flat_list_decodes_every_eip_7685_type() {
+        use ssz::Encode;
+        let deposits: BuilderDepositRequests = vec![helix_types::BuilderDepositRequest {
+            pubkey: helix_types::BlsPublicKeyBytesLh::empty(),
+            withdrawal_credentials: B256::repeat_byte(0x11),
+            amount: 32_000_000_000,
+            signature: helix_types::BlsSignatureBytesLh::empty(),
+        }]
+        .into();
+        let exits: BuilderExitRequests = vec![helix_types::BuilderExitRequest {
+            source_address: AAddress::repeat_byte(0x22),
+            pubkey: helix_types::BlsPublicKeyBytesLh::empty(),
+        }]
+        .into();
+        let encoded = vec![
+            prefixed(RequestType::BuilderDeposit, deposits.as_ssz_bytes()),
+            prefixed(RequestType::BuilderExit, exits.as_ssz_bytes()),
+        ];
+
+        let decoded = decode_execution_requests(&encoded).expect("prefixes 3 and 4 are valid");
+
+        assert_eq!(decoded.builder_deposits, deposits);
+        assert_eq!(decoded.builder_exits, exits);
+    }
+
+    #[test]
+    fn an_unknown_request_type_is_named() {
+        let err = decode_execution_requests(&[EncodedRequests(vec![9u8, 0u8].into())])
+            .expect_err("prefix 9 is not an EIP-7685 type");
+
+        assert!(err.contains("unknown request_type prefix: 9"), "got: {err}");
+    }
+
+    fn prefixed(request_type: RequestType, body: Vec<u8>) -> EncodedRequests {
+        let mut bytes = vec![request_type.to_u8()];
+        bytes.extend_from_slice(&body);
+        EncodedRequests(bytes.into())
     }
 
     #[test]

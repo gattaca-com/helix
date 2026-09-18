@@ -33,7 +33,7 @@ use helix_common::{
     validator_preferences::{Filtering, ValidatorPreferences},
 };
 use helix_types::{
-    BidTrace, BlockAccessListBytes, BlsPublicKeyBytes, BlsSignatureBytes, ForkName,
+    BidTrace, BlsPublicKeyBytes, BlsSignatureBytes, ForkName, GloasSubmissionData,
     SignedBidSubmission, SignedBidSubmissionGloas, SimHydrationCache, Submission,
 };
 use ssz::Encode as _;
@@ -359,7 +359,7 @@ impl SimulatorTile {
         let version = decoded_data.submission_data.version;
         let trace = decoded_data.submission_data.trace;
         let submission_ref = decoded_data.submission_data.submission_ref;
-        let block_access_list = decoded_data.submission_data.block_access_list.clone();
+        let gloas_data = decoded_data.submission_data.gloas_data.clone();
 
         let sim = &mut self.simulators[id];
         // Both dispatch kinds gate on the fork. The SSZ and JSON validators are
@@ -411,7 +411,7 @@ impl SimulatorTile {
             SimulatorMetrics::sim_count(optimistic_version.is_optimistic());
             let (mut res, ssz_retry) = match dispatch {
                 SimDispatch::Ssz { to_send, ssz_url, http } => {
-                    let request = create_ssz_request(&req, &submission, block_access_list);
+                    let request = create_ssz_request(&req, &submission, gloas_data);
                     let res =
                         SimulatorClient::do_sim_request(&request, req.is_top_bid, to_send).await;
                     (res, Some((request, ssz_url, http)))
@@ -953,7 +953,7 @@ fn merged_block_to_submission(
 fn create_ssz_request(
     req: &ValidationRequest,
     submission: &SignedBidSubmission,
-    block_access_list: Option<BlockAccessListBytes>,
+    gloas_data: Option<GloasSubmissionData>,
 ) -> SszValidationRequest {
     ssz_request(
         req.apply_blacklist,
@@ -961,7 +961,7 @@ fn create_ssz_request(
         req.parent_beacon_block_root,
         req.inclusion_list.clone(),
         submission,
-        block_access_list,
+        gloas_data,
     )
 }
 
@@ -975,12 +975,12 @@ fn ssz_request(
     parent_beacon_block_root: B256,
     inclusion_list: InclusionListWithMetadata,
     submission: &SignedBidSubmission,
-    block_access_list: Option<BlockAccessListBytes>,
+    gloas_data: Option<GloasSubmissionData>,
 ) -> SszValidationRequest {
-    let (decoder_params, signed_bid_submission) = match block_access_list {
-        Some(bal) => (
+    let (decoder_params, signed_bid_submission) = match gloas_data {
+        Some(gloas_data) => (
             Some(SubmissionDecoderParams::plain(ForkName::Gloas)),
-            SignedBidSubmissionGloas::join(submission.clone(), bal).as_ssz_bytes(),
+            SignedBidSubmissionGloas::join(submission.clone(), gloas_data).as_ssz_bytes(),
         ),
         None => (None, submission.as_ssz_bytes()),
     };
@@ -1031,10 +1031,16 @@ mod tests {
     fn a_gloas_ssz_request_carries_the_block_access_list() {
         let mut submission = SignedBidSubmission::test_random();
         submission.blobs_bundle = Default::default();
-        let bal = BlockAccessListBytes(vec![7u8; 48].into());
+        let bal = helix_types::BlockAccessListBytes(vec![7u8; 48].into());
 
-        let request =
-            ssz_request(false, 0, B256::ZERO, Default::default(), &submission, Some(bal.clone()));
+        let request = ssz_request(
+            false,
+            0,
+            B256::ZERO,
+            Default::default(),
+            &submission,
+            Some(GloasSubmissionData { block_access_list: bal.clone(), ..Default::default() }),
+        );
 
         let params = request.decoder_params.expect("a Gloas request names its shape");
         assert_eq!(params.fork_name, ForkName::Gloas);
@@ -1042,7 +1048,7 @@ mod tests {
         let (_, _, _, decoded) = helix_common::decoder::SubmissionDecoder::new(&params)
             .decode(&request.signed_bid_submission, &mut buf)
             .expect("the simulator must be able to decode what the relay sends");
-        assert_eq!(decoded.expect("the list must survive the re-encode"), bal);
+        assert_eq!(decoded.expect("the list must survive the re-encode").block_access_list, bal);
     }
 
     /// Every other fork keeps the bare shape, so no simulator sees a new one.
