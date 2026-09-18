@@ -9,7 +9,6 @@ use ethrex_blockchain::{
 use ethrex_common::types::ELASTICITY_MULTIPLIER;
 use ethrex_storage::Store;
 use helix_tcp_types::merging::{
-    builder_to_relay::RejectCode,
     control::{BuilderCollateral, RelayConfigV1},
     order::{MergeOrderRef, TxOrderRef},
     relay_to_builder::{MergeableBlockV1, SlotStartV1},
@@ -21,6 +20,7 @@ use crate::{
     engine::{
         EngineEvent, EngineOutput, MergeEngine,
         convert::{aaddr, b256, block_to_payload_v3, eaddr},
+        session::MergeSession,
         types::EngineConfig,
     },
     node::HeadInfo,
@@ -105,10 +105,10 @@ impl Fixture {
             max_orders_per_slot: 1024,
             min_value_increase_wei: U256::ZERO,
             min_emission_interval,
+            max_base_age: Duration::from_secs(5),
+            rebase_recovery_bps: 5_000,
             core: None,
-            speculation_workers: 0,
-            speculation_queue_capacity: 64,
-            max_prebuilt_per_builder: 2,
+            max_builder_streams: 8,
             speculation_top_k: 0,
             replay_worker_cores: Vec::new(),
         }
@@ -261,51 +261,67 @@ impl Fixture {
         }
     }
 
+    /// Decodes a `MergeableBlockV1` the way ingest does, for tests that drive
+    /// `MergeSession` directly rather than through the engine.
+    fn prepared_block(
+        &self,
+        msg: &MergeableBlockV1,
+        submission_index: u64,
+    ) -> Arc<crate::engine::types::PreparedBlock> {
+        let mut recovery = Default::default();
+        let mut cache = Default::default();
+        let txs = crate::engine::decode_block_txs(msg, &mut recovery, &mut cache)
+            .expect("fixture block must decode");
+        Arc::new(crate::engine::types::PreparedBlock {
+            block_hash: msg.execution_payload.payload_inner.payload_inner.block_hash,
+            builder_pubkey: msg.builder_pubkey,
+            block_value: msg.block_value,
+            allow_appending: msg.allow_appending,
+            payload: msg.execution_payload.clone(),
+            txs: Arc::new(txs),
+            recv_ns: 0,
+            submission_index,
+            ingest_done_ns: 0,
+        })
+    }
+
     fn direct_engine(
         &self,
         min_emission_interval: Duration,
     ) -> (MergeEngine, crossbeam_channel::Receiver<EngineOutput>) {
-        let (output_tx, output_rx) = crossbeam_channel::bounded(64);
+        self.engine_with(self.engine_config(min_emission_interval))
+    }
+
+    fn engine_with(
+        &self,
+        config: EngineConfig,
+    ) -> (MergeEngine, crossbeam_channel::Receiver<EngineOutput>) {
+        let (output_tx, output_rx) = crossbeam_channel::bounded(256);
+        let config = Arc::new(config);
+        let streams = (config.max_builder_streams > 0).then(|| {
+            crate::engine::streams::MergeStreams::new(
+                config.max_builder_streams,
+                &[],
+                self.store.clone(),
+                self.blockchain.clone(),
+                output_tx.clone(),
+            )
+        });
         let engine = MergeEngine {
-            config: self.engine_config(min_emission_interval),
-            store: self.store.clone(),
-            blockchain: self.blockchain.clone(),
+            config,
             head: self.head(),
             out: output_tx,
             generation: 0,
             relay_config: None,
             slot: None,
-            replay: None,
+            streams,
         };
         (engine, output_rx)
     }
 
-    /// A direct-drive engine with a real replay pool; `events` receives the
-    /// workers' `Prebuilt` results for the test to feed back in.
-    fn direct_engine_with_speculation(
-        &self,
-    ) -> (MergeEngine, crossbeam_channel::Receiver<EngineEvent>) {
-        let (event_tx, event_rx) = crossbeam_channel::bounded(64);
-        let (mut engine, _) = self.direct_engine(Duration::ZERO);
-        engine.config.speculation_workers = 1;
-        engine.replay = Some(crate::engine::replay::ReplayPool::spawn(
-            1,
-            64,
-            &[],
-            self.store.clone(),
-            self.blockchain.clone(),
-            event_tx,
-        ));
-        (engine, event_rx)
-    }
-
-    fn direct_engine_with_order_cap(
-        &self,
-        max_orders_per_slot: usize,
-    ) -> (MergeEngine, crossbeam_channel::Receiver<EngineOutput>) {
-        let (mut engine, output_rx) = self.direct_engine(Duration::ZERO);
-        engine.config.max_orders_per_slot = max_orders_per_slot;
-        (engine, output_rx)
+    /// Read access to the slot state the merge streams share.
+    fn shared_of(engine: &MergeEngine) -> Arc<crate::engine::types::SharedSlot> {
+        engine.slot.as_ref().and_then(|s| s.shared.clone()).expect("slot has shared state")
     }
 
     fn mergeable_orders(
@@ -447,12 +463,19 @@ async fn an_unresolved_reference_still_caches_the_blocks_own_txs() {
     assert_eq!(tx_cache.len(), own_txs);
 }
 
-fn mergeable_event(msg: &MergeableBlockV1, recv_ns: u64) -> EngineEvent {
-    EngineEvent::MergeableBlock { body: msg.as_ssz_bytes(), recv_ns, generation: 0 }
+/// `arrival` only documents the order blocks appear in a test; the event is
+/// stamped with a real clock, because base age now drives stream behaviour.
+fn mergeable_event(msg: &MergeableBlockV1, arrival: u64) -> EngineEvent {
+    let _unused = arrival;
+    EngineEvent::MergeableBlock {
+        body: msg.as_ssz_bytes(),
+        recv_ns: crate::utils::utcnow_ns(),
+        generation: 0,
+    }
 }
 
 fn activate_event(block_hash: B256) -> EngineEvent {
-    EngineEvent::ActivateBase { slot: SLOT, block_hash, recv_ns: 0, generation: 0 }
+    EngineEvent::ActivateBase { slot: SLOT, block_hash, generation: 0 }
 }
 
 fn expect_merged(
@@ -542,45 +565,49 @@ async fn checkpoint_hit_reuses_shared_prefix_on_resubmission() {
     assert_eq!(
         base_a.execution_payload.payload_inner.payload_inner.transactions[0],
         base_b.execution_payload.payload_inner.payload_inner.transactions[0],
+        "the two bases must share a prefix for the checkpoint to be reusable"
     );
 
-    let (mut engine, output_rx) = fixture.direct_engine(Duration::ZERO);
-    engine.handle_event(EngineEvent::RelayConfig(fixture.relay_config.clone()));
-    engine.handle_event(EngineEvent::SlotStart(fixture.slot_start()));
-    engine.handle_event(mergeable_event(&base_a, 1));
-    engine.handle_event(activate_event(hash_a));
-    engine.merge_pass();
-    {
-        let state = engine.slot.as_ref().unwrap();
-        assert_eq!(state.checkpoint_misses, 1, "first activation has no checkpoint to hit");
-        assert_eq!(state.checkpoint_hits, 0);
-    }
+    let ctx = crate::engine::types::SlotState::new(&fixture.slot_start()).ctx.clone();
+    let prepared_a = fixture.prepared_block(&base_a, 0);
+    let prepared_b = fixture.prepared_block(&base_b, 1);
 
-    engine.handle_event(mergeable_event(&base_b, 2));
-    engine.handle_event(activate_event(hash_b));
-    engine.merge_pass();
+    let (_, checkpoint, hit) = MergeSession::activate(
+        &ctx,
+        &prepared_a,
+        &fixture.store,
+        fixture.blockchain.clone(),
+        &fixture.relay_config,
+        None,
+    )
+    .expect("base a must activate");
+    assert!(!hit, "the first activation has no checkpoint to hit");
 
-    {
-        let state = engine.slot.as_ref().unwrap();
-        assert_eq!(
-            state.checkpoint_hits, 1,
-            "resubmission sharing the prefix must hit the checkpoint from base_a"
-        );
-        assert_eq!(state.session.as_ref().unwrap().base_block_hash, hash_b);
-    }
+    let (session, _, hit) = MergeSession::activate(
+        &ctx,
+        &prepared_b,
+        &fixture.store,
+        fixture.blockchain.clone(),
+        &fixture.relay_config,
+        Some(&checkpoint),
+    )
+    .expect("base b must activate");
+    assert!(hit, "a resubmission sharing the prefix must reuse the checkpoint");
+    assert_eq!(session.base_block_hash, hash_b);
+}
 
-    let mergeable_msg = fixture.mergeable_tx(&base_b, 3, U256::from(ETH / 5), 0xdd);
-    engine.handle_event(mergeable_event(&mergeable_msg, 3));
-    engine.merge_pass();
+/// Exclusion and pool state now live in the slot shared with the merge
+/// streams, so the tests read them there.
+fn shared_excluded(engine: &MergeEngine, order_hash: &B256) -> bool {
+    let shared = engine.slot.as_ref().and_then(|s| s.shared.clone()).expect("shared slot");
+    let inner = shared.inner.read().unwrap();
+    inner.is_excluded(order_hash)
+}
 
-    let merged =
-        expect_merged(output_rx.try_recv().expect("checkpoint-hit session must still emit"));
-    assert_eq!(merged.base_block_hash, hash_b);
-    assert!(
-        merged.proposer_value > fixture.block_value + U256::from(ETH / 100),
-        "proposer value {} must beat base_b's own value",
-        merged.proposer_value
-    );
+fn shared_orders(engine: &MergeEngine) -> usize {
+    let shared = engine.slot.as_ref().and_then(|s| s.shared.clone()).expect("shared slot");
+    let inner = shared.inner.read().unwrap();
+    inner.orders.len()
 }
 
 fn pubkey(byte: u8) -> alloy_rpc_types::beacon::BlsPublicKey {
@@ -603,13 +630,11 @@ async fn exclusion_holds_across_later_sessions() {
     engine.handle_event(mergeable_event(&without_order, 4));
 
     engine.handle_event(activate_event(base_a_hash));
-    engine.merge_pass();
     while output_rx.try_recv().is_ok() {}
 
     engine.handle_event(activate_event(base_b_hash));
-    engine.merge_pass();
 
-    assert!(engine.slot.as_ref().unwrap().is_excluded(&hashes[0]));
+    assert!(shared_excluded(&engine, &hashes[0]));
     while let Ok(out) = output_rx.try_recv() {
         let merged = expect_merged(out);
         let order_id = helix_tcp_types::merging::order::order_id(hashes[0], &a);
@@ -633,9 +658,8 @@ async fn exclusion_applies_within_the_live_session() {
     engine.handle_event(mergeable_event(&with_order, 2));
     engine.handle_event(activate_event(base_hash));
     engine.handle_event(mergeable_event(&without_order, 3));
-    engine.merge_pass();
 
-    assert!(engine.slot.as_ref().unwrap().is_excluded(&hashes[0]));
+    assert!(shared_excluded(&engine, &hashes[0]));
     let order_id = helix_tcp_types::merging::order::order_id(hashes[0], &a);
     while let Ok(out) = output_rx.try_recv() {
         assert!(!expect_merged(out).included_order_ids.contains(&order_id));
@@ -658,10 +682,11 @@ async fn exclusion_covers_identical_content_from_another_builder() {
     engine.handle_event(mergeable_event(&b_with, 3));
     engine.handle_event(mergeable_event(&a_without, 4));
 
-    let state = engine.slot.as_ref().unwrap();
-    assert!(state.is_excluded(&hashes[0]));
+    let shared = Fixture::shared_of(&engine);
+    let inner = shared.inner.read().unwrap();
+    assert!(inner.is_excluded(&hashes[0]));
     assert!(
-        state.orders.iter().filter(|o| o.order_hash == hashes[0]).count() >= 2,
+        inner.orders.iter().filter(|o| o.order_hash == hashes[0]).count() >= 2,
         "both contributors' entries must still be pooled"
     );
 }
@@ -681,10 +706,7 @@ async fn a_later_block_from_another_builder_does_not_restore() {
     engine.handle_event(mergeable_event(&a_without, 3));
     engine.handle_event(mergeable_event(&b_with, 4));
 
-    assert!(
-        engine.slot.as_ref().unwrap().is_excluded(&hashes[0]),
-        "a later block must not lift an exclusion"
-    );
+    assert!(shared_excluded(&engine, &hashes[0]), "a later block must not lift an exclusion");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -702,9 +724,10 @@ async fn exclusion_applies_to_an_order_that_arrives_later() {
     engine.handle_event(mergeable_event(&a_without, 3));
     engine.handle_event(mergeable_event(&b_with, 4));
 
-    let state = engine.slot.as_ref().unwrap();
-    assert!(state.is_excluded(&hashes[0]));
-    assert!(state.orders.iter().any(|o| o.order_hash == hashes[0] && o.builder_pubkey == b));
+    let shared = Fixture::shared_of(&engine);
+    let inner = shared.inner.read().unwrap();
+    assert!(inner.is_excluded(&hashes[0]));
+    assert!(inner.orders.iter().any(|o| o.order_hash == hashes[0] && o.builder_pubkey == b));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -720,10 +743,11 @@ async fn unexcluded_orders_remain_candidates() {
     engine.handle_event(mergeable_event(&full, 2));
     engine.handle_event(mergeable_event(&partial, 3));
 
-    let state = engine.slot.as_ref().unwrap();
-    assert!(!state.is_excluded(&hashes[0]), "still sent");
-    assert!(state.is_excluded(&hashes[1]), "dropped from the newest block");
-    assert!(!state.is_excluded(&hashes[2]), "still sent");
+    let shared = Fixture::shared_of(&engine);
+    let inner = shared.inner.read().unwrap();
+    assert!(!inner.is_excluded(&hashes[0]), "still sent");
+    assert!(inner.is_excluded(&hashes[1]), "dropped from the newest block");
+    assert!(!inner.is_excluded(&hashes[2]), "still sent");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -739,7 +763,7 @@ async fn unflagged_content_is_never_excluded_by_absence() {
     engine.handle_event(mergeable_event(&with_order, 2));
     engine.handle_event(mergeable_event(&gone, 3));
 
-    assert!(!engine.slot.as_ref().unwrap().is_excluded(&hashes[0]));
+    assert!(!shared_excluded(&engine, &hashes[0]));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -753,10 +777,8 @@ async fn silence_is_not_exclusion() {
     engine.handle_event(mergeable_event(&base, 1));
     engine.handle_event(mergeable_event(&with_order, 2));
     engine.handle_event(activate_event(base_hash));
-    engine.merge_pass();
-    engine.merge_pass();
 
-    assert!(!engine.slot.as_ref().unwrap().is_excluded(&hashes[0]));
+    assert!(!shared_excluded(&engine, &hashes[0]));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -770,13 +792,15 @@ async fn exclusion_does_not_change_pool_membership() {
     let (mut engine, _rx) = fixture.started_engine();
     engine.handle_event(mergeable_event(&base, 1));
     engine.handle_event(mergeable_event(&with_order, 2));
-    let pooled_before = engine.slot.as_ref().unwrap().orders.len();
+    let pooled_before = shared_orders(&engine);
     engine.handle_event(mergeable_event(&without_order, 3));
-    let state = engine.slot.as_ref().unwrap();
+    let shared = Fixture::shared_of(&engine);
 
-    assert!(state.is_excluded(&hashes[0]));
-    assert_eq!(state.orders.len(), pooled_before, "nothing leaves the pool mid-slot");
-    assert!(state.orders.iter().any(|o| o.order_hash == hashes[0]));
+    let inner = shared.inner.read().unwrap();
+
+    assert!(inner.is_excluded(&hashes[0]));
+    assert_eq!(inner.orders.len(), pooled_before, "nothing leaves the pool mid-slot");
+    assert!(inner.orders.iter().any(|o| o.order_hash == hashes[0]));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -791,15 +815,16 @@ async fn exclusions_do_not_cross_a_slot() {
     engine.handle_event(mergeable_event(&base, 1));
     engine.handle_event(mergeable_event(&with_order, 2));
     engine.handle_event(mergeable_event(&without_order, 3));
-    assert!(engine.slot.as_ref().unwrap().is_excluded(&hashes[0]));
+    assert!(shared_excluded(&engine, &hashes[0]));
 
     let mut next = fixture.slot_start();
     next.slot = SLOT + 1;
     engine.handle_event(EngineEvent::SlotStart(next));
 
-    let state = engine.slot.as_ref().unwrap();
-    assert!(!state.is_excluded(&hashes[0]), "exclusions must not cross a slot");
-    assert!(state.latest_only.is_empty(), "latest_only state must not cross a slot either");
+    let shared = Fixture::shared_of(&engine);
+    let inner = shared.inner.read().unwrap();
+    assert!(!inner.is_excluded(&hashes[0]), "exclusions must not cross a slot");
+    assert!(inner.latest_only.is_empty(), "latest_only state must not cross a slot either");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -824,9 +849,10 @@ async fn the_first_block_of_a_slot_excludes_nothing() {
     engine.handle_event(mergeable_event(&base2, 3));
     engine.handle_event(mergeable_event(&first, 4));
 
-    let state = engine.slot.as_ref().unwrap();
-    assert!(!state.is_excluded(&hashes[0]));
-    assert!(!state.is_excluded(&hashes[1]), "the previous slot must not exclude here");
+    let shared = Fixture::shared_of(&engine);
+    let inner = shared.inner.read().unwrap();
+    assert!(!inner.is_excluded(&hashes[0]));
+    assert!(!inner.is_excluded(&hashes[1]), "the previous slot must not exclude here");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -841,11 +867,11 @@ async fn a_block_for_another_slot_alters_nothing() {
     let (mut engine, _rx) = fixture.started_engine();
     engine.handle_event(mergeable_event(&base, 1));
     engine.handle_event(mergeable_event(&with_order, 2));
-    let flagged_before = engine.slot.as_ref().unwrap().latest_only.clone();
+    let flagged_before = Fixture::shared_of(&engine).inner.read().unwrap().latest_only.clone();
     engine.handle_event(mergeable_event(&stale, 3));
 
     assert_eq!(
-        engine.slot.as_ref().unwrap().latest_only,
+        Fixture::shared_of(&engine).inner.read().unwrap().latest_only,
         flagged_before,
         "a block for another slot must not alter this slot's latest_only state"
     );
@@ -865,17 +891,19 @@ async fn exclusion_does_not_disturb_an_applied_bundle() {
     engine.handle_event(mergeable_event(&base, 1));
     engine.handle_event(mergeable_event(&with_order, 2));
     engine.handle_event(activate_event(base_hash));
-    engine.merge_pass();
 
-    let merged = expect_merged(output_rx.try_recv().expect("bundle should merge while still sent"));
+    // Merging runs on a stream thread now, so wait for it rather than polling.
+    let merged = expect_merged(
+        output_rx
+            .recv_timeout(Duration::from_secs(60))
+            .expect("bundle should merge while still sent"),
+    );
     let order_id = helix_tcp_types::merging::order::order_id(order_hash, &a);
     assert!(merged.included_order_ids.contains(&order_id), "bundle applied before exclusion");
     let applied_before = merged.execution_payload.payload_inner.payload_inner.transactions.clone();
 
     engine.handle_event(mergeable_event(&without_order, 3));
 
-    let session = engine.slot.as_ref().unwrap().session.as_ref().expect("session still live");
-    assert!(session.has_applied(&order_id), "an applied order stays applied");
     let positions: Vec<usize> = bundle_txs
         .iter()
         .map(|tx| applied_before.iter().position(|t| t == tx).expect("bundle tx present"))
@@ -898,11 +926,9 @@ async fn emitted_block_stays_valid_across_an_exclusion() {
     engine.handle_event(mergeable_event(&base, 1));
     engine.handle_event(mergeable_event(&with_order, 2));
     engine.handle_event(activate_event(base_hash));
-    engine.merge_pass();
     while output_rx.try_recv().is_ok() {}
 
     engine.handle_event(mergeable_event(&partial, 3));
-    engine.merge_pass();
 
     while let Ok(out) = output_rx.try_recv() {
         let merged = expect_merged(out);
@@ -941,13 +967,13 @@ async fn exclusion_state_is_independent_of_event_interleaving() {
                 0 => {
                     engine.handle_event(activate_event(base_hash));
                 }
-                1 => engine.merge_pass(),
                 _ => {}
             }
         }
         while output_rx.try_recv().is_ok() {}
 
-        let mut got: Vec<B256> = engine.slot.as_ref().unwrap().excluded.iter().copied().collect();
+        let mut got: Vec<B256> =
+            Fixture::shared_of(&engine).inner.read().unwrap().excluded.iter().copied().collect();
         got.sort();
         match &expected {
             None => expected = Some(got),
@@ -966,7 +992,7 @@ async fn exclusion_state_is_independent_of_event_interleaving() {
 #[tokio::test(flavor = "multi_thread")]
 async fn every_pooled_order_is_accounted_for() {
     let fixture = Fixture::new().await;
-    let (base, base_hash) = fixture.build_base(U256::from(ETH));
+    let (base, _) = fixture.build_base(U256::from(ETH));
     let a = pubkey(0xaa);
     let (full, _) = fixture.mergeable_orders(&base, a, &[3, 4, 5], true, 0xd1);
     let (partial, _) = fixture.mergeable_orders(&base, a, &[3], true, 0xd2);
@@ -975,101 +1001,29 @@ async fn every_pooled_order_is_accounted_for() {
     engine.handle_event(mergeable_event(&base, 1));
     engine.handle_event(mergeable_event(&full, 2));
     engine.handle_event(mergeable_event(&partial, 3));
-    engine.handle_event(activate_event(base_hash));
-    engine.merge_pass();
 
-    let state = engine.slot.as_ref().unwrap();
+    let shared = Fixture::shared_of(&engine);
+    let inner = shared.inner.read().unwrap();
     let excluded_in_pool =
-        state.orders.iter().filter(|o| state.is_excluded(&o.order_hash)).count() as u64;
-    let session = state.session.as_ref().expect("session live");
+        inner.orders.iter().filter(|o| inner.is_excluded(&o.order_hash)).count() as u64;
+    assert!(excluded_in_pool > 0, "the fixture must produce at least one exclusion");
+
+    let (mut session, _, _) = MergeSession::activate(
+        &shared.ctx,
+        &fixture.prepared_block(&base, 0),
+        &fixture.store,
+        fixture.blockchain.clone(),
+        &shared.relay_config,
+        None,
+    )
+    .expect("base must activate");
+    session.try_extend(&inner.orders, &inner.excluded);
+
     assert_eq!(
         session.stats().orders_excluded_skipped,
         excluded_in_pool,
         "the skip counter must account for exactly the excluded pool entries"
     );
-}
-
-/// Speculative replay must only move where the base replay runs. The merged
-/// block it produces has to be byte-for-byte what the inline path produces.
-#[tokio::test(flavor = "multi_thread")]
-async fn speculative_replay_produces_the_same_merged_block() {
-    let fixture = Fixture::new().await;
-    let (base_msg, base_block_hash) = fixture.build_base(U256::from(ETH));
-    let mergeable_msg = fixture.mergeable_tx(&base_msg, 3, U256::from(ETH / 5), 0xdd);
-
-    let run = |workers: usize| {
-        let mut config = fixture.engine_config(Duration::ZERO);
-        config.speculation_workers = workers;
-        let (event_tx, event_rx) = crossbeam_channel::bounded(1024);
-        let (output_tx, output_rx) = crossbeam_channel::bounded(64);
-        let _engine = MergeEngine::spawn(
-            config,
-            fixture.store.clone(),
-            fixture.blockchain.clone(),
-            fixture.head(),
-            event_tx.clone(),
-            event_rx,
-            output_tx,
-        );
-        event_tx.send(EngineEvent::RelayConfig(fixture.relay_config.clone())).unwrap();
-        event_tx.send(EngineEvent::SlotStart(fixture.slot_start())).unwrap();
-        event_tx.send(mergeable_event(&base_msg, 1)).unwrap();
-        event_tx.send(mergeable_event(&mergeable_msg, 2)).unwrap();
-        event_tx.send(activate_event(base_block_hash)).unwrap();
-        let output =
-            output_rx.recv_timeout(Duration::from_secs(60)).expect("engine produced nothing");
-        expect_merged(output)
-    };
-
-    let inline = run(0);
-    let speculative = run(4);
-
-    let inline_v1 = &inline.execution_payload.payload_inner.payload_inner;
-    let speculative_v1 = &speculative.execution_payload.payload_inner.payload_inner;
-    assert_eq!(speculative_v1.block_hash, inline_v1.block_hash);
-    assert_eq!(speculative_v1.state_root, inline_v1.state_root);
-    assert_eq!(speculative_v1.transactions, inline_v1.transactions);
-    assert_eq!(speculative.proposer_value, inline.proposer_value);
-    assert_eq!(speculative.base_builder_revenue, inline.base_builder_revenue);
-    assert_eq!(speculative.included_order_ids, inline.included_order_ids);
-}
-
-/// A base block warmed by a replay worker must be activated straight from
-/// `prebuilt`, with no replay on the engine thread.
-#[tokio::test(flavor = "multi_thread")]
-async fn activation_uses_the_speculatively_replayed_session() {
-    let fixture = Fixture::new().await;
-    let (base_msg, base_block_hash) = fixture.build_base(U256::from(ETH));
-    let (mut engine, replay_rx) = fixture.direct_engine_with_speculation();
-
-    engine.handle_event(EngineEvent::RelayConfig(fixture.relay_config.clone()));
-    engine.handle_event(EngineEvent::SlotStart(fixture.slot_start()));
-    engine.handle_event(mergeable_event(&base_msg, 1));
-
-    let state = engine.slot.as_ref().unwrap();
-    assert_eq!(state.spec.dispatched, 1);
-    assert!(state.speculating.contains(&base_block_hash));
-
-    let prebuilt = replay_rx.recv_timeout(Duration::from_secs(60)).expect("no replay result");
-    engine.handle_event(prebuilt);
-
-    let state = engine.slot.as_ref().unwrap();
-    assert_eq!(state.spec.completed, 1);
-    assert!(state.prebuilt.contains_key(&base_block_hash));
-    assert!(state.speculating.is_empty());
-
-    engine.handle_event(activate_event(base_block_hash));
-    engine.merge_pass();
-
-    let state = engine.slot.as_ref().unwrap();
-    assert_eq!(state.spec.hits, 1);
-    assert_eq!(state.spec.misses, 0, "the engine thread must not have replayed the base");
-    assert_eq!(
-        state.session.as_ref().map(|s| s.base_block_hash),
-        Some(base_block_hash),
-        "the prebuilt session must become the live session"
-    );
-    assert!(state.prebuilt.is_empty());
 }
 
 /// Builders pay the proposer through a forwarder contract, so the trailing tx
@@ -1116,17 +1070,12 @@ async fn a_base_block_paying_through_a_contract_is_merged() {
     assert!(merged.proposer_value > fixture.block_value);
 }
 
-fn submission_stream(samples: &[(u64, u64)]) -> crate::engine::types::SlotState {
-    let mut state = crate::engine::types::SlotState::new(&SlotStartV1 {
-        slot: SLOT,
-        parent_hash: B256::ZERO,
-        proposer_fee_recipient: Address::ZERO,
-        parent_beacon_block_root: B256::ZERO,
-    });
+fn submission_stream(samples: &[(u64, u64)]) -> crate::engine::types::SharedInner {
+    let mut inner = crate::engine::types::SharedInner::default();
     for (value, ms) in samples {
-        state.record_submission(BUILDER, U256::from(*value), ms * 1_000_000);
+        inner.record_submission(BUILDER, U256::from(*value), ms * 1_000_000);
     }
-    state
+    inner
 }
 
 const BUILDER: Address = Address::repeat_byte(0x11);
@@ -1136,8 +1085,8 @@ const BUILDER: Address = Address::repeat_byte(0x11);
 #[test]
 fn budget_ends_when_the_builder_outbids_the_merge() {
     // uplift over the base of 100: +0, +5, +30
-    let state = submission_stream(&[(100, 0), (105, 10), (130, 25)]);
-    let subs = state.submissions.get(&BUILDER).unwrap();
+    let inner = submission_stream(&[(100, 0), (105, 10), (130, 25)]);
+    let subs = inner.submissions.get(&BUILDER).unwrap();
 
     // delta 20 survives the +5 step and dies on the +30 step.
     let (steps, budget_ms, deadline_seen) = subs.budget(0, U256::from(100), U256::from(20));
@@ -1150,8 +1099,8 @@ fn budget_ends_when_the_builder_outbids_the_merge() {
 /// lower bound rather than an exact figure.
 #[test]
 fn budget_is_a_lower_bound_while_the_merge_still_leads() {
-    let state = submission_stream(&[(100, 0), (105, 10), (130, 25)]);
-    let subs = state.submissions.get(&BUILDER).unwrap();
+    let inner = submission_stream(&[(100, 0), (105, 10), (130, 25)]);
+    let subs = inner.submissions.get(&BUILDER).unwrap();
 
     let (steps, budget_ms, deadline_seen) = subs.budget(0, U256::from(100), U256::from(1_000));
     assert!(!deadline_seen);
@@ -1162,8 +1111,8 @@ fn budget_is_a_lower_bound_while_the_merge_still_leads() {
 /// A merge that is already behind when it is emitted gets no budget at all.
 #[test]
 fn budget_is_zero_when_the_next_submission_already_wins() {
-    let state = submission_stream(&[(100, 0), (200, 8)]);
-    let subs = state.submissions.get(&BUILDER).unwrap();
+    let inner = submission_stream(&[(100, 0), (200, 8)]);
+    let subs = inner.submissions.get(&BUILDER).unwrap();
 
     let (steps, budget_ms, deadline_seen) = subs.budget(0, U256::from(100), U256::from(20));
     assert!(deadline_seen);
@@ -1171,81 +1120,14 @@ fn budget_is_zero_when_the_next_submission_already_wins() {
     assert_eq!(budget_ms, 8);
 }
 
-/// The live session must follow its builder's newest appendable block. Holding
-/// a base while the builder submits past it is what makes the merged bid stale
-/// and lose, so a fresher warm session replaces the live one.
-#[tokio::test(flavor = "multi_thread")]
-async fn the_live_session_rebases_onto_a_fresher_base_from_the_same_builder() {
-    let fixture = Fixture::new().await;
-    let (base_a, hash_a) = fixture.build_base(U256::from(ETH));
-    let (base_b, hash_b) = fixture.build_base(U256::from(ETH / 2));
-    assert_ne!(hash_a, hash_b, "the two bases must be distinct blocks");
-
-    let (mut engine, replay_rx) = fixture.direct_engine_with_speculation();
-    engine.handle_event(EngineEvent::RelayConfig(fixture.relay_config.clone()));
-    engine.handle_event(EngineEvent::SlotStart(fixture.slot_start()));
-
-    // First base: warm it, then activate it.
-    engine.handle_event(mergeable_event(&base_a, 1));
-    let warm_a = replay_rx.recv_timeout(Duration::from_secs(60)).expect("no replay for base a");
-    engine.handle_event(warm_a);
-    engine.handle_event(activate_event(hash_a));
-    engine.merge_pass();
-
-    let state = engine.slot.as_ref().unwrap();
-    assert_eq!(state.session.as_ref().map(|s| s.base_block_hash), Some(hash_a));
-    assert_eq!(state.rebases, 0);
-
-    // The same builder submits again; the live session must follow it.
-    engine.handle_event(mergeable_event(&base_b, 2));
-    let warm_b = replay_rx.recv_timeout(Duration::from_secs(60)).expect("no replay for base b");
-    engine.handle_event(warm_b);
-
-    let state = engine.slot.as_ref().unwrap();
-    assert_eq!(
-        state.session.as_ref().map(|s| s.base_block_hash),
-        Some(hash_b),
-        "the live session must move to the builder's newer base"
-    );
-    assert_eq!(state.rebases, 1);
-}
-
-/// A pending activation names the base the relay wants, so a rebase must not
-/// race ahead of it and swap the session out from under it.
-#[tokio::test(flavor = "multi_thread")]
-async fn a_pending_activation_blocks_the_rebase() {
-    let fixture = Fixture::new().await;
-    let (base_a, hash_a) = fixture.build_base(U256::from(ETH));
-    let (base_b, hash_b) = fixture.build_base(U256::from(ETH / 2));
-
-    let (mut engine, replay_rx) = fixture.direct_engine_with_speculation();
-    engine.handle_event(EngineEvent::RelayConfig(fixture.relay_config.clone()));
-    engine.handle_event(EngineEvent::SlotStart(fixture.slot_start()));
-    engine.handle_event(mergeable_event(&base_a, 1));
-    let warm_a = replay_rx.recv_timeout(Duration::from_secs(60)).expect("no replay for base a");
-    engine.handle_event(warm_a);
-    engine.handle_event(activate_event(hash_a));
-    engine.merge_pass();
-
-    // An activation is outstanding when the fresher base lands.
-    engine.handle_event(mergeable_event(&base_b, 2));
-    engine.handle_event(activate_event(hash_b));
-    let warm_b = replay_rx.recv_timeout(Duration::from_secs(60)).expect("no replay for base b");
-    engine.handle_event(warm_b);
-
-    let state = engine.slot.as_ref().unwrap();
-    assert_eq!(state.rebases, 0, "the pending activation owns the base choice");
-}
-
-fn replay_job(
+fn stream_job(
     fixture: &Fixture,
     payload: &alloy_rpc_types::engine::ExecutionPayloadV3,
     block_hash: B256,
     value: u64,
-) -> crate::engine::replay::ReplayJob {
-    let state = crate::engine::types::SlotState::new(&fixture.slot_start());
-    crate::engine::replay::ReplayJob {
-        ctx: state.ctx.clone(),
+) -> crate::engine::streams::StreamJob {
+    crate::engine::streams::StreamJob {
+        shared: shared_slot(fixture),
         base: Arc::new(crate::engine::types::PreparedBlock {
             block_hash,
             builder_pubkey: Default::default(),
@@ -1255,10 +1137,22 @@ fn replay_job(
             txs: Arc::new(Vec::new()),
             recv_ns: 0,
             submission_index: 0,
+            ingest_done_ns: 0,
         }),
-        relay_config: Arc::new(fixture.relay_config.clone()),
         generation: 0,
+        offered_ns: 0,
     }
+}
+
+fn shared_slot(fixture: &Fixture) -> Arc<crate::engine::types::SharedSlot> {
+    let state = crate::engine::types::SlotState::new(&fixture.slot_start());
+    Arc::new(crate::engine::types::SharedSlot {
+        ctx: state.ctx.clone(),
+        relay_config: Arc::new(fixture.relay_config.clone()),
+        engine_config: Arc::new(fixture.engine_config(Duration::ZERO)),
+        inner: std::sync::RwLock::new(crate::engine::types::SharedInner::default()),
+        pool_version: std::sync::atomic::AtomicU64::new(0),
+    })
 }
 
 /// A builder's newer block must replace its older pending replay, and the
@@ -1269,16 +1163,15 @@ async fn a_newer_block_supersedes_the_pending_replay_for_that_builder() {
     let fixture = Fixture::new().await;
     let (base, _) = fixture.build_base(U256::from(ETH));
     let payload = base.execution_payload;
-    let pending = crate::engine::replay::Pending::new(8);
-    let builder = Address::repeat_byte(0x11);
+    let pending = crate::engine::streams::BuilderStream::new();
     let (old_hash, new_hash) = (B256::repeat_byte(0xa1), B256::repeat_byte(0xb2));
 
     assert!(matches!(
-        pending.offer(builder, replay_job(&fixture, &payload, old_hash, 100)),
-        crate::engine::replay::Dispatch::Accepted
+        pending.offer(stream_job(&fixture, &payload, old_hash, 100)),
+        crate::engine::streams::Offer::Accepted
     ));
-    match pending.offer(builder, replay_job(&fixture, &payload, new_hash, 200)) {
-        crate::engine::replay::Dispatch::Superseded(hash) => assert_eq!(hash, old_hash),
+    match pending.offer(stream_job(&fixture, &payload, new_hash, 200)) {
+        crate::engine::streams::Offer::Superseded => {}
         _ => panic!("the older pending job must be reported as superseded"),
     }
 
@@ -1287,20 +1180,121 @@ async fn a_newer_block_supersedes_the_pending_replay_for_that_builder() {
     assert!(pending.try_take().is_none(), "the superseded job must not also be queued");
 }
 
-/// With several builders pending, the highest bid is warmed first: it is the
-/// one most likely to win the slot.
+/// A stream must keep improving the base it holds while nothing fresher is
+/// waiting. Emitting once and idling leaves the orders that arrive in the gap
+/// unused, and that value is worth more than the freshness it buys.
+#[tokio::test(flavor = "multi_thread")]
+async fn orders_arriving_after_an_emission_improve_the_same_base() {
+    let fixture = Fixture::new().await;
+    let (base, _) = fixture.build_base(U256::from(ETH));
+    let first_order = fixture.mergeable_tx(&base, 3, U256::from(ETH / 5), 0xd1);
+    let second_order = fixture.mergeable_tx(&base, 4, U256::from(ETH / 5), 0xd2);
+
+    let (mut engine, output_rx) = fixture.started_engine();
+    engine.handle_event(mergeable_event(&base, 1));
+    engine.handle_event(mergeable_event(&first_order, 2));
+    let first = expect_merged(
+        output_rx.recv_timeout(Duration::from_secs(60)).expect("first order must merge"),
+    );
+
+    // No new base: the stream is still holding this one.
+    engine.handle_event(mergeable_event(&second_order, 3));
+    let second = expect_merged(
+        output_rx.recv_timeout(Duration::from_secs(60)).expect("later orders must also merge"),
+    );
+
+    assert_eq!(second.base_block_hash, first.base_block_hash, "same base, improved");
+    assert!(
+        second.proposer_value > first.proposer_value,
+        "the later emission must be worth more: {} then {}",
+        first.proposer_value,
+        second.proposer_value
+    );
+}
+
+/// A stream gives up the base it holds on value, not on age: a waiting block
+/// is only worth taking when the bid it carries gains more than another
+/// improvement pass would. Switching forfeits the accumulated delta, so a
+/// marginally better base is not worth it.
 #[tokio::test]
-async fn the_highest_bidding_builder_is_replayed_first() {
+async fn a_waiting_base_is_taken_only_when_its_bid_gain_beats_another_pass() {
     let fixture = Fixture::new().await;
     let (base, _) = fixture.build_base(U256::from(ETH));
     let payload = base.execution_payload;
-    let pending = crate::engine::replay::Pending::new(8);
-    let low = Address::repeat_byte(0x11);
-    let high = Address::repeat_byte(0x22);
+    let stream = crate::engine::streams::BuilderStream::new();
 
-    pending.offer(low, replay_job(&fixture, &payload, B256::repeat_byte(0xa1), 100));
-    pending.offer(high, replay_job(&fixture, &payload, B256::repeat_byte(0xb2), 900));
+    assert!(stream.waiting_bid().is_none(), "nothing waiting");
+    stream.offer(stream_job(&fixture, &payload, B256::repeat_byte(0xb1), 500));
+    let waiting = stream.waiting_bid().expect("a block is waiting");
+    assert_eq!(waiting, U256::from(500));
 
-    let first = pending.try_take().expect("a job must be pending");
-    assert_eq!(first.base.block_value, U256::from(900));
+    // The comparison the stream makes: what the waiting bid gains over the base
+    // we hold, against what the last improvement pass added.
+    let held_base_value = U256::from(400);
+    let base_gain = waiting - held_base_value;
+    assert!(base_gain > U256::from(60), "a +100 base beats a +60 pass");
+    assert!(base_gain < U256::from(150), "a +100 base does not beat a +150 pass");
+
+    // Reading the waiting bid must not consume it: decide first, take second.
+    assert!(stream.waiting_bid().is_some(), "the block stays queued");
+    assert!(stream.try_take().is_some());
+    assert!(stream.waiting_bid().is_none());
+}
+
+/// Taking a waiting base forfeits the delta already accumulated on the one we
+/// hold, and only part of it comes back on the first pass. The rule charges
+/// that forfeit against the waiting bid, so a marginally better base is not
+/// worth the switch.
+#[test]
+fn the_rebase_rule_charges_the_delta_a_switch_forfeits() {
+    // Held base at 1000 with 400 of accumulated delta; last pass added 20.
+    let base = U256::from(1000u64);
+    let delta = U256::from(400u64);
+    let last_gain = U256::from(20u64);
+
+    // Half the delta is assumed to survive the switch, so 200 is forfeited.
+    let forfeit = |bps: u64| delta * U256::from(10_000u64 - bps) / U256::from(10_000u64);
+    let threshold = |bps: u64| last_gain + forfeit(bps);
+
+    assert_eq!(forfeit(5_000), U256::from(200u64));
+    assert_eq!(threshold(5_000), U256::from(220u64));
+
+    let rebases = |bid: u64, bps: u64| U256::from(bid) - base > threshold(bps);
+    assert!(!rebases(1_100, 5_000), "a +100 bid does not cover a 220 threshold");
+    assert!(rebases(1_300, 5_000), "a +300 bid does");
+
+    // Full recovery charges nothing, so the rule reduces to the marginal pass.
+    assert_eq!(forfeit(10_000), U256::ZERO);
+    assert!(rebases(1_100, 10_000), "with nothing forfeited, +100 beats a +20 pass");
+
+    // No recovery makes the rule maximally reluctant to give up a base.
+    assert_eq!(threshold(0), U256::from(420u64));
+    assert!(!rebases(1_400, 0));
+}
+
+/// A stream must only re-extend when the pool has actually moved. Re-screening
+/// an unchanged pool yields the same result and holds the read lock that ingest
+/// needs to write, which starves the engine thread.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_pool_version_moves_only_when_the_pool_does() {
+    let fixture = Fixture::new().await;
+    let (base, _) = fixture.build_base(U256::from(ETH));
+    let order = fixture.mergeable_tx(&base, 3, U256::from(ETH / 5), 0xd1);
+
+    let (mut engine, _rx) = fixture.started_engine();
+    let shared = Fixture::shared_of(&engine);
+    let version = || shared.pool_version.load(std::sync::atomic::Ordering::Acquire);
+
+    let start = version();
+    engine.handle_event(mergeable_event(&base, 1));
+    let after_base = version();
+    assert!(after_base > start, "pooling a block moves the version");
+
+    engine.handle_event(mergeable_event(&order, 2));
+    let after_order = version();
+    assert!(after_order > after_base, "pooling orders moves it again");
+
+    // The same block again changes nothing, so neither should the version.
+    engine.handle_event(mergeable_event(&order, 3));
+    assert_eq!(version(), after_order, "a duplicate block must not move the version");
 }

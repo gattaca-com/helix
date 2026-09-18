@@ -10,8 +10,9 @@ use alloy_primitives::U256;
 use axum::{Router, http::StatusCode, routing::get};
 use lazy_static::lazy_static;
 use prometheus::{
-    Encoder, HistogramVec, IntCounterVec, Registry, TextEncoder,
-    register_histogram_vec_with_registry, register_int_counter_vec_with_registry,
+    Encoder, Histogram, HistogramVec, IntCounterVec, Registry, TextEncoder,
+    register_histogram_vec_with_registry, register_histogram_with_registry,
+    register_int_counter_vec_with_registry,
 };
 use tokio::net::TcpListener;
 use tracing::{error, info};
@@ -152,6 +153,70 @@ lazy_static! {
     )
     .unwrap();
 
+    /// Every millisecond between a base arriving and the merge being emitted,
+    /// split by phase. The phases sum to the base age, so waiting shows up as
+    /// clearly as work does.
+    static ref PHASE: HistogramVec = register_histogram_vec_with_registry!(
+        "merge_phase_ms",
+        "Time a base spends in each phase between arrival and emission",
+        &["phase"],
+        millis_buckets(),
+        &BUILDER_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    /// How many times a base was improved before a fresher one replaced it.
+    /// One means we abandoned it immediately; the value left in the pool is
+    /// what makes that costly.
+    static ref EXTEND_PASSES: Histogram = register_histogram_with_registry!(
+        "merge_extend_passes",
+        "Extend and emit passes made on one base",
+        vec![1., 2., 3., 4., 5., 7., 10., 15., 20., 30., 50.],
+        &BUILDER_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    /// Why a stream stopped improving a base and took another.
+    static ref REBASE_REASON: IntCounterVec = register_int_counter_vec_with_registry!(
+        "merge_rebase_reason_total",
+        "Why a stream gave up the base it held",
+        &["reason"],
+        &BUILDER_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    /// Delta reached on the first pass of a new base, against the delta the
+    /// previous base ended on. Two distributions, so the comparison is not a
+    /// mean of unbounded per-event ratios.
+    static ref DELTA_ON_BASE: HistogramVec = register_histogram_vec_with_registry!(
+        "merge_delta_on_base_gwei",
+        "Delta on a base at first pass and at hand-off",
+        &["stage"],
+        value_buckets(),
+        &BUILDER_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    /// Emissions that beat the builder's own bid *and* are inside the relay's
+    /// staleness gate. The joint condition is the objective.
+    static ref SERVABLE_WIN: IntCounterVec = register_int_counter_vec_with_registry!(
+        "merge_servable_win_total",
+        "Emissions that beat the builder's bid and are young enough to serve",
+        &["servable"],
+        &BUILDER_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    /// Size of the state-root walk, by stage and unit.
+    static ref STATE_WALK: HistogramVec = register_histogram_vec_with_registry!(
+        "merge_state_walk",
+        "Accounts and storage slots the state-root walk touches",
+        &["stage", "unit"],
+        vec![1., 5., 10., 25., 50., 100., 200., 400., 800., 1_600., 3_200., 6_400., 12_800.],
+        &BUILDER_METRICS_REGISTRY
+    )
+    .unwrap();
+
     //////////////// PIPELINE ////////////////
 
     /// Critical-path cost by stage: replay, extend, emit, and the activation
@@ -239,21 +304,72 @@ pub fn emission_verdict(
     BASE_AGE.with_label_values(&[result]).observe(base_age_ms as f64);
 }
 
+/// Splits one emission's base age into its phases. A zero stamp means the
+/// phase did not happen -- an inline replay never reaches a worker -- so those
+/// gaps are skipped rather than recorded as zero.
+pub fn emission_phases(t: &crate::engine::types::Timeline) {
+    let emit_ns = crate::utils::utcnow_ns();
+    let gap = |phase: &str, from: u64, to: u64| {
+        if from == 0 || to == 0 || to < from {
+            return;
+        }
+        PHASE.with_label_values(&[phase]).observe((to - from) as f64 / 1e6);
+    };
+    gap("ingest", t.recv_ns, t.ingest_done_ns);
+    gap("dispatch_wait", t.ingest_done_ns, t.dispatch_ns);
+    gap("worker_wait", t.dispatch_ns, t.replay_start_ns);
+    gap("replay", t.replay_start_ns, t.replay_end_ns);
+    gap("return_queue", t.replay_end_ns, t.handled_ns);
+    gap("to_live", t.handled_ns, t.live_ns);
+    gap("to_emit", t.live_ns, emit_ns);
+    gap("total", t.recv_ns, emit_ns);
+}
+
+/// How long a block waited before its stream started it, split by whether the
+/// stream was mid-merge or idle when it arrived.
+pub fn worker_wait(state: &str, ms: u64) {
+    PHASE.with_label_values(&[state]).observe(ms as f64);
+}
+
+/// Accounts and storage slots the state-root walk has to touch, split between
+/// what the base block alone changed and the full set at emission. If the base
+/// dominates, every emission is re-walking work that did not change.
+pub fn account_updates(stage: &str, accounts: usize, slots: usize) {
+    STATE_WALK.with_label_values(&[stage, "accounts"]).observe(accounts as f64);
+    STATE_WALK.with_label_values(&[stage, "slots"]).observe(slots as f64);
+}
+
 pub fn stage_latency(stage: &str, micros: u64) {
     STAGE_LATENCY.with_label_values(&[stage]).observe(micros as f64);
 }
 
-/// A live session moved onto a fresher base from the same builder.
-pub fn rebase() {
-    SPECULATION.with_label_values(&["rebase"]).inc();
+/// Extend/emit passes made on one base before moving to a fresher one.
+pub fn extend_passes(passes: u64) {
+    EXTEND_PASSES.observe(passes as f64);
+}
+
+/// Why a stream gave up the base it held.
+pub fn rebase_reason(reason: &str) {
+    REBASE_REASON.with_label_values(&[reason]).inc();
+}
+
+/// The delta one pass on a new base reaches, against the delta the previous
+/// base ended on. Recorded as two distributions rather than a per-event ratio:
+/// the ratio is unbounded when the previous base ended near zero, which made
+/// its mean meaningless.
+pub fn delta_on_base(stage: &str, delta: U256) {
+    DELTA_ON_BASE.with_label_values(&[stage]).observe(gwei(delta));
+}
+
+/// An emission that both beat the builder's own bid and is young enough for the
+/// relay to serve. Beating the bid on a base past the gate is worth nothing, so
+/// this is the objective, not `beats_own_bid` alone.
+pub fn servable_win(servable: bool) {
+    SERVABLE_WIN.with_label_values(&[if servable { "yes" } else { "no" }]).inc();
 }
 
 pub fn speculation(outcome: &str) {
     SPECULATION.with_label_values(&[outcome]).inc();
-}
-
-pub fn speculation_by(outcome: &str, n: u64) {
-    SPECULATION.with_label_values(&[outcome]).inc_by(n);
 }
 
 pub fn activation_source(source: &str) {

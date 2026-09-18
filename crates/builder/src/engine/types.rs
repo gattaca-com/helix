@@ -1,21 +1,14 @@
-use std::{collections::VecDeque, sync::Arc, time::Duration};
+use std::{
+    collections::VecDeque,
+    sync::{Arc, RwLock, atomic::AtomicU64},
+    time::Duration,
+};
 
 use alloy_primitives::{Address, B256, U256};
 use alloy_rpc_types::beacon::BlsPublicKey;
 use alloy_signer_local::PrivateKeySigner;
 use helix_tcp_types::merging::control::RelayConfigV1;
 use rustc_hash::{FxHashMap, FxHashSet};
-
-use crate::engine::session::{MergeSession, ReplayCheckpoint};
-
-/// Sessions kept alive after a base switch, resumed instantly when the
-/// relay's top bid flips back instead of re-replaying the base block.
-pub const MAX_PARKED_SESSIONS: usize = 4;
-
-/// Per-beneficiary replay checkpoints kept alive at once; a defensive cap —
-/// distinct beneficiaries this slot are bounded in practice by
-/// `builder_collaterals` (<= `MAX_BUILDER_COLLATERALS`).
-pub const MAX_REPLAY_CHECKPOINTS: usize = 32;
 
 /// Environment variable holding the relay-owned Safe signer key (same
 /// convention as the simulator's `load_signer`).
@@ -30,15 +23,20 @@ pub struct EngineConfig {
     pub min_value_increase_wei: U256,
     /// Minimum spacing between emissions for the same base.
     pub min_emission_interval: Duration,
+    /// Stop improving a base once it is this old. Must match the relay's
+    /// `max_merged_bid_age_ms`; it is not sent over the wire.
+    pub max_base_age: Duration,
+    /// Assumed share of a base's delta that one pass on a new base recovers,
+    /// in basis points. The rebase rule charges the remainder against a
+    /// waiting bid before taking it.
+    pub rebase_recovery_bps: u64,
     /// Optional core pin for the engine worker thread.
     pub core: Option<usize>,
-    /// Speculative replay workers; 0 disables speculation.
-    pub speculation_workers: usize,
-    pub speculation_queue_capacity: usize,
-    pub max_prebuilt_per_builder: usize,
+    /// Cap on distinct per-builder merge streams; 0 disables merging.
+    pub max_builder_streams: usize,
     /// Warm only the top-K builders by best bid this slot; 0 warms every one.
     pub speculation_top_k: usize,
-    /// One core per speculative replay worker; empty leaves them unpinned.
+    /// One core per merge stream, in creation order; empty leaves them unpinned.
     pub replay_worker_cores: Vec<usize>,
 }
 
@@ -73,6 +71,8 @@ pub struct PreparedBlock {
     /// Index of this block in its builder's submission stream this slot: `i`
     /// in the win condition.
     pub submission_index: u64,
+    /// When the engine finished decoding and pooling this block.
+    pub ingest_done_ns: u64,
 }
 
 impl PreparedBlock {
@@ -135,20 +135,104 @@ pub struct SlotContext {
     pub parent_beacon_block_root: B256,
 }
 
-/// All merging state for the current slot.
-pub struct SlotState {
-    pub slot: u64,
-    pub parent_hash: B256,
-    pub proposer_fee_recipient: Address,
-    /// The three fields above plus the beacon root, as the replay workers take them.
+/// Slot state shared with the per-builder merge streams. The engine thread
+/// owns ingest and writes here; the streams read it to extend and emit, so no
+/// part of the merge cycle runs on the engine thread.
+pub struct SharedSlot {
     pub ctx: Arc<SlotContext>,
-    /// Relay config snapshot taken at slot start.
-    pub relay_config: Option<Arc<RelayConfigV1>>,
-    pub blocks: FxHashMap<B256, Arc<PreparedBlock>>,
+    pub relay_config: Arc<RelayConfigV1>,
+    pub engine_config: Arc<EngineConfig>,
+    pub inner: RwLock<SharedInner>,
+    /// Bumped whenever the pool or the exclusion set changes. A stream reads it
+    /// without taking the lock, so an unchanged pool costs nothing: extending
+    /// against it would produce the same result while starving ingest of the
+    /// write lock.
+    pub pool_version: AtomicU64,
+}
+
+#[derive(Default)]
+pub struct SharedInner {
     pub orders: Vec<PreparedOrder>,
     /// order_id -> index into `orders` (dedup; attribution goes to the
     /// highest-value source block).
     pub order_ids: FxHashMap<B256, usize>,
+    pub excluded: FxHashSet<B256>,
+    pub latest_only: FxHashMap<BlsPublicKey, FxHashSet<B256>>,
+    /// Per-builder bid history. The streams read it at emission to evaluate the
+    /// exact comparison the relay will make at get_header.
+    pub submissions: FxHashMap<Address, BuilderSubmissions>,
+}
+
+impl SharedInner {
+    pub fn update_latest_only(&mut self, pubkey: BlsPublicKey, current: FxHashSet<B256>) {
+        if let Some(previous) = self.latest_only.get(&pubkey) {
+            for dropped in previous.difference(&current) {
+                self.excluded.insert(*dropped);
+            }
+        }
+        self.latest_only.insert(pubkey, current);
+    }
+
+    pub fn is_excluded(&self, order_hash: &B256) -> bool {
+        self.excluded.contains(order_hash)
+    }
+
+    /// Records a submission and returns its index plus the ratchet against the
+    /// previous one from the same builder, as (delta, interval_ms, rising).
+    pub fn record_submission(
+        &mut self,
+        builder: Address,
+        value: U256,
+        recv_ns: u64,
+    ) -> (u64, Option<(U256, u64, bool)>) {
+        match self.submissions.get_mut(&builder) {
+            Some(prev) => {
+                let interval_ms = recv_ns.saturating_sub(prev.last_recv_ns) / 1_000_000;
+                let rising = value >= prev.last;
+                let delta = if rising { value - prev.last } else { prev.last - value };
+                if rising {
+                    prev.total_rise = prev.total_rise.saturating_add(delta);
+                }
+                let index = prev.push(value, recv_ns);
+                prev.last = value;
+                prev.last_recv_ns = recv_ns;
+                prev.count += 1;
+                if value > prev.best {
+                    prev.best = value;
+                }
+                (index, Some((delta, interval_ms, rising)))
+            }
+            None => {
+                self.submissions.insert(builder, BuilderSubmissions::new(value, recv_ns));
+                (0, None)
+            }
+        }
+    }
+
+    /// What our merged bid for `builder` is compared against, as
+    /// (latest, best). The bid sorter honours cancellations, so `latest` is
+    /// the real reference and `best` is an upper bound on it.
+    pub fn reference_bids(&self, builder: &Address) -> (U256, U256) {
+        self.submissions.get(builder).map(|s| (s.last, s.best)).unwrap_or_default()
+    }
+
+    /// Builders ranked by their best bid this slot, highest first.
+    pub fn top_builders(&self, k: usize) -> Vec<Address> {
+        let mut ranked: Vec<(Address, U256)> =
+            self.submissions.iter().map(|(addr, s)| (*addr, s.best)).collect();
+        ranked.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+        ranked.into_iter().take(k).map(|(addr, _)| addr).collect()
+    }
+}
+
+/// Ingest-side state for the current slot, owned by the engine thread.
+pub struct SlotState {
+    pub slot: u64,
+    pub parent_hash: B256,
+    pub ctx: Arc<SlotContext>,
+    /// Shared with the merge streams; `None` until the relay config arrives.
+    pub shared: Option<Arc<SharedSlot>>,
+    pub blocks: FxHashMap<B256, Arc<PreparedBlock>>,
     /// Sender-recovery cache: incremental submissions share most txs.
     pub recovery_cache: FxHashMap<B256, ethrex_common::Address>,
     /// Decoded txs already seen whole on this connection this slot, keyed by
@@ -156,43 +240,35 @@ pub struct SlotState {
     /// `order::is_tx_hash_ref`). Scope matches the relay's own `sent_txs`
     /// cache: per connection, cleared every slot.
     pub tx_cache: FxHashMap<B256, Arc<DecodedTx>>,
-    pub session: Option<MergeSession>,
-    /// Sessions for previously activated bases, newest last; capped at
-    /// [`MAX_PARKED_SESSIONS`].
-    pub parked: Vec<MergeSession>,
-    /// Activation that arrived before its block finished ingest.
-    pub pending_activation: Option<(B256, u64)>,
-    /// Post-replay snapshot of the last base built per beneficiary, reused by
-    /// `MergeSession::activate` when a later resubmission extends it — see
-    /// `ReplayCheckpoint`. Capped at [`MAX_REPLAY_CHECKPOINTS`].
-    pub replay_checkpoints: FxHashMap<Address, ReplayCheckpoint>,
-    /// Activations that reused a checkpoint vs. replayed the base from
-    /// scratch, this slot.
-    pub checkpoint_hits: usize,
-    pub checkpoint_misses: usize,
-    pub excluded: FxHashSet<B256>,
-    pub latest_only: FxHashMap<BlsPublicKey, FxHashSet<B256>>,
-    /// Sessions replayed speculatively on arrival, keyed by base block hash.
-    pub prebuilt: FxHashMap<B256, MergeSession>,
-    /// Prebuilt hashes per base builder, oldest first; caps retention.
-    pub prebuilt_by_builder: FxHashMap<Address, Vec<B256>>,
-    /// Blocks dispatched to a replay worker and not yet answered.
-    pub speculating: FxHashSet<B256>,
-    pub spec: SpecStats,
-    /// Per-builder bid history this slot. `best` is what the relay's top bid
-    /// for that builder will be, so it is what our merged bid is compared
-    /// against; the consecutive deltas give R, the ratchet we must beat.
-    pub submissions: FxHashMap<Address, BuilderSubmissions>,
-    /// Emissions whose proposer value beat the base builder's own best bid,
-    /// and those that did not. The win predictor, per slot.
-    pub emissions_ahead: u64,
-    pub emissions_behind: u64,
-    /// Beneficiary of the live session. Its newest appendable block is what we
-    /// want to be merging onto at all times, so a warm session for a later
-    /// block from this builder replaces the live one.
-    pub live_builder: Option<Address>,
-    /// Live sessions replaced by a fresher base from the same builder.
-    pub rebases: u64,
+    /// Builder the relay last named as top bid. Advisory: the streams merge
+    /// for every candidate builder regardless, since we cannot know which one
+    /// will be top when get_header is called.
+    pub top_builder: Option<Address>,
+    pub stream: StreamStats,
+}
+
+/// Per-slot stream counters, logged at slot end.
+#[derive(Debug, Default)]
+pub struct StreamStats {
+    pub offered: u64,
+    pub superseded: u64,
+    pub refused: u64,
+    pub skipped_not_top_k: u64,
+}
+
+/// Wall-clock stamps along one base's path from arrival to emission. A zero
+/// means that phase did not happen: an inline replay never goes near a worker.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Timeline {
+    pub recv_ns: u64,
+    pub ingest_done_ns: u64,
+    pub dispatch_ns: u64,
+    pub replay_start_ns: u64,
+    pub replay_end_ns: u64,
+    /// Engine processed the worker's result.
+    pub handled_ns: u64,
+    /// Became the live session.
+    pub live_ns: u64,
 }
 
 /// One submission in a builder's stream, kept so the exact win condition can
@@ -281,39 +357,7 @@ impl BuilderSubmissions {
     }
 }
 
-/// Speculation counters for one slot, logged at slot end.
-#[derive(Debug, Default)]
-pub struct SpecStats {
-    pub dispatched: u64,
-    pub queue_full: u64,
-    pub completed: u64,
-    pub failed: u64,
-    pub evicted: u64,
-    /// Activations served from `prebuilt` with no replay on the engine thread.
-    pub hits: u64,
-    /// Activations that fell through to an engine-thread replay.
-    pub misses: u64,
-    /// Appendable blocks from builders outside the top-K, never warmed.
-    pub skipped_not_top_k: u64,
-    /// Pending replays dropped because the builder submitted a newer block
-    /// before the old one started. Replaying a superseded base cannot help.
-    pub superseded: u64,
-}
-
 impl SlotState {
-    pub fn update_latest_only(&mut self, pubkey: BlsPublicKey, current: FxHashSet<B256>) {
-        if let Some(previous) = self.latest_only.get(&pubkey) {
-            for dropped in previous.difference(&current) {
-                self.excluded.insert(*dropped);
-            }
-        }
-        self.latest_only.insert(pubkey, current);
-    }
-
-    pub fn is_excluded(&self, order_hash: &B256) -> bool {
-        self.excluded.contains(order_hash)
-    }
-
     pub fn new(msg: &helix_tcp_types::merging::relay_to_builder::SlotStartV1) -> Self {
         let ctx = Arc::new(SlotContext {
             slot: msg.slot,
@@ -324,113 +368,13 @@ impl SlotState {
         Self {
             slot: ctx.slot,
             parent_hash: ctx.parent_hash,
-            proposer_fee_recipient: ctx.proposer_fee_recipient,
             ctx,
-            relay_config: None,
+            shared: None,
             blocks: FxHashMap::default(),
-            orders: Vec::new(),
-            order_ids: FxHashMap::default(),
             recovery_cache: FxHashMap::default(),
             tx_cache: FxHashMap::default(),
-            session: None,
-            parked: Vec::new(),
-            pending_activation: None,
-            replay_checkpoints: FxHashMap::default(),
-            checkpoint_hits: 0,
-            checkpoint_misses: 0,
-            excluded: FxHashSet::default(),
-            latest_only: FxHashMap::default(),
-            prebuilt: FxHashMap::default(),
-            prebuilt_by_builder: FxHashMap::default(),
-            speculating: FxHashSet::default(),
-            spec: SpecStats::default(),
-            submissions: FxHashMap::default(),
-            emissions_ahead: 0,
-            emissions_behind: 0,
-            live_builder: None,
-            rebases: 0,
+            top_builder: None,
+            stream: StreamStats::default(),
         }
-    }
-
-    /// Records a submission and returns the ratchet against the previous one
-    /// from the same builder, as (delta, interval_ms, rising).
-    pub fn record_submission(
-        &mut self,
-        builder: Address,
-        value: U256,
-        recv_ns: u64,
-    ) -> (u64, Option<(U256, u64, bool)>) {
-        match self.submissions.get_mut(&builder) {
-            Some(prev) => {
-                let interval_ms = recv_ns.saturating_sub(prev.last_recv_ns) / 1_000_000;
-                let rising = value >= prev.last;
-                let delta = if rising { value - prev.last } else { prev.last - value };
-                if rising {
-                    prev.total_rise = prev.total_rise.saturating_add(delta);
-                }
-                let index = prev.push(value, recv_ns);
-                prev.last = value;
-                prev.last_recv_ns = recv_ns;
-                prev.count += 1;
-                if value > prev.best {
-                    prev.best = value;
-                }
-                (index, Some((delta, interval_ms, rising)))
-            }
-            None => {
-                self.submissions.insert(builder, BuilderSubmissions::new(value, recv_ns));
-                (0, None)
-            }
-        }
-    }
-
-    /// What our merged bid for `builder` is compared against. The bid sorter
-    /// honours cancellations -- a lower resubmission replaces the previous bid
-    /// -- so `latest` is the real reference and `best` is an upper bound on it.
-    /// Both are reported so the gap between them is visible.
-    pub fn reference_bids(&self, builder: &Address) -> (U256, U256) {
-        self.submissions.get(builder).map(|s| (s.last, s.best)).unwrap_or_default()
-    }
-
-    /// Builders ranked by their best bid this slot, highest first.
-    pub fn top_builders(&self, k: usize) -> Vec<Address> {
-        let mut ranked: Vec<(Address, U256)> =
-            self.submissions.iter().map(|(addr, s)| (*addr, s.best)).collect();
-        ranked.sort_unstable_by(|a, b| b.1.cmp(&a.1));
-        ranked.into_iter().take(k).map(|(addr, _)| addr).collect()
-    }
-
-    /// Stores a speculatively replayed session, evicting the builder's oldest
-    /// beyond `max_per_builder`. Returns the number evicted.
-    pub fn insert_prebuilt(
-        &mut self,
-        beneficiary: Address,
-        session: MergeSession,
-        max_per_builder: usize,
-    ) -> usize {
-        let block_hash = session.base_block_hash;
-        if self.prebuilt.insert(block_hash, session).is_none() {
-            self.prebuilt_by_builder.entry(beneficiary).or_default().push(block_hash);
-        }
-        let mut evicted = 0;
-        if let Some(hashes) = self.prebuilt_by_builder.get_mut(&beneficiary) {
-            while hashes.len() > max_per_builder {
-                let old = hashes.remove(0);
-                if let Some(session) = self.prebuilt.remove(&old) {
-                    session.log_stats("prebuilt_eviction");
-                    evicted += 1;
-                }
-            }
-        }
-        evicted
-    }
-
-    /// Takes the prebuilt session for `block_hash`, if one was warmed.
-    pub fn take_prebuilt(&mut self, block_hash: &B256) -> Option<MergeSession> {
-        let session = self.prebuilt.remove(block_hash)?;
-        for hashes in self.prebuilt_by_builder.values_mut() {
-            hashes.retain(|hash| hash != block_hash);
-        }
-        Some(session)
     }
 }
