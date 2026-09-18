@@ -3,27 +3,34 @@ use helix_common::{
     api::{
         builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
     },
-    beacon::types::{ProposerPreferences, ProposerPreferencesEvent},
+    beacon::types::{ProposerPreferences, ProposerPreferencesEvent, SignedProposerPreferences},
+    chain_info::ChainInfo,
 };
 use helix_types::{SignedValidatorRegistration, Slot};
 use rustc_hash::FxHashMap;
 
 #[derive(Default)]
 pub struct ProposerPreferencesStore {
-    by_slot: FxHashMap<Slot, ProposerPreferences>,
+    /// The signature is kept so the proposer's own key can be checked later, once
+    /// the duty that names the proposer is to hand.
+    by_slot: FxHashMap<Slot, SignedProposerPreferences>,
 }
 
 impl ProposerPreferencesStore {
     /// The proposer may resubmit up to an epoch ahead, so a later event wins.
     pub fn process(&mut self, head: Slot, event: ProposerPreferencesEvent) {
-        let prefs = event.data.message;
-        if prefs.proposal_slot <= head {
+        let signed = event.data;
+        if signed.message.proposal_slot <= head {
             return;
         }
-        self.by_slot.insert(prefs.proposal_slot, prefs);
+        self.by_slot.insert(signed.message.proposal_slot, signed);
     }
 
     pub fn get(&self, slot: Slot) -> Option<&ProposerPreferences> {
+        self.by_slot.get(&slot).map(|signed| &signed.message)
+    }
+
+    pub fn get_signed(&self, slot: Slot) -> Option<&SignedProposerPreferences> {
         self.by_slot.get(&slot)
     }
 
@@ -31,10 +38,35 @@ impl ProposerPreferencesStore {
         self.by_slot.retain(|slot, _| *slot >= bid_slot);
     }
 
+    /// Reports whether the slot's preferences carry the proposer's own signature.
+    /// Logged rather than enforced for now: the signing domain has not yet been
+    /// confirmed against live gossip, and refusing wrongly would stop every bid.
+    pub fn check_signature(&self, duty: &ProposerDuty, chain_info: &ChainInfo) -> bool {
+        let Some(signed) = self.get_signed(duty.slot) else {
+            return false;
+        };
+        let ok = signed.verify(&duty.pubkey, chain_info);
+        if !ok {
+            tracing::warn!(
+                slot = %duty.slot,
+                validator_index = duty.validator_index,
+                "proposer preferences failed signature verification",
+            );
+        }
+        ok
+    }
+
     #[cfg(test)]
     fn len(&self) -> usize {
         self.by_slot.len()
     }
+}
+
+/// Whether these preferences were gossiped by the validator that actually proposes the
+/// slot. Nothing else binds the two: the fee recipient our builder pays comes straight
+/// from here, so preferences from any other index would redirect the payment.
+pub fn prefs_match_duty(duty: &ProposerDuty, prefs: &ProposerPreferences) -> bool {
+    prefs.validator_index == duty.validator_index && prefs.proposal_slot == duty.slot
 }
 
 /// Gloas has no `registerValidator`, so the entry comes from the beacon duty and the gossiped
@@ -68,7 +100,10 @@ pub fn synthesize_duty_feed(
         .iter()
         .filter(|duty| duty.slot >= from_slot)
         .filter_map(|duty| {
-            prefs.get(duty.slot).map(|prefs| synthesize_registration(duty, prefs, defaults))
+            prefs
+                .get(duty.slot)
+                .filter(|prefs| prefs_match_duty(duty, prefs))
+                .map(|prefs| synthesize_registration(duty, prefs, defaults))
         })
         .collect()
 }
@@ -98,6 +133,19 @@ mod tests {
         ev.data.message.proposal_slot = Slot::new(slot);
         ev.data.message.fee_recipient = fee_recipient;
         ev.data.message.target_gas_limit = target_gas_limit;
+        ev
+    }
+
+    /// As `event`, but gossiped by `index` -- the feed only accepts preferences from
+    /// the validator that actually proposes the slot.
+    fn event_from(
+        slot: u64,
+        index: u64,
+        fee_recipient: Address,
+        target_gas_limit: u64,
+    ) -> ProposerPreferencesEvent {
+        let mut ev = event(slot, fee_recipient, target_gas_limit);
+        ev.data.message.validator_index = index;
         ev
     }
 
@@ -205,12 +253,18 @@ mod tests {
         }
     }
 
-    fn store_with(slots: &[u64]) -> ProposerPreferencesStore {
+    /// `(slot, proposer index)` pairs, matching how `duty` numbers them.
+    fn store_with(entries: &[(u64, u64)]) -> ProposerPreferencesStore {
         let mut store = ProposerPreferencesStore::default();
-        for slot in slots {
+        for (slot, index) in entries {
             store.process(
                 Slot::new(0),
-                event(*slot, address!("00000000000000000000000000000000000000aa"), 45_000_000),
+                event_from(
+                    *slot,
+                    *index,
+                    address!("00000000000000000000000000000000000000aa"),
+                    45_000_000,
+                ),
             );
         }
         store
@@ -219,7 +273,7 @@ mod tests {
     #[test]
     fn serves_only_the_slots_with_a_gossiped_preference() {
         let duties = [duty(101, 1), duty(102, 2), duty(103, 3)];
-        let store = store_with(&[101, 103]);
+        let store = store_with(&[(101, 1), (103, 3)]);
 
         let feed =
             synthesize_duty_feed(&duties, &store, Slot::new(101), &ValidatorPreferences::default());
@@ -233,12 +287,28 @@ mod tests {
     #[test]
     fn drops_duties_before_the_bid_slot() {
         let duties = [duty(100, 1), duty(101, 2)];
-        let store = store_with(&[100, 101]);
+        let store = store_with(&[(100, 1), (101, 2)]);
 
         let feed =
             synthesize_duty_feed(&duties, &store, Slot::new(101), &ValidatorPreferences::default());
 
         let slots: Vec<u64> = feed.iter().map(|e| e.slot.as_u64()).collect();
         assert_eq!(slots, vec![101], "builders cannot build a slot that has started");
+    }
+
+    /// The fee recipient the builder pays comes straight from these preferences, so
+    /// preferences gossiped by anyone but the slot's proposer would redirect the
+    /// payment. Nothing else binds the two.
+    #[test]
+    fn refuses_preferences_gossiped_by_another_validator() {
+        let attacker = address!("00000000000000000000000000000000000000ff");
+        let duties = [duty(101, 1)];
+        let mut store = ProposerPreferencesStore::default();
+        store.process(Slot::new(0), event_from(101, 999, attacker, 45_000_000));
+
+        let feed =
+            synthesize_duty_feed(&duties, &store, Slot::new(101), &ValidatorPreferences::default());
+
+        assert!(feed.is_empty(), "a slot must not be served on someone else's preferences");
     }
 }
