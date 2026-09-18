@@ -6,14 +6,19 @@ use helix_types::{BuilderCollateral, OperatorMessage};
 use libp2p::{
     PeerId, SwarmBuilder,
     allow_block_list::{self, AllowedPeers},
+    connection_limits::{self, ConnectionLimits},
     futures::StreamExt,
     gossipsub::{self, Event, IdentTopic, MessageAcceptance, MessageAuthenticity, ValidationMode},
     identity::Keypair,
     ping,
-    swarm::{NetworkBehaviour, SwarmEvent},
+    swarm::{
+        NetworkBehaviour, SwarmEvent,
+        dial_opts::{DialOpts, PeerCondition},
+    },
 };
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use ssz::{Decode, Encode};
+use tokio::time::Instant;
 
 use super::{Operator, OperatorError};
 use crate::utils::{PromotionState, PromotionStates};
@@ -29,6 +34,9 @@ const OPERATOR_RPC_OVERHEAD: usize = 1024;
 /// connection) stall multi-MiB payloads at one window per RTT.
 const QUIC_STREAM_RECV_WINDOW: u32 = 64 * 1024 * 1024;
 const QUIC_CONN_RECV_WINDOW: u32 = 192 * 1024 * 1024;
+const QUIC_IDLE_TIMEOUT: u32 = 6_000;
+const QUIC_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(2);
+const QUIC_REDIAL_INTERVAL: Duration = Duration::from_secs(10);
 /// A queued publish is dropped, silently, once this elapses. The libp2p default of 5s is shorter
 /// than the time a burst of payloads needs on a congested link.
 const PUBLISH_QUEUE_DURATION: Duration = Duration::from_secs(12);
@@ -38,6 +46,7 @@ struct NetBehaviour {
     allow_list: allow_block_list::Behaviour<AllowedPeers>,
     gossipsub: gossipsub::Behaviour,
     ping: ping::Behaviour,
+    limit: connection_limits::Behaviour,
 }
 
 fn publish_operator_message(
@@ -97,16 +106,21 @@ pub(super) async fn run_operator_connection(
     for op in &operators {
         allow_list.allow_peer(PeerId::from_public_key(&op.pubkey));
     }
+    let limit = connection_limits::Behaviour::new(
+        ConnectionLimits::default().with_max_established_per_peer(Some(1)),
+    );
 
     let mut swarm = SwarmBuilder::with_existing_identity(keypair)
         .with_tokio()
         .with_quic_config(|mut cfg| {
             cfg.max_stream_data = QUIC_STREAM_RECV_WINDOW;
             cfg.max_connection_data = QUIC_CONN_RECV_WINDOW;
+            cfg.max_idle_timeout = QUIC_IDLE_TIMEOUT;
+            cfg.keep_alive_interval = QUIC_KEEPALIVE_INTERVAL;
             cfg
         })
         .with_behaviour(|_key| {
-            Ok(NetBehaviour { allow_list, gossipsub, ping: ping::Behaviour::default() })
+            Ok(NetBehaviour { allow_list, gossipsub, ping: ping::Behaviour::default(), limit })
         })?
         .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(u64::MAX)))
         .build();
@@ -136,7 +150,8 @@ pub(super) async fn run_operator_connection(
     // Local collateral keyed by builder pubkey. Sent when a new operator subscribes.
     let mut builder_collateral = FxHashMap::<String, BuilderCollateral>::default();
     // Number of connected peers
-    let mut connected_peers = 0u32;
+    let mut connected_peers = FxHashSet::default();
+    let mut redial_deadline = Instant::now() + QUIC_REDIAL_INTERVAL;
 
     loop {
         tokio::select! {
@@ -158,7 +173,7 @@ pub(super) async fn run_operator_connection(
                         }
                         _ => true,
                     };
-                    if transmit && connected_peers > 0 {
+                    if transmit && !connected_peers.is_empty() {
                         publish_operator_message(
                             &mut swarm.behaviour_mut().gossipsub,
                             &operator_topic,
@@ -274,15 +289,27 @@ pub(super) async fn run_operator_connection(
                 }
                 SwarmEvent::ConnectionEstablished { peer_id, .. } => {
                     if peers.contains_key(&peer_id) {
-                        connected_peers += 1;
+                        connected_peers.insert(peer_id);
                     }
                 }
                 SwarmEvent::ConnectionClosed { peer_id, .. } => {
-                    if peers.contains_key(&peer_id) {
-                        connected_peers = connected_peers.saturating_sub(1);
-                    }
+                    connected_peers.remove(&peer_id);
                 }
                 _ => {},
+            },
+            _ = tokio::time::sleep_until(redial_deadline) => {
+                redial_deadline += QUIC_REDIAL_INTERVAL;
+                for (peer, operator) in &peers {
+                    if !connected_peers.contains(peer) {
+                        if let Err(e) = swarm.dial( DialOpts::peer_id(*peer)
+                            .addresses(vec![operator.multiaddr.clone()])
+                            .condition(PeerCondition::DisconnectedAndNotDialing)
+                            .build()
+                        ) {
+                            tracing::warn!(?operator, ?e, "failed to redial operator");
+                        }
+                    }
+                }
             }
         }
     }
