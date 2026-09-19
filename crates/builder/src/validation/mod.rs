@@ -5,7 +5,7 @@ mod server_tests;
 #[cfg(test)]
 pub(crate) mod tests;
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use alloy_primitives::B256;
 use alloy_rpc_types::{
@@ -33,6 +33,7 @@ use helix_common::{
     payment_forwarder_recipient,
 };
 use tokio::sync::watch;
+use tracing::info;
 
 use crate::{
     engine::convert::{Amsterdam, aaddr, b256, eaddr, eu256, h256, payload_v3_to_block},
@@ -99,14 +100,28 @@ impl BlockValidator {
         apply_blacklist: bool,
         amsterdam: Option<Amsterdam<'_>>,
     ) -> Result<ExecutedBlock, ValidationError> {
+        let t0 = Instant::now();
         let prepared =
             self.prepare(payload, message, parent_beacon_block_root, requests, amsterdam)?;
+        let t1 = Instant::now();
         self.validate_blobs_bundle(&prepared.block, blobs)?;
+        let t2 = Instant::now();
         let executed = self.execute(prepared)?;
+        let t3 = Instant::now();
         if apply_blacklist {
             self.ensure_not_blacklisted(&executed, message)?;
         }
+        let t4 = Instant::now();
         self.ensure_payment(&executed, message)?;
+        info!(
+            blobs = blobs.blobs.len(),
+            prepare_us = t1.duration_since(t0).as_micros() as u64,
+            blobs_us = t2.duration_since(t1).as_micros() as u64,
+            execute_us = t3.duration_since(t2).as_micros() as u64,
+            blacklist_us = t4.duration_since(t3).as_micros() as u64,
+            payment_us = t4.elapsed().as_micros() as u64,
+            "validation stages",
+        );
         Ok(executed)
     }
 
