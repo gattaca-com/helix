@@ -15,7 +15,7 @@ use ssz::Decode;
 use tracing::{error, info, warn};
 use tree_hash::TreeHash;
 
-use super::{ProposerApi, get_payload::fork_name_from_header};
+use super::{ProposerApi, get_payload::fork_name_from_header, reveal_guard::Registered};
 use crate::api::{Api, proposer::error::ProposerApiError};
 
 /// A payload a builder has already handed helix for a proposer's committed bid.
@@ -197,7 +197,30 @@ impl<A: Api> ProposerApi<A> {
             &proposer_api.chain_info,
         )?);
 
+        // Only now is the block known to redeem our bid: this endpoint does not verify
+        // the proposer's signature, so an unvalidated block must never be able to
+        // withhold a legitimate reveal. A second, different block that still redeems
+        // the same bid is the proposer equivocating.
         let slot = block.message.slot;
+        let block_root = block.message.tree_hash_root();
+        let registered = proposer_api
+            .reveal_guard
+            .lock()
+            .expect("reveal guard mutex")
+            .register(slot, block_root);
+        if let Registered::Equivocation { first } = registered {
+            let withheld =
+                proposer_api.reveal_guard.lock().expect("reveal guard mutex").withhold(slot);
+            error!(
+                slot = slot.as_u64(),
+                ?first,
+                second = ?block_root,
+                withheld,
+                "the proposer equivocated",
+            );
+            return Err(ProposerApiError::ProposerEquivocated { slot: slot.as_u64(), first });
+        }
+
         let block = Arc::new(block);
 
         // The proposer gossips its own block, but handing it to our node directly is
@@ -212,10 +235,12 @@ impl<A: Api> ProposerApi<A> {
         // the proposer have its acknowledgement now rather than seconds from now.
         let delay = proposer_api.chain_info.gloas_reveal_delay(slot, unix_now());
         info!(slot = slot.as_u64(), delay_ms = delay.as_millis() as u64, "holding the payload");
-        spawn_tracked!(async move {
+        let guard = proposer_api.reveal_guard.clone();
+        let reveal = spawn_tracked!(async move {
             tokio::time::sleep(delay).await;
             reveal_envelope(&proposer_api, signed_envelope, slot).await;
         });
+        guard.lock().expect("reveal guard mutex").attach(slot, reveal.abort_handle());
 
         Ok(StatusCode::ACCEPTED)
     }

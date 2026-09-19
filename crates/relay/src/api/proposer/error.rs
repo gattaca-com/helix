@@ -156,6 +156,9 @@ pub enum ProposerApiError {
         "bid builder_index {bid} does not match this relay's configured builder_index {configured}"
     )]
     BuilderIndexMismatch { bid: u64, configured: u64 },
+
+    #[error("proposer equivocated at slot {slot}: already committed to block {first:?}")]
+    ProposerEquivocated { slot: u64, first: B256 },
 }
 
 impl From<DecodeError> for ProposerApiError {
@@ -206,7 +209,8 @@ impl IntoResponse for ProposerApiError {
                 ProposerApiError::MissingTimingHeaders |
                 ProposerApiError::NoHeldPayloadForBlock(_) |
                 ProposerApiError::HeldPayloadBlockHashMismatch { .. } |
-                ProposerApiError::BuilderIndexMismatch { .. } => StatusCode::BAD_REQUEST,
+                ProposerApiError::BuilderIndexMismatch { .. } |
+                ProposerApiError::ProposerEquivocated { .. } => StatusCode::BAD_REQUEST,
 
                 // All authentication failures, kept indistinguishable by status
                 ProposerApiError::InvalidApiKey |

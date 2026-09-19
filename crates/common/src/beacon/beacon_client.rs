@@ -161,7 +161,13 @@ impl BeaconClient {
         envelope: Arc<SignedExecutionPayloadEnvelopeContents>,
         fork: ForkName,
     ) -> Result<u16, BeaconClientError> {
-        let target = self.config.url.join("eth/v1/beacon/execution_payload_envelopes")?;
+        let mut target = self.config.url.join("eth/v1/beacon/execution_payload_envelopes")?;
+        // Fail closed on an equivocating proposer: the node refuses to broadcast a
+        // payload for a block it has seen a competing version of.
+        target.query_pairs_mut().append_pair(
+            "broadcast_validation",
+            &BroadcastValidation::ConsensusAndEquivocation.to_string(),
+        );
         let body_bytes = Bytes::from(envelope.as_ssz_bytes());
         let req = Request::builder()
             .method("POST")
@@ -258,6 +264,22 @@ mod tests {
 
         mock.assert();
         assert_eq!(result.unwrap(), 200);
+    }
+
+    #[tokio::test]
+    async fn publish_execution_payload_envelope_asks_for_equivocation_validation() {
+        let server = MockServer::start();
+        let mock = server.mock(|when, then| {
+            when.method(POST)
+                .path("/eth/v1/beacon/execution_payload_envelopes")
+                .query_param("broadcast_validation", "consensus_and_equivocation");
+            then.status(200);
+        });
+
+        let client = test_client(Url::parse(&server.url("/")).unwrap());
+        client.publish_execution_payload_envelope(empty_envelope(), ForkName::Gloas).await.unwrap();
+
+        mock.assert();
     }
 
     #[tokio::test]
