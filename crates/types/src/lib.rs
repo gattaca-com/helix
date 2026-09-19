@@ -86,6 +86,7 @@ pub type BeaconBlockBodyFulu = lh_types::BeaconBlockBodyFulu<MainnetEthSpec>;
 pub type SignedBuilderBid = crate::builder_bid::SignedBuilderBid;
 /// Response object of GET `/eth/v1/builder/header/{slot}/{parent_hash}/{pubkey}`
 pub type GetHeaderResponse = lh_eth2::ForkVersionedResponse<SignedBuilderBid>;
+pub type GetExecutionPayloadBidResponse = lh_eth2::ForkVersionedResponse<SignedExecutionPayloadBid>;
 
 // Get payload
 /// Request object of POST `/eth/v1/builder/blinded_blocks`
