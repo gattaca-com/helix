@@ -108,6 +108,43 @@ pub fn synthesize_duty_feed(
         .collect()
 }
 
+/// Merges freshly synthesized entries into the feed the builders poll.
+///
+/// A synthesized entry is only a snapshot of the last preferences gossiped for
+/// the slot, and a proposer may resubmit up to an epoch ahead -- the store keeps
+/// the latest on purpose. Keeping the first snapshot instead would leave
+/// builders working from a stale fee recipient and gas limit. A real
+/// registration, which a proposer signed, is never displaced.
+pub fn merge_duty_feed(
+    existing: Vec<BuilderGetValidatorsResponseEntry>,
+    synthesized: Vec<BuilderGetValidatorsResponseEntry>,
+) -> Vec<BuilderGetValidatorsResponseEntry> {
+    let refreshed: FxHashMap<u64, BuilderGetValidatorsResponseEntry> =
+        synthesized.into_iter().map(|entry| (entry.slot.as_u64(), entry)).collect();
+
+    let mut feed: Vec<_> = existing
+        .into_iter()
+        .map(|entry| {
+            let slot = entry.slot.as_u64();
+            match refreshed.get(&slot) {
+                Some(fresh) if !is_registered(&entry) => fresh.clone(),
+                _ => entry,
+            }
+        })
+        .collect();
+
+    let known: rustc_hash::FxHashSet<u64> = feed.iter().map(|e| e.slot.as_u64()).collect();
+    feed.extend(refreshed.into_values().filter(|entry| !known.contains(&entry.slot.as_u64())));
+    feed.sort_by_key(|e| e.slot.as_u64());
+    feed
+}
+
+/// Whether the proposer signed this registration itself, rather than it being
+/// synthesized from gossiped preferences.
+fn is_registered(entry: &BuilderGetValidatorsResponseEntry) -> bool {
+    entry.entry.registration.signature != helix_types::BlsSignatureBytes::default()
+}
+
 #[cfg(test)]
 mod tests {
     use alloy_primitives::{Address, B256, address};
@@ -332,6 +369,57 @@ mod tests {
 
         let slots: Vec<u64> = feed.iter().map(|e| e.slot.as_u64()).collect();
         assert_eq!(slots, vec![101], "builders cannot build a slot that has started");
+    }
+
+    /// A proposer may resubmit its preferences, and the store keeps the latest on
+    /// purpose. Keeping the first snapshot in the feed left builders working from a
+    /// stale gas limit and fee recipient, which the proposer then rejects.
+    #[test]
+    fn a_resubmitted_preference_replaces_the_served_entry() {
+        let chain_info = ChainInfo::default();
+        let (duties, store) = duties_and_store(&[(101, 1)], &chain_info);
+        let first = synthesize_duty_feed(
+            &duties,
+            &store,
+            Slot::new(101),
+            &ValidatorPreferences::default(),
+            &chain_info,
+        );
+        assert_eq!(first[0].entry.registration.message.gas_limit, 45_000_000);
+
+        // The proposer changes its mind about the gas limit.
+        let mut later = first.clone();
+        later[0].entry.registration.message.gas_limit = 200_000_000;
+
+        let merged = merge_duty_feed(first, later);
+
+        assert_eq!(merged.len(), 1, "the slot must not be duplicated");
+        assert_eq!(
+            merged[0].entry.registration.message.gas_limit, 200_000_000,
+            "the builder has to see the latest preferences, not the first",
+        );
+    }
+
+    /// A registration the proposer actually signed outranks anything synthesized.
+    #[test]
+    fn a_real_registration_is_not_displaced() {
+        let chain_info = ChainInfo::default();
+        let (duties, store) = duties_and_store(&[(101, 1)], &chain_info);
+        let synthesized = synthesize_duty_feed(
+            &duties,
+            &store,
+            Slot::new(101),
+            &ValidatorPreferences::default(),
+            &chain_info,
+        );
+        let mut registered = synthesized.clone();
+        registered[0].entry.registration.signature =
+            helix_types::BlsSignatureBytes::from([7u8; 96]);
+        registered[0].entry.registration.message.gas_limit = 36_000_000;
+
+        let merged = merge_duty_feed(registered, synthesized);
+
+        assert_eq!(merged[0].entry.registration.message.gas_limit, 36_000_000);
     }
 
     /// The fee recipient the builder pays comes straight from these preferences, so

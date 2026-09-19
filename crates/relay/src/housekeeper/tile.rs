@@ -40,7 +40,7 @@ use crate::{
             build_primev_builder_configs,
         },
         proposer_prefs::{
-            ProposerPreferencesStore, prefs_match_duty, synthesize_duty_feed,
+            ProposerPreferencesStore, merge_duty_feed, prefs_match_duty, synthesize_duty_feed,
             synthesize_registration,
         },
     },
@@ -248,10 +248,7 @@ impl HousekeeperTile {
             return;
         }
 
-        let mut feed = self.local_cache.get_proposer_duties();
-        let known: rustc_hash::FxHashSet<u64> = feed.iter().map(|e| e.slot.as_u64()).collect();
-        feed.extend(synthesized.into_iter().filter(|e| !known.contains(&e.slot.as_u64())));
-        feed.sort_by_key(|e| e.slot.as_u64());
+        let feed = merge_duty_feed(self.local_cache.get_proposer_duties(), synthesized);
         self.local_cache.update_proposer_duties(feed);
     }
 
