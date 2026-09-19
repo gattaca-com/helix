@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc, time::Instant};
 
 use alloy_primitives::Address;
 use alloy_rpc_types::beacon::relay::SignedBidSubmissionV5;
@@ -103,6 +103,8 @@ fn decode_submission(
 }
 
 async fn validate(State(state): State<ServerState>, body: axum::body::Bytes) -> Response {
+    let received = Instant::now();
+    let body_len = body.len();
     let request = match SszValidationRequest::from_ssz_bytes(&body) {
         Ok(request) => request,
         Err(err) => return bad_request(format!("{err:?}")),
@@ -117,7 +119,9 @@ async fn validate(State(state): State<ServerState>, body: axum::body::Bytes) -> 
             Err(err) => return bad_request(err.to_string()),
         };
 
-    run_validation(state, move |validator| {
+    let decoded = Instant::now();
+
+    let response = run_validation(state, move |validator| {
         validator.validate(
             &submission.execution_payload,
             &submission.message,
@@ -128,7 +132,17 @@ async fn validate(State(state): State<ServerState>, body: axum::body::Bytes) -> 
             amsterdam(gloas_data.as_ref(), submission.message.slot),
         )
     })
-    .await
+    .await;
+
+    info!(
+        body_len,
+        decode_us = decoded.duration_since(received).as_micros() as u64,
+        validate_us = decoded.elapsed().as_micros() as u64,
+        total_us = received.elapsed().as_micros() as u64,
+        status = response.status().as_u16(),
+        "validated a submission",
+    );
+    response
 }
 
 /// Gloas data marks the submission as Amsterdam, and the slot number the header

@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use alloy_rpc_types::beacon::relay::{BuilderBlockValidationRequestV5, SignedBidSubmissionV5};
 use axum::{
     Router,
@@ -13,7 +15,7 @@ use helix_common::{
 use helix_types::Submission;
 use ssz::Decode;
 use tokio::net::TcpListener;
-use tracing::error;
+use tracing::{error, info};
 
 use crate::validation::{
     BlockSubmissionValidationApiServer, ExtendedMergedValidationRequestV5,
@@ -66,6 +68,8 @@ async fn handler(
     State(api): State<ValidationApi>,
     body: axum::body::Bytes,
 ) -> Result<Response, DecoderError> {
+    let received = Instant::now();
+    let body_len = body.len();
     let req = SszValidationRequest::from_ssz_bytes(&body)?;
 
     let signed_bid_submission =
@@ -73,6 +77,7 @@ async fn handler(
             Ok(submission) => submission,
             Err(early_response) => return Ok(early_response),
         };
+    let decoded = Instant::now();
 
     let ext = ExtendedValidationRequestV5 {
         base: BuilderBlockValidationRequestV5 {
@@ -84,7 +89,17 @@ async fn handler(
         apply_blacklist: req.apply_blacklist,
     };
 
-    Ok(match api.validate_builder_submission_v5(ext).await {
+    let result = api.validate_builder_submission_v5(ext).await;
+    info!(
+        body_len,
+        decode_us = decoded.duration_since(received).as_micros() as u64,
+        validate_us = decoded.elapsed().as_micros() as u64,
+        total_us = received.elapsed().as_micros() as u64,
+        ok = result.is_ok(),
+        "validated a submission",
+    );
+
+    Ok(match result {
         Ok(()) => StatusCode::OK.into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, e.message().to_string()).into_response(),
     })

@@ -83,12 +83,21 @@ impl Tile<HelixSpine> for SimulatorTile {
         let events: Vec<SimTileInternalEvent> = self.rx.try_iter().collect();
         for event in events {
             match event {
-                SimTileInternalEvent::TaskDone { id, paused_until, result_ix, elapsed } => {
+                SimTileInternalEvent::TaskDone {
+                    id,
+                    paused_until,
+                    result_ix,
+                    elapsed,
+                    encode,
+                    body_len,
+                } => {
                     self.handle_task_response(
                         id,
                         paused_until,
                         result_ix,
                         elapsed,
+                        encode,
+                        body_len,
                         &mut adapter.producers,
                     );
                 }
@@ -290,6 +299,8 @@ impl SimulatorTile {
         paused_until: Option<Instant>,
         result_ix: usize,
         elapsed: Option<Duration>,
+        encode: Duration,
+        body_len: u64,
         producers: &mut HelixSpineProducers,
     ) {
         let sim = &mut self.simulators[id];
@@ -300,6 +311,8 @@ impl SimulatorTile {
             let stats = &mut self.sim_slot_stats[id];
             stats.count += 1;
             stats.total_time += elapsed;
+            stats.total_encode += encode;
+            stats.total_body += body_len;
         }
 
         producers.produce(FromSimMsg { ix: result_ix });
@@ -328,6 +341,8 @@ impl SimulatorTile {
                 paused_until: None,
                 result_ix,
                 elapsed: None,
+                encode: Duration::ZERO,
+                body_len: 0,
             });
             return;
         };
@@ -349,6 +364,8 @@ impl SimulatorTile {
                             paused_until: None,
                             result_ix,
                             elapsed: None,
+                            encode: Duration::ZERO,
+                            body_len: 0,
                         });
                         return;
                     }
@@ -393,6 +410,8 @@ impl SimulatorTile {
                 paused_until: None,
                 result_ix,
                 elapsed: None,
+                encode: Duration::ZERO,
+                body_len: 0,
             });
             return;
         };
@@ -409,9 +428,16 @@ impl SimulatorTile {
 
             let optimistic_version = req.optimistic_version();
             SimulatorMetrics::sim_count(optimistic_version.is_optimistic());
+            let mut encode = Duration::ZERO;
+            let mut body_len = 0u64;
             let (mut res, ssz_retry) = match dispatch {
                 SimDispatch::Ssz { to_send, ssz_url, http } => {
+                    // SSZ re-encoding is the relay's own work; everything after it is
+                    // the round trip plus the simulator's.
+                    let encode_start = Nanos::now();
                     let request = create_ssz_request(&req, &submission, gloas_data);
+                    encode = encode_start.elapsed().into();
+                    body_len = request.signed_bid_submission.len() as u64;
                     let res =
                         SimulatorClient::do_sim_request(&request, req.is_top_bid, to_send).await;
                     (res, Some((request, ssz_url, http)))
@@ -487,6 +513,8 @@ impl SimulatorTile {
                 paused_until,
                 result_ix,
                 elapsed: Some(Duration::from_secs_f64(time)),
+                encode,
+                body_len,
             });
         });
     }
@@ -505,6 +533,8 @@ impl SimulatorTile {
                 paused_until: None,
                 result_ix,
                 elapsed: None,
+                encode: Duration::ZERO,
+                body_len: 0,
             });
             return;
         };
@@ -524,6 +554,8 @@ impl SimulatorTile {
                     paused_until: None,
                     result_ix,
                     elapsed: None,
+                    encode: Duration::ZERO,
+                    body_len: 0,
                 });
                 return;
             }
@@ -604,6 +636,8 @@ impl SimulatorTile {
                 paused_until,
                 result_ix,
                 elapsed: Some(Duration::from_secs_f64(time)),
+                encode: Duration::ZERO,
+                body_len: 0,
             });
         });
     }
@@ -676,7 +710,13 @@ impl SimulatorTile {
             .zip(self.sim_slot_stats.iter())
             .map(|(sim, stats)| {
                 let avg = avg_duration(stats.total_time, stats.count);
-                format!("{}: count={}, avg={avg:?}", sim.client.endpoint(), stats.count)
+                let avg_encode = avg_duration(stats.total_encode, stats.count);
+                let avg_body = stats.total_body.checked_div(stats.count as u64).unwrap_or(0);
+                format!(
+                    "{}: count={}, avg={avg:?}, avg_encode={avg_encode:?}, avg_body={avg_body}",
+                    sim.client.endpoint(),
+                    stats.count
+                )
             })
             .collect();
         self.sim_slot_stats.fill(SimSlotStats::default());
@@ -788,6 +828,8 @@ pub(super) enum SimTileInternalEvent {
     /// `elapsed` is `None` for infra errors where no request was actually sent
     /// (e.g. decoded submission or hydration missing).
     TaskDone {
+        encode: Duration,
+        body_len: u64,
         id: usize,
         paused_until: Option<Instant>,
         result_ix: usize,
@@ -803,6 +845,9 @@ pub(super) enum SimTileInternalEvent {
 struct SimSlotStats {
     count: u32,
     total_time: Duration,
+    /// SSZ re-encoding, the one part of a dispatch that is the relay's own work.
+    total_encode: Duration,
+    total_body: u64,
 }
 
 /// Jump consistent hash — maps a builder pubkey to a simulator index with
