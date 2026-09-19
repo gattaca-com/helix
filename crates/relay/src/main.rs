@@ -32,7 +32,8 @@ use helix_relay::{
     DefaultBidAdjustor, FutureBidSubmissionResult, GossipedMessage, HelixSpine, HelixSpineConfig,
     HousekeeperTile, Lane, NewTcpBidSubmission, RegWorkerHandle, RegistrationTile,
     RelayNetworkManager, SimRequest, SimResult, SimulatorTile, SlotUpdate, SubmissionDataWithSpan,
-    TopBidTile, spawn_tokio_monitoring, start_admin_service, start_api_service, start_db_service,
+    TopBidTile, UdpTopBidTile, spawn_tokio_monitoring, start_admin_service, start_api_service,
+    start_db_service,
 };
 use helix_types::BlsKeypair;
 use helix_website::WebsiteService;
@@ -340,6 +341,24 @@ async fn run(
                 spine,
                 TileConfig::new(config.cores.top_bid, None),
             );
+
+            if config.udp_top_bid_enabled {
+                attach_tile(
+                    UdpTopBidTile::new(
+                        sock_addr,
+                        local_cache.api_key_cache.clone(),
+                        config.udp_top_bid_max_connections,
+                    ),
+                    spine,
+                    TileConfig::new(
+                        config
+                            .cores
+                            .udp_top_bid
+                            .expect("cores.udp_top_bid must be set when udp_top_bid_enabled"),
+                        None,
+                    ),
+                );
+            }
 
             let sim_requests =
                 Arc::new(SharedVector::<SimRequest>::with_capacity(MAX_SUBMISSIONS_PER_SLOT));
