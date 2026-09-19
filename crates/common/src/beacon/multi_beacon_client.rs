@@ -4,7 +4,7 @@ use std::sync::{
 };
 
 use futures::future::join_all;
-use helix_types::{ForkName, SignedExecutionPayloadEnvelope, VersionedSignedProposal};
+use helix_types::{ForkName, SignedExecutionPayloadEnvelopeContents, VersionedSignedProposal};
 
 use crate::{
     beacon::{beacon_client::BeaconClient, error::BeaconClientError, types::BroadcastValidation},
@@ -89,7 +89,7 @@ impl MultiBeaconClient {
     /// `spawn_tracked!`.
     pub async fn publish_execution_payload_envelope(
         &self,
-        envelope: Arc<SignedExecutionPayloadEnvelope>,
+        envelope: Arc<SignedExecutionPayloadEnvelopeContents>,
         fork: ForkName,
     ) -> Result<(), BeaconClientError> {
         let futures = self
@@ -111,17 +111,21 @@ impl MultiBeaconClient {
 
 #[cfg(test)]
 mod tests {
-    use helix_types::{BlsSignature, ExecutionPayloadEnvelope};
+    use helix_types::{BlsSignature, ExecutionPayloadEnvelope, SignedExecutionPayloadEnvelope};
     use httpmock::{Method::POST, MockServer};
     use reqwest::Url;
 
     use super::*;
     use crate::BeaconClientConfig;
 
-    fn envelope() -> Arc<SignedExecutionPayloadEnvelope> {
-        Arc::new(SignedExecutionPayloadEnvelope {
-            message: ExecutionPayloadEnvelope::empty(),
-            signature: BlsSignature::empty(),
+    fn envelope() -> Arc<SignedExecutionPayloadEnvelopeContents> {
+        Arc::new(SignedExecutionPayloadEnvelopeContents {
+            signed_execution_payload_envelope: SignedExecutionPayloadEnvelope {
+                message: ExecutionPayloadEnvelope::empty(),
+                signature: BlsSignature::empty(),
+            },
+            kzg_proofs: Default::default(),
+            blobs: Default::default(),
         })
     }
 

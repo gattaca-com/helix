@@ -249,3 +249,34 @@ mod tests {
         assert_eq!(ex, ex_test)
     }
 }
+
+/// The envelope plus the blob data, as the beacon node's
+/// `execution_payload_envelopes` endpoint wants it when `Eth-Blob-Data-Included`
+/// is set.
+///
+/// The node never saw this block -- the builder made it -- so it has nothing
+/// cached to attach and refuses a bare envelope that commits to blobs.
+pub fn envelope_with_blobs(
+    signed_execution_payload_envelope: crate::SignedExecutionPayloadEnvelope,
+    bundle: &BlobsBundle,
+) -> Result<crate::SignedExecutionPayloadEnvelopeContents, String> {
+    let mut contents = crate::SignedExecutionPayloadEnvelopeContents {
+        signed_execution_payload_envelope,
+        kzg_proofs: Default::default(),
+        blobs: Default::default(),
+    };
+
+    for proof in &bundle.proofs {
+        contents
+            .kzg_proofs
+            .push(lh_types::KzgProof(proof.0))
+            .map_err(|e| format!("too many kzg proofs: {e:?}"))?;
+    }
+    for blob in &bundle.blobs {
+        let bytes: Vec<u8> = blob.as_ref().to_vec();
+        let blob = bytes.try_into().map_err(|_| "blob is the wrong length".to_string())?;
+        contents.blobs.push(blob).map_err(|e| format!("too many blobs: {e:?}"))?;
+    }
+
+    Ok(contents)
+}

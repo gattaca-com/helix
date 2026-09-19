@@ -97,6 +97,8 @@ pub type BlindedPayloadRef<'a> = lh_types::BlindedPayloadRef<'a, MainnetEthSpec>
 
 /// Response object of POST `/eth/v1/builder/blinded_blocks`
 pub type GetPayloadResponse = lh_eth2::ForkVersionedResponse<PayloadAndBlobs>;
+pub type SignedExecutionPayloadEnvelopeContents =
+    lh_eth2::types::SignedExecutionPayloadEnvelopeContents<MainnetEthSpec>;
 
 // Registration
 pub type ValidatorRegistration = validator::ValidatorRegistrationData;

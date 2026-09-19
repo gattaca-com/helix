@@ -34,7 +34,11 @@ impl<B: BidAdjustor> Context<B> {
                 &gloas_data.builder_deposits,
                 &gloas_data.builder_exits,
             );
-            Some(HeldGloasPayload { payload, execution_requests })
+            Some(HeldGloasPayload {
+                payload,
+                execution_requests,
+                blobs: entry.payload_and_blobs().blobs_bundle.as_ref().clone(),
+            })
         });
 
         let _ = res_tx.send(held);

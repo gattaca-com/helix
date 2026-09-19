@@ -3,7 +3,8 @@ use std::{sync::Arc, task::Poll, time::Duration};
 use ::ssz::Encode;
 use alloy_primitives::B256;
 use helix_types::{
-    ForkName, LhConfig, SignedExecutionPayloadEnvelope, VersionedSignedProposal, spec_from_config,
+    ForkName, LhConfig, SignedExecutionPayloadEnvelopeContents, VersionedSignedProposal,
+    spec_from_config,
 };
 use http::{Request, header::CONTENT_TYPE};
 use http_body_util::Full;
@@ -22,7 +23,8 @@ use crate::{
 };
 
 const CONSENSUS_VERSION_HEADER: &str = "eth-consensus-version";
-// Always "false": helix always has blobs cached from the builder's own submission.
+// Always "true": the beacon node never saw the builder's block, so it has no
+// blobs cached to attach and the reveal has to carry them.
 const BLOB_DATA_INCLUDED_HEADER: &str = "eth-blob-data-included";
 const PUBLISH_BLOCK_TIMEOUT: Duration = Duration::from_secs(4);
 const GET_TIMEOUT: Duration = Duration::from_secs(5);
@@ -121,7 +123,7 @@ impl BeaconClient {
     /// <https://github.com/ethereum/beacon-APIs/blob/master/apis/beacon/execution_payload/envelope_post.yaml>
     pub async fn publish_execution_payload_envelope(
         &self,
-        envelope: Arc<SignedExecutionPayloadEnvelope>,
+        envelope: Arc<SignedExecutionPayloadEnvelopeContents>,
         fork: ForkName,
     ) -> Result<u16, BeaconClientError> {
         let target = self.config.url.join("eth/v1/beacon/execution_payload_envelopes")?;
@@ -130,7 +132,9 @@ impl BeaconClient {
             .method("POST")
             .uri(target.as_str())
             .header(CONSENSUS_VERSION_HEADER, fork.to_string())
-            .header(BLOB_DATA_INCLUDED_HEADER, "false")
+            // The blobs travel with the envelope: this block never reached the node,
+            // so it has nothing cached to attach.
+            .header(BLOB_DATA_INCLUDED_HEADER, "true")
             .header(CONTENT_TYPE, "application/octet-stream")
             .body(Full::new(body_bytes))?;
         let mut pending = self.http.send(&target, req)?.with_timeout(PUBLISH_BLOCK_TIMEOUT);
@@ -179,7 +183,7 @@ impl BeaconClient {
 
 #[cfg(test)]
 mod tests {
-    use helix_types::{BlsSignature, ExecutionPayloadEnvelope};
+    use helix_types::{BlsSignature, ExecutionPayloadEnvelope, SignedExecutionPayloadEnvelope};
     use httpmock::{Method::POST, MockServer};
     use reqwest::Url;
 
@@ -190,10 +194,14 @@ mod tests {
         BeaconClient::new(BeaconClientConfig { url })
     }
 
-    fn empty_envelope() -> Arc<SignedExecutionPayloadEnvelope> {
-        Arc::new(SignedExecutionPayloadEnvelope {
-            message: ExecutionPayloadEnvelope::empty(),
-            signature: BlsSignature::empty(),
+    fn empty_envelope() -> Arc<SignedExecutionPayloadEnvelopeContents> {
+        Arc::new(SignedExecutionPayloadEnvelopeContents {
+            signed_execution_payload_envelope: SignedExecutionPayloadEnvelope {
+                message: ExecutionPayloadEnvelope::empty(),
+                signature: BlsSignature::empty(),
+            },
+            kzg_proofs: Default::default(),
+            blobs: Default::default(),
         })
     }
 
@@ -204,7 +212,7 @@ mod tests {
             when.method(POST)
                 .path("/eth/v1/beacon/execution_payload_envelopes")
                 .header("eth-consensus-version", "gloas")
-                .header("eth-blob-data-included", "false")
+                .header("eth-blob-data-included", "true")
                 .header("content-type", "application/octet-stream");
             then.status(200);
         });

@@ -20,6 +20,9 @@ use crate::api::{Api, proposer::error::ProposerApiError};
 pub struct HeldGloasPayload {
     pub payload: ExecutionPayloadGloas,
     pub execution_requests: ExecutionRequestsGloas,
+    /// Revealed with the envelope: the beacon node never saw this block, so it
+    /// has no blobs cached to attach itself.
+    pub blobs: helix_types::BlobsBundle,
 }
 
 /// Helix's own on-chain Gloas builder identity: `builder_index` plus signing key.
@@ -75,7 +78,7 @@ pub(super) fn construct_signed_envelope(
     held: Option<HeldGloasPayload>,
     identity: &GloasBuilderIdentity,
     chain_info: &ChainInfo,
-) -> Result<SignedExecutionPayloadEnvelope, ProposerApiError> {
+) -> Result<helix_types::SignedExecutionPayloadEnvelopeContents, ProposerApiError> {
     let bid = &block.message.body.signed_execution_payload_bid.message;
     let bid_block_hash: B256 = bid.block_hash.0;
 
@@ -104,7 +107,11 @@ pub(super) fn construct_signed_envelope(
         parent_beacon_block_root: block.message.parent_root,
     };
 
-    Ok(identity.sign_envelope(envelope, chain_info))
+    helix_types::envelope_with_blobs(identity.sign_envelope(envelope, chain_info), &held.blobs)
+        .map_err(|err| {
+            warn!(%err, "could not attach the blobs to the envelope");
+            ProposerApiError::InternalServerError
+        })
 }
 
 /// How many times to offer the payload envelope to the beacon node, and how long
@@ -204,7 +211,11 @@ mod construct_signed_envelope_tests {
     fn held_payload(block_hash: B256) -> HeldGloasPayload {
         let mut payload = ExecutionPayloadGloas::default();
         payload.block_hash = ExecutionBlockHash(block_hash);
-        HeldGloasPayload { payload, execution_requests: ExecutionRequestsGloas::default() }
+        HeldGloasPayload {
+            payload,
+            execution_requests: ExecutionRequestsGloas::default(),
+            blobs: Default::default(),
+        }
     }
 
     fn test_block(
@@ -235,8 +246,8 @@ mod construct_signed_envelope_tests {
         let held = Some(held_payload(block_hash));
         let identity = identity(7);
 
-        let signed_envelope =
-            construct_signed_envelope(&block, held, &identity, &chain_info).unwrap();
+        let contents = construct_signed_envelope(&block, held, &identity, &chain_info).unwrap();
+        let signed_envelope = contents.signed_execution_payload_envelope;
 
         assert_eq!(signed_envelope.message.builder_index, 7);
         assert_eq!(signed_envelope.message.beacon_block_root, block.message.tree_hash_root());
@@ -252,8 +263,9 @@ mod construct_signed_envelope_tests {
         let held = Some(held_payload(block_hash));
         let identity = identity(3);
 
-        let signed_envelope =
-            construct_signed_envelope(&block, held, &identity, &chain_info).unwrap();
+        let signed_envelope = construct_signed_envelope(&block, held, &identity, &chain_info)
+            .unwrap()
+            .signed_execution_payload_envelope;
 
         let epoch = signed_envelope.message.slot().epoch(MainnetEthSpec::slots_per_epoch());
         let fork = chain_info.spec.fork_at_epoch(epoch);
@@ -311,5 +323,51 @@ mod construct_signed_envelope_tests {
             result,
             Err(ProposerApiError::BuilderIndexMismatch { bid: 9, configured: 1 })
         ));
+    }
+}
+
+#[cfg(test)]
+mod envelope_blob_tests {
+    use helix_common::utils::install_default_crypto_provider;
+    use helix_types::{BeaconBlockGloas, BlsSignature, EmptyBlock, ExecutionBlockHash, TestRandom};
+
+    use super::*;
+
+    /// The beacon node never saw this block, so it has nothing cached to attach and
+    /// refuses a bare envelope that commits to blobs. The reveal has to carry them.
+    #[test]
+    fn the_reveal_carries_the_blocks_blobs() {
+        install_default_crypto_provider();
+        let chain_info = ChainInfo::default();
+        let block_hash = B256::repeat_byte(0xaa);
+        let mut rng = rand::rng();
+        let blobs = helix_types::BlobsBundle::random_for_test(&mut rng);
+        let expected_blobs = blobs.blobs.len();
+        let expected_proofs = blobs.proofs.len();
+        assert!(expected_blobs > 0, "the fixture must have blobs to be worth testing");
+
+        let mut payload = ExecutionPayloadGloas::default();
+        payload.block_hash = ExecutionBlockHash(block_hash);
+        let held = Some(HeldGloasPayload {
+            payload,
+            execution_requests: ExecutionRequestsGloas::default(),
+            blobs,
+        });
+
+        let mut message = BeaconBlockGloas::empty(&chain_info.spec);
+        message.body.signed_execution_payload_bid.message.block_hash =
+            ExecutionBlockHash(block_hash);
+        message.body.signed_execution_payload_bid.message.builder_index = 3;
+        let block = SignedBeaconBlockGloas { message, signature: BlsSignature::empty() };
+
+        let contents =
+            construct_signed_envelope(&block, held, &identity_for(3), &chain_info).unwrap();
+
+        assert_eq!(contents.blobs.len(), expected_blobs, "every blob must be revealed");
+        assert_eq!(contents.kzg_proofs.len(), expected_proofs, "and every proof with them");
+    }
+
+    fn identity_for(builder_index: u64) -> GloasBuilderIdentity {
+        GloasBuilderIdentity { builder_index, keypair: helix_types::BlsKeypair::random() }
     }
 }
