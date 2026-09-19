@@ -3,8 +3,8 @@ use std::{sync::Arc, task::Poll, time::Duration};
 use ::ssz::Encode;
 use alloy_primitives::B256;
 use helix_types::{
-    ForkName, LhConfig, SignedExecutionPayloadEnvelopeContents, VersionedSignedProposal,
-    spec_from_config,
+    ForkName, LhConfig, SignedBeaconBlockGloas, SignedExecutionPayloadEnvelopeContents,
+    VersionedSignedProposal, spec_from_config,
 };
 use http::{Request, header::CONTENT_TYPE};
 use http_body_util::Full;
@@ -111,6 +111,41 @@ impl BeaconClient {
                 }
                 Ok(202)
             }
+            _ => {
+                let api_err: ApiError = serde_json::from_slice(&body)?;
+                Err(BeaconClientError::Api(api_err))
+            }
+        }
+    }
+
+    /// Publishes a Gloas `SignedBeaconBlock` SSZ-encoded. Post-Gloas the block carries no
+    /// blob sidecars, so the body is the bare block rather than `SignedBlockContents`.
+    /// Sending it here gives our own node the block root before the reveal needs it.
+    pub async fn publish_gloas_block(
+        &self,
+        block: Arc<SignedBeaconBlockGloas>,
+    ) -> Result<u16, BeaconClientError> {
+        let target = self.config.url.join("eth/v2/beacon/blocks")?;
+        let body_bytes = Bytes::from(block.as_ssz_bytes());
+        let req = Request::builder()
+            .method("POST")
+            .uri(target.as_str())
+            .header(CONSENSUS_VERSION_HEADER, ForkName::Gloas.to_string())
+            .header(CONTENT_TYPE, "application/octet-stream")
+            .body(Full::new(body_bytes))?;
+        let mut pending = self.http.send(&target, req)?.with_timeout(PUBLISH_BLOCK_TIMEOUT);
+
+        let (status, body) = loop {
+            match pending.poll_bytes() {
+                Poll::Pending => {}
+                Poll::Ready(Ok(r)) => break r,
+                Poll::Ready(Err(e)) => return Err(e.into()),
+            }
+            tokio::task::yield_now().await;
+        };
+
+        match status {
+            200 | 202 => Ok(status),
             _ => {
                 let api_err: ApiError = serde_json::from_slice(&body)?;
                 Err(BeaconClientError::Api(api_err))

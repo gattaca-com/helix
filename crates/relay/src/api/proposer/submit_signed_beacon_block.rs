@@ -2,7 +2,9 @@ use std::{sync::Arc, time::Duration};
 
 use alloy_primitives::B256;
 use axum::{Extension, http::HeaderMap};
-use helix_common::{chain_info::ChainInfo, decoder::Encoding, utils::extract_request_id};
+use helix_common::{
+    chain_info::ChainInfo, decoder::Encoding, spawn_tracked, utils::extract_request_id,
+};
 use helix_types::{
     BlsKeypair, Domain, EthSpec, ExecutionPayloadEnvelope, ExecutionPayloadGloas,
     ExecutionRequestsGloas, ForkName, MainnetEthSpec, SignedBeaconBlockGloas,
@@ -114,11 +116,41 @@ pub(super) fn construct_signed_envelope(
         })
 }
 
-/// How many times to offer the payload envelope to the beacon node, and how long
-/// to wait between tries. The block reaches our node over gossip a few hundred
-/// milliseconds after the proposer hands it to us directly.
 const PUBLISH_ATTEMPTS: u32 = 12;
 const PUBLISH_RETRY_INTERVAL: Duration = Duration::from_millis(100);
+
+fn unix_now() -> Duration {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("the clock is after the unix epoch")
+}
+
+/// Offers the envelope to the beacon nodes until one takes it. The block reaches a
+/// node over gossip a few hundred milliseconds after the proposer hands it to us.
+async fn reveal_envelope<A: Api>(
+    proposer_api: &ProposerApi<A>,
+    signed_envelope: Arc<helix_types::SignedExecutionPayloadEnvelopeContents>,
+    slot: helix_types::Slot,
+) {
+    for attempt in 0..PUBLISH_ATTEMPTS {
+        match proposer_api
+            .multi_beacon_client
+            .publish_execution_payload_envelope(signed_envelope.clone(), ForkName::Gloas)
+            .await
+        {
+            Ok(()) => {
+                info!(slot = slot.as_u64(), attempt, "revealed the payload");
+                return;
+            }
+            Err(err) => {
+                warn!(%err, attempt, "could not reveal the payload yet");
+                tokio::time::sleep(PUBLISH_RETRY_INTERVAL).await;
+            }
+        }
+    }
+
+    error!(slot = slot.as_u64(), "gave up revealing the payload after {PUBLISH_ATTEMPTS} attempts");
+}
 
 impl<A: Api> ProposerApi<A> {
     /// Accepts a Gloas `SignedBeaconBlock`. Replaces `submitBlindedBlock`/`getPayload`; per
@@ -158,44 +190,32 @@ impl<A: Api> ProposerApi<A> {
             }
         };
 
-        let signed_envelope = construct_signed_envelope(
+        let signed_envelope = Arc::new(construct_signed_envelope(
             &block,
             held,
             &proposer_api.gloas_builder_identity,
             &proposer_api.chain_info,
-        )?;
+        )?);
 
-        // The proposer hands us its block before the network has it, so our own
-        // beacon node usually rejects the first reveal with an unknown block
-        // root. Retry until it has seen the block.
-        let signed_envelope = Arc::new(signed_envelope);
-        let mut published = Err(());
-        for attempt in 0..PUBLISH_ATTEMPTS {
-            match proposer_api
-                .multi_beacon_client
-                .publish_execution_payload_envelope(signed_envelope.clone(), ForkName::Gloas)
-                .await
-            {
-                Ok(()) => {
-                    published = Ok(());
-                    break;
-                }
-                Err(err) => {
-                    warn!(%err, attempt, "could not reveal the payload yet");
-                    tokio::time::sleep(PUBLISH_RETRY_INTERVAL).await;
-                }
-            }
+        let slot = block.message.slot;
+        let block = Arc::new(block);
+
+        // The proposer gossips its own block, but handing it to our node directly is
+        // what makes the block root known by the time we reveal.
+        if let Err(err) = proposer_api.multi_beacon_client.publish_gloas_block(block.clone()).await
+        {
+            warn!(%err, "could not publish the proposer's block");
         }
 
-        if published.is_err() {
-            // The proposer's request was well formed and is already accepted; the
-            // reveal is ours to get right, so this is not their error.
-            error!(
-                slot = block.message.slot.as_u64(),
-                "gave up revealing the payload after {PUBLISH_ATTEMPTS} attempts",
-            );
-            return Err(ProposerApiError::InternalServerError);
-        }
+        // Revealing before the attestation deadline hands an equivocating proposer a
+        // payload it can build a competing block on. Wait it out, then reveal, and let
+        // the proposer have its acknowledgement now rather than seconds from now.
+        let delay = proposer_api.chain_info.gloas_reveal_delay(slot, unix_now());
+        info!(slot = slot.as_u64(), delay_ms = delay.as_millis() as u64, "holding the payload");
+        spawn_tracked!(async move {
+            tokio::time::sleep(delay).await;
+            reveal_envelope(&proposer_api, signed_envelope, slot).await;
+        });
 
         Ok(StatusCode::ACCEPTED)
     }
@@ -204,7 +224,8 @@ impl<A: Api> ProposerApi<A> {
 #[cfg(test)]
 mod construct_signed_envelope_tests {
     use helix_common::utils::install_default_crypto_provider;
-    use helix_types::{BeaconBlockGloas, BlsSignature, EmptyBlock, ExecutionBlockHash};
+    use helix_types::{BeaconBlockGloas, BlsSignature, EmptyBlock, ExecutionBlockHash, TestRandom};
+    use rand::SeedableRng;
 
     use super::*;
 
@@ -330,8 +351,15 @@ mod construct_signed_envelope_tests {
 mod envelope_blob_tests {
     use helix_common::utils::install_default_crypto_provider;
     use helix_types::{BeaconBlockGloas, BlsSignature, EmptyBlock, ExecutionBlockHash, TestRandom};
+    use rand::SeedableRng;
 
     use super::*;
+
+    /// Seeded so the bundle is never empty: `random_for_test` picks a length in 0..=6.
+    fn blobs_bundle() -> helix_types::BlobsBundle {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(7);
+        helix_types::BlobsBundle::random_for_test(&mut rng)
+    }
 
     /// The beacon node never saw this block, so it has nothing cached to attach and
     /// refuses a bare envelope that commits to blobs. The reveal has to carry them.
@@ -340,8 +368,7 @@ mod envelope_blob_tests {
         install_default_crypto_provider();
         let chain_info = ChainInfo::default();
         let block_hash = B256::repeat_byte(0xaa);
-        let mut rng = rand::rng();
-        let blobs = helix_types::BlobsBundle::random_for_test(&mut rng);
+        let blobs = blobs_bundle();
         let expected_blobs = blobs.blobs.len();
         let expected_proofs = blobs.proofs.len();
         assert!(expected_blobs > 0, "the fixture must have blobs to be worth testing");

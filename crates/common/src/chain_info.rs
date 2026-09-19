@@ -11,6 +11,10 @@ pub(crate) const MAINNET_GENESIS_VALIDATOR_ROOT: [u8; 32] = [
     243, 63, 246, 207, 90, 210, 127, 81, 27, 254, 149,
 ];
 
+/// `ATTESTATION_DUE_BPS_GLOAS` from the Gloas preset: attestations are due a quarter
+/// of the way into the slot.
+const ATTESTATION_DUE_BPS_GLOAS: u32 = 2500;
+
 /// Runtime config with all chain specific information
 #[derive(Clone)]
 pub struct ChainInfo {
@@ -75,6 +79,24 @@ impl ChainInfo {
         self.clock.now().unwrap_or(Slot::new(0))
     }
 
+    /// Unix time at which `slot` starts.
+    pub fn slot_start(&self, slot: Slot) -> Duration {
+        Duration::from_secs(self.genesis_time_in_secs + slot.as_u64() * self.seconds_per_slot())
+    }
+
+    /// Gloas divides the slot in quarters: attestations are due at 25%, the payload
+    /// reveal at 50%.
+    pub fn gloas_attestation_deadline(&self) -> Duration {
+        self.spec.get_slot_duration() * ATTESTATION_DUE_BPS_GLOAS / 10_000
+    }
+
+    /// How long to hold a Gloas payload before revealing it. Revealing before the
+    /// attestation deadline lets an equivocating proposer build a competing block on
+    /// the payload while the honest block still has no attestations behind it.
+    pub fn gloas_reveal_delay(&self, slot: Slot, now: Duration) -> Duration {
+        (self.slot_start(slot) + self.gloas_attestation_deadline()).saturating_sub(now)
+    }
+
     pub fn max_blobs_per_block(&self) -> usize {
         let epoch = self.current_slot().epoch(self.slots_per_epoch());
         self.spec.max_blobs_per_block(epoch) as usize
@@ -85,5 +107,44 @@ impl Default for ChainInfo {
     fn default() -> Self {
         let spec = ChainSpec::mainnet();
         Self::new(spec, MAINNET_GENESIS_VALIDATOR_ROOT.into(), MAINNET_GENESIS_TIME)
+    }
+}
+
+#[cfg(test)]
+mod gloas_reveal_tests {
+    use super::*;
+
+    fn chain_info() -> ChainInfo {
+        ChainInfo::default()
+    }
+
+    #[test]
+    fn the_deadline_is_a_quarter_of_the_slot() {
+        let info = chain_info();
+        assert_eq!(info.gloas_attestation_deadline(), Duration::from_secs(3));
+    }
+
+    #[test]
+    fn a_reveal_asked_for_at_the_slot_start_waits_for_the_deadline() {
+        let info = chain_info();
+        let slot = Slot::new(1_000);
+        let delay = info.gloas_reveal_delay(slot, info.slot_start(slot));
+        assert_eq!(delay, Duration::from_secs(3));
+    }
+
+    #[test]
+    fn a_reveal_asked_for_after_the_deadline_does_not_wait() {
+        let info = chain_info();
+        let slot = Slot::new(1_000);
+        let now = info.slot_start(slot) + Duration::from_secs(5);
+        assert_eq!(info.gloas_reveal_delay(slot, now), Duration::ZERO);
+    }
+
+    #[test]
+    fn the_wait_never_runs_past_the_payload_deadline() {
+        let info = chain_info();
+        let slot = Slot::new(1_000);
+        let delay = info.gloas_reveal_delay(slot, info.slot_start(slot));
+        assert!(delay < info.spec.get_slot_duration() / 2);
     }
 }
