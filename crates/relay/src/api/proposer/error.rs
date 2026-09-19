@@ -159,6 +159,12 @@ pub enum ProposerApiError {
 
     #[error("proposer equivocated at slot {slot}: already committed to block {first:?}")]
     ProposerEquivocated { slot: u64, first: B256 },
+
+    #[error("the block is not signed by the proposer this bid was served to")]
+    InvalidProposerSignature,
+
+    #[error("the payload held for block {0:?} has no known proposer")]
+    UnknownBidProposer(B256),
 }
 
 impl From<DecodeError> for ProposerApiError {
@@ -210,7 +216,9 @@ impl IntoResponse for ProposerApiError {
                 ProposerApiError::NoHeldPayloadForBlock(_) |
                 ProposerApiError::HeldPayloadBlockHashMismatch { .. } |
                 ProposerApiError::BuilderIndexMismatch { .. } |
-                ProposerApiError::ProposerEquivocated { .. } => StatusCode::BAD_REQUEST,
+                ProposerApiError::ProposerEquivocated { .. } |
+                ProposerApiError::InvalidProposerSignature |
+                ProposerApiError::UnknownBidProposer(_) => StatusCode::BAD_REQUEST,
 
                 // All authentication failures, kept indistinguishable by status
                 ProposerApiError::InvalidApiKey |

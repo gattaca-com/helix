@@ -33,7 +33,7 @@ pub use hydration::*;
 pub use lh_kzg::{KzgCommitment, KzgProof};
 pub use lh_types::{
     Config as LhConfig, EmptyBlock, EthSpec, ExecPayload, ExecutionBlockHash, ForkName,
-    ForkVersionDecode, MainnetEthSpec, SignedRoot,
+    ForkVersionDecode, MainnetEthSpec, SignedRoot, SigningData,
 };
 pub use operator::*;
 pub use request_auth::*;

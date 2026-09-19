@@ -6,9 +6,9 @@ use helix_common::{
     chain_info::ChainInfo, decoder::Encoding, spawn_tracked, utils::extract_request_id,
 };
 use helix_types::{
-    BlsKeypair, Domain, EthSpec, ExecutionPayloadEnvelope, ExecutionPayloadGloas,
-    ExecutionRequestsGloas, ForkName, MainnetEthSpec, SignedBeaconBlockGloas,
-    SignedExecutionPayloadEnvelope, SignedRoot,
+    BlsKeypair, BlsPublicKey, BlsPublicKeyBytes, Domain, EthSpec, ExecutionPayloadEnvelope,
+    ExecutionPayloadGloas, ExecutionRequestsGloas, ForkName, MainnetEthSpec,
+    SignedBeaconBlockGloas, SignedExecutionPayloadEnvelope, SignedRoot,
 };
 use hyper::StatusCode;
 use ssz::Decode;
@@ -25,6 +25,9 @@ pub struct HeldGloasPayload {
     /// Revealed with the envelope: the beacon node never saw this block, so it
     /// has no blobs cached to attach itself.
     pub blobs: helix_types::BlobsBundle,
+    /// The proposer this bid was served to, whose signature the redeeming block
+    /// must carry.
+    pub proposer_pubkey: Option<BlsPublicKeyBytes>,
 }
 
 /// Helix's own on-chain Gloas builder identity: `builder_index` plus signing key.
@@ -73,6 +76,31 @@ impl GloasBuilderIdentity {
     }
 }
 
+/// Whether the proposer helix bid to signed this block. The redeeming block is not
+/// otherwise authenticated, and the bid's block hash is public once the block is
+/// gossiped, so without this anyone could redeem a bid on the proposer's behalf.
+fn proposer_signed_block(
+    block: &SignedBeaconBlockGloas,
+    pubkey: &BlsPublicKeyBytes,
+    chain_info: &ChainInfo,
+) -> bool {
+    let epoch = block.message.slot.epoch(MainnetEthSpec::slots_per_epoch());
+    let fork = chain_info.spec.fork_at_epoch(epoch);
+    let domain = chain_info.spec.get_domain(
+        epoch,
+        Domain::BeaconProposer,
+        &fork,
+        chain_info.genesis_validators_root,
+    );
+    let Ok(pubkey) = BlsPublicKey::deserialize(pubkey.as_ref()) else {
+        return false;
+    };
+    let signing_root =
+        helix_types::SigningData { object_root: block.message.tree_hash_root(), domain }
+            .tree_hash_root();
+    block.signature.verify(&pubkey, signing_root)
+}
+
 /// Constructs and signs the `SignedExecutionPayloadEnvelope` fulfilling `block`'s committed bid.
 /// `held` is the payload the auctioneer has stored for the bid's committed block hash, if any.
 pub(super) fn construct_signed_envelope(
@@ -92,6 +120,13 @@ pub(super) fn construct_signed_envelope(
     }
 
     let held = held.ok_or(ProposerApiError::NoHeldPayloadForBlock(bid_block_hash))?;
+
+    // Fail closed: a payload whose proposer we cannot name cannot be redeemed.
+    let proposer_pubkey =
+        held.proposer_pubkey.ok_or(ProposerApiError::UnknownBidProposer(bid_block_hash))?;
+    if !proposer_signed_block(block, &proposer_pubkey, chain_info) {
+        return Err(ProposerApiError::InvalidProposerSignature);
+    }
 
     let held_block_hash: B256 = held.payload.block_hash.0;
     if held_block_hash != bid_block_hash {
@@ -249,33 +284,64 @@ impl<A: Api> ProposerApi<A> {
 #[cfg(test)]
 mod construct_signed_envelope_tests {
     use helix_common::utils::install_default_crypto_provider;
-    use helix_types::{BeaconBlockGloas, BlsSignature, EmptyBlock, ExecutionBlockHash, TestRandom};
+    use helix_types::{BeaconBlockGloas, EmptyBlock, ExecutionBlockHash, SigningData};
     use rand::SeedableRng;
 
     use super::*;
 
-    fn held_payload(block_hash: B256) -> HeldGloasPayload {
+    fn held_payload(block_hash: B256, proposer: &BlsKeypair) -> HeldGloasPayload {
         let mut payload = ExecutionPayloadGloas::default();
         payload.block_hash = ExecutionBlockHash(block_hash);
         HeldGloasPayload {
             payload,
             execution_requests: ExecutionRequestsGloas::default(),
             blobs: Default::default(),
+            proposer_pubkey: Some(proposer.pk.compress().serialize().into()),
         }
     }
 
-    fn test_block(
-        block_hash: B256,
-        builder_index: u64,
-        parent_root: B256,
+    pub(super) fn proposer() -> BlsKeypair {
+        install_default_crypto_provider();
+        BlsKeypair::random()
+    }
+
+    /// Signs `message` the way the proposer's validator client would.
+    pub(super) fn sign_block(
+        message: BeaconBlockGloas,
+        proposer: &BlsKeypair,
     ) -> SignedBeaconBlockGloas {
+        let chain_info = ChainInfo::default();
+        let epoch = message.slot.epoch(MainnetEthSpec::slots_per_epoch());
+        let fork = chain_info.spec.fork_at_epoch(epoch);
+        let domain = chain_info.spec.get_domain(
+            epoch,
+            Domain::BeaconProposer,
+            &fork,
+            chain_info.genesis_validators_root,
+        );
+        let signing_root =
+            SigningData { object_root: message.tree_hash_root(), domain }.tree_hash_root();
+        let signature = proposer.sk.sign(signing_root);
+        SignedBeaconBlockGloas { message, signature }
+    }
+
+    fn block_message(block_hash: B256, builder_index: u64, parent_root: B256) -> BeaconBlockGloas {
         let chain_info = ChainInfo::default();
         let mut message = BeaconBlockGloas::empty(&chain_info.spec);
         message.parent_root = parent_root;
         message.body.signed_execution_payload_bid.message.block_hash =
             ExecutionBlockHash(block_hash);
         message.body.signed_execution_payload_bid.message.builder_index = builder_index;
-        SignedBeaconBlockGloas { message, signature: BlsSignature::empty() }
+        message
+    }
+
+    fn test_block(
+        block_hash: B256,
+        builder_index: u64,
+        parent_root: B256,
+        proposer: &BlsKeypair,
+    ) -> SignedBeaconBlockGloas {
+        sign_block(block_message(block_hash, builder_index, parent_root), proposer)
     }
 
     fn identity(builder_index: u64) -> GloasBuilderIdentity {
@@ -288,8 +354,9 @@ mod construct_signed_envelope_tests {
         let chain_info = ChainInfo::default();
         let block_hash = B256::repeat_byte(0x11);
         let parent_root = B256::repeat_byte(0x22);
-        let block = test_block(block_hash, 7, parent_root);
-        let held = Some(held_payload(block_hash));
+        let proposer = proposer();
+        let block = test_block(block_hash, 7, parent_root, &proposer);
+        let held = Some(held_payload(block_hash, &proposer));
         let identity = identity(7);
 
         let contents = construct_signed_envelope(&block, held, &identity, &chain_info).unwrap();
@@ -305,8 +372,9 @@ mod construct_signed_envelope_tests {
     fn signature_verifies_against_the_configured_identity() {
         let chain_info = ChainInfo::default();
         let block_hash = B256::repeat_byte(0x33);
-        let block = test_block(block_hash, 3, B256::ZERO);
-        let held = Some(held_payload(block_hash));
+        let proposer = proposer();
+        let block = test_block(block_hash, 3, B256::ZERO, &proposer);
+        let held = Some(held_payload(block_hash, &proposer));
         let identity = identity(3);
 
         let signed_envelope = construct_signed_envelope(&block, held, &identity, &chain_info)
@@ -327,7 +395,8 @@ mod construct_signed_envelope_tests {
     fn no_held_payload_is_an_error_not_a_panic() {
         let chain_info = ChainInfo::default();
         let block_hash = B256::repeat_byte(0x44);
-        let block = test_block(block_hash, 1, B256::ZERO);
+        let proposer = proposer();
+        let block = test_block(block_hash, 1, B256::ZERO, &proposer);
         let identity = identity(1);
 
         let result = construct_signed_envelope(&block, None, &identity, &chain_info);
@@ -342,8 +411,9 @@ mod construct_signed_envelope_tests {
         let chain_info = ChainInfo::default();
         let bid_block_hash = B256::repeat_byte(0x55);
         let wrong_held_hash = B256::repeat_byte(0x66);
-        let block = test_block(bid_block_hash, 1, B256::ZERO);
-        let held = Some(held_payload(wrong_held_hash));
+        let proposer = proposer();
+        let block = test_block(bid_block_hash, 1, B256::ZERO, &proposer);
+        let held = Some(held_payload(wrong_held_hash, &proposer));
         let identity = identity(1);
 
         let result = construct_signed_envelope(&block, held, &identity, &chain_info);
@@ -355,12 +425,62 @@ mod construct_signed_envelope_tests {
         ));
     }
 
+    /// The bid's block hash is public once the proposer gossips its block, so without
+    /// this check anyone could redeem the bid and, with the equivocation guard, make
+    /// helix withhold a legitimate reveal.
+    #[test]
+    fn a_block_signed_by_anyone_else_is_rejected() {
+        let chain_info = ChainInfo::default();
+        let block_hash = B256::repeat_byte(0x33);
+        let attacker = proposer();
+        let proposer = proposer();
+        // The attacker replays the real bid commitment under its own signature.
+        let block = test_block(block_hash, 4, B256::ZERO, &attacker);
+        let held = Some(held_payload(block_hash, &proposer));
+
+        let result = construct_signed_envelope(&block, held, &identity(4), &chain_info);
+
+        assert!(matches!(result, Err(ProposerApiError::InvalidProposerSignature)));
+    }
+
+    #[test]
+    fn an_unsigned_block_is_rejected() {
+        let chain_info = ChainInfo::default();
+        let block_hash = B256::repeat_byte(0x44);
+        let proposer = proposer();
+        let block = SignedBeaconBlockGloas {
+            message: block_message(block_hash, 4, B256::ZERO),
+            signature: helix_types::BlsSignature::empty(),
+        };
+        let held = Some(held_payload(block_hash, &proposer));
+
+        let result = construct_signed_envelope(&block, held, &identity(4), &chain_info);
+
+        assert!(matches!(result, Err(ProposerApiError::InvalidProposerSignature)));
+    }
+
+    /// Fail closed: a payload whose proposer helix cannot name must not be redeemable.
+    #[test]
+    fn a_payload_with_no_known_proposer_is_not_redeemable() {
+        let chain_info = ChainInfo::default();
+        let block_hash = B256::repeat_byte(0x55);
+        let proposer = proposer();
+        let block = test_block(block_hash, 4, B256::ZERO, &proposer);
+        let mut held = held_payload(block_hash, &proposer);
+        held.proposer_pubkey = None;
+
+        let result = construct_signed_envelope(&block, Some(held), &identity(4), &chain_info);
+
+        assert!(matches!(result, Err(ProposerApiError::UnknownBidProposer(_))));
+    }
+
     #[test]
     fn bid_builder_index_not_matching_configured_identity_is_rejected() {
         let chain_info = ChainInfo::default();
         let block_hash = B256::repeat_byte(0x77);
-        let block = test_block(block_hash, 9, B256::ZERO);
-        let held = Some(held_payload(block_hash));
+        let proposer = proposer();
+        let block = test_block(block_hash, 9, B256::ZERO, &proposer);
+        let held = Some(held_payload(block_hash, &proposer));
         let identity = identity(1);
 
         let result = construct_signed_envelope(&block, held, &identity, &chain_info);
@@ -375,10 +495,13 @@ mod construct_signed_envelope_tests {
 #[cfg(test)]
 mod envelope_blob_tests {
     use helix_common::utils::install_default_crypto_provider;
-    use helix_types::{BeaconBlockGloas, BlsSignature, EmptyBlock, ExecutionBlockHash, TestRandom};
+    use helix_types::{BeaconBlockGloas, EmptyBlock, ExecutionBlockHash, TestRandom};
     use rand::SeedableRng;
 
-    use super::*;
+    use super::{
+        construct_signed_envelope_tests::{proposer, sign_block},
+        *,
+    };
 
     /// Seeded so the bundle is never empty: `random_for_test` picks a length in 0..=6.
     fn blobs_bundle() -> helix_types::BlobsBundle {
@@ -400,17 +523,19 @@ mod envelope_blob_tests {
 
         let mut payload = ExecutionPayloadGloas::default();
         payload.block_hash = ExecutionBlockHash(block_hash);
+        let proposer = proposer();
         let held = Some(HeldGloasPayload {
             payload,
             execution_requests: ExecutionRequestsGloas::default(),
             blobs,
+            proposer_pubkey: Some(proposer.pk.compress().serialize().into()),
         });
 
         let mut message = BeaconBlockGloas::empty(&chain_info.spec);
         message.body.signed_execution_payload_bid.message.block_hash =
             ExecutionBlockHash(block_hash);
         message.body.signed_execution_payload_bid.message.builder_index = 3;
-        let block = SignedBeaconBlockGloas { message, signature: BlsSignature::empty() };
+        let block = sign_block(message, &proposer);
 
         let contents =
             construct_signed_envelope(&block, held, &identity_for(3), &chain_info).unwrap();

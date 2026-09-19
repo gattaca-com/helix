@@ -322,6 +322,15 @@ impl PayloadEntry {
         }
     }
 
+    /// The proposer this payload was bid to. Gossiped payloads carry no bid trace,
+    /// so their proposer is unknown.
+    pub fn proposer_pubkey(&self) -> Option<&BlsPublicKeyBytes> {
+        match &self {
+            Self::Submission(s) => Some(s.signed_bid_submission.proposer_public_key()),
+            Self::Gossip(_) => None,
+        }
+    }
+
     pub fn bid_data_ref(&self) -> PayloadBidDataRef<'_> {
         match &self {
             Self::Submission(s) => PayloadBidDataRef {
