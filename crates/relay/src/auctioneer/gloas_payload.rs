@@ -38,6 +38,7 @@ impl<B: BidAdjustor> Context<B> {
                 payload,
                 execution_requests,
                 blobs_bundle: entry.payload_and_blobs().blobs_bundle.clone(),
+                proposer_pubkey: entry.proposer_pubkey().copied(),
             })
         });
 
