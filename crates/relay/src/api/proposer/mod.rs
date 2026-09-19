@@ -104,4 +104,59 @@ pub async fn status(
     }
 }
 
+/// How much of a request auth's opaque `data` to log. Nothing reads the field yet,
+/// so this is here to find out what clients actually put in it.
+const LOGGED_AUTH_DATA_BYTES: usize = 64;
+
+/// Renders a request auth for logging: its slot, the length of `data`, and as much of
+/// `data` as [`LOGGED_AUTH_DATA_BYTES`] allows.
+pub(crate) fn auth_summary(auth: &helix_types::SignedBuilderRequestAuth) -> (u64, usize, String) {
+    let data = &auth.message.data;
+    let shown = data.len().min(LOGGED_AUTH_DATA_BYTES);
+    let mut rendered = format!("{}", alloy_primitives::Bytes::copy_from_slice(&data[..shown]));
+    if shown < data.len() {
+        rendered.push('\u{2026}');
+    }
+    (auth.message.slot, data.len(), rendered)
+}
+
 const CONSENSUS_VERSION_HEADER: &str = "Eth-Consensus-Version";
+
+#[cfg(test)]
+mod auth_summary_tests {
+    use helix_types::{
+        BlsSignatureBytes, BuilderRequestAuth, RequestAuthData, SignedBuilderRequestAuth,
+    };
+
+    use super::*;
+
+    fn auth(data: Vec<u8>) -> SignedBuilderRequestAuth {
+        SignedBuilderRequestAuth {
+            message: BuilderRequestAuth { data: RequestAuthData(data.into()), slot: 42 },
+            signature: BlsSignatureBytes::default(),
+        }
+    }
+
+    #[test]
+    fn empty_data_is_reported_as_empty() {
+        let (slot, len, rendered) = auth_summary(&auth(vec![]));
+        assert_eq!((slot, len), (42, 0));
+        assert_eq!(rendered, "0x");
+    }
+
+    #[test]
+    fn short_data_is_rendered_whole() {
+        let (_, len, rendered) = auth_summary(&auth(vec![0xde, 0xad, 0xbe, 0xef]));
+        assert_eq!(len, 4);
+        assert_eq!(rendered, "0xdeadbeef");
+    }
+
+    /// `data` runs to 4096 bytes; a log line must not carry all of it.
+    #[test]
+    fn long_data_is_truncated_but_its_length_is_kept() {
+        let (_, len, rendered) = auth_summary(&auth(vec![0xab; 1000]));
+        assert_eq!(len, 1000, "the real length is still reported");
+        assert!(rendered.ends_with('\u{2026}'), "and the rendering says it was cut");
+        assert_eq!(rendered.chars().count(), 2 + LOGGED_AUTH_DATA_BYTES * 2 + 1);
+    }
+}
