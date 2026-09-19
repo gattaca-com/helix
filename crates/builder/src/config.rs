@@ -156,9 +156,11 @@ pub struct BuildingConfig {
     pub payout_gas_reserve: u64,
     #[serde(default = "default_extra_data")]
     pub extra_data: String,
-    /// Points into the slot, in milliseconds, at which to build and submit.
-    #[serde(default = "default_submit_offsets_ms")]
-    pub submit_offsets_ms: Vec<u64>,
+    /// How long before the slot starts to begin building, in milliseconds.
+    /// From then the builder rebuilds and resubmits without pause, picking up
+    /// whatever the mempool has gained, until the relay moves to the next slot.
+    #[serde(default = "default_build_lead_ms")]
+    pub build_lead_ms: u64,
 }
 
 impl BuildingConfig {
@@ -181,8 +183,8 @@ impl BuildingConfig {
         if self.payout_gas_reserve < TX_GAS_COST {
             eyre::bail!("building config: payout_gas_reserve must be at least {TX_GAS_COST}");
         }
-        if self.submit_offsets_ms.is_empty() {
-            eyre::bail!("building config: submit_offsets_ms must not be empty");
+        if self.build_lead_ms == 0 {
+            eyre::bail!("building config: build_lead_ms must not be zero");
         }
         if self.extra_data.len() > MAX_EXTRA_DATA_BYTES {
             eyre::bail!("building config: extra_data must be at most {MAX_EXTRA_DATA_BYTES} bytes");
@@ -246,8 +248,8 @@ fn default_payout_gas_reserve() -> u64 {
 fn default_extra_data() -> String {
     "helix-builder".to_string()
 }
-fn default_submit_offsets_ms() -> Vec<u64> {
-    vec![500, 2000]
+fn default_build_lead_ms() -> u64 {
+    2_000
 }
 fn default_blacklist_endpoint() -> String {
     "http://localhost:3520/blacklist".to_string()
@@ -443,7 +445,7 @@ mod building_config_tests {
         assert_eq!(config.subsidy_wei, 1_000_000_000_000_000);
         assert_eq!(config.payout_gas_reserve, 21_000);
         assert_eq!(config.extra_data, "helix-builder");
-        assert_eq!(config.submit_offsets_ms, vec![500, 2000]);
+        assert_eq!(config.build_lead_ms, 2_000);
     }
 
     #[test]
@@ -457,7 +459,10 @@ mod building_config_tests {
         );
         assert_eq!(config.payout_gas_reserve, 21_000);
         assert_eq!(config.extra_data, "helix-builder");
-        assert_eq!(config.submit_offsets_ms, vec![500, 2000]);
+        assert_eq!(
+            config.build_lead_ms, 2_000,
+            "bidding has to start before the proposer asks, which it does at the slot start",
+        );
     }
 
     #[test]
@@ -480,12 +485,12 @@ mod building_config_tests {
     }
 
     #[test]
-    fn rejects_empty_submit_offsets() {
-        let err = with_line("submit_offsets_ms: []")
+    fn rejects_a_zero_build_lead() {
+        let err = with_line("build_lead_ms: 0")
             .validate()
-            .expect_err("without an offset the role would start and never build");
+            .expect_err("starting at the slot start is already too late for the proposer");
 
-        assert!(err.to_string().contains("submit_offsets_ms"), "got: {err}");
+        assert!(err.to_string().contains("build_lead_ms"), "got: {err}");
     }
 
     #[test]

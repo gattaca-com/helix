@@ -27,5 +27,6 @@ payout_gas_reserve: 21000
 
 extra_data: "helix-builder"
 
-# Points into the slot, in milliseconds, at which to build and submit.
-submit_offsets_ms: [500, 2000]
+# How long before the slot starts to begin building, in milliseconds. From then
+# the builder rebuilds and resubmits without pause until the relay moves on.
+build_lead_ms: 2000

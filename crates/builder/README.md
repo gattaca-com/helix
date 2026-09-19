@@ -85,10 +85,13 @@ Gas for that transfer is held back from the fill by lowering ethrex's
 `remaining_gas` before `fill_transactions` and restoring it afterwards.
 
 The builder signs under the domain read from the beacon node's own spec and
-genesis, never a compiled-in fork version. It builds at each
-`submit_offsets_ms` point in the slot and submits only when the value beats
-what it already sent for that slot and parent -- a new parent, after a re-org,
-starts a fresh auction.
+genesis, never a compiled-in fork version. It starts building `build_lead_ms`
+before the slot begins, because the proposer asks for its bid at the slot
+start, and then rebuilds and resubmits without pause, picking up whatever the
+mempool has gained. It submits only when the value beats what it already sent
+for that slot and parent -- a new parent, after a re-org, starts a fresh
+auction. It stops when the relay reports that it has moved to the next bid
+slot, or when the slot's own time runs out.
 
 From Amsterdam the block also carries the EIP-7928 block access list ethrex
 records and the EIP-7843 slot number, and the submission goes out in the Gloas

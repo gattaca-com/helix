@@ -338,3 +338,28 @@ fn the_bid_trace_slot_matches_the_slot_the_block_was_built_for() {
 
     assert_eq!(bid.message().slot, slot.slot);
 }
+
+/// The loop only stops when the relay says the slot has moved on, so the two
+/// messages that mean exactly that have to be recognised.
+#[test]
+fn a_wrong_slot_rejection_closes_the_slot() {
+    let rejected = |body: &str| SubmitError::Rejected { status: 400, body: body.to_string() };
+
+    assert!(
+        rejected("block validation: submission for wrong slot. expected: 11, got: 10")
+            .is_slot_closed()
+    );
+    assert!(rejected("late sim, already on next slot").is_slot_closed());
+}
+
+/// Anything else is a bad block, not a closed slot: keep building.
+#[test]
+fn other_rejections_do_not_close_the_slot() {
+    let rejected = |body: &str| SubmitError::Rejected { status: 400, body: body.to_string() };
+
+    assert!(!rejected("block validation: unknown parent hash").is_slot_closed());
+    assert!(
+        !rejected("block simulation: BlockValidationFailed(\"bad state root\")").is_slot_closed()
+    );
+    assert!(!SubmitError::Transport("connection refused".into()).is_slot_closed());
+}

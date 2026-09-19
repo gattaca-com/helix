@@ -17,6 +17,23 @@ use crate::{
     engine::convert::{block_to_payload_v3, decode_execution_requests},
 };
 
+impl SubmitError {
+    /// Whether the relay has moved on to the next bid slot. Nothing further will
+    /// be accepted for this one, so there is no point building again.
+    ///
+    /// The relay answers in plain text, so this matches on the message. Both
+    /// come from `BlockValidationError::SubmissionForWrongSlot` and the
+    /// auctioneer's late-simulation path.
+    pub fn is_slot_closed(&self) -> bool {
+        match self {
+            Self::Rejected { body, .. } => {
+                body.contains("submission for wrong slot") || body.contains("already on next slot")
+            }
+            _ => false,
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum SubmitError {
     #[error("blobs bundle: {0}")]

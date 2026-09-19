@@ -5,73 +5,69 @@ use tokio::sync::mpsc;
 
 use crate::building::slot::SlotContext;
 
-/// How long to wait before each build attempt, measured from `now_ms`.
-///
-/// Every entry is relative to the same instant, so a caller must sleep to an
-/// absolute deadline rather than sleeping each in turn.
-///
-/// Empty once every offset has passed. Whether that still deserves an immediate
-/// attempt is the caller's call, because it depends on whether the slot has been
-/// bid on already.
-pub fn delays(slot_timestamp: u64, offsets: &[u64], now_ms: u64) -> Vec<Duration> {
-    let start_ms = slot_timestamp * 1_000;
-    let mut sorted: Vec<u64> = offsets.to_vec();
-    sorted.sort_unstable();
+/// A floor between attempts, so a build that fails immediately cannot spin.
+const MIN_ATTEMPT_INTERVAL: Duration = Duration::from_millis(25);
 
-    sorted
-        .iter()
-        .filter_map(|offset| start_ms.checked_add(*offset)?.checked_sub(now_ms))
-        .map(Duration::from_millis)
-        .collect()
+/// What the relay's answer says about whether this slot is still worth bidding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Attempt {
+    /// Keep going: a better block may still win the slot.
+    Continue,
+    /// The relay has moved on to the next bid slot, so nothing further is
+    /// accepted and building again would only waste the CPU.
+    SlotClosed,
 }
 
-/// Runs one slot's attempts, one per delay, measured from a single instant.
-async fn run_schedule<F, Fut>(slot: SlotContext, delays: Vec<Duration>, attempt: F)
+/// When to start building for a slot: `lead_ms` before it begins, or now if that
+/// moment has passed.
+fn start_delay(slot_timestamp: u64, lead_ms: u64, now_ms: u64) -> Duration {
+    let start_ms = (slot_timestamp * 1_000).saturating_sub(lead_ms);
+    Duration::from_millis(start_ms.saturating_sub(now_ms))
+}
+
+/// Builds and submits without pause from `lead_ms` before the slot starts, each
+/// attempt picking up whatever the mempool has gained, until the relay says the
+/// slot has closed or the slot itself has run out.
+async fn run_schedule<F, Fut>(slot: SlotContext, start: Duration, budget: Duration, attempt: F)
 where
     F: Fn(SlotContext) -> Fut,
-    Fut: Future<Output = ()>,
+    Fut: Future<Output = Attempt>,
 {
     let base = tokio::time::Instant::now();
-    for delay in delays {
-        tokio::time::sleep_until(base + delay).await;
-        attempt(slot.clone()).await;
+    tokio::time::sleep_until(base + start).await;
+
+    let deadline = base + start + budget;
+    while tokio::time::Instant::now() < deadline {
+        let attempted_at = tokio::time::Instant::now();
+        if attempt(slot.clone()).await == Attempt::SlotClosed {
+            return;
+        }
+        tokio::time::sleep_until(attempted_at + MIN_ATTEMPT_INTERVAL).await;
     }
 }
 
-/// Drives one schedule at a time. A new context supersedes the one in flight:
-/// the head moved, so every remaining attempt would bid on a parent the relay
-/// has already replaced.
+/// Drives one slot at a time. A new context supersedes the one in flight: the
+/// head moved, so every further attempt would bid on a parent the relay has
+/// already replaced.
 pub async fn drive<F, Fut, N>(
     mut contexts: mpsc::Receiver<SlotContext>,
-    offsets: &[u64],
+    lead_ms: u64,
+    budget: Duration,
     now_ms: N,
     attempt: F,
 ) where
     F: Fn(SlotContext) -> Fut + Clone + Send + 'static,
-    Fut: Future<Output = ()> + Send + 'static,
+    Fut: Future<Output = Attempt> + Send + 'static,
     N: Fn() -> u64,
 {
     let mut current: Option<tokio::task::JoinHandle<()>> = None;
-    let mut scheduled_slot: Option<u64> = None;
 
     while let Some(slot) = contexts.recv().await {
-        let mut delays = delays(slot.timestamp, offsets, now_ms());
-        if delays.is_empty() {
-            if scheduled_slot == Some(slot.slot) {
-                // A new head this late only replaces a bid already sent, and the
-                // relay has moved on to the next bid slot by now, so an immediate
-                // attempt is refused as a submission for the wrong slot.
-                continue;
-            }
-            // Nothing has been sent for this slot, so one late attempt beats none.
-            delays.push(Duration::ZERO);
-        }
-
         if let Some(handle) = current.take() {
             handle.abort();
         }
-        scheduled_slot = Some(slot.slot);
-        current = Some(tokio::spawn(run_schedule(slot, delays, attempt.clone())));
+        let start = start_delay(slot.timestamp, lead_ms, now_ms());
+        current = Some(tokio::spawn(run_schedule(slot, start, budget, attempt.clone())));
     }
 
     if let Some(handle) = current.take() {
@@ -114,11 +110,19 @@ impl BestBid {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
 
     use helix_types::{BlsPublicKeyBytes, Withdrawals};
 
     use super::*;
+
+    const SLOT_TIMESTAMP: u64 = 1_700_000_000;
+    const START_MS: u64 = SLOT_TIMESTAMP * 1_000;
+    const LEAD_MS: u64 = 2_000;
+    const BUDGET: Duration = Duration::from_millis(400);
 
     fn context(slot: u64, parent: u8, timestamp: u64) -> SlotContext {
         SlotContext {
@@ -135,8 +139,12 @@ mod tests {
         }
     }
 
-    /// Drives `contexts` and reports the parent of every attempt, in order.
-    async fn attempts_for(contexts: Vec<SlotContext>, offsets: &[u64], now_ms: u64) -> Vec<B256> {
+    /// Drives `contexts`, answering `outcome` for each attempt, and reports the
+    /// parent of every attempt in order.
+    async fn attempts_for<F>(contexts: Vec<SlotContext>, now_ms: u64, outcome: F) -> Vec<B256>
+    where
+        F: Fn(usize) -> Attempt + Send + Sync + 'static,
+    {
         let (tx, rx) = mpsc::channel(16);
         for context in contexts {
             tx.send(context).await.unwrap();
@@ -144,15 +152,19 @@ mod tests {
         drop(tx);
 
         let seen = Arc::new(Mutex::new(Vec::new()));
+        let calls = Arc::new(AtomicUsize::new(0));
         let recorder = seen.clone();
+        let outcome = Arc::new(outcome);
         drive(
             rx,
-            offsets,
+            LEAD_MS,
+            BUDGET,
             move || now_ms,
             move |slot: SlotContext| {
-                let recorder = recorder.clone();
+                let (recorder, calls, outcome) = (recorder.clone(), calls.clone(), outcome.clone());
                 async move {
                     recorder.lock().unwrap().push(slot.parent_hash);
+                    outcome(calls.fetch_add(1, Ordering::SeqCst))
                 }
             },
         )
@@ -162,97 +174,71 @@ mod tests {
         attempts
     }
 
-    /// The head moved, so the first context's remaining attempts would bid on a
-    /// parent the relay has already replaced. Before the driver they ran anyway,
-    /// late and all at once, and the relay answered "unknown parent hash" or
-    /// "submission for wrong slot".
+    #[test]
+    fn building_starts_before_the_slot_does() {
+        let delay = start_delay(SLOT_TIMESTAMP, LEAD_MS, START_MS - 10_000);
+
+        assert_eq!(delay, Duration::from_millis(8_000), "2s before a slot 10s away");
+    }
+
+    #[test]
+    fn a_slot_learned_about_late_starts_at_once() {
+        let delay = start_delay(SLOT_TIMESTAMP, LEAD_MS, START_MS + 500);
+
+        assert_eq!(delay, Duration::ZERO, "no waiting for a moment already gone");
+    }
+
+    /// The point of the loop: keep building better blocks for as long as the
+    /// relay will take them, rather than bidding once and stopping.
     #[tokio::test]
-    async fn a_superseded_context_never_attempts() {
+    async fn it_keeps_building_until_the_relay_closes_the_slot() {
+        let attempts = attempts_for(vec![context(1, 0xa1, SLOT_TIMESTAMP)], START_MS, |n| {
+            if n >= 3 { Attempt::SlotClosed } else { Attempt::Continue }
+        })
+        .await;
+
+        assert_eq!(attempts.len(), 4, "three accepted attempts, then the closing one");
+        assert!(attempts.iter().all(|p| *p == B256::repeat_byte(0xa1)));
+    }
+
+    /// Once the relay is bidding for the next slot nothing more can be accepted,
+    /// so further building is wasted.
+    #[tokio::test]
+    async fn it_stops_as_soon_as_the_slot_closes() {
+        let attempts =
+            attempts_for(vec![context(1, 0xa1, SLOT_TIMESTAMP)], START_MS, |_| Attempt::SlotClosed)
+                .await;
+
+        assert_eq!(attempts.len(), 1);
+    }
+
+    /// The head moved, so everything still to come would bid on a parent the
+    /// relay has already replaced.
+    #[tokio::test]
+    async fn a_superseded_context_stops_attempting() {
         let attempts = attempts_for(
             vec![context(1, 0xa1, SLOT_TIMESTAMP), context(1, 0xb2, SLOT_TIMESTAMP)],
-            &[20, 40],
             START_MS,
+            |n| if n >= 2 { Attempt::SlotClosed } else { Attempt::Continue },
         )
         .await;
 
-        assert_eq!(
-            attempts,
-            vec![B256::repeat_byte(0xb2), B256::repeat_byte(0xb2)],
-            "only the newest parent may be bid on",
+        assert!(
+            attempts.iter().all(|p| *p == B256::repeat_byte(0xb2)),
+            "only the newest parent may be bid on, got: {attempts:?}",
         );
     }
 
-    /// The fallback in `delays` still has to hold: a slot learned about after
-    /// every offset has passed gets one attempt rather than none.
-    /// The head moved again after the last offset had passed. The relay has moved
-    /// on to the next bid slot by then, so submitting produced a steady stream of
-    /// "submission for wrong slot" -- and a bid was already sent for this slot
-    /// anyway.
+    /// Without a closing answer the loop still has to end, or a dead relay would
+    /// leave it building for ever.
     #[tokio::test]
-    async fn a_late_replacement_does_not_attempt() {
-        let attempts = attempts_for(
-            vec![
-                context(1, 0xa1, SLOT_TIMESTAMP),
-                // Arrives once both offsets are long past.
-                context(1, 0xb2, SLOT_TIMESTAMP),
-            ],
-            &[20, 40],
-            START_MS + 9_000,
-        )
-        .await;
-
-        assert_eq!(
-            attempts,
-            vec![B256::repeat_byte(0xa1)],
-            "the first context still earns its one late attempt; the replacement adds nothing",
-        );
-    }
-
-    #[tokio::test]
-    async fn a_slot_learned_about_late_still_attempts_once() {
+    async fn the_budget_ends_a_slot_the_relay_never_closes() {
         let attempts =
-            attempts_for(vec![context(1, 0xa1, SLOT_TIMESTAMP)], &[20, 40], START_MS + 9_000).await;
+            attempts_for(vec![context(1, 0xa1, SLOT_TIMESTAMP)], START_MS, |_| Attempt::Continue)
+                .await;
 
-        assert_eq!(attempts, vec![B256::repeat_byte(0xa1)]);
-    }
-
-    const SLOT_TIMESTAMP: u64 = 1_700_000_000;
-    const START_MS: u64 = SLOT_TIMESTAMP * 1_000;
-
-    #[test]
-    fn offsets_become_delays_from_the_slot_start() {
-        let delays = delays(SLOT_TIMESTAMP, &[500, 2000], START_MS);
-
-        assert_eq!(delays, vec![Duration::from_millis(500), Duration::from_millis(2000)]);
-    }
-
-    #[test]
-    fn unsorted_offsets_are_ordered() {
-        let delays = delays(SLOT_TIMESTAMP, &[2000, 500], START_MS);
-
-        assert_eq!(
-            delays,
-            vec![Duration::from_millis(500), Duration::from_millis(2000)],
-            "the config is a plain list and nothing else sorts it",
-        );
-    }
-
-    #[test]
-    fn an_offset_already_past_is_skipped() {
-        let delays = delays(SLOT_TIMESTAMP, &[500, 2000], START_MS + 1_000);
-
-        assert_eq!(delays, vec![Duration::from_millis(1000)], "only the 2000ms offset is ahead");
-    }
-
-    /// Whether a passed slot still deserves an attempt depends on whether anything
-    /// has been sent for it, which only the driver knows -- see
-    /// `a_slot_learned_about_late_still_attempts_once` and
-    /// `a_late_replacement_does_not_attempt`.
-    #[test]
-    fn every_offset_past_leaves_no_delays() {
-        let delays = delays(SLOT_TIMESTAMP, &[500, 2000], START_MS + 5_000);
-
-        assert!(delays.is_empty());
+        assert!(!attempts.is_empty(), "it must try");
+        assert!(attempts.len() < 100, "the budget must stop it, got {} attempts", attempts.len(),);
     }
 
     #[test]
