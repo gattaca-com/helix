@@ -17,7 +17,7 @@ impl<B: BidAdjustor> Context<B> {
         slot: Slot,
         res_tx: oneshot::Sender<Option<HeldGloasPayload>>,
     ) {
-        let held = self.payloads.get(&block_hash).and_then(|entry| {
+        let held = self.payloads.get_for_redemption(&block_hash).and_then(|entry| {
             let gloas_data = entry.gloas_data();
             let payload = match entry
                 .execution_payload()

@@ -57,8 +57,68 @@ pub struct SlotContext {
     /// builder -> version
     pub version: FxHashMap<BlsPublicKeyBytes, SubmissionVersion>,
     pub hydration_cache: HydrationCache,
-    pub payloads: FxHashMap<B256, PayloadEntry>,
+    pub payloads: PayloadStore,
     pub block_merger: BlockMerger,
+}
+
+/// The payloads a slot's submissions produced, kept one slot longer than the
+/// auction that made them.
+///
+/// The relay moves to the next bid slot shortly after a slot begins, but a Gloas
+/// proposer redeems its bid part-way through its own slot, so a payload has to
+/// outlive the auction it won. Keeping the previous generation covers the whole
+/// of that slot; anything older is dropped.
+#[derive(Default)]
+pub struct PayloadStore {
+    current: FxHashMap<B256, PayloadEntry>,
+    previous: FxHashMap<B256, PayloadEntry>,
+}
+
+impl PayloadStore {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            current: FxHashMap::with_capacity_and_hasher(capacity, Default::default()),
+            previous: FxHashMap::default(),
+        }
+    }
+
+    pub fn insert(&mut self, block_hash: B256, entry: PayloadEntry) {
+        self.current.insert(block_hash, entry);
+    }
+
+    pub fn or_insert(&mut self, block_hash: B256, entry: PayloadEntry) {
+        self.current.entry(block_hash).or_insert(entry);
+    }
+
+    /// The current auction's payloads only: a bid is served from this slot.
+    pub fn get(&self, block_hash: &B256) -> Option<&PayloadEntry> {
+        self.current.get(block_hash)
+    }
+
+    /// As [`Self::get`], falling back to the previous slot. Redemption arrives
+    /// after the relay has moved on, so the bid it names is usually one back.
+    pub fn get_for_redemption(&self, block_hash: &B256) -> Option<&PayloadEntry> {
+        self.current.get(block_hash).or_else(|| self.previous.get(block_hash))
+    }
+
+    pub fn len(&self) -> usize {
+        self.current.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.current.is_empty() && self.previous.is_empty()
+    }
+
+    /// Starts a new auction, returning the generation that is now too old to
+    /// redeem so the caller can drop it off the event loop.
+    #[must_use]
+    fn rotate(&mut self, capacity: usize) -> FxHashMap<B256, PayloadEntry> {
+        let just_finished = std::mem::replace(
+            &mut self.current,
+            FxHashMap::with_capacity_and_hasher(capacity, Default::default()),
+        );
+        std::mem::replace(&mut self.previous, just_finished)
+    }
 }
 
 pub struct Context<B: BidAdjustor> {
@@ -125,10 +185,7 @@ impl<B: BidAdjustor> Context<B> {
                 Default::default(),
             ),
             hydration_cache: HydrationCache::new(),
-            payloads: FxHashMap::with_capacity_and_hasher(
-                EXPECTED_PAYLOADS_PER_SLOT,
-                Default::default(),
-            ),
+            payloads: PayloadStore::with_capacity(EXPECTED_PAYLOADS_PER_SLOT),
             block_merger,
         };
 
@@ -274,10 +331,7 @@ impl<B: BidAdjustor> Context<B> {
             // map, however that would require us to estimate a hard upper limit on
             // payloads received, or risk causing a missed slot
 
-            let payloads_to_drop = std::mem::replace(
-                &mut self.payloads,
-                FxHashMap::with_capacity_and_hasher(EXPECTED_PAYLOADS_PER_SLOT, Default::default()),
-            );
+            let payloads_to_drop = self.payloads.rotate(EXPECTED_PAYLOADS_PER_SLOT);
             std::thread::spawn(move || {
                 let to_drop = payloads_to_drop.len();
                 let start = Instant::now();
@@ -419,5 +473,70 @@ pub fn send_submission_result<P>(
         }
         SubmissionRef::Tcp { .. } => producers.produce(result),
         SubmissionRef::Internal => {}
+    }
+}
+
+#[cfg(test)]
+mod payload_store_tests {
+    use helix_types::{SignedBidSubmission, TestRandomSeed};
+
+    use super::*;
+
+    fn entry() -> PayloadEntry {
+        let mut submission = SignedBidSubmission::test_random();
+        submission.blobs_bundle = Default::default();
+        PayloadEntry::new_submission(
+            submission,
+            B256::ZERO,
+            None,
+            None,
+            None,
+            helix_types::SubmissionVersion::new(0, None),
+            Default::default(),
+            None,
+        )
+    }
+
+    /// The relay moves to the next bid slot moments after a slot starts, but the
+    /// proposer redeems its bid part-way through that slot. Dropping the payload
+    /// at the auction boundary answered every redemption with "no held payload".
+    #[test]
+    fn a_served_bid_is_redeemable_after_the_auction_moves_on() {
+        let hash = B256::repeat_byte(0x11);
+        let mut store = PayloadStore::with_capacity(4);
+        store.insert(hash, entry());
+
+        let _stale = store.rotate(4);
+
+        assert!(store.get(&hash).is_none(), "the new auction starts clean");
+        assert!(
+            store.get_for_redemption(&hash).is_some(),
+            "the proposer must still be able to redeem the bid it was served",
+        );
+    }
+
+    /// One generation, not unbounded: a slot later it is gone.
+    #[test]
+    fn a_payload_is_dropped_after_two_auctions() {
+        let hash = B256::repeat_byte(0x11);
+        let mut store = PayloadStore::with_capacity(4);
+        store.insert(hash, entry());
+
+        let _ = store.rotate(4);
+        let stale = store.rotate(4);
+
+        assert!(store.get_for_redemption(&hash).is_none(), "two slots on, it is not needed");
+        assert!(stale.contains_key(&hash), "and it is handed back to be dropped off-thread");
+    }
+
+    #[test]
+    fn the_current_auction_is_served_from_the_new_generation() {
+        let hash = B256::repeat_byte(0x22);
+        let mut store = PayloadStore::with_capacity(4);
+        let _ = store.rotate(4);
+        store.insert(hash, entry());
+
+        assert!(store.get(&hash).is_some());
+        assert!(store.get_for_redemption(&hash).is_some());
     }
 }
