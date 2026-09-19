@@ -221,6 +221,47 @@ impl IntoResponse for ProposerApiError {
                 ProposerApiError::InvalidGetHeader(_) => StatusCode::UNAUTHORIZED,
             };
 
+        // A 204 carries no body, and no content-type either. Attaching the message
+        // leaves the response malformed, and clients then report it as whatever
+        // their stack makes of it.
+        if code == StatusCode::NO_CONTENT {
+            return code.into_response();
+        }
+
         (code, self.to_string()).into_response()
+    }
+}
+
+#[cfg(test)]
+mod response_shape_tests {
+    use axum::body::to_bytes;
+
+    use super::*;
+
+    /// RFC 9110: a 204 carries no body, and therefore no content-type. Sending one
+    /// leaves the response malformed, and what a client reports it as is then
+    /// anyone's guess.
+    #[tokio::test]
+    async fn no_bid_is_an_empty_204() {
+        let response = ProposerApiError::NoBidPrepared.into_response();
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert_eq!(
+            response.headers().get(http::header::CONTENT_TYPE),
+            None,
+            "a 204 must not declare a content type",
+        );
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert!(body.is_empty(), "a 204 must not carry a body, got: {body:?}");
+    }
+
+    /// Errors that do carry an explanation keep it.
+    #[tokio::test]
+    async fn an_error_status_keeps_its_message() {
+        let response = ProposerApiError::InvalidFork.into_response();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert!(!body.is_empty());
     }
 }
