@@ -5,10 +5,11 @@ pub(crate) mod get_payload;
 mod header_stream;
 mod ip_tracker;
 mod register;
+mod reveal_guard;
 mod submit_builder_preferences;
 mod submit_signed_beacon_block;
 
-use std::sync::{Arc, atomic::Ordering};
+use std::sync::{Arc, Mutex, atomic::Ordering};
 
 use axum::{Extension, response::IntoResponse};
 pub use error::*;
@@ -23,7 +24,11 @@ use hyper::StatusCode;
 pub use submit_signed_beacon_block::{GloasBuilderIdentity, HeldGloasPayload};
 
 use crate::{
-    api::{Api, proposer::ip_tracker::IpTracker, router::Terminating},
+    api::{
+        Api,
+        proposer::{ip_tracker::IpTracker, reveal_guard::RevealGuard},
+        router::Terminating,
+    },
     auctioneer::AuctioneerHandle,
     gossip::GrpcGossiperClientManager,
     registration::RegWorkerHandle,
@@ -48,6 +53,8 @@ pub struct ProposerApi<A: Api> {
     pub operator_api: Option<Arc<OperatorPubSub>>,
     pub ip_tracker: IpTracker,
     pub gloas_builder_identity: Arc<GloasBuilderIdentity>,
+    /// Blocks helix has already committed to redeem, per slot.
+    pub reveal_guard: Arc<Mutex<RevealGuard>>,
 }
 
 impl<A: Api> ProposerApi<A> {
@@ -88,6 +95,7 @@ impl<A: Api> ProposerApi<A> {
             operator_api,
             ip_tracker: IpTracker::default(),
             gloas_builder_identity,
+            reveal_guard: Default::default(),
         }
     }
 }
