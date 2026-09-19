@@ -35,7 +35,7 @@ impl<B: BidAdjustor> Context<B> {
 
         let block_hash = payload.execution_payload.execution_payload.block_hash;
         let entry = PayloadEntry::new_gossip(payload.execution_payload, payload.bid_data);
-        self.payloads.entry(block_hash).or_insert(entry);
+        self.payloads.or_insert(block_hash, entry);
     }
 
     /// If we start broacasting, returns the block hash of the block
