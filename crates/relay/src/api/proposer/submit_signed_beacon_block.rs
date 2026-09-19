@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use alloy_primitives::B256;
 use axum::{Extension, http::HeaderMap};
@@ -10,7 +10,7 @@ use helix_types::{
 };
 use hyper::StatusCode;
 use ssz::Decode;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 use tree_hash::TreeHash;
 
 use super::{ProposerApi, get_payload::fork_name_from_header};
@@ -107,6 +107,12 @@ pub(super) fn construct_signed_envelope(
     Ok(identity.sign_envelope(envelope, chain_info))
 }
 
+/// How many times to offer the payload envelope to the beacon node, and how long
+/// to wait between tries. The block reaches our node over gossip a few hundred
+/// milliseconds after the proposer hands it to us directly.
+const PUBLISH_ATTEMPTS: u32 = 12;
+const PUBLISH_RETRY_INTERVAL: Duration = Duration::from_millis(100);
+
 impl<A: Api> ProposerApi<A> {
     /// Accepts a Gloas `SignedBeaconBlock`. Replaces `submitBlindedBlock`/`getPayload`; per
     /// <https://github.com/ethereum/builder-specs/blob/main/specs/gloas/validator.md#block-proposal>,
@@ -152,10 +158,37 @@ impl<A: Api> ProposerApi<A> {
             &proposer_api.chain_info,
         )?;
 
-        proposer_api
-            .multi_beacon_client
-            .publish_execution_payload_envelope(Arc::new(signed_envelope), ForkName::Gloas)
-            .await?;
+        // The proposer hands us its block before the network has it, so our own
+        // beacon node usually rejects the first reveal with an unknown block
+        // root. Retry until it has seen the block.
+        let signed_envelope = Arc::new(signed_envelope);
+        let mut published = Err(());
+        for attempt in 0..PUBLISH_ATTEMPTS {
+            match proposer_api
+                .multi_beacon_client
+                .publish_execution_payload_envelope(signed_envelope.clone(), ForkName::Gloas)
+                .await
+            {
+                Ok(()) => {
+                    published = Ok(());
+                    break;
+                }
+                Err(err) => {
+                    warn!(%err, attempt, "could not reveal the payload yet");
+                    tokio::time::sleep(PUBLISH_RETRY_INTERVAL).await;
+                }
+            }
+        }
+
+        if published.is_err() {
+            // The proposer's request was well formed and is already accepted; the
+            // reveal is ours to get right, so this is not their error.
+            error!(
+                slot = block.message.slot.as_u64(),
+                "gave up revealing the payload after {PUBLISH_ATTEMPTS} attempts",
+            );
+            return Err(ProposerApiError::InternalServerError);
+        }
 
         Ok(StatusCode::ACCEPTED)
     }
