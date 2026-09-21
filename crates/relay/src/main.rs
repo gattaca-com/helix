@@ -347,7 +347,7 @@ async fn run(
                     UdpTopBidTile::new(
                         sock_addr,
                         local_cache.api_key_cache.clone(),
-                        config.udp_top_bid_max_connections,
+                        config.udp_top_bid_max_connections_per_key,
                     ),
                     spine,
                     TileConfig::new(

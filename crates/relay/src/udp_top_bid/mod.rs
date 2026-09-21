@@ -30,8 +30,6 @@ const MAX_BACKLOG_TIMEOUT_MS: u64 = 100;
 /// has to stay under `SEND_WINDOW` datagrams, which flux asserts.
 const MAX_MESSAGE_SIZE: usize = 4096;
 
-/// `registration_ok + registration_invalid + registration_timeouts <=
-/// accepted`; `sends` is per-(update, peer), `updates_received` is per-update.
 #[derive(Default)]
 struct Stats {
     accepted: u32,
@@ -53,8 +51,9 @@ pub struct UdpTopBidTile {
     /// Accepted but not yet registered, with their accept time.
     pending: Vec<(Token, Instant)>,
     to_disconnect: Vec<Token>,
-    /// Scratch for formatting an api key into the cache's `&str` key.
-    key_buf: [u8; uuid::fmt::Hyphenated::LENGTH],
+
+    send_buf_scratch: Vec<u8>,
+    registration_timeout: Duration,
 
     bid_slot: u64,
     stats: Stats,
@@ -85,7 +84,8 @@ impl UdpTopBidTile {
             registered: Vec::with_capacity(256),
             pending: Vec::with_capacity(256),
             to_disconnect: Vec::with_capacity(256),
-            key_buf: [0; uuid::fmt::Hyphenated::LENGTH],
+            send_buf_scratch: Vec::with_capacity(MAX_MESSAGE_SIZE),
+            registration_timeout: Duration::from_millis(REGISTRATION_TIMEOUT_MS),
             bid_slot: 0,
             stats: Stats::default(),
         }
@@ -112,7 +112,6 @@ impl UdpTopBidTile {
     }
 }
 
-/// Key is known and covers the pubkey, and this key is under the per-key cap.
 fn can_connect(
     cache: &DashMap<String, Vec<BlsPublicKeyBytes>>,
     msg: &RegistrationMsg,
@@ -141,7 +140,6 @@ impl Tile<HelixSpine> for UdpTopBidTile {
             registered,
             pending,
             to_disconnect,
-            key_buf,
             stats,
             ..
         } = self;
@@ -156,8 +154,11 @@ impl Tile<HelixSpine> for UdpTopBidTile {
             PollEvent::Disconnect { token } => {
                 tracing::trace!(?token, "udp top bid peer disconnected");
                 stats.disconnected += 1;
-                registered.retain(|(t, _)| *t != token);
-                pending.retain(|(t, _)| *t != token);
+                if let Some(i) = registered.iter().position(|(t, _)| *t == token) {
+                    registered.swap_remove(i);
+                } else if let Some(i) = pending.iter().position(|(t, _)| *t == token) {
+                    pending.swap_remove(i);
+                }
             }
             PollEvent::Message { token, payload, send_ts: _ } => {
                 let Some(ix) = pending.iter().position(|(t, _)| *t == token) else {
@@ -175,7 +176,9 @@ impl Tile<HelixSpine> for UdpTopBidTile {
                     }
                 };
 
-                let api_key = Uuid::from_bytes(msg.api_key).as_hyphenated().encode_lower(key_buf);
+                let mut key_buf = [0u8; uuid::fmt::Hyphenated::LENGTH];
+                let api_key =
+                    Uuid::from_bytes(msg.api_key).as_hyphenated().encode_lower(&mut key_buf);
                 if can_connect(api_key_cache, &msg, api_key, registered, *max_per_key) {
                     stats.registration_ok += 1;
                     registered.push((token, msg.api_key));
@@ -186,9 +189,9 @@ impl Tile<HelixSpine> for UdpTopBidTile {
             }
         });
 
-        let Self { pending, to_disconnect, stats, .. } = self;
+        let Self { pending, to_disconnect, stats, registration_timeout, .. } = self;
         pending.retain(|(token, accepted_at)| {
-            if accepted_at.elapsed() <= Duration::from_millis(REGISTRATION_TIMEOUT_MS) {
+            if accepted_at.elapsed() <= *registration_timeout {
                 return true;
             }
             stats.registration_timeouts += 1;
@@ -198,17 +201,22 @@ impl Tile<HelixSpine> for UdpTopBidTile {
 
         for token in self.to_disconnect.drain(..) {
             self.driver.disconnect(token);
-            self.registered.retain(|(t, _)| *t != token);
         }
 
-        let Self { driver, registered, stats, .. } = self;
+        let Self { driver, registered, send_buf_scratch: send_buf, stats, .. } = self;
         let mut latest_slot = 0;
         adapter.consume(|top_bid: TopBidUpdate, _producers| {
             latest_slot = latest_slot.max(top_bid.slot);
             stats.updates_received += 1;
+            if registered.is_empty() {
+                return;
+            }
+            send_buf.clear();
+            top_bid.ssz_append(send_buf);
+            let payload: &[u8] = send_buf;
             for &(token, _) in registered.iter() {
                 driver.write_or_enqueue_with(SendBehavior::Single(token), |buffer| {
-                    top_bid.ssz_append(buffer);
+                    buffer.extend_from_slice(payload);
                 });
                 stats.sends += 1;
             }

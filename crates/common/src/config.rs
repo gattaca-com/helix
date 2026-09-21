@@ -77,7 +77,7 @@ pub struct RelayConfig {
     pub udp_top_bid_enabled: bool,
     /// Max UDP top-bid sessions per API key. Further registrations from that key are dropped.
     #[serde(default = "default_usize::<5>")]
-    pub udp_top_bid_max_connections: usize,
+    pub udp_top_bid_max_connections_per_key: usize,
     pub s3_config: Option<S3Config>,
     /// Directory for local cache snapshots (bincode). Enables fast startup.
     pub snapshot_dir: Option<PathBuf>,
@@ -141,7 +141,7 @@ impl RelayConfig {
             tcp_port: 4041,
             tcp_max_connections: 512,
             udp_top_bid_enabled: false,
-            udp_top_bid_max_connections: 5,
+            udp_top_bid_max_connections_per_key: 5,
             s3_config: None,
             snapshot_dir: None,
             clickhouse: None,
