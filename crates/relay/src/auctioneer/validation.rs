@@ -35,16 +35,23 @@ impl<B: BidAdjustor> Context<B> {
             });
         };
 
-        if let helix_types::Submission::Dehydrated(ref dehydrated) = *submission &&
-            !self.hydration_cache.can_hydrate(dehydrated, self.chain_info.max_blobs_per_block())
-        {
-            return Err(BlockValidationError::CannotHydrate);
+        // Keyed withdrawals are empty on the wire, so the decoder's root is of
+        // the empty list; take the cached list's root instead.
+        let mut withdrawals_root = submission_data.withdrawals_root;
+        if let helix_types::Submission::Dehydrated(ref dehydrated) = *submission {
+            if !self.hydration_cache.can_hydrate(dehydrated, self.chain_info.max_blobs_per_block())
+            {
+                return Err(BlockValidationError::CannotHydrate);
+            }
+            if let Some(root) = self.hydration_cache.cached_withdrawals_root(dehydrated) {
+                withdrawals_root = root;
+            }
         }
 
         self.staleness_check(submission.builder_pubkey(), submission_data.version)?;
         self.validate_submission_data(
             submission,
-            &submission_data.withdrawals_root,
+            &withdrawals_root,
             slot_data,
             payload_attributes,
         )?;

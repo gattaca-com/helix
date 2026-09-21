@@ -472,6 +472,8 @@ struct BlobItemFulu {
 const TX_KEY_SIZE: usize = 67;
 
 type CachedBlob = (KzgCommitment, Vec<KzgProof>, Blob);
+/// The slot's withdrawals with their tree hash root, checked pre-hydration.
+type CachedWithdrawals = (Withdrawals, B256);
 
 /// Withdrawals cache key: FxHash over each withdrawal's fields. Mirrored by
 /// the builder for v2 `withdrawals_ref`.
@@ -500,14 +502,21 @@ impl DehydratedBidSubmissionFulu {
         &self,
         txs: &FxHashMap<u64, Transaction>,
         blobs: &FxHashMap<u64, CachedBlob>,
-        withdrawals: &FxHashMap<u64, Withdrawals>,
+        withdrawals: &FxHashMap<u64, CachedWithdrawals>,
         max_blobs_per_block: usize,
     ) -> bool {
+        // v1 conversion keys new blobs by hash rather than `0`, so a ref may
+        // point at an item in `new_items` that is not cached yet.
+        let is_new =
+            |r: u64| self.blobs_bundle.new_items.iter().any(|b| blob_cache_key(&b.commitment) == r);
         self.blobs_bundle.refs.len() <= max_blobs_per_block &&
             (self.withdrawals_ref == 0 || withdrawals.contains_key(&self.withdrawals_ref)) &&
             self.tx_refs.iter().all(|&r| r == NEXT_FULL_ITEM || txs.contains_key(&r)) &&
             self.execution_payload.transactions.iter().all(|tx| tx.len() >= TX_KEY_SIZE) &&
-            self.blobs_bundle.refs.iter().all(|&r| r == NEXT_FULL_ITEM || blobs.contains_key(&r))
+            self.blobs_bundle
+                .refs
+                .iter()
+                .all(|&r| r == NEXT_FULL_ITEM || blobs.contains_key(&r) || is_new(r))
     }
 
     #[timed]
@@ -515,7 +524,7 @@ impl DehydratedBidSubmissionFulu {
         mut self,
         txs: &mut FxHashMap<u64, Transaction>,
         blobs: &mut FxHashMap<u64, CachedBlob>,
-        withdrawals: &mut FxHashMap<u64, Withdrawals>,
+        withdrawals: &mut FxHashMap<u64, CachedWithdrawals>,
         max_blobs_per_block: usize,
     ) -> Result<HydratedData, HydrationError> {
         // avoid short-circuiting the loop to maximize cache population
@@ -524,14 +533,14 @@ impl DehydratedBidSubmissionFulu {
 
         if self.withdrawals_ref != 0 {
             match withdrawals.get(&self.withdrawals_ref) {
-                Some(w) => self.execution_payload.withdrawals = w.clone(),
+                Some((w, _)) => self.execution_payload.withdrawals = w.clone(),
                 None => {
                     last_err = Err(HydrationError::UnknownWithdrawals { key: self.withdrawals_ref })
                 }
             }
         } else if !self.execution_payload.withdrawals.is_empty() {
             let w = &self.execution_payload.withdrawals;
-            withdrawals.insert(withdrawals_key(w), w.clone());
+            withdrawals.insert(withdrawals_key(w), (w.clone(), w.tree_hash_root()));
         }
 
         let full: Vec<Transaction> =
@@ -623,11 +632,11 @@ impl DehydratedBidSubmissionFulu {
         &self,
         txs: &mut FxHashMap<u64, Transaction>,
         blobs: &mut FxHashMap<u64, CachedBlob>,
-        withdrawals: &mut FxHashMap<u64, Withdrawals>,
+        withdrawals: &mut FxHashMap<u64, CachedWithdrawals>,
     ) {
         if self.withdrawals_ref == 0 && !self.execution_payload.withdrawals.is_empty() {
             let w = &self.execution_payload.withdrawals;
-            withdrawals.insert(withdrawals_key(w), w.clone());
+            withdrawals.insert(withdrawals_key(w), (w.clone(), w.tree_hash_root()));
         }
         for tx in &self.execution_payload.transactions {
             if tx.len() >= TX_KEY_SIZE {
@@ -646,7 +655,7 @@ impl DehydratedBidSubmissionFulu {
 struct Cache {
     transactions: FxHashMap<u64, Transaction>,
     blobs_fulu: FxHashMap<u64, CachedBlob>,
-    withdrawals: FxHashMap<u64, Withdrawals>,
+    withdrawals: FxHashMap<u64, CachedWithdrawals>,
 }
 
 impl Cache {
@@ -674,7 +683,7 @@ impl Default for Cache {
 pub struct SimHydrationCache {
     transactions: FxHashMap<u64, Transaction>,
     blobs_fulu: FxHashMap<u64, CachedBlob>,
-    withdrawals: FxHashMap<u64, Withdrawals>,
+    withdrawals: FxHashMap<u64, CachedWithdrawals>,
 }
 
 impl SimHydrationCache {
@@ -774,6 +783,20 @@ impl HydrationCache {
                     max_blobs_per_block,
                 )
             }
+        }
+    }
+
+    /// Root of the cached withdrawals a keyed submission refers to; `None`
+    /// when the list is inline (the decoder computed it) or unknown.
+    pub fn cached_withdrawals_root(&self, submission: &DehydratedBidSubmission) -> Option<B256> {
+        match submission {
+            DehydratedBidSubmission::Fulu(s) if s.withdrawals_ref != 0 => self
+                .caches
+                .get(&s.message.builder_pubkey)?
+                .withdrawals
+                .get(&s.withdrawals_ref)
+                .map(|(_, root)| *root),
+            DehydratedBidSubmission::Fulu(_) => None,
         }
     }
 
