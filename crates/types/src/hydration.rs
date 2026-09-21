@@ -540,7 +540,9 @@ impl DehydratedBidSubmissionFulu {
             }
         } else if !self.execution_payload.withdrawals.is_empty() {
             let w = &self.execution_payload.withdrawals;
-            withdrawals.insert(withdrawals_key(w), (w.clone(), w.tree_hash_root()));
+            withdrawals
+                .entry(withdrawals_key(w))
+                .or_insert_with(|| (w.clone(), w.tree_hash_root()));
         }
 
         let full: Vec<Transaction> =
@@ -636,7 +638,9 @@ impl DehydratedBidSubmissionFulu {
     ) {
         if self.withdrawals_ref == 0 && !self.execution_payload.withdrawals.is_empty() {
             let w = &self.execution_payload.withdrawals;
-            withdrawals.insert(withdrawals_key(w), (w.clone(), w.tree_hash_root()));
+            withdrawals
+                .entry(withdrawals_key(w))
+                .or_insert_with(|| (w.clone(), w.tree_hash_root()));
         }
         for tx in &self.execution_payload.transactions {
             if tx.len() >= TX_KEY_SIZE {
