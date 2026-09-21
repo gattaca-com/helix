@@ -46,9 +46,10 @@ struct Stats {
 pub struct UdpTopBidTile {
     driver: NetworkDriver,
     api_key_cache: Arc<DashMap<String, Vec<BlsPublicKeyBytes>>>,
+    max_per_key: usize,
 
     /// Authenticated peers, the only tokens an update is written to.
-    registered: Vec<Token>,
+    registered: Vec<(Token, [u8; 16])>,
     /// Accepted but not yet registered, with their accept time.
     pending: Vec<(Token, Instant)>,
     to_disconnect: Vec<Token>,
@@ -63,7 +64,7 @@ impl UdpTopBidTile {
     pub fn new(
         listener_addr: SocketAddr,
         api_key_cache: Arc<DashMap<String, Vec<BlsPublicKeyBytes>>>,
-        max_connections: usize,
+        max_per_key: usize,
     ) -> Self {
         let udp = UdpConfig {
             send_window: SEND_WINDOW,
@@ -80,9 +81,10 @@ impl UdpTopBidTile {
         Self {
             driver,
             api_key_cache,
-            registered: Vec::with_capacity(max_connections),
-            pending: Vec::with_capacity(max_connections),
-            to_disconnect: Vec::with_capacity(max_connections),
+            max_per_key,
+            registered: Vec::with_capacity(256),
+            pending: Vec::with_capacity(256),
+            to_disconnect: Vec::with_capacity(256),
             key_buf: [0; uuid::fmt::Hyphenated::LENGTH],
             bid_slot: 0,
             stats: Stats::default(),
@@ -110,21 +112,38 @@ impl UdpTopBidTile {
     }
 }
 
-/// Same check as the TCP bid listener: the key must be known and cover the
-/// claimed builder pubkey.
-fn is_authorised(
+/// Key is known and covers the pubkey, and this key is under the per-key cap.
+fn can_connect(
     cache: &DashMap<String, Vec<BlsPublicKeyBytes>>,
+    msg: &RegistrationMsg,
     api_key: &str,
-    builder_pubkey: &BlsPublicKeyBytes,
+    registered: &[(Token, [u8; 16])],
+    max_per_key: usize,
 ) -> bool {
-    cache.get(api_key).is_some_and(|p| p.value().contains(builder_pubkey)) ||
-        (is_local_dev() && cache.contains_key(api_key))
+    // api-key is allowed to connect via udp
+    let is_authorised = cache.get(api_key).is_some_and(|p| p.value().contains(&msg.builder_pubkey)) ||
+        (is_local_dev() && cache.contains_key(api_key));
+    if !is_authorised {
+        return false;
+    }
+
+    // api-key hasn't reached it's max conns
+    // registered.len() is expected to be low.
+    registered.iter().filter(|(_, k)| *k == msg.api_key).count() < max_per_key
 }
 
 impl Tile<HelixSpine> for UdpTopBidTile {
     fn loop_body(&mut self, adapter: &mut flux::spine::SpineAdapter<HelixSpine>) {
         let Self {
-            driver, api_key_cache, registered, pending, to_disconnect, key_buf, stats, ..
+            driver,
+            api_key_cache,
+            max_per_key,
+            registered,
+            pending,
+            to_disconnect,
+            key_buf,
+            stats,
+            ..
         } = self;
 
         driver.poll_with(|event| match event {
@@ -137,7 +156,7 @@ impl Tile<HelixSpine> for UdpTopBidTile {
             PollEvent::Disconnect { token } => {
                 tracing::trace!(?token, "udp top bid peer disconnected");
                 stats.disconnected += 1;
-                registered.retain(|t| *t != token);
+                registered.retain(|(t, _)| *t != token);
                 pending.retain(|(t, _)| *t != token);
             }
             PollEvent::Message { token, payload, send_ts: _ } => {
@@ -157,15 +176,10 @@ impl Tile<HelixSpine> for UdpTopBidTile {
                 };
 
                 let api_key = Uuid::from_bytes(msg.api_key).as_hyphenated().encode_lower(key_buf);
-                if is_authorised(api_key_cache, api_key, &msg.builder_pubkey) {
+                if can_connect(api_key_cache, &msg, api_key, registered, *max_per_key) {
                     stats.registration_ok += 1;
-                    registered.push(token);
+                    registered.push((token, msg.api_key));
                 } else {
-                    tracing::error!(
-                        %api_key,
-                        builder_pubkey = %msg.builder_pubkey,
-                        "unknown api key and pubkey pair, disconnecting udp peer"
-                    );
                     stats.registration_invalid += 1;
                     to_disconnect.push(token);
                 }
@@ -184,7 +198,7 @@ impl Tile<HelixSpine> for UdpTopBidTile {
 
         for token in self.to_disconnect.drain(..) {
             self.driver.disconnect(token);
-            self.registered.retain(|t| *t != token);
+            self.registered.retain(|(t, _)| *t != token);
         }
 
         let Self { driver, registered, stats, .. } = self;
@@ -192,7 +206,7 @@ impl Tile<HelixSpine> for UdpTopBidTile {
         adapter.consume(|top_bid: TopBidUpdate, _producers| {
             latest_slot = latest_slot.max(top_bid.slot);
             stats.updates_received += 1;
-            for &token in registered.iter() {
+            for &(token, _) in registered.iter() {
                 driver.write_or_enqueue_with(SendBehavior::Single(token), |buffer| {
                     top_bid.ssz_append(buffer);
                 });
