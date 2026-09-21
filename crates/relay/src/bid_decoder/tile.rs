@@ -19,7 +19,7 @@ use helix_common::{
     utils::utcnow_ns,
 };
 use helix_types::{
-    BidAdjustmentData, BlockMergingData, BlsPublicKeyBytes, MergeType, SignedBidSubmission,
+    BidAdjustmentData, BlockMergingDataV2, BlsPublicKeyBytes, MergeType, SignedBidSubmission,
     Submission, SubmissionVersion,
 };
 use rustc_hash::FxHashMap;
@@ -343,7 +343,7 @@ impl DecoderTile {
                 config
                     .block_merging_config
                     .treat_as_append_only(submission.fee_recipient())
-                    .then(|| BlockMergingData::append_only(submission.fee_recipient()))
+                    .then(|| BlockMergingDataV2::append_only(submission.fee_recipient()))
             })
         } else {
             None
@@ -380,7 +380,7 @@ impl DecoderTile {
             Submission,
             B256,
             SubmissionVersion,
-            Option<BlockMergingData>,
+            Option<BlockMergingDataV2>,
             Option<BidAdjustmentData>,
             SubmissionDecoderParams,
         ),
@@ -389,11 +389,15 @@ impl DecoderTile {
         let with_mergeable_data = header.merge_type.is_some();
         let with_adjustments = header.flags.with_adjustments();
         let is_dehydrated = header.flags.is_dehydrated();
+        let dehydrated_v2 = header.flags.dehydrated_v2();
+        let merging_v2 = header.flags.merging_v2();
 
         let decoder_params = SubmissionDecoderParams {
             compression: header.compression,
             encoding: header.encoding,
             is_dehydrated,
+            dehydrated_v2,
+            merging_v2,
             merge_type: header.merge_type,
             with_mergeable_data,
             with_adjustments,
