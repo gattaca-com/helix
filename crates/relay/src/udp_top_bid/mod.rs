@@ -94,6 +94,7 @@ impl UdpTopBidTile {
             return;
         }
         let stats = std::mem::take(&mut self.stats);
+        // TODO: move to datagatherer telem
         info!(
             bid_slot = self.bid_slot,
             peers = self.registered.len(),

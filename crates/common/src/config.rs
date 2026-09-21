@@ -195,8 +195,7 @@ pub struct CoresConfig {
     pub simulator: usize,
     #[serde(default)]
     pub top_bid: usize,
-    /// Required when `udp_top_bid_enabled`; left unset the tile would land on
-    /// core 0 alongside whatever already spins there.
+    /// Required when `udp_top_bid_enabled`
     #[serde(default)]
     pub udp_top_bid: Option<usize>,
     #[serde(default)]
