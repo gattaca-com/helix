@@ -10,6 +10,7 @@ use helix_common::{
     metrics::TopBidMetrics,
 };
 use hyper::HeaderMap;
+use rand::{SeedableRng, rngs::SmallRng, seq::SliceRandom};
 use tokio_tungstenite::tungstenite::{Error as WebSocketError, Message};
 use tracing::{debug, error, info};
 
@@ -92,6 +93,7 @@ pub struct TopBidTile {
     last_send: Nanos,
     bid_slot: u64,
     stats: SlotStats,
+    rng: SmallRng,
 }
 
 impl TopBidTile {
@@ -102,6 +104,7 @@ impl TopBidTile {
             last_send: Nanos::now(),
             bid_slot: 0,
             stats: SlotStats::default(),
+            rng: SmallRng::from_os_rng(),
         }
     }
 
@@ -111,6 +114,7 @@ impl TopBidTile {
         }
         self.report_slot_stats();
         self.bid_slot = slot;
+        self.connections.shuffle(&mut self.rng);
     }
 
     fn report_slot_stats(&mut self) {
