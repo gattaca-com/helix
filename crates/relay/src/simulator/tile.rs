@@ -213,13 +213,24 @@ impl SimulatorTile {
 
     fn handle_sync_status(&mut self, id: usize, reported: Option<bool>) {
         self.simulators[id].record_sync(reported);
-        let now = Instant::now();
+        self.refresh_accept_optimistic(Instant::now());
+    }
+
+    fn refresh_accept_optimistic(&self, now: Instant) {
         let new = self.simulators.iter().any(|s| s.can_simulate_light(now));
-        let prev = self.accept_optimistic.load(Ordering::Relaxed);
+        let prev = self.accept_optimistic.swap(new, Ordering::Relaxed);
         if new != prev {
-            warn!(prev, new, "changing accept_optimistic simulation status");
+            let synced = self.simulators.iter().filter(|s| s.is_synced).count();
+            let answering = self.simulators.iter().filter(|s| s.answered_recently(now)).count();
+            warn!(
+                prev,
+                new,
+                synced,
+                answering,
+                sims = self.simulators.len(),
+                "changing accept_optimistic simulation status"
+            );
         }
-        self.accept_optimistic.store(new, Ordering::Relaxed);
     }
 
     #[timed]
@@ -315,6 +326,8 @@ impl SimulatorTile {
             stats.count += 1;
             stats.total_time += elapsed;
         }
+
+        self.refresh_accept_optimistic(now);
 
         producers.produce(FromSimMsg { ix: result_ix });
 
@@ -791,6 +804,8 @@ struct SimEntry {
     client: SimulatorClient,
     is_synced: bool,
     breaker: Breaker,
+    /// When this node last answered a simulation. `None` until it answers one.
+    last_success: Option<Instant>,
     /// Adaptive concurrency limit, bounded by `max_concurrent_tasks`.
     limit: usize,
     /// Consecutive sim faults, reset by any answer from the node.
@@ -809,6 +824,7 @@ impl SimEntry {
             client,
             is_synced: false,
             breaker: Breaker::Closed,
+            last_success: None,
             limit,
             faults: 0,
             sync_failures: 0,
@@ -845,9 +861,15 @@ impl SimEntry {
         }
     }
 
-    /// A lighter check to decide whether we should accept optimistic submissions
+    /// A lighter check to decide whether we should accept optimistic submissions. A breaker
+    /// backoff is not a loss of capability, so it only closes this once the node has gone
+    /// `OPTIMISTIC_GRACE` without answering a simulation.
     fn can_simulate_light(&self, now: Instant) -> bool {
-        self.is_synced && self.effective_limit(now) > 0
+        self.is_synced && (matches!(self.breaker, Breaker::Closed) || self.answered_recently(now))
+    }
+
+    fn answered_recently(&self, now: Instant) -> bool {
+        self.last_success.is_some_and(|at| now.saturating_duration_since(at) < OPTIMISTIC_GRACE)
     }
 
     fn can_simulate_at(&self, now: Instant) -> bool {
@@ -877,6 +899,7 @@ impl SimEntry {
     fn record_success(&mut self, elapsed: Duration, now: Instant) {
         self.faults = 0;
         self.breaker = Breaker::Closed;
+        self.last_success = Some(now);
         if elapsed <= LATENCY_TARGET {
             self.limit = (self.limit + 1).min(self.ceiling());
         } else {
@@ -931,6 +954,10 @@ const DECREASE_FLOOR: usize = 4;
 const DECREASE_WINDOW: Duration = Duration::from_millis(250);
 const UTILIZATION_SCALE: usize = 1_000;
 const SIM_FAULTS_TO_OPEN: usize = 3;
+/// How long every simulator must go without answering a simulation before the relay stops
+/// accepting optimistic submissions. Longer than `BREAKER_BACKOFF_START`, shorter than
+/// `BREAKER_BACKOFF_MAX`, so a backoff is ridden out but a real outage is not.
+const OPTIMISTIC_GRACE: Duration = Duration::from_secs(30);
 const BREAKER_BACKOFF_START: Duration = Duration::from_secs(12);
 const BREAKER_BACKOFF_MAX: Duration = Duration::from_secs(60);
 const SYNC_FAILURES_TO_UNSYNC: usize = 3;
@@ -1855,6 +1882,53 @@ mod tests {
         assert_eq!(submission.blobs_bundle.commitments[0], blob.commitment);
         assert_eq!(submission.blobs_bundle.proofs, blob.proofs);
         assert_eq!(submission.blobs_bundle.blobs.len(), 1);
+    }
+
+    /// A breaker opens for 12s at the first fault. Demoting every builder for a whole slot
+    /// over a backoff, on a node that is synced and answering, costs far more than it saves.
+    #[test]
+    fn a_breaker_backoff_alone_keeps_optimistic_acceptance() {
+        let now = Instant::now();
+        let mut sim = fast_sim(8);
+        sim.is_synced = true;
+        sim.record_success(LATENCY_TARGET / 2, now);
+        open_breaker(&mut sim, now);
+
+        assert_eq!(sim.health(now), SimHealth::Open);
+        assert!(sim.can_simulate_light(now));
+    }
+
+    #[test]
+    fn a_sustained_outage_stops_optimistic_acceptance() {
+        let now = Instant::now();
+        let mut sim = fast_sim(8);
+        sim.is_synced = true;
+        sim.record_success(LATENCY_TARGET / 2, now);
+        open_breaker(&mut sim, now);
+
+        assert!(!sim.can_simulate_light(now + OPTIMISTIC_GRACE));
+    }
+
+    #[test]
+    fn an_unsynced_sim_never_holds_optimistic_acceptance_open() {
+        let now = Instant::now();
+        let mut sim = fast_sim(8);
+        sim.record_success(LATENCY_TARGET / 2, now);
+
+        assert!(!sim.can_simulate_light(now));
+    }
+
+    #[test]
+    fn a_success_rearms_optimistic_acceptance() {
+        let now = Instant::now();
+        let mut sim = fast_sim(8);
+        sim.is_synced = true;
+        open_breaker(&mut sim, now);
+        assert!(!sim.can_simulate_light(now + OPTIMISTIC_GRACE));
+
+        sim.record_success(LATENCY_TARGET / 2, now);
+
+        assert!(sim.can_simulate_light(now + OPTIMISTIC_GRACE));
     }
 
     #[test]
