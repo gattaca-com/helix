@@ -123,6 +123,7 @@ impl RelayConfig {
             is_local_dev: Default::default(),
             cores: CoresConfig {
                 auctioneer: 1,
+                dealloc: None,
                 tokio: vec![],
                 reg_workers: vec![],
                 tcp_bid_submissions_tile: 2,
@@ -185,6 +186,8 @@ pub struct WebsiteConfig {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct CoresConfig {
     pub auctioneer: usize,
+    #[serde(default)]
+    pub dealloc: Option<usize>,
     pub tokio: Vec<usize>,
     /// Registrations
     pub reg_workers: Vec<usize>,

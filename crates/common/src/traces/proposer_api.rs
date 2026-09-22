@@ -32,6 +32,11 @@ pub struct GetPayloadTrace {
     pub payload_fetched: u64,
     #[serde(default)]
     pub slot_start_awaited: u64,
+    /// After `gossip_payload` returns: SSZ encode, one deep clone + gzip per peer
+    /// relay, and the operator broadcast. Awaited on both API versions, so without
+    /// this stamp it is indistinguishable from the beacon publish that follows it.
+    #[serde(default)]
+    pub gossiped: u64,
     pub validation_complete: u64,
     pub beacon_client_broadcast: u64,
     pub broadcaster_block_broadcast: u64,
@@ -59,6 +64,7 @@ impl GetPayloadTrace {
             ("signature_validated", self.signature_validated),
             ("payload_fetched", self.payload_fetched),
             ("slot_start_awaited", self.slot_start_awaited),
+            ("gossiped", self.gossiped),
             ("validation_complete", self.validation_complete),
             ("beacon_client_broadcast", self.beacon_client_broadcast),
             ("broadcaster_block_broadcast", self.broadcaster_block_broadcast),

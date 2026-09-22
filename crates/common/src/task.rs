@@ -22,21 +22,24 @@ static RUNTIME: OnceLock<runtime::Runtime> = OnceLock::new();
 #[macro_export]
 macro_rules! spawn_tracked {
     ($future:expr) => {
-        $crate::task::spawn(file!(), line!(), $future)
+        $crate::task::spawn(concat!(file!(), ":", line!()), $future)
     };
 }
 
-pub fn spawn<F>(file: &str, line: u32, future: F) -> JoinHandle<F::Output>
+/// `label` is built by the macro with `concat!`, so it is a compile-time constant
+/// rather than a per-spawn `format!` allocation. Every proxied request and every
+/// gossip peer goes through here, so that allocation was on the hot path.
+#[doc(hidden)]
+pub fn spawn<F>(label: &'static str, future: F) -> JoinHandle<F::Output>
 where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
 {
-    let label = format!("{file}:{line}");
     match RUNTIME.get() {
         Some(runtime) => runtime.spawn(
             async move {
                 // TODO perf: preload metrics for labels.
-                match crate::metrics::TASK_COUNT.get_metric_with_label_values(&[label.as_str()]) {
+                match crate::metrics::TASK_COUNT.get_metric_with_label_values(&[label]) {
                     Ok(metric) => {
                         metric.inc();
                         let result = future.await;
