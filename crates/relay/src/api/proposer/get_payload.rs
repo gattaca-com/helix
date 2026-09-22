@@ -381,6 +381,8 @@ impl<A: Api> ProposerApi<A> {
         )
         .await;
 
+        trace.gossiped = utcnow_ns();
+
         let self_clone = self.clone();
         let mut trace_clone = *trace;
         let payload_clone = to_proposer.data.clone();
