@@ -369,6 +369,8 @@ impl<A: Api> ProposerApi<A> {
                 }
             };
 
+        trace.slot_start_awaited = utcnow_ns();
+
         self.gossip_payload(
             to_publish.signed_block.slot(),
             &proposer_public_key,

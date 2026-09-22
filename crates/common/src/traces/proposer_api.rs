@@ -30,6 +30,8 @@ pub struct GetPayloadTrace {
     pub proposer_index_validated: u64,
     pub signature_validated: u64,
     pub payload_fetched: u64,
+    #[serde(default)]
+    pub slot_start_awaited: u64,
     pub validation_complete: u64,
     pub beacon_client_broadcast: u64,
     pub broadcaster_block_broadcast: u64,
@@ -49,25 +51,35 @@ impl GetPayloadTrace {
     }
 
     pub fn record_metrics(&self) {
-        record("read_body", self.receive, self.read_body);
-        record("start_handler", self.read_body, self.start_handler);
-        record("decode", self.start_handler, self.decode);
-        record("proposer_index_validated", self.decode, self.proposer_index_validated);
-        record("signature_validated", self.proposer_index_validated, self.signature_validated);
-        record("payload_fetched", self.signature_validated, self.payload_fetched);
-        record("validation_complete", self.payload_fetched, self.validation_complete);
-        record("beacon_client_broadcast", self.validation_complete, self.beacon_client_broadcast);
-        record(
-            "broadcaster_block_broadcast",
-            self.beacon_client_broadcast,
-            self.broadcaster_block_broadcast,
-        );
-        record("on_deliver_payload", self.broadcaster_block_broadcast, self.on_deliver_payload);
+        let steps = [
+            ("read_body", self.read_body),
+            ("start_handler", self.start_handler),
+            ("decode", self.decode),
+            ("proposer_index_validated", self.proposer_index_validated),
+            ("signature_validated", self.signature_validated),
+            ("payload_fetched", self.payload_fetched),
+            ("slot_start_awaited", self.slot_start_awaited),
+            ("validation_complete", self.validation_complete),
+            ("beacon_client_broadcast", self.beacon_client_broadcast),
+            ("broadcaster_block_broadcast", self.broadcaster_block_broadcast),
+            ("on_deliver_payload", self.on_deliver_payload),
+        ];
+
+        let mut prev = self.receive;
+        for (label, stamp) in steps {
+            if stamp == 0 {
+                continue;
+            }
+            record(label, prev, stamp);
+            prev = stamp;
+        }
     }
 }
 
 fn record(label: &str, start: u64, end: u64) {
-    if end > start {
+    // `start == 0` means the preceding step was never stamped; without this guard the
+    // subtraction degenerates into the absolute timestamp.
+    if start > 0 && end > start {
         let value = (end - start) as f64 / 1000.;
         GET_PAYLOAD_TRACE_LATENCY.with_label_values(&[label]).observe(value);
     }
