@@ -96,27 +96,22 @@ impl Default for ForkState {
 }
 
 impl ForkState {
+    /// Highest bid currently held for this fork, whoever sent it.
+    fn best_bid(&self) -> Option<Bid> {
+        self.bids
+            .values()
+            .copied()
+            .reduce(|best, bid| if bid.value > best.value { bid } else { best })
+    }
+
     fn traverse_update_top_bid(
         &mut self,
         trace: Option<&mut SubmissionTrace>,
         is_optimistic: bool,
         producers: &mut HelixSpineProducers,
     ) {
-        let mut best = None;
-
-        for bid in self.bids.values() {
-            let Some(curr_best) = best else {
-                best = Some(bid);
-                continue;
-            };
-
-            if bid.value > curr_best.value {
-                best = Some(bid);
-            }
-        }
-
-        if let Some(best_bid) = best {
-            self.update_top_bid(*best_bid, trace, is_optimistic, producers);
+        if let Some(best_bid) = self.best_bid() {
+            self.update_top_bid(best_bid, trace, is_optimistic, producers);
         } else {
             self.curr_bid = None;
         }
@@ -265,7 +260,7 @@ impl BidSorter {
                     trace!("cancel submission, traversing");
                     state.traverse_update_top_bid(Some(trace), is_optimistic, producers);
 
-                    false
+                    state.curr_bid.is_some_and(|b| b.block_hash == new_bid.block_hash)
                 } else {
                     // new bid lower than best
                     false
@@ -332,5 +327,59 @@ impl BidSorter {
             ?fork_report,
             "bid sorter slot stats"
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bid(builder: u8, block: u8, value: u64) -> Bid {
+        Bid {
+            version: SubmissionVersion::new(0, None),
+            value: U256::from(value),
+            slot: 1,
+            block_hash: B256::repeat_byte(block),
+            builder_pubkey: {
+                let mut pk = BlsPublicKeyBytes::default();
+                pk.0[0] = builder;
+                pk
+            },
+            block_number: 1,
+            parent_hash: B256::repeat_byte(1),
+            fee_recipient: Address::ZERO,
+        }
+    }
+
+    fn fork_with(bids: &[Bid]) -> ForkState {
+        let mut state = ForkState::default();
+        for b in bids {
+            state.bids.insert(b.builder_pubkey, *b);
+        }
+        state
+    }
+
+    /// A builder lowering its own top bid while still holding the highest bid keeps the
+    /// auction, so the traversal must name it. `process_bid` reports this as `is_top_bid`,
+    /// which decides whether the simulator treats the bid as one we would serve.
+    #[test]
+    fn a_self_cancel_that_stays_highest_is_still_the_top_bid() {
+        let cancelled = bid(1, 10, 80);
+        let state = fork_with(&[cancelled, bid(2, 20, 50)]);
+
+        assert_eq!(state.best_bid().map(|b| b.block_hash), Some(cancelled.block_hash));
+    }
+
+    #[test]
+    fn a_self_cancel_below_a_rival_hands_over_the_top_bid() {
+        let rival = bid(2, 20, 90);
+        let state = fork_with(&[bid(1, 10, 80), rival]);
+
+        assert_eq!(state.best_bid().map(|b| b.block_hash), Some(rival.block_hash));
+    }
+
+    #[test]
+    fn a_fork_with_no_bids_has_no_best() {
+        assert!(fork_with(&[]).best_bid().is_none());
     }
 }
