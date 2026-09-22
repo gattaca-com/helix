@@ -124,6 +124,7 @@ impl BlockSimError {
             },
             BlockSimError::Timeout => true,
             BlockSimError::RpcError => true,
+            BlockSimError::SimulationDropped => true,
             BlockSimError::NoSimulatorAvailable => true,
             BlockSimError::UnsupportedFork(_) => true,
             BlockSimError::RelayHydrationFailed => true,
@@ -296,6 +297,15 @@ mod tests {
 
         assert!(!err.is_sim_fault());
         assert!(!err.is_demotable());
+    }
+
+    #[test]
+    fn a_dropped_simulation_never_demotes() {
+        let err = BlockSimError::SimulationDropped;
+
+        assert!(err.is_temporary());
+        assert!(!err.is_demotable());
+        assert!(!err.is_sim_fault());
     }
 
     #[test]
