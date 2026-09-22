@@ -62,6 +62,7 @@ impl Drop for OperatorPubSub {
     }
 }
 
+#[allow(clippy::result_large_err)]
 impl OperatorPubSub {
     pub fn new(
         quic_port: u16,
@@ -114,6 +115,7 @@ impl OperatorPubSub {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_operator_connection<F>(
     config: OperatorConfig,
     loaded: Arc<AtomicBool>,
@@ -240,7 +242,7 @@ where
                                     // ignore collateral messages from our own group
                                     continue;
                                 }
-                                if operator.operator_group.as_ref().map(|s| s.as_bytes()) != builder_collateral.operator_group.as_ref().map(|v| v.as_slice()) {
+                                if operator.operator_group.as_ref().map(|s| s.as_bytes()) != builder_collateral.operator_group.as_deref() {
                                     tracing::error!(config_operator_group=?operator.operator_group, msg_operator_group=?builder_collateral.operator_group, "operator group mismatch");
                                     continue;
                                 }

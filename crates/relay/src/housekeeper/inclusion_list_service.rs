@@ -95,8 +95,6 @@ impl IlFetchState {
 #[cfg(test)]
 mod tests {
     use alloy_primitives::Address;
-    use helix_common::api::builder_api::InclusionList;
-    use helix_types::Transaction;
     use httpmock::{Method::POST, MockServer};
     use reqwest::Url;
     use serde_json::json;

@@ -10,11 +10,10 @@ use http_body_util::Full;
 use hyper::{
     Request, Response,
     body::{Body, Bytes, Incoming},
-    client::conn::http1::{Connection, SendRequest},
 };
 use mio::{Events, Poll as MioPoll};
 
-use crate::http::transport::{BoxFuture, HyperConn, Transport};
+use crate::http::transport::{BoxFuture, Handshake, HyperConn};
 
 // --- SSE ---
 
@@ -43,17 +42,10 @@ impl Stream for SseChunkStream {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum SseState {
-    Handshaking {
-        handshake: BoxFuture<
-            hyper::Result<(SendRequest<Full<Bytes>>, Connection<Transport, Full<Bytes>>)>,
-        >,
-        req: Request<Full<Bytes>>,
-    },
-    Responding {
-        conn: HyperConn,
-        resp: BoxFuture<hyper::Result<Response<Incoming>>>,
-    },
+    Handshaking { handshake: Handshake, req: Request<Full<Bytes>> },
+    Responding { conn: HyperConn, resp: BoxFuture<hyper::Result<Response<Incoming>>> },
     Streaming(Pin<Box<EventStream<SseChunkStream>>>),
     Done,
 }

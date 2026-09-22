@@ -2464,6 +2464,7 @@ impl PostgresDatabaseService {
     }
 
     #[instrument(skip_all)]
+    #[allow(clippy::too_many_arguments)]
     pub async fn save_get_header_call(
         &self,
         params: GetHeaderParams,
@@ -2862,7 +2863,7 @@ impl PostgresDatabaseService {
                 }),
                 extra_data: row
                     .get::<_, Option<Vec<u8>>>("extra_data")
-                    .map(|b| alloy_primitives::hex::encode_prefixed(b)),
+                    .map(alloy_primitives::hex::encode_prefixed),
                 region: row.get::<_, Option<String>>("region"),
             })
             .collect();

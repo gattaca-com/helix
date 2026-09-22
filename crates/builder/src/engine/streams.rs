@@ -266,6 +266,7 @@ fn run_stream(
 /// real value in the pool -- but so does holding a base the builder has bid
 /// well past. The decision is made on value, not elapsed time: staleness only
 /// ever mattered through the bid drift it stands for.
+#[allow(clippy::too_many_arguments)]
 fn merge_base(
     id: usize,
     job: &StreamJob,

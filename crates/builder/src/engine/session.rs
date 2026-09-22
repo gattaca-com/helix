@@ -570,7 +570,7 @@ impl MergeSession {
         }
 
         // Highest payment first.
-        simulated.sort_unstable_by(|a, b| b.builder_payment.cmp(&a.builder_payment));
+        simulated.sort_unstable_by_key(|s| std::cmp::Reverse(s.builder_payment));
 
         let mut changed = false;
         for candidate in simulated {
@@ -939,11 +939,6 @@ impl MergeSession {
 
     fn available_blobs(&self) -> u64 {
         self.max_blobs.saturating_sub(self.blob_count)
-    }
-
-    #[cfg(test)]
-    pub fn included_order_count(&self) -> usize {
-        self.included_order_ids.len()
     }
 
     #[cfg(test)]

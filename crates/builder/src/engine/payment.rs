@@ -167,6 +167,7 @@ pub fn build_payment_tx(
 
 /// Encodes a Safe `execTransaction` call that delegatecalls the multisend
 /// contract to pay every recipient.
+#[allow(clippy::too_many_arguments)]
 pub fn encode_multisend_calldata(
     value_by_recipient: &FxHashMap<Address, U256>,
     safe: Address,

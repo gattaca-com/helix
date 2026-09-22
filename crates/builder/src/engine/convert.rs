@@ -174,7 +174,7 @@ pub fn eblobs(
 /// Inverse of [`requests_to_v4`]. `compute_requests_hash` skips type-byte-only
 /// entries, so the empty ones the wire format drops need not be restored.
 fn encoded_requests(requests: &ExecutionRequestsV4) -> Vec<EncodedRequests> {
-    requests.to_requests().iter().map(|request| EncodedRequests(request.clone().0.into())).collect()
+    requests.to_requests().iter().map(|request| EncodedRequests(request.clone().0)).collect()
 }
 
 /// Converts ethrex's encoded EIP-7685 requests into the wire

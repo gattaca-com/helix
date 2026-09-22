@@ -435,7 +435,7 @@ impl From<SignedBidSubmission> for SignedBidSubmissionV5 {
             blobs_bundle: BlobsBundleV2 {
                 commitments: bb.commitments.iter().cloned().collect(),
                 proofs: bb.proofs.clone(),
-                blobs: bb.blobs.iter().map(|b| (**b).clone()).collect(),
+                blobs: bb.blobs.iter().map(|b| **b).collect(),
             },
             execution_requests: requests_to_v4(&s.execution_requests),
             signature: s.signature,

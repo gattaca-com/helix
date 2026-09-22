@@ -1,10 +1,9 @@
-use std::collections::{HashMap, HashSet};
-
 use alloy_primitives::{Address, B256};
 use helix_common::{
     api::builder_api::BuilderGetValidatorsResponse, beacon::types::PayloadAttributesEvent,
 };
 use helix_types::{BlsPublicKeyBytes, Withdrawals};
+use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::debug;
 
 /// The proposer's registration for one slot, as the relay reports it.
@@ -37,12 +36,12 @@ pub struct SlotContext {
 /// proposer duties, and decides which events are worth building for.
 #[derive(Debug, Default)]
 pub struct SlotTracker {
-    duties: HashMap<u64, ProposerDuty>,
+    duties: FxHashMap<u64, ProposerDuty>,
     /// Highest slot seen, for discarding replays after an SSE reconnect.
     latest_slot: u64,
     /// Slot and parent pairs already built for. The beacon node repeats an
     /// event whenever it recomputes the attributes.
-    built: HashSet<(u64, B256)>,
+    built: FxHashSet<(u64, B256)>,
 }
 
 impl SlotTracker {

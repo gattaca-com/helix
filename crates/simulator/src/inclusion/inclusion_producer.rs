@@ -63,13 +63,13 @@ fn handle_tx_event<P: TransactionPool>(
     match event {
         FullTransactionEvent::Pending(tx_hash) => {
             // Add to valid set
-            if let Some(pending_tx) = pool.get(&tx_hash) {
-                if matches!(pending_tx.transaction.blob_count(), Some(0) | None) {
-                    let tx_hash = *pending_tx.hash();
-                    let score = score_tx(&pending_tx);
-                    ordered_tx.insert(OrderedTx { score, tx_hash });
-                    pending_txs.insert(tx_hash, pending_tx);
-                }
+            if let Some(pending_tx) = pool.get(&tx_hash) &&
+                matches!(pending_tx.transaction.blob_count(), Some(0) | None)
+            {
+                let tx_hash = *pending_tx.hash();
+                let score = score_tx(&pending_tx);
+                ordered_tx.insert(OrderedTx { score, tx_hash });
+                pending_txs.insert(tx_hash, pending_tx);
             }
         }
         FullTransactionEvent::Queued(tx_hash, _) |

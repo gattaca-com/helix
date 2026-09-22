@@ -107,6 +107,8 @@ fn slot_ctx(ev: PayloadAttributesEvent, relay_http: &Url) -> Option<SlotCtx> {
 
 /// One block template per slot; submissions only differ in block hash, value
 /// and builder, which is all the auction path looks at.
+type SharedSlotCtx = Arc<std::sync::RwLock<Option<Arc<(SlotCtx, Template)>>>>;
+
 struct Template {
     payload: ExecutionPayload,
     blobs: Arc<BlobsBundle>,
@@ -186,7 +188,7 @@ fn main() {
     // Slot context is produced by the main thread from the beacon SSE stream and
     // handed to the senders; every sender fires at the barrier so a burst hits
     // the relay within microseconds, like builders answering one relay event.
-    let ctx: Arc<std::sync::RwLock<Option<Arc<(SlotCtx, Template)>>>> = Default::default();
+    let ctx: SharedSlotCtx = Default::default();
     let barrier = Arc::new(std::sync::Barrier::new(args.builders + 1));
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let sent = Arc::new(std::sync::atomic::AtomicU64::new(0));
@@ -209,10 +211,8 @@ fn main() {
         threads.push(std::thread::spawn(move || {
             let key = BlsSecretKey::random();
             let pubkey = BlsPublicKeyBytes::from(key.public_key().serialize());
-            let reg = RegistrationMsg {
-                api_key: args.api_key.into_bytes(),
-                builder_pubkey: pubkey.into(),
-            };
+            let reg =
+                RegistrationMsg { api_key: args.api_key.into_bytes(), builder_pubkey: pubkey };
             let mut conn = NetworkDriver::default()
                 .with_socket_buf_size(8 * 1024 * 1024)
                 .with_on_connect_msg(reg.as_ssz_bytes());
@@ -313,15 +313,15 @@ fn main() {
             match serde_json::from_str::<PayloadAttributesEvent>(&ev.data) {
                 Ok(ev) => {
                     let slot = ev.data.proposal_slot.as_u64();
-                    if ctx.read().unwrap().as_ref().is_none_or(|c| c.0.slot != slot) {
-                        if let Some(c) = slot_ctx(ev, &args.relay_http) {
-                            let t = template(&c, &args, &mut rng);
-                            eprintln!(
-                                "slot {slot}: template {} bytes",
-                                t.payload.ssz_bytes_len() + 131_072 * args.blobs
-                            );
-                            *ctx.write().unwrap() = Some(Arc::new((c, t)));
-                        }
+                    if ctx.read().unwrap().as_ref().is_none_or(|c| c.0.slot != slot) &&
+                        let Some(c) = slot_ctx(ev, &args.relay_http)
+                    {
+                        let t = template(&c, &args, &mut rng);
+                        eprintln!(
+                            "slot {slot}: template {} bytes",
+                            t.payload.ssz_bytes_len() + 131_072 * args.blobs
+                        );
+                        *ctx.write().unwrap() = Some(Arc::new((c, t)));
                     }
                 }
                 Err(e) => eprintln!("payload_attributes parse: {e}"),

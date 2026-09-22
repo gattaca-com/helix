@@ -9,6 +9,7 @@ use ssz_derive::{Decode, Encode};
 
 pub type Proof = Vec<Vec<u8>>;
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, Clone)]
 #[ssz(enum_behaviour = "transparent")]
 #[serde(untagged)]

@@ -118,10 +118,10 @@ impl WebsiteService {
         debug!("Fetched num_delivered_payloads: {}", num_delivered_payloads);
 
         let mut payloads_by_value_desc = recent_payloads.clone();
-        payloads_by_value_desc.sort_by(|a, b| b.bid_trace.value.cmp(&a.bid_trace.value));
+        payloads_by_value_desc.sort_by_key(|p| std::cmp::Reverse(p.bid_trace.value));
 
         let mut payloads_by_value_asc = recent_payloads.clone();
-        payloads_by_value_asc.sort_by(|a, b| a.bid_trace.value.cmp(&b.bid_trace.value));
+        payloads_by_value_asc.sort_by_key(|p| p.bid_trace.value);
 
         let default_template = Self::generate_template(
             state,

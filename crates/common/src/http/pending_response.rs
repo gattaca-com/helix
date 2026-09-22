@@ -9,20 +9,18 @@ use http_body_util::{BodyExt, Collected, Full};
 use hyper::{
     Request, Response,
     body::{Bytes, Incoming},
-    client::conn::http1::{Connection, SendRequest},
 };
 use mio::{Events, Poll as MioPoll};
 
 use crate::http::{
     error::HttpClientError,
-    transport::{BoxFuture, HyperConn, Transport},
+    transport::{BoxFuture, Handshake, HyperConn},
 };
 
+#[allow(clippy::large_enum_variant)]
 pub enum State {
     Handshaking {
-        handshake: BoxFuture<
-            hyper::Result<(SendRequest<Full<Bytes>>, Connection<Transport, Full<Bytes>>)>,
-        >,
+        handshake: Handshake,
         req: Request<Full<Bytes>>,
     },
     Responding {

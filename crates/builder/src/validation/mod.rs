@@ -106,6 +106,7 @@ impl BlockValidator {
 
     /// Relay-internal merged-block path. A merged block's payment is split
     /// across the base block's own payment tx and the appended distribution tx.
+    #[allow(clippy::too_many_arguments)]
     pub fn validate_merged(
         &self,
         payload: &ExecutionPayloadV3,

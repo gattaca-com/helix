@@ -6,14 +6,20 @@ use std::{
 };
 
 use http_body_util::Full;
-use hyper::{body::Bytes, client::conn::http1::Connection};
+use hyper::{
+    body::Bytes,
+    client::conn::http1::{Connection, SendRequest},
+};
 use mio::net::TcpStream;
 use rustls::ClientConnection;
 
 pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 pub type HyperConn = Pin<Box<Connection<Transport, Full<Bytes>>>>;
+pub type Handshake =
+    BoxFuture<hyper::Result<(SendRequest<Full<Bytes>>, Connection<Transport, Full<Bytes>>)>>;
 
 // Plain TCP or TLS over TCP, unified for hyper's IO traits.
+#[allow(clippy::large_enum_variant)]
 pub enum Transport {
     Plain(TcpStream),
     Tls(TlsStream),
@@ -54,7 +60,7 @@ impl hyper::rt::Read for TlsStream {
             }
         }
         if let Err(e) = this.tls.process_new_packets() {
-            return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, e)));
+            return Poll::Ready(Err(io::Error::other(e)));
         }
         if buf.remaining() == 0 {
             return Poll::Ready(Ok(()));

@@ -239,7 +239,7 @@ pub fn load_config<R: AsRef<RelayConfig> + DeserializeOwned>() -> R {
 }
 
 pub fn expect_env_var(env_var: &str) -> String {
-    env::var(env_var).expect(&format!("{} should be set", env_var))
+    env::var(env_var).unwrap_or_else(|_| panic!("{env_var} should be set"))
 }
 
 pub fn load_keypair() -> BlsKeypair {

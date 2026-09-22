@@ -72,7 +72,7 @@ where
     S: Serializer,
 {
     let key = value.clone().try_into_secp256k1().map_err(|e| S::Error::custom(e.to_string()))?;
-    serializer.serialize_str(&hex::encode(&key.to_bytes()))
+    serializer.serialize_str(&hex::encode(key.to_bytes()))
 }
 
 /// Deserialize a hex-encoded secp256k1 pubkey.

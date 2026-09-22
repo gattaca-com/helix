@@ -1,6 +1,7 @@
-use std::{collections::HashMap, time::Duration};
+use std::time::Duration;
 
 use alloy_primitives::{B256, U256};
+use rustc_hash::FxHashMap;
 
 /// How long to wait before each build attempt, measured from `now_ms`.
 ///
@@ -29,7 +30,7 @@ pub fn delays(slot_timestamp: u64, offsets: &[u64], now_ms: u64) -> Vec<Duration
 /// would replace a better one.
 #[derive(Debug, Default)]
 pub struct BestBid {
-    best: HashMap<(u64, B256), U256>,
+    best: FxHashMap<(u64, B256), U256>,
 }
 
 impl BestBid {

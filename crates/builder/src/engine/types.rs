@@ -173,6 +173,7 @@ impl SharedInner {
         self.latest_only.insert(pubkey, current);
     }
 
+    #[cfg(test)]
     pub fn is_excluded(&self, order_hash: &B256) -> bool {
         self.excluded.contains(order_hash)
     }
@@ -220,7 +221,7 @@ impl SharedInner {
     pub fn top_builders(&self, k: usize) -> Vec<Address> {
         let mut ranked: Vec<(Address, U256)> =
             self.submissions.iter().map(|(addr, s)| (*addr, s.best)).collect();
-        ranked.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+        ranked.sort_unstable_by_key(|r| std::cmp::Reverse(r.1));
         ranked.into_iter().take(k).map(|(addr, _)| addr).collect()
     }
 }

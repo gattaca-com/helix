@@ -11,6 +11,9 @@ fmt-check:
 clippy:
   cargo +{{toolchain}} clippy --all-features --fix --allow-dirty --no-deps -- -D warnings
 
+check pkg="":
+  @./scripts/check.sh {{pkg}}
+
 test:
   cargo test --workspace --all-features
 

@@ -84,7 +84,7 @@ impl ApiError {
 
     pub fn is_client_error(&self) -> bool {
         let code = self.code();
-        code >= 400 && code < 500
+        (400..500).contains(&code)
     }
 }
 

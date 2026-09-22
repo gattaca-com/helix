@@ -368,6 +368,7 @@ impl MergeEngine {
 
     /// Decodes and pools a forwarded `MergeableBlockV1`.
     #[allow(clippy::type_complexity)]
+    #[allow(clippy::result_large_err)]
     fn ingest_mergeable_block(
         &mut self,
         body: &[u8],

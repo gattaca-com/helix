@@ -91,6 +91,7 @@ fn record_builder_collateral(
     changed
 }
 
+#[allow(clippy::result_large_err)]
 pub(super) async fn run_operator_connection(
     quic_port: u16,
     keypair: Keypair,
@@ -239,10 +240,10 @@ pub(super) async fn run_operator_connection(
                                     }
 
                                     // Always handle payload messages
-                                    if forward && (matches!(mode, OperatorP2pMode::On) || matches!(operator_msg, OperatorMessage::Payload(_))) {
-                                        if let Err(e) = incoming.try_send((operator.clone(), operator_msg)) {
-                                            tracing::warn!(?e, "failed to forward operator message");
-                                        }
+                                    if forward && (matches!(mode, OperatorP2pMode::On) || matches!(operator_msg, OperatorMessage::Payload(_)))
+                                        && let Err(e) = incoming.try_send((operator.clone(), operator_msg))
+                                    {
+                                        tracing::warn!(?e, "failed to forward operator message");
                                     }
                                 }
                                 None => {
@@ -269,7 +270,7 @@ pub(super) async fn run_operator_connection(
                                         msg,
                                     );
                                 }
-                                for (_, collateral) in &builder_collateral {
+                                for collateral in builder_collateral.values() {
                                     publish_operator_message(
                                         &mut swarm.behaviour_mut().gossipsub,
                                         &operator_topic,
@@ -306,14 +307,14 @@ pub(super) async fn run_operator_connection(
             _ = tokio::time::sleep_until(redial_deadline) => {
                 redial_deadline += QUIC_REDIAL_INTERVAL;
                 for (peer, operator) in &peers {
-                    if !connected_peers.contains(peer) {
-                        if let Err(e) = swarm.dial( DialOpts::peer_id(*peer)
+                    if !connected_peers.contains(peer)
+                        && let Err(e) = swarm.dial( DialOpts::peer_id(*peer)
                             .addresses(vec![operator.multiaddr.clone()])
                             .condition(PeerCondition::DisconnectedAndNotDialing)
                             .build()
-                        ) {
-                            tracing::warn!(?operator, ?e, "failed to redial operator");
-                        }
+                        )
+                    {
+                        tracing::warn!(?operator, ?e, "failed to redial operator");
                     }
                 }
             }

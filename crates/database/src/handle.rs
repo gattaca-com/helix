@@ -149,12 +149,10 @@ impl DbHandle {
             optimistic_version,
             is_adjusted,
             live_ts,
-        }) {
-            if let Some(dropped) =
-                count_dropped_submission(utcnow_sec(), &DROPPED_SUBMISSIONS, &LAST_DROP_LOG_SEC)
-            {
-                error!(%err, dropped, "failed to store block submissions");
-            }
+        }) && let Some(dropped) =
+            count_dropped_submission(utcnow_sec(), &DROPPED_SUBMISSIONS, &LAST_DROP_LOG_SEC)
+        {
+            error!(%err, dropped, "failed to store block submissions");
         }
     }
 
@@ -166,6 +164,7 @@ impl DbHandle {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn save_get_header_call(
         &self,
         params: GetHeaderParams,

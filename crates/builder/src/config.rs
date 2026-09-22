@@ -160,10 +160,8 @@ impl MergingConfig {
         if self.max_orders_per_slot == 0 || self.max_blocks_per_slot == 0 {
             eyre::bail!("merging config: max_orders_per_slot and max_blocks_per_slot must be > 0");
         }
-        if self.speculation.enabled {
-            if self.speculation.rebase_recovery_bps > 10_000 {
-                eyre::bail!("merging config: speculation.rebase_recovery_bps must be <= 10000");
-            }
+        if self.speculation.enabled && self.speculation.rebase_recovery_bps > 10_000 {
+            eyre::bail!("merging config: speculation.rebase_recovery_bps must be <= 10000");
         }
         Ok(())
     }

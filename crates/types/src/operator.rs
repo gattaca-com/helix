@@ -43,6 +43,7 @@ pub struct Promotion {
 /// Message broadcast to operators:
 /// - when a new connection is established with another operator (one message for every builder)
 /// - when builder collateral is changed
+///
 /// Note that total collateral held by the operator is broadcast.
 #[derive(Clone, Debug, Decode, Encode)]
 pub struct BuilderCollateral {
