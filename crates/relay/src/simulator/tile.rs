@@ -43,7 +43,10 @@ use crate::{
     HelixSpine, SimRequest, ValidationRequest,
     auctioneer::Bid,
     bid_decoder::SubmissionDataWithSpan,
-    simulator::{BlockMergeResponse, MergedValidationRequest, SimResult, client::SimulatorClient},
+    simulator::{
+        BlockMergeResponse, MergedValidationRequest, SimPriority, SimResult,
+        client::SimulatorClient,
+    },
     spine::{
         HelixSpineProducers,
         messages::{FromSimMsg, ToSimKind, ToSimMsg},
@@ -70,6 +73,8 @@ pub struct SimulatorTile {
     merged_blocks: Arc<SharedVector<BlockMergeResponse>>,
     hydration_cache: SimHydrationCache,
     chain_info: ChainInfo,
+    /// Sampled-so-far and seen-so-far counts per builder for the current slot.
+    sample_state: FxHashMap<BlsPublicKeyBytes, SampleState>,
     /// If we have any synced simulator
     pub accept_optimistic: Arc<AtomicBool>,
     /// If we failed to demote a builder in the DB
@@ -204,6 +209,7 @@ impl SimulatorTile {
             merged_blocks,
             hydration_cache: SimHydrationCache::new(),
             chain_info,
+            sample_state: FxHashMap::default(),
             accept_optimistic: accept_optimistic.clone(),
             failsafe_triggered: failsafe_triggered.clone(),
         };
@@ -231,6 +237,19 @@ impl SimulatorTile {
                 "changing accept_optimistic simulation status"
             );
         }
+    }
+
+    /// Whether this builder's next sampled bid should run. Every builder gets
+    /// `SAMPLE_FLOOR` simulations a slot however little it submits, then one in
+    /// `SAMPLE_EVERY` after that.
+    fn take_sample(&mut self, builder_pubkey: BlsPublicKeyBytes) -> bool {
+        let state = self.sample_state.entry(builder_pubkey).or_default();
+        state.seen += 1;
+        if state.sampled < SAMPLE_FLOOR || state.seen.is_multiple_of(SAMPLE_EVERY) {
+            state.sampled += 1;
+            return true;
+        }
+        false
     }
 
     /// Answers a request no simulator will ever run, so the builder never waits on a
@@ -285,6 +304,12 @@ impl SimulatorTile {
         self.feed_cache(&decoded_data.submission_data.submission);
 
         self.local_telemetry.sims_reqs += 1;
+
+        if req.priority == SimPriority::Sample && !self.take_sample(builder_pubkey) {
+            self.local_telemetry.sample_skipped += 1;
+            self.answer_dropped(&req, producers);
+            return;
+        }
 
         let sim_id = self.select_simulator();
 
@@ -740,6 +765,7 @@ impl SimulatorTile {
         }
         self.merge_requests.clear();
         self.hydration_cache.clear();
+        self.sample_state.clear();
     }
 
     fn report(&mut self) {
@@ -748,6 +774,7 @@ impl SimulatorTile {
 
         SimulatorMetrics::sim_mananger_count("sims_sent_immediately", tel.sims_sent_immediately);
         SimulatorMetrics::sim_mananger_count("sims_reqs_dropped", tel.sims_reqs_dropped);
+        SimulatorMetrics::sim_mananger_count("sample_skipped", tel.sample_skipped);
         SimulatorMetrics::sim_mananger_count("stale_sim_reqs", tel.stale_sim_reqs);
         SimulatorMetrics::sim_manager_gauge("max_pending", tel.max_pending);
         SimulatorMetrics::sim_manager_gauge("max_in_flight", tel.max_in_flight);
@@ -789,6 +816,7 @@ impl SimulatorTile {
             queued = tel.queued,
             sims_sent_from_queue = tel.sims_sent_from_queue,
             sims_reqs_dropped = tel.sims_reqs_dropped,
+            sample_skipped = tel.sample_skipped,
             queue_left,
             stale_sim_reqs = tel.stale_sim_reqs,
             max_pending = tel.max_pending,
@@ -992,6 +1020,10 @@ const SIM_FAULTS_TO_OPEN: usize = 3;
 /// accepting optimistic submissions. Longer than `BREAKER_BACKOFF_START`, shorter than
 /// `BREAKER_BACKOFF_MAX`, so a backoff is ridden out but a real outage is not.
 const OPTIMISTIC_GRACE: Duration = Duration::from_secs(30);
+/// Simulations every builder gets each slot, however few bids it sends.
+const SAMPLE_FLOOR: u32 = 3;
+/// After the floor, one bid in this many joins the sample.
+const SAMPLE_EVERY: u32 = 64;
 const BREAKER_BACKOFF_START: Duration = Duration::from_secs(12);
 const BREAKER_BACKOFF_MAX: Duration = Duration::from_secs(60);
 const SYNC_FAILURES_TO_UNSYNC: usize = 3;
@@ -1006,6 +1038,9 @@ struct LocalTelemetry {
     max_pending: usize,
     // waiting for result
     max_in_flight: usize,
+    /// Optimistic bids that could not win and were not drawn into their builder's
+    /// validity sample, so no simulator ran them.
+    sample_skipped: usize,
     /// Requests with no simulator free at intake, queued for later dispatch.
     /// `sims_reqs == sims_sent_immediately + queued`.
     queued: usize,
@@ -1064,6 +1099,13 @@ pub(super) enum SimTileInternalEvent {
         id: usize,
         reported: Option<bool>,
     },
+}
+
+/// Per-builder sampling counters for the current slot.
+#[derive(Default, Clone, Copy)]
+struct SampleState {
+    seen: u32,
+    sampled: u32,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -1327,6 +1369,7 @@ mod tests {
             merged_blocks: Arc::new(SharedVector::default()),
             hydration_cache: SimHydrationCache::new(),
             chain_info: ChainInfo::default(),
+            sample_state: FxHashMap::default(),
             accept_optimistic: Arc::new(AtomicBool::new(true)),
             failsafe_triggered: Arc::new(AtomicBool::new(false)),
         }
@@ -1396,6 +1439,7 @@ mod tests {
 
     fn validation_request(decoded_ix: usize) -> ValidationRequest {
         ValidationRequest {
+            priority: SimPriority::Low,
             is_top_bid: false,
             is_optimistic: false,
             apply_blacklist: false,
@@ -1934,8 +1978,9 @@ mod tests {
         assert_eq!(submission.blobs_bundle.blobs.len(), 1);
     }
 
-    fn queued(receive_ns: u64) -> crate::simulator::ValidationRequest {
+    fn queued(priority: SimPriority, receive_ns: u64) -> crate::simulator::ValidationRequest {
         let mut req = validation_request(0);
+        req.priority = priority;
         req.receive_ns = receive_ns;
         req
     }
@@ -1958,8 +2003,16 @@ mod tests {
         let mut pending = PendingRequests::with_capacity(4);
         let mut tel = LocalTelemetry::default();
 
-        assert!(pending.store(queued(10), key(1, 7), version(10, None), &mut tel).is_none());
-        assert!(pending.store(queued(20), key(2, 7), version(20, None), &mut tel).is_none());
+        assert!(
+            pending
+                .store(queued(SimPriority::Low, 10), key(1, 7), version(10, None), &mut tel)
+                .is_none()
+        );
+        assert!(
+            pending
+                .store(queued(SimPriority::Low, 20), key(2, 7), version(20, None), &mut tel)
+                .is_none()
+        );
 
         assert!(pending.next_req().is_some());
         assert!(pending.next_req().is_some());
@@ -1972,9 +2025,10 @@ mod tests {
     fn a_later_arrival_with_an_older_sequence_loses_to_the_queued_bid() {
         let mut pending = PendingRequests::with_capacity(4);
         let mut tel = LocalTelemetry::default();
-        pending.store(queued(10), key(1, 7), version(10, Some(2)), &mut tel);
+        pending.store(queued(SimPriority::Low, 10), key(1, 7), version(10, Some(2)), &mut tel);
 
-        let dropped = pending.store(queued(99), key(1, 7), version(99, Some(1)), &mut tel);
+        let dropped =
+            pending.store(queued(SimPriority::Low, 99), key(1, 7), version(99, Some(1)), &mut tel);
 
         assert_eq!(dropped.map(|r| r.on_receive_ns()), Some(99), "the stale bid must be dropped");
         assert_eq!(pending.next_req().map(|r| r.on_receive_ns()), Some(10));
@@ -1984,9 +2038,10 @@ mod tests {
     fn a_newer_sequence_replaces_the_queued_bid() {
         let mut pending = PendingRequests::with_capacity(4);
         let mut tel = LocalTelemetry::default();
-        pending.store(queued(99), key(1, 7), version(99, Some(1)), &mut tel);
+        pending.store(queued(SimPriority::Low, 99), key(1, 7), version(99, Some(1)), &mut tel);
 
-        let dropped = pending.store(queued(10), key(1, 7), version(10, Some(2)), &mut tel);
+        let dropped =
+            pending.store(queued(SimPriority::Low, 10), key(1, 7), version(10, Some(2)), &mut tel);
 
         assert_eq!(dropped.map(|r| r.on_receive_ns()), Some(99));
         assert_eq!(pending.next_req().map(|r| r.on_receive_ns()), Some(10));
@@ -2000,12 +2055,18 @@ mod tests {
         let mut pending = PendingRequests::with_capacity(4);
         let mut tel = LocalTelemetry::default();
 
-        assert!(pending.store(queued(10), key(1, 0), version(10, None), &mut tel).is_none());
+        assert!(
+            pending
+                .store(queued(SimPriority::Low, 10), key(1, 0), version(10, None), &mut tel)
+                .is_none()
+        );
 
-        let dropped = pending.store(queued(20), key(1, 0), version(20, None), &mut tel);
+        let dropped =
+            pending.store(queued(SimPriority::Low, 20), key(1, 0), version(20, None), &mut tel);
         assert_eq!(dropped.map(|r| r.on_receive_ns()), Some(10));
 
-        let dropped = pending.store(queued(15), key(1, 0), version(15, None), &mut tel);
+        let dropped =
+            pending.store(queued(SimPriority::Low, 15), key(1, 0), version(15, None), &mut tel);
         assert_eq!(dropped.map(|r| r.on_receive_ns()), Some(15));
 
         assert_eq!(pending.next_req().map(|r| r.on_receive_ns()), Some(20));
@@ -2016,11 +2077,92 @@ mod tests {
         let mut pending = PendingRequests::with_capacity(4);
         let mut tel = LocalTelemetry::default();
         for i in 0..3u8 {
-            pending.store(queued(i as u64), key(1, i), version(i as u64, None), &mut tel);
+            pending.store(
+                queued(SimPriority::Low, i as u64),
+                key(1, i),
+                version(i as u64, None),
+                &mut tel,
+            );
         }
 
         assert_eq!(pending.drain().len(), 3);
         assert!(pending.next_req().is_none());
+    }
+
+    #[test]
+    fn next_req_drains_by_priority_class_first() {
+        let mut pending = PendingRequests::with_capacity(4);
+        let mut tel = LocalTelemetry::default();
+        for (i, priority) in
+            [SimPriority::Low, SimPriority::Top, SimPriority::Sample].into_iter().enumerate()
+        {
+            pending.store(queued(priority, 100), key(1, i as u8), version(100, None), &mut tel);
+        }
+
+        assert_eq!(pending.next_req().map(|r| r.priority), Some(SimPriority::Top));
+        assert_eq!(pending.next_req().map(|r| r.priority), Some(SimPriority::Sample));
+        assert_eq!(pending.next_req().map(|r| r.priority), Some(SimPriority::Low));
+    }
+
+    /// Within one class the oldest request still goes first, so a bid never starves.
+    #[test]
+    fn next_req_keeps_fifo_within_a_class() {
+        let mut pending = PendingRequests::with_capacity(4);
+        let mut tel = LocalTelemetry::default();
+        for (i, receive_ns) in [30u64, 10, 20].into_iter().enumerate() {
+            pending.store(
+                queued(SimPriority::Sample, receive_ns),
+                key(1, i as u8),
+                version(receive_ns, None),
+                &mut tel,
+            );
+        }
+
+        assert_eq!(pending.next_req().map(|r| r.on_receive_ns()), Some(10));
+        assert_eq!(pending.next_req().map(|r| r.on_receive_ns()), Some(20));
+        assert_eq!(pending.next_req().map(|r| r.on_receive_ns()), Some(30));
+    }
+
+    /// Every builder is covered each slot however little it submits, so a bad small
+    /// builder is caught as fast as a bad large one.
+    #[test]
+    fn every_builder_gets_the_sample_floor() {
+        let mut tile = test_tile();
+        let mut quiet = BlsPublicKeyBytes::default();
+        quiet.0[0] = 9;
+
+        for _ in 0..SAMPLE_FLOOR {
+            assert!(tile.take_sample(quiet));
+        }
+        assert!(!tile.take_sample(quiet));
+    }
+
+    #[test]
+    fn a_busy_builder_is_sampled_one_in_sample_every() {
+        let mut tile = test_tile();
+        let builder = BlsPublicKeyBytes::default();
+        let bids = SAMPLE_EVERY * 10;
+
+        let sampled = (0..bids).filter(|_| tile.take_sample(builder)).count() as u32;
+
+        assert_eq!(sampled, SAMPLE_FLOOR + 10);
+    }
+
+    #[test]
+    fn sampling_is_tracked_per_builder() {
+        let mut tile = test_tile();
+        let mut first = BlsPublicKeyBytes::default();
+        first.0[0] = 1;
+        let mut second = BlsPublicKeyBytes::default();
+        second.0[0] = 2;
+
+        for _ in 0..SAMPLE_EVERY {
+            tile.take_sample(first);
+        }
+
+        for _ in 0..SAMPLE_FLOOR {
+            assert!(tile.take_sample(second));
+        }
     }
 
     /// A breaker opens for 12s at the first fault. Demoting every builder for a whole slot

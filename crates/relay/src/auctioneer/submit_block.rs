@@ -20,7 +20,7 @@ use crate::{
         context::{Context, send_submission_result},
         types::{PayloadEntry, SlotData, SubmissionData},
     },
-    simulator::{SimRequest, ValidationRequest, tile::ValidationResult},
+    simulator::{SimPriority, SimRequest, ValidationRequest, tile::ValidationResult},
     spine::{
         HelixSpineProducers,
         messages::{BidEvent, BidUpdate, ToSimKind, ToSimMsg},
@@ -79,7 +79,12 @@ impl<B: BidAdjustor> Context<B> {
             let is_top_bid = self.bid_sorter.sort(bid, &mut submission_data.trace, true, producers);
             (OptimisticVersion::V1, is_top_bid)
         } else {
-            (OptimisticVersion::NotOptimistic, false)
+            let bid_trace = submission_data.bid_trace();
+            let beats_top_bid = self
+                .bid_sorter
+                .top_bid_value(&bid_trace.parent_hash)
+                .is_none_or(|top| bid_trace.value > top);
+            (OptimisticVersion::NotOptimistic, beats_top_bid)
         };
 
         let is_optimistic = optimistic_version.is_optimistic();
@@ -88,6 +93,7 @@ impl<B: BidAdjustor> Context<B> {
         }
 
         let req = ValidationRequest {
+            priority: sim_priority(is_top_bid, is_optimistic),
             is_top_bid,
             is_optimistic,
             apply_blacklist: slot_data.registration_data.entry.preferences.filtering.is_regional(),
@@ -322,5 +328,36 @@ impl<B: BidAdjustor> Context<B> {
                 Ok((hydrated.submission, hydrated.tx_root))
             }
         }
+    }
+}
+
+/// A bid that would be served now outranks everything. Below that a live optimistic bid,
+/// which can be served without a simulation, outranks a bid that cannot win at all.
+fn sim_priority(is_top_bid: bool, is_optimistic: bool) -> SimPriority {
+    if is_top_bid {
+        SimPriority::Top
+    } else if is_optimistic {
+        SimPriority::Sample
+    } else {
+        SimPriority::Low
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_bid_that_would_be_served_outranks_every_other_class() {
+        assert_eq!(sim_priority(true, true), SimPriority::Top);
+        assert_eq!(sim_priority(true, false), SimPriority::Top);
+        assert!(SimPriority::Top > SimPriority::Sample);
+        assert!(SimPriority::Sample > SimPriority::Low);
+    }
+
+    #[test]
+    fn a_live_optimistic_bid_outranks_one_that_cannot_win() {
+        assert_eq!(sim_priority(false, true), SimPriority::Sample);
+        assert_eq!(sim_priority(false, false), SimPriority::Low);
     }
 }
