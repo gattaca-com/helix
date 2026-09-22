@@ -32,7 +32,7 @@ use tokio::sync::watch;
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use tracing::{debug, error, info, warn};
 
-use crate::cli::{NodeOptions, parse_socket_addr};
+use crate::cli::{NodeOptions, parse_socket_addr, validate_rpc_addrs};
 
 const HEAD_WATCH_INTERVAL: Duration = Duration::from_millis(25);
 const NODE_CONFIG_FILENAME: &str = "node_config.json";
@@ -152,15 +152,19 @@ pub async fn start(opts: &NodeOptions) -> eyre::Result<NodeHandle> {
 
     let http_addr = parse_socket_addr(&opts.http_addr, &opts.http_port)?;
     let authrpc_addr = parse_socket_addr(&opts.authrpc_addr, &opts.authrpc_port)?;
-    if http_addr == authrpc_addr {
-        eyre::bail!("--http.addr/--http.port and --authrpc.addr/--authrpc.port must differ");
-    }
+    let ws_addr = opts.ws_socket_addr()?;
+    validate_rpc_addrs(http_addr, authrpc_addr, ws_addr)?;
     let jwt_secret = read_jwtsecret_file(&opts.authrpc_jwtsecret)?;
+
+    let ws_config = ws_addr.map(|addr| ethrex_rpc::WebSocketConfig {
+        addr,
+        subscription_manager: ethrex_rpc::SubscriptionManager::spawn(),
+    });
 
     let bound = ethrex_rpc::bind_api(
         cancel_token.clone(),
         http_addr,
-        None,
+        ws_config,
         authrpc_addr,
         store.clone(),
         blockchain.clone(),
@@ -175,7 +179,7 @@ pub async fn start(opts: &NodeOptions) -> eyre::Result<NodeHandle> {
         opts.http_api.iter().copied().collect(),
     )
     .await?;
-    info!(%http_addr, %authrpc_addr, "RPC + Engine API bound");
+    info!(%http_addr, %authrpc_addr, ?ws_addr, "RPC + Engine API bound");
     spawn_fatal(&tracker, cancel_token.clone(), "RPC server", bound.serve());
 
     if opts.metrics_enabled {

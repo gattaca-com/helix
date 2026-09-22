@@ -105,6 +105,32 @@ pub struct NodeOptions {
     )]
     pub http_api: Vec<ethrex_rpc::RpcNamespace>,
     #[arg(
+        long = "ws.enabled",
+        action = clap::ArgAction::SetTrue,
+        help = "Enable the websocket rpc server. Disabled by default.",
+        env = "ETHREX_ENABLE_WS",
+        help_heading = "RPC options"
+    )]
+    pub ws_enabled: bool,
+    #[arg(
+        long = "ws.addr",
+        value_name = "ADDRESS",
+        requires = "ws_enabled",
+        help = "Listening address for the websocket rpc server. Defaults to the http.addr value.",
+        env = "ETHREX_WS_ADDR",
+        help_heading = "RPC options"
+    )]
+    pub ws_addr: Option<String>,
+    #[arg(
+        long = "ws.port",
+        value_name = "PORT",
+        requires = "ws_enabled",
+        help = "Listening port for the websocket rpc server. Defaults to the http.port value.",
+        env = "ETHREX_WS_PORT",
+        help_heading = "RPC options"
+    )]
+    pub ws_port: Option<String>,
+    #[arg(
         long = "authrpc.addr",
         default_value = "127.0.0.1",
         value_name = "ADDRESS",
@@ -222,6 +248,17 @@ pub struct NodeOptions {
     pub metrics_port: String,
 }
 
+impl NodeOptions {
+    pub fn ws_socket_addr(&self) -> eyre::Result<Option<SocketAddr>> {
+        if !self.ws_enabled {
+            return Ok(None);
+        }
+        let addr = self.ws_addr.as_deref().unwrap_or(&self.http_addr);
+        let port = self.ws_port.as_deref().unwrap_or(&self.http_port);
+        parse_socket_addr(addr, port).map(Some)
+    }
+}
+
 fn parse_sync_mode(s: &str) -> eyre::Result<SyncMode> {
     match s {
         "full" => Ok(SyncMode::Full),
@@ -242,6 +279,49 @@ fn parse_http_namespace(s: &str) -> eyre::Result<ethrex_rpc::RpcNamespace> {
     }
     ethrex_rpc::RpcNamespace::from_prefix(&trimmed.to_ascii_lowercase())
         .ok_or_else(|| eyre::eyre!("unknown RPC namespace {trimmed:?}"))
+}
+
+fn rpc_addrs_conflict(a: SocketAddr, b: SocketAddr) -> bool {
+    a == b ||
+        (a.port() == b.port() &&
+            a.is_ipv4() == b.is_ipv4() &&
+            (a.ip().is_unspecified() || b.ip().is_unspecified()))
+}
+
+/// Rejects conflicting rpc listener addresses before anything binds, with an error that
+/// names both flags to change. A websocket address equal to the http address is not a
+/// conflict: `bind_api` then serves both protocols on the http listener.
+pub fn validate_rpc_addrs(
+    http: SocketAddr,
+    authrpc: SocketAddr,
+    ws: Option<SocketAddr>,
+) -> eyre::Result<()> {
+    use ethrex_rpc::RpcRole;
+
+    let ws = ws.filter(|ws| *ws != http);
+    let http = (RpcRole::Http, http);
+    let authrpc = (RpcRole::AuthRpc, authrpc);
+    let ws = ws.map(|addr| (RpcRole::Ws, addr));
+    let pairs = [Some((http, authrpc)), ws.map(|ws| (http, ws)), ws.map(|ws| (authrpc, ws))];
+    for ((role_a, a), (role_b, b)) in pairs.into_iter().flatten() {
+        if !rpc_addrs_conflict(a, b) {
+            continue;
+        }
+        if a == b {
+            eyre::bail!(
+                "{a} is requested by both the {role_a} and the {role_b}; change {} or {}.",
+                role_a.flags(),
+                role_b.flags(),
+            );
+        }
+        eyre::bail!(
+            "{b} ({role_b}) overlaps {a} ({role_a}): a wildcard address covers every \
+             interface on its port; change {} or {}.",
+            role_a.flags(),
+            role_b.flags(),
+        );
+    }
+    Ok(())
 }
 
 pub fn parse_socket_addr(addr: &str, port: &str) -> eyre::Result<SocketAddr> {
