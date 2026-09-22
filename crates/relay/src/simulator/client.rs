@@ -123,11 +123,19 @@ impl SimulatorClient {
         ssz_req: &impl Encode,
         is_top_bid: bool,
         to_send: RequestBuilder,
+        endpoint: &str,
     ) -> Result<(), BlockSimError> {
-        Self::ssz_request(to_send.body(ssz_req.as_ssz_bytes()), is_top_bid).await
+        let body = ssz_req.as_ssz_bytes();
+        let body_len = body.len();
+        Self::ssz_request(to_send.body(body), is_top_bid, endpoint, body_len).await
     }
 
-    async fn ssz_request(to_send: RequestBuilder, is_top_bid: bool) -> Result<(), BlockSimError> {
+    async fn ssz_request(
+        to_send: RequestBuilder,
+        is_top_bid: bool,
+        endpoint: &str,
+        body_len: usize,
+    ) -> Result<(), BlockSimError> {
         let mut headers = HeaderMap::new();
         headers.insert("Content-Type", HeaderValue::from_static("application/octet-stream"));
         if is_top_bid {
@@ -137,7 +145,7 @@ impl SimulatorClient {
         let res = match to_send.headers(headers).send().await {
             Ok(r) => r,
             Err(err) => {
-                error!(%err, "failed ssz simulation");
+                error!(%err, endpoint, "failed ssz simulation");
                 return Err(BlockSimError::RpcError);
             }
         };
@@ -145,8 +153,16 @@ impl SimulatorClient {
         match res.status().as_u16() {
             200 => Ok(()),
             400 => Err(BlockSimError::BlockValidationFailed(res.text().await.unwrap_or_default())),
+            413 => {
+                error!(endpoint, body_len, "ssz simulation request over the simulator body limit");
+                Err(BlockSimError::PayloadTooLarge)
+            }
             424 => Err(BlockSimError::HydrationMiss),
-            _ => Err(BlockSimError::RpcError),
+            status => {
+                let body = res.text().await.unwrap_or_default();
+                error!(status, body, endpoint, "ssz simulation rejected by the simulator");
+                Err(BlockSimError::RpcError)
+            }
         }
     }
 

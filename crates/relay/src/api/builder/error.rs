@@ -102,6 +102,7 @@ impl BuilderApiError {
                     StatusCode::REQUEST_TIMEOUT
                 }
                 BlockSimError::RelayHydrationFailed => StatusCode::INTERNAL_SERVER_ERROR,
+                BlockSimError::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
                 _ => StatusCode::BAD_REQUEST,
             },
 

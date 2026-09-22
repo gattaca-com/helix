@@ -458,8 +458,13 @@ impl SimulatorTile {
             let (mut res, ssz_retry) = match dispatch {
                 SimDispatch::Ssz { to_send, ssz_url, http } => {
                     let request = create_ssz_request(&req, &submission);
-                    let res =
-                        SimulatorClient::do_sim_request(&request, req.is_top_bid, to_send).await;
+                    let res = SimulatorClient::do_sim_request(
+                        &request,
+                        req.is_top_bid,
+                        to_send,
+                        &ssz_url,
+                    )
+                    .await;
                     (res, Some((request, ssz_url, http)))
                 }
                 SimDispatch::Json { to_send, method } => {
@@ -491,8 +496,13 @@ impl SimulatorTile {
                     let to_send = http.post(format!("{ssz_url}/validate"));
                     let mut retry_req = request.clone();
                     retry_req.signed_bid_submission = submission.as_ssz_bytes();
-                    res =
-                        SimulatorClient::do_sim_request(&retry_req, req.is_top_bid, to_send).await;
+                    res = SimulatorClient::do_sim_request(
+                        &retry_req,
+                        req.is_top_bid,
+                        to_send,
+                        &ssz_url,
+                    )
+                    .await;
                 } else {
                     res = Err(BlockSimError::RpcError);
                 }
@@ -574,7 +584,10 @@ impl SimulatorTile {
 
         let sim = &mut self.simulators[id];
         let dispatch = if let Some(url) = &sim.client.ssz_url {
-            MergedSimDispatch::Ssz(sim.client.client.post(format!("{url}/validate_merged")))
+            MergedSimDispatch::Ssz(
+                sim.client.client.post(format!("{url}/validate_merged")),
+                url.clone(),
+            )
         } else {
             let (builder, method) = sim.client.merged_sim_request_builder();
             MergedSimDispatch::Json { to_send: builder, method: method.to_owned() }
@@ -597,7 +610,7 @@ impl SimulatorTile {
 
             SimulatorMetrics::sim_count(false);
             let res = match dispatch {
-                MergedSimDispatch::Ssz(to_send) => {
+                MergedSimDispatch::Ssz(to_send, endpoint) => {
                     let request = ssz_merged_request(
                         apply_blacklist,
                         registered_gas_limit,
@@ -606,7 +619,7 @@ impl SimulatorTile {
                         &submission,
                         base_payment_tx_index,
                     );
-                    SimulatorClient::do_sim_request(&request, false, to_send).await
+                    SimulatorClient::do_sim_request(&request, false, to_send, &endpoint).await
                 }
                 MergedSimDispatch::Json { to_send, method } => {
                     let filtering =
@@ -954,7 +967,7 @@ enum SimDispatch {
 /// Merged-block counterpart of [`SimDispatch`]: no hydration-miss retry (merged blocks are
 /// always full, never dehydrated), so it doesn't need `SimDispatch::Ssz`'s extra fields.
 enum MergedSimDispatch {
-    Ssz(reqwest::RequestBuilder),
+    Ssz(reqwest::RequestBuilder, String),
     Json { to_send: reqwest::RequestBuilder, method: String },
 }
 
