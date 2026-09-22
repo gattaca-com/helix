@@ -595,6 +595,11 @@ impl SimulatorTile {
 
             let error = res.as_ref().err().cloned();
             let bid = Bid::new(version, &submission);
+            SimulatorMetrics::sim_builder_outcome(
+                &bid.builder_pubkey.to_string(),
+                req.priority.label(),
+                sim_outcome(error.as_ref()),
+            );
             let inner = SimulationResultInner {
                 submission_ref,
                 result: res.map(|()| trace),
@@ -1204,6 +1209,18 @@ impl PendingMergeRequests {
     /// Clear backlog of simulations from the previous bid slot.
     fn clear(&mut self) {
         self.reqs.clear();
+    }
+}
+
+/// Metric label for what a simulation said, so a builder's invalid-block rate can be read
+/// apart from simulator trouble.
+fn sim_outcome(error: Option<&BlockSimError>) -> &'static str {
+    match error {
+        None => "valid",
+        Some(BlockSimError::PayloadTooLarge) => "too_large",
+        Some(err) if err.is_sim_fault() => "sim_fault",
+        Some(err) if err.is_temporary() => "temporary",
+        Some(_) => "invalid",
     }
 }
 
