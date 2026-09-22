@@ -272,7 +272,13 @@ impl<B: BidAdjustor> Context<B> {
                 &mut self.payloads,
                 FxHashMap::with_capacity_and_hasher(EXPECTED_PAYLOADS_PER_SLOT, Default::default()),
             );
+            let dealloc_core = self.config.cores.dealloc;
             std::thread::spawn(move || {
+                // Unpinned, this lands on whatever core the OS picks -- including a
+                // tokio worker's, which every other hot thread here is pinned away from.
+                if let Some(core) = dealloc_core {
+                    helix_common::utils::pin_thread_to_core(core);
+                }
                 let to_drop = payloads_to_drop.len();
                 let start = Instant::now();
                 drop(payloads_to_drop);
