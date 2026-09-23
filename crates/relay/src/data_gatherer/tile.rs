@@ -203,14 +203,14 @@ impl Tile<HelixSpine> for DataGatherer {
             |bid: &InternalMessage<NewTcpBidSubmission>, payload| {
                 self.on_new_bid(&bid.0, payload, &mut max_slot);
             },
-            |_, _, _| {},
+            |_, _| {},
         );
 
         adapter.consume_with_dcache_internal_message(
             |bid: &InternalMessage<NewBidSubmission>, payload| {
                 self.on_new_bid(bid, payload, &mut max_slot);
             },
-            |_, _, _| {},
+            |_, _| {},
         );
 
         adapter.consume_internal_message(|msg: &mut InternalMessage<DecodedSubmission>, _| {

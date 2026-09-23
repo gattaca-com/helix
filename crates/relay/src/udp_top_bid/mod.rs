@@ -20,9 +20,10 @@ use crate::HelixSpine;
 /// A session that has not sent its registration within this window is dropped.
 const REGISTRATION_TIMEOUT_MS: u64 = 1_000;
 
-/// Top bids are a latest-value feed: a peer that cannot keep up is better cut
-/// than fed a slot of stale tops after its window drains. Keep the window at
-/// the flux minimum and cut anything that backs up past it.
+/// Top bids are a latest-value feed, so the transport is unreliable: a lost
+/// update is superseded by the next one rather than resent. Datagrams leave
+/// the window once the kernel takes them; a peer whose socket stays blocked
+/// past the backlog is cut.
 const SEND_WINDOW: usize = 64;
 const MAX_BACKLOG: usize = 64;
 const MAX_BACKLOG_TIMEOUT_MS: u64 = 100;
@@ -68,6 +69,7 @@ impl UdpTopBidTile {
         let udp = UdpConfig {
             send_window: SEND_WINDOW,
             max_message_size: MAX_MESSAGE_SIZE,
+            reliable: false,
             ..UdpConfig::wan()
         };
         let mut driver = NetworkDriver::default()
