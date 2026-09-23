@@ -33,7 +33,7 @@ use helix_common::{
 };
 use helix_types::{
     BidTrace, BlsPublicKeyBytes, BlsSignatureBytes, SignedBidSubmission, SimHydrationCache,
-    Submission,
+    Submission, SubmissionVersion,
 };
 use rustc_hash::FxHashMap;
 use ssz::Encode as _;
@@ -112,7 +112,7 @@ impl Tile<HelixSpine> for SimulatorTile {
                 None => error!(?msg, "sim inbound payload not found"),
             },
             ToSimKind::NewSlot => {
-                self.on_new_slot(msg.bid_slot);
+                self.on_new_slot(msg.bid_slot, producers);
             }
             ToSimKind::FeedCache => {
                 self.handle_feed_cache(msg.ix, msg.bid_slot);
@@ -233,6 +233,30 @@ impl SimulatorTile {
         }
     }
 
+    /// Answers a request no simulator will ever run, so the builder never waits on a
+    /// result that is not coming. A dropped simulation never demotes. An optimistic
+    /// submission was answered when it was sorted, so only the other ones need this.
+    fn answer_dropped(
+        &mut self,
+        req: &crate::simulator::ValidationRequest,
+        producers: &mut HelixSpineProducers,
+    ) {
+        if req.is_optimistic {
+            return;
+        }
+
+        let result_ix = self.sim_results.push(SimResult::Validate((
+            0,
+            Some(SimulationResultInner {
+                submission_ref: req.submission_ref,
+                optimistic_version: req.optimistic_version(),
+                bid: None,
+                result: Err(BlockSimError::SimulationDropped),
+            }),
+        )));
+        producers.produce(FromSimMsg { ix: result_ix });
+    }
+
     #[timed]
     fn handle_sim_request(
         &mut self,
@@ -248,6 +272,11 @@ impl SimulatorTile {
             return;
         };
         let builder_pubkey = *decoded_data.submission_data.submission.builder_pubkey();
+        let queue_key = QueueKey {
+            parent_hash: *decoded_data.submission_data.submission.parent_hash(),
+            builder_pubkey,
+        };
+        let version = decoded_data.submission_data.version;
         assert_eq!(decoded_data.submission_data.submission.bid_slot(), self.last_bid_slot);
 
         // Before deciding whether to simulate or queue: a queued submission would
@@ -266,10 +295,13 @@ impl SimulatorTile {
             self.local_telemetry.queued += 1;
             // Every request feeds the cache on arrival, so an evicted one has
             // already contributed its transactions.
-            if fast_track {
-                self.priority_requests.store(req, builder_pubkey, &mut self.local_telemetry);
+            let dropped = if fast_track {
+                self.priority_requests.store(req, queue_key, version, &mut self.local_telemetry)
             } else {
-                self.requests.store(req, builder_pubkey, &mut self.local_telemetry);
+                self.requests.store(req, queue_key, version, &mut self.local_telemetry)
+            };
+            if let Some(dropped) = dropped {
+                self.answer_dropped(&dropped, producers);
             }
         }
     }
@@ -696,14 +728,16 @@ impl SimulatorTile {
             .map(|(i, _)| i)
     }
 
-    fn on_new_slot(&mut self, bid_slot: u64) {
+    fn on_new_slot(&mut self, bid_slot: u64, producers: &mut HelixSpineProducers) {
         if self.last_bid_slot > 0 {
             self.report();
         }
 
         self.last_bid_slot = bid_slot;
-        self.requests.clear();
-        self.priority_requests.clear();
+        let left = [self.requests.drain(), self.priority_requests.drain()].concat();
+        for req in left {
+            self.answer_dropped(&req, producers);
+        }
         self.merge_requests.clear();
         self.hydration_cache.clear();
     }
@@ -1038,9 +1072,17 @@ struct SimSlotStats {
     total_time: Duration,
 }
 
-/// Pending requests, we only keep the last one for each builder.
+/// Identifies the one queued request a builder may hold on a fork. Mirrors the bid sorter,
+/// which keys on parent hash then builder pubkey.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct QueueKey {
+    parent_hash: B256,
+    builder_pubkey: BlsPublicKeyBytes,
+}
+
+/// Pending requests, we only keep the last one for each builder on each fork.
 struct PendingRequests {
-    reqs: Vec<(crate::simulator::ValidationRequest, BlsPublicKeyBytes)>,
+    reqs: Vec<(crate::simulator::ValidationRequest, QueueKey, SubmissionVersion)>,
 }
 
 impl PendingRequests {
@@ -1048,36 +1090,44 @@ impl PendingRequests {
         Self { reqs: Vec::with_capacity(capacity) }
     }
 
-    /// Returns the evicted request if a newer one replaced it.
+    /// Returns the request this store dropped: the one it replaced, or `req` itself when
+    /// the queue already holds a fresher one. Either way that request is never simulated,
+    /// so the caller must answer it.
     fn store(
         &mut self,
         req: crate::simulator::ValidationRequest,
-        builder_pubkey: BlsPublicKeyBytes,
+        key: QueueKey,
+        version: SubmissionVersion,
         local_telemetry: &mut LocalTelemetry,
     ) -> Option<crate::simulator::ValidationRequest> {
-        if let Some(i) = self.reqs.iter().position(|(_, pk)| *pk == builder_pubkey) {
+        if let Some(i) = self.reqs.iter().position(|(_, k, _)| *k == key) {
             local_telemetry.sims_reqs_dropped += 1;
-            if req.on_receive_ns() > self.reqs[i].0.on_receive_ns() {
-                let evicted = std::mem::replace(&mut self.reqs[i].0, req);
-                return Some(evicted);
+            if version > self.reqs[i].2 {
+                self.reqs[i].2 = version;
+                return Some(std::mem::replace(&mut self.reqs[i].0, req));
             }
-            return None;
+            return Some(req);
         }
-        self.reqs.push((req, builder_pubkey));
+        self.reqs.push((req, key, version));
         local_telemetry.max_pending = local_telemetry.max_pending.max(self.reqs.len());
         None
     }
 
     fn next_req(&mut self) -> Option<crate::simulator::ValidationRequest> {
-        let i =
-            self.reqs.iter().enumerate().max_by_key(|(_, (r, _))| r.sort_key()).map(|(i, _)| i)?;
+        let i = self
+            .reqs
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, (r, _, _))| r.sort_key())
+            .map(|(i, _)| i)?;
         Some(self.reqs.swap_remove(i).0)
     }
 
-    /// Clear backlog of simulations from the previous bid slot.
+    /// Takes the backlog of simulations from the previous bid slot. They are never
+    /// simulated, so the caller must answer them.
     /// All pending requests are always for `last_bid_slot` (asserted on intake).
-    fn clear(&mut self) {
-        self.reqs.clear();
+    fn drain(&mut self) -> Vec<crate::simulator::ValidationRequest> {
+        self.reqs.drain(..).map(|(req, _, _)| req).collect()
     }
 }
 
@@ -1882,6 +1932,95 @@ mod tests {
         assert_eq!(submission.blobs_bundle.commitments[0], blob.commitment);
         assert_eq!(submission.blobs_bundle.proofs, blob.proofs);
         assert_eq!(submission.blobs_bundle.blobs.len(), 1);
+    }
+
+    fn queued(receive_ns: u64) -> crate::simulator::ValidationRequest {
+        let mut req = validation_request(0);
+        req.receive_ns = receive_ns;
+        req
+    }
+
+    fn key(parent: u8, builder: u8) -> QueueKey {
+        let mut builder_pubkey = BlsPublicKeyBytes::default();
+        builder_pubkey.0[0] = builder;
+        QueueKey { parent_hash: B256::repeat_byte(parent), builder_pubkey }
+    }
+
+    fn version(receive_ns: u64, sequence: Option<u32>) -> SubmissionVersion {
+        SubmissionVersion::new(receive_ns, sequence)
+    }
+
+    /// The bid sorter keys on parent hash then builder, so one builder can hold a live bid on
+    /// each fork. The sim queue must do the same, or a fork's bid is evicted by the other
+    /// fork's and never simulated while the auction still counts both.
+    #[test]
+    fn a_builder_keeps_one_queued_request_per_fork() {
+        let mut pending = PendingRequests::with_capacity(4);
+        let mut tel = LocalTelemetry::default();
+
+        assert!(pending.store(queued(10), key(1, 7), version(10, None), &mut tel).is_none());
+        assert!(pending.store(queued(20), key(2, 7), version(20, None), &mut tel).is_none());
+
+        assert!(pending.next_req().is_some());
+        assert!(pending.next_req().is_some());
+    }
+
+    /// The sorter orders a builder's bids by `SubmissionVersion`, which prefers the builder's
+    /// own sequence over our arrival clock. The queue must agree, or it can hold a sim for a
+    /// bid the auction has already superseded.
+    #[test]
+    fn a_later_arrival_with_an_older_sequence_loses_to_the_queued_bid() {
+        let mut pending = PendingRequests::with_capacity(4);
+        let mut tel = LocalTelemetry::default();
+        pending.store(queued(10), key(1, 7), version(10, Some(2)), &mut tel);
+
+        let dropped = pending.store(queued(99), key(1, 7), version(99, Some(1)), &mut tel);
+
+        assert_eq!(dropped.map(|r| r.on_receive_ns()), Some(99), "the stale bid must be dropped");
+        assert_eq!(pending.next_req().map(|r| r.on_receive_ns()), Some(10));
+    }
+
+    #[test]
+    fn a_newer_sequence_replaces_the_queued_bid() {
+        let mut pending = PendingRequests::with_capacity(4);
+        let mut tel = LocalTelemetry::default();
+        pending.store(queued(99), key(1, 7), version(99, Some(1)), &mut tel);
+
+        let dropped = pending.store(queued(10), key(1, 7), version(10, Some(2)), &mut tel);
+
+        assert_eq!(dropped.map(|r| r.on_receive_ns()), Some(99));
+        assert_eq!(pending.next_req().map(|r| r.on_receive_ns()), Some(10));
+    }
+
+    /// gattaca-com/helix: a request the queue drops is never simulated, so `store` must
+    /// hand it back for the caller to answer. Otherwise the builder waits for a result
+    /// that is not coming, and the bid never enters the auction.
+    #[test]
+    fn store_returns_the_request_it_dropped() {
+        let mut pending = PendingRequests::with_capacity(4);
+        let mut tel = LocalTelemetry::default();
+
+        assert!(pending.store(queued(10), key(1, 0), version(10, None), &mut tel).is_none());
+
+        let dropped = pending.store(queued(20), key(1, 0), version(20, None), &mut tel);
+        assert_eq!(dropped.map(|r| r.on_receive_ns()), Some(10));
+
+        let dropped = pending.store(queued(15), key(1, 0), version(15, None), &mut tel);
+        assert_eq!(dropped.map(|r| r.on_receive_ns()), Some(15));
+
+        assert_eq!(pending.next_req().map(|r| r.on_receive_ns()), Some(20));
+    }
+
+    #[test]
+    fn drain_takes_every_request_left_at_the_slot_boundary() {
+        let mut pending = PendingRequests::with_capacity(4);
+        let mut tel = LocalTelemetry::default();
+        for i in 0..3u8 {
+            pending.store(queued(i as u64), key(1, i), version(i as u64, None), &mut tel);
+        }
+
+        assert_eq!(pending.drain().len(), 3);
+        assert!(pending.next_req().is_none());
     }
 
     /// A breaker opens for 12s at the first fault. Demoting every builder for a whole slot
