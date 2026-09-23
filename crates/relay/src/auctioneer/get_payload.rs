@@ -1,5 +1,5 @@
 use alloy_primitives::B256;
-use helix_common::GetPayloadTrace;
+use helix_common::{GetPayloadTrace, utils::utcnow_ns};
 use helix_types::{
     BeaconBlockBodyFulu, BeaconBlockFulu, GetPayloadResponse, PayloadAndBlobs, PayloadBidData,
     SignedBeaconBlock, SignedBeaconBlockFulu, SignedBlindedBeaconBlock, VersionedSignedProposal,
@@ -98,11 +98,12 @@ impl<B: BidAdjustor> Context<B> {
         &self,
         blinded: SignedBlindedBeaconBlock,
         local: PayloadAndBlobs,
-        trace: GetPayloadTrace,
+        mut trace: GetPayloadTrace,
         slot_data: &SlotData,
     ) -> Result<(GetPayloadResponse, VersionedSignedProposal, GetPayloadTrace), ProposerApiError>
     {
         self.validate_proposal_coordinate(&blinded, slot_data)?;
+        trace.proposer_index_validated = utcnow_ns();
 
         if blinded.fork_name_unchecked() != slot_data.current_fork {
             return Err(ProposerApiError::UnsupportedBeaconChainVersion);

@@ -1264,7 +1264,6 @@ mod tests {
         beacon::{BlsPublicKey, requests::ExecutionRequestsV4},
         engine::{ExecutionPayloadV1, ExecutionPayloadV2, ExecutionPayloadV3},
     };
-    use flux::timing::Nanos;
     use helix_common::{
         MergingBuilderCollateral, MergingBuilderEndpoint, SubmissionTrace,
         decoder::{Encoding, SubmissionDecoderParams},
@@ -1433,7 +1432,7 @@ mod tests {
             },
             is_pessimistic: false,
         };
-        SubmissionDataWithSpan { submission_data, span: tracing::Span::none(), sent_at: Nanos(0) }
+        SubmissionDataWithSpan { submission_data, span: tracing::Span::none() }
     }
 
     #[test]

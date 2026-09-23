@@ -1451,7 +1451,7 @@ mod tests {
             },
             is_pessimistic: false,
         };
-        SubmissionDataWithSpan { submission_data, span: tracing::Span::none(), sent_at: Nanos(0) }
+        SubmissionDataWithSpan { submission_data, span: tracing::Span::none() }
     }
 
     fn validation_request(decoded_ix: usize) -> ValidationRequest {
