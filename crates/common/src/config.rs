@@ -72,7 +72,7 @@ pub struct RelayConfig {
     pub tcp_port: u16,
     #[serde(default = "default_usize::<512>")]
     pub tcp_max_connections: usize,
-    /// Serve the top-bid feed over reliable UDP as well, on `tcp_port`.
+    /// Serve the top-bid feed over UDP as well, on `tcp_port`.
     #[serde(default)]
     pub udp_top_bid_enabled: bool,
     /// Max UDP top-bid sessions per API key. Further registrations from that key are dropped.

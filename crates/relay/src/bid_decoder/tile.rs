@@ -3,7 +3,7 @@ use std::{cell::RefCell, sync::Arc};
 use alloy_primitives::B256;
 use bytes::Bytes;
 use flux::{
-    spine::{SpineDCacheConsumer, SpineProducers},
+    spine::{DCacheRead, SpineDCacheConsumer, SpineProducers},
     tile::Tile,
     timing::{InternalMessage, Nanos},
 };
@@ -23,7 +23,7 @@ use helix_types::{
     Submission, SubmissionVersion,
 };
 use rustc_hash::FxHashMap;
-use tracing::{info, trace};
+use tracing::{info, trace, warn};
 
 use crate::{
     HelixSpine,
@@ -124,7 +124,7 @@ impl DecoderTile {
         <HelixSpine as flux::spine::FluxSpine>::Consumers: AsMut<SpineDCacheConsumer<T>>,
     {
         adapter.consume_with_dcache_collaborative_internal_message(
-            |msg: &InternalMessage<T>, dcache_payload| {
+            |msg: &InternalMessage<T>, dcache_payload, _| {
                 let new_bid = msg.bid();
                 // dcache bypass: the dcache slot can be mutated between publish and
                 // consume, read the stable staged copy when one is present.
@@ -150,8 +150,8 @@ impl DecoderTile {
                     new_bid.expected_pubkey(),
                 )
             },
-            |msg, result, producers| match result {
-                Some(result) => {
+            |read, producers| match read {
+                DCacheRead::Ok((msg, result)) => {
                     let new_bid = msg.bid();
                     self.record_decode_result(&result);
                     let sent_at = msg.tracking_timestamp().publish_t();
@@ -164,7 +164,7 @@ impl DecoderTile {
                         producers,
                     );
                 }
-                None => {
+                DCacheRead::NoRef(msg) => {
                     let new_bid = msg.bid();
                     let Some(payload) = self.http_submissions.get(new_bid.http_submission_ix)
                     else {
@@ -204,6 +204,10 @@ impl DecoderTile {
                         producers,
                     );
                 }
+                DCacheRead::Lost(msg) => {
+                    warn!(id = %msg.bid().header.id, "bid submission payload lost");
+                }
+                DCacheRead::SpedPast => {}
             },
         );
     }
