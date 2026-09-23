@@ -218,6 +218,11 @@ impl BidSorter {
         self.process_demotion(demoted, producers);
     }
 
+    /// Value of the bid that would be served for this parent right now.
+    pub fn top_bid_value(&self, parent_hash: &B256) -> Option<U256> {
+        self.forks.get(parent_hash).and_then(|s| s.curr_bid.as_ref().map(|b| b.value))
+    }
+
     pub fn get_header(&self, parent_hash: &B256) -> Option<B256> {
         self.forks.get(parent_hash).and_then(|s| s.curr_bid.as_ref().map(|b| b.block_hash))
     }

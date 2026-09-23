@@ -18,8 +18,30 @@ pub mod tile;
 
 pub use tile::SimulatorTile;
 
+/// Dispatch class for a validation request, highest first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SimPriority {
+    /// Below every other class: a bid that cannot win and carries no relay exposure.
+    Low,
+    /// A live optimistic bid drawn into the validity sample for its builder.
+    Sample,
+    /// A bid that would top the auction now, in either mode.
+    Top,
+}
+
+impl SimPriority {
+    pub fn label(self) -> &'static str {
+        match self {
+            SimPriority::Low => "low",
+            SimPriority::Sample => "sample",
+            SimPriority::Top => "top",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ValidationRequest {
+    pub priority: SimPriority,
     pub is_top_bid: bool,
     pub is_optimistic: bool,
     pub apply_blacklist: bool,
@@ -95,9 +117,9 @@ impl ValidationRequest {
     }
 
     // TODO: use a "score" eg how close to top bid even if below
-    pub fn sort_key(&self) -> (u8, u64) {
+    pub fn sort_key(&self) -> (SimPriority, u8, u64) {
         let top = if self.is_top_bid { 1 } else { 0 };
-        (top, u64::MAX - self.on_receive_ns())
+        (self.priority, top, u64::MAX - self.on_receive_ns())
     }
 
     pub fn optimistic_version(&self) -> OptimisticVersion {
