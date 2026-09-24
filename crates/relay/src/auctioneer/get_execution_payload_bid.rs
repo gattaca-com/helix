@@ -1,4 +1,6 @@
-use helix_common::{api::proposer_api::GetExecutionPayloadBidParams, chain_info::ChainInfo};
+use helix_common::{
+    ForkKey, api::proposer_api::GetExecutionPayloadBidParams, chain_info::ChainInfo,
+};
 use helix_types::{
     ExecutionBlockHash, ExecutionPayloadBid, SignedExecutionPayloadBid, Slot,
     convert_kzg_commitments_to_progressive, execution_requests_to_gloas,
@@ -26,10 +28,9 @@ impl<B: BidAdjustor> Context<B> {
         res_tx: oneshot::Sender<GetExecutionPayloadBidResult>,
     ) {
         let result = check_execution_payload_bid_liveness(&params, slot_data).and_then(|()| {
-            let best_block_hash = self
-                .bid_sorter
-                .get_header(&params.parent_hash)
-                .ok_or(ProposerApiError::NoBidPrepared)?;
+            let fork = ForkKey { parent_hash: params.parent_hash, parent_root: params.parent_root };
+            let best_block_hash =
+                self.bid_sorter.get_header(&fork).ok_or(ProposerApiError::NoBidPrepared)?;
             let entry =
                 self.payloads.get(&best_block_hash).ok_or(ProposerApiError::NoBidPrepared)?;
             build_signed_bid(entry, &params, &self.gloas_builder_identity, &self.chain_info)
@@ -43,20 +44,12 @@ pub(super) fn check_execution_payload_bid_liveness(
     params: &GetExecutionPayloadBidParams,
     slot_data: &SlotData,
 ) -> Result<(), ProposerApiError> {
-    let Some(attrs) = slot_data.payload_attributes_map.get(&params.parent_hash) else {
+    let fork = ForkKey { parent_hash: params.parent_hash, parent_root: params.parent_root };
+    if !slot_data.payload_attributes_map.contains_key(&fork) {
         warn!(
-            req =% params.parent_hash,
+            req =? fork,
             have =? slot_data.payload_attributes_map.keys(),
-            "get execution payload bid for unknown parent hash"
-        );
-        return Err(ProposerApiError::NoBidPrepared);
-    };
-
-    if attrs.parent_beacon_block_root != Some(params.parent_root) {
-        warn!(
-            req =% params.parent_root,
-            have =? attrs.parent_beacon_block_root,
-            "get execution payload bid for mismatched parent root"
+            "get execution payload bid for unknown fork"
         );
         return Err(ProposerApiError::NoBidPrepared);
     }
@@ -112,16 +105,15 @@ mod tests {
     use alloy_primitives::B256;
     use helix_common::PayloadAttributesUpdate;
     use helix_types::{Domain, EthSpec, ForkName, SignedRoot, TestRandomSeed};
-    use rustc_hash::FxHashMap;
 
     use super::*;
 
-    fn slot_data(payload_attributes_map: FxHashMap<B256, PayloadAttributesUpdate>) -> SlotData {
+    fn slot_data(attrs: Vec<PayloadAttributesUpdate>) -> SlotData {
         SlotData {
             bid_slot: Default::default(),
             registration_data: Default::default(),
             current_fork: ForkName::Gloas,
-            payload_attributes_map,
+            payload_attributes_map: attrs.into_iter().map(|a| (a.fork(), a)).collect(),
             il: Default::default(),
         }
     }
@@ -153,7 +145,7 @@ mod tests {
     fn unknown_parent_hash_is_no_bid() {
         let parent_hash = B256::repeat_byte(0x11);
         let parent_root = B256::repeat_byte(0x22);
-        let data = slot_data(FxHashMap::default());
+        let data = slot_data(vec![]);
 
         let result = check_execution_payload_bid_liveness(&params(parent_hash, parent_root), &data);
 
@@ -165,9 +157,7 @@ mod tests {
         let parent_hash = B256::repeat_byte(0x11);
         let live_root = B256::repeat_byte(0x22);
         let requested_root = B256::repeat_byte(0x33);
-        let mut map = FxHashMap::default();
-        map.insert(parent_hash, attrs_update(parent_hash, Some(live_root)));
-        let data = slot_data(map);
+        let data = slot_data(vec![attrs_update(parent_hash, Some(live_root))]);
 
         let result =
             check_execution_payload_bid_liveness(&params(parent_hash, requested_root), &data);
@@ -179,9 +169,7 @@ mod tests {
     fn missing_parent_beacon_block_root_is_no_bid() {
         let parent_hash = B256::repeat_byte(0x11);
         let requested_root = B256::repeat_byte(0x33);
-        let mut map = FxHashMap::default();
-        map.insert(parent_hash, attrs_update(parent_hash, None));
-        let data = slot_data(map);
+        let data = slot_data(vec![attrs_update(parent_hash, None)]);
 
         let result =
             check_execution_payload_bid_liveness(&params(parent_hash, requested_root), &data);
@@ -193,13 +181,27 @@ mod tests {
     fn matching_parent_passes_liveness_check() {
         let parent_hash = B256::repeat_byte(0x11);
         let parent_root = B256::repeat_byte(0x22);
-        let mut map = FxHashMap::default();
-        map.insert(parent_hash, attrs_update(parent_hash, Some(parent_root)));
-        let data = slot_data(map);
+        let data = slot_data(vec![attrs_update(parent_hash, Some(parent_root))]);
 
         let result = check_execution_payload_bid_liveness(&params(parent_hash, parent_root), &data);
 
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn each_parent_root_on_a_shared_parent_hash_passes_liveness_check() {
+        let parent_hash = B256::repeat_byte(0x11);
+        let missed_root = B256::repeat_byte(0x22);
+        let empty_root = B256::repeat_byte(0x33);
+        let data = slot_data(vec![
+            attrs_update(parent_hash, Some(missed_root)),
+            attrs_update(parent_hash, Some(empty_root)),
+        ]);
+
+        for root in [missed_root, empty_root] {
+            let result = check_execution_payload_bid_liveness(&params(parent_hash, root), &data);
+            assert!(result.is_ok());
+        }
     }
 
     fn payload_entry(block_hash: B256, value: u64) -> PayloadEntry {

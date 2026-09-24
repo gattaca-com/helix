@@ -4,15 +4,14 @@ use std::{
     time::{Duration, Instant},
 };
 
-use alloy_primitives::B256;
 use flux::{
     spine::SpineProducers,
     tile::{Tile, TileName},
 };
 use flux_utils::SharedVector;
 use helix_common::{
-    CurrentSlotInfo, InclusionListConfig, PayloadAttributesUpdate, PrimevConfig, ProposerDuty,
-    RelayConfig, SlotDuties, ValidatorSummary,
+    CurrentSlotInfo, ForkKey, InclusionListConfig, PayloadAttributesUpdate, PrimevConfig,
+    ProposerDuty, RelayConfig, SlotDuties, ValidatorSummary,
     api::builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
     beacon::{
         MultiBeaconClient,
@@ -100,7 +99,7 @@ pub struct HousekeeperTile {
     relay_network_api: Arc<RelayNetworkManager>,
     db: DbHandle,
 
-    known_payload_attributes: HashMap<(B256, Slot), PayloadAttributesUpdate>,
+    known_payload_attributes: HashMap<(ForkKey, Slot), PayloadAttributesUpdate>,
     duties: Vec<ProposerDuty>,
 
     // In-flight fetch state machines
@@ -530,7 +529,7 @@ fn send_slot_event(
     local_cache: &LocalCache,
     curr_slot_info: &CurrentSlotInfo,
     slot_events: &SharedVector<SlotUpdate>,
-    known_payload_attributes: &HashMap<(B256, Slot), PayloadAttributesUpdate>,
+    known_payload_attributes: &HashMap<(ForkKey, Slot), PayloadAttributesUpdate>,
     il: Option<InclusionListWithMetadata>,
     stats: HousekeeperStats,
 ) {

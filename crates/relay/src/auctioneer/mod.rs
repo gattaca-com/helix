@@ -24,7 +24,7 @@ use flux_profiler::timed;
 use flux_utils::SharedVector;
 pub use handle::{AuctioneerHandle, GetPayloadKind};
 use helix_common::{
-    PayloadAttributesUpdate, RelayConfig,
+    ForkKey, PayloadAttributesUpdate, RelayConfig,
     alerts::AlertManager,
     api::builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
     chain_info::ChainInfo,
@@ -197,7 +197,7 @@ enum State {
     Slot {
         bid_slot: Slot,
         registration_data: Option<BuilderGetValidatorsResponseEntry>,
-        payload_attributes_map: FxHashMap<B256, PayloadAttributesUpdate>,
+        payload_attributes_map: FxHashMap<ForkKey, PayloadAttributesUpdate>,
         il: Option<InclusionListWithMetadata>,
     },
 
@@ -311,14 +311,14 @@ impl State {
                     // check fork
                     let new_forks: Vec<_> = payload_attributes
                         .into_iter()
-                        .filter(|u| !slot_data.payload_attributes_map.contains_key(&u.parent_hash))
+                        .filter(|u| !slot_data.payload_attributes_map.contains_key(&u.fork()))
                         .collect();
                     if !new_forks.is_empty() {
                         // ugly clone but should be relatively rare
                         let mut slot_data = slot_data.clone();
                         for update in new_forks {
-                            info!(bid_slot =% slot_data.bid_slot, received =? update.parent_hash, sorting =? slot_data.payload_attributes_map.keys(), "sorting for an additional fork");
-                            slot_data.payload_attributes_map.insert(update.parent_hash, update);
+                            info!(bid_slot =% slot_data.bid_slot, received =? update.fork(), sorting =? slot_data.payload_attributes_map.keys(), "sorting for an additional fork");
+                            slot_data.payload_attributes_map.insert(update.fork(), update);
                         }
                         *self = State::Sorting(slot_data);
                     } else if slot_data.il.is_none() && il.is_some() {
@@ -433,9 +433,9 @@ impl State {
                         request_slot: params.slot,
                         bid_slot: slot_data.bid_slot.into(),
                     }));
-                } else if !slot_data.payload_attributes_map.contains_key(&params.parent_hash) {
+                } else if slot_data.fork_for_parent_hash(&params.parent_hash).is_none() {
                     // proposer is on a different fork
-                    warn!(req =% params.parent_hash, have =? slot_data.payload_attributes_map.keys(), "get header for unknown parent hash");
+                    warn!(req =% params.parent_hash, have =? slot_data.parent_hashes(), "get header for unknown parent hash");
                     let _ = res_tx.send(Err(ProposerApiError::NoBidPrepared));
                 } else if slot_data.registration_data.entry.registration.message.pubkey !=
                     params.pubkey
@@ -709,14 +709,14 @@ impl State {
     #[timed]
     fn process_slot_data<B: BidAdjustor>(
         bid_slot: Slot,
-        mut payload_attributes_map: FxHashMap<B256, PayloadAttributesUpdate>,
+        mut payload_attributes_map: FxHashMap<ForkKey, PayloadAttributesUpdate>,
         registration_data: Option<BuilderGetValidatorsResponseEntry>,
         payload_attributes: Vec<PayloadAttributesUpdate>,
         il: Option<InclusionListWithMetadata>,
         ctx: &mut Context<B>,
     ) -> Self {
         for update in payload_attributes {
-            payload_attributes_map.insert(update.parent_hash, update);
+            payload_attributes_map.insert(update.fork(), update);
         }
 
         match (registration_data, payload_attributes_map.is_empty()) {

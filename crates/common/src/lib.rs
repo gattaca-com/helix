@@ -29,7 +29,7 @@ pub use adjustments::*;
 pub use builder_info::*;
 pub use config::*;
 pub use proposer::*;
-pub use slot_info::{CurrentSlotInfo, PayloadAttributesUpdate, SlotDuties};
+pub use slot_info::{CurrentSlotInfo, ForkKey, PayloadAttributesUpdate, SlotDuties};
 pub use traces::*;
 pub use validator::*;
 pub use validator_preferences::*;

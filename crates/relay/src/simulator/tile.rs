@@ -473,7 +473,7 @@ impl SimulatorTile {
 
             record_submission_step("simulation", start_sim.elapsed());
 
-            let bid = Bid::new(version, &submission);
+            let bid = Bid::new(version, &submission, req.parent_beacon_block_root);
             let inner = SimulationResultInner {
                 submission_ref,
                 result: res.map(|()| trace),

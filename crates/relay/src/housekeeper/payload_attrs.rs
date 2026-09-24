@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
-use alloy_primitives::B256;
-use helix_common::{PayloadAttributesUpdate, beacon::types::PayloadAttributesEvent};
+use helix_common::{ForkKey, PayloadAttributesUpdate, beacon::types::PayloadAttributesEvent};
 use helix_types::Slot;
 use tracing::info;
 use tree_hash::TreeHash;
@@ -11,16 +10,20 @@ use crate::housekeeper::chain_head::ChainHead;
 pub fn process_payload_attributes(
     chain_head: &mut ChainHead,
     event: PayloadAttributesEvent,
-    known_payload_attributes: &mut HashMap<(B256, Slot), PayloadAttributesUpdate>,
+    known_payload_attributes: &mut HashMap<(ForkKey, Slot), PayloadAttributesUpdate>,
 ) {
     // Drop stale payload attributes
     if chain_head.head() >= event.data.proposal_slot {
         return;
     }
 
-    // Drop duplicates for the same parent and slot. We may receive multiple events for the same
+    // Drop duplicates for the same fork and slot. We may receive multiple events for the same
     // slot
-    let payload_attributes_key = (event.data.parent_block_hash, event.data.proposal_slot);
+    let fork = ForkKey {
+        parent_hash: event.data.parent_block_hash,
+        parent_root: event.data.payload_attributes.parent_beacon_block_root.unwrap_or_default(),
+    };
+    let payload_attributes_key = (fork, event.data.proposal_slot);
     if known_payload_attributes.contains_key(&payload_attributes_key) {
         return;
     }
@@ -29,6 +32,7 @@ pub fn process_payload_attributes(
         head_slot =% chain_head.head(),
         payload_attribute_slot =% event.data.proposal_slot,
         payload_attribute_parent = ?event.data.parent_block_hash,
+        payload_attribute_parent_root = ?fork.parent_root,
         "processing payload attribute event",
     );
 
@@ -184,6 +188,20 @@ mod tests {
         let slot = head_slot + 1;
         process_payload_attributes(&mut ch, make_event(slot, B256::from([7u8; 32])), &mut known);
         process_payload_attributes(&mut ch, make_event(slot, B256::from([8u8; 32])), &mut known);
+        assert_eq!(known.len(), 2);
+    }
+
+    #[test]
+    fn events_on_the_same_parent_hash_with_different_roots_both_stored() {
+        let (mut ch, head_slot) = make_chain_head();
+        let mut known = HashMap::new();
+        let slot = head_slot + 1;
+        let parent = B256::from([9u8; 32]);
+        for root in [B256::from([10u8; 32]), B256::from([11u8; 32])] {
+            let mut event = make_event(slot, parent);
+            event.data.payload_attributes.parent_beacon_block_root = Some(root);
+            process_payload_attributes(&mut ch, event, &mut known);
+        }
         assert_eq!(known.len(), 2);
     }
 }

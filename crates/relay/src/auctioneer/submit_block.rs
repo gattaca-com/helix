@@ -69,7 +69,7 @@ impl<B: BidAdjustor> Context<B> {
             !self.failsafe_triggered.load(Ordering::Relaxed) &&
             self.should_process_optimistically(&submission_data, &builder_info, slot_data)
         {
-            let bid = Bid::from_submission_data(&submission_data);
+            let bid = Bid::from_submission_data(&submission_data, payload_attributes.parent_root());
             let is_top_bid = self.bid_sorter.sort(bid, &mut submission_data.trace, true, producers);
             (OptimisticVersion::V1, is_top_bid)
         } else {
@@ -86,9 +86,7 @@ impl<B: BidAdjustor> Context<B> {
             is_optimistic,
             apply_blacklist: slot_data.registration_data.entry.preferences.filtering.is_regional(),
             registered_gas_limit: slot_data.registration_data.entry.registration.message.gas_limit,
-            parent_beacon_block_root: payload_attributes
-                .parent_beacon_block_root
-                .unwrap_or_default(),
+            parent_beacon_block_root: payload_attributes.parent_root(),
             inclusion_list: slot_data.il.clone().unwrap_or_default(),
             decoded_ix,
             receive_ns: submission_data.trace.receive_ns.0,
