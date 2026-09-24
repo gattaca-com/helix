@@ -316,7 +316,9 @@ fn merge_base(
             seen_version = version;
             passes += 1;
             {
+                let lock_start = std::time::Instant::now();
                 let inner = shared.inner.read().expect("shared slot poisoned");
+                metrics::stage_latency("extend_lock_wait", lock_start.elapsed().as_micros() as u64);
                 session.try_extend(&inner.orders, &inner.excluded);
             }
             match session.emit(

@@ -179,6 +179,9 @@ pub struct SimulationConfig {
     pub validation_window: u64,
     #[serde(default = "default_max_concurrent_validations")]
     pub max_concurrent_validations: usize,
+    /// Prometheus port; the merging config's port wins when both roles run.
+    #[serde(default = "default_metrics_port")]
+    pub metrics_port: Option<u16>,
 }
 
 impl SimulationConfig {

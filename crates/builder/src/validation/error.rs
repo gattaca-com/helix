@@ -40,3 +40,27 @@ pub enum ValidationError {
     #[error("invalid blobs bundle")]
     InvalidBlobsBundle,
 }
+
+impl ValidationError {
+    pub fn metric_label(&self) -> &'static str {
+        match self {
+            ValidationError::BlockHashMismatch { .. } => "block_hash_mismatch",
+            ValidationError::ParentHashMismatch { .. } => "parent_hash_mismatch",
+            ValidationError::GasLimitMismatch { .. } => "gas_limit_mismatch",
+            ValidationError::GasUsedMismatch { .. } => "gas_used_mismatch",
+            ValidationError::DecodeTransaction(_) => "decode_transaction",
+            ValidationError::BaseFeeTooLarge => "base_fee_too_large",
+            ValidationError::MissingParentBlock => "missing_parent_block",
+            ValidationError::BlockTooOld => "block_too_old",
+            ValidationError::Store(_) => "store",
+            ValidationError::PreExecution(_) => "pre_execution",
+            ValidationError::Execution(_) => "execution",
+            ValidationError::PostExecution(_) => "post_execution",
+            ValidationError::StateRootMismatch { .. } => "state_root_mismatch",
+            ValidationError::MissingParentState => "missing_parent_state",
+            ValidationError::ProposerPayment => "proposer_payment",
+            ValidationError::Blacklist(_) => "blacklist",
+            ValidationError::InvalidBlobsBundle => "invalid_blobs_bundle",
+        }
+    }
+}

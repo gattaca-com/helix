@@ -64,6 +64,14 @@ fn main() -> eyre::Result<()> {
 
     let node = runtime.block_on(node::start(&cli.node))?;
 
+    let metrics_port = match roles.merging() {
+        Some(merging_config) => merging_config.metrics_port,
+        None => roles.simulation().and_then(|simulation_config| simulation_config.metrics_port),
+    };
+    if let Some(port) = metrics_port {
+        runtime.spawn(metrics::serve(port));
+    }
+
     if let Some(simulation_config) = roles.simulation() {
         let disallow = std::sync::Arc::new(dashmap::DashSet::new());
         let validator = BlockValidator::new(
@@ -114,10 +122,6 @@ fn main() -> eyre::Result<()> {
     // `BuilderSpine::start` blocks until its tiles stop, so merging starts last.
     if let Some(merging_config) = roles.merging() {
         let relay_signer = relay_signer.expect("the merging role loads a relay signer");
-
-        if let Some(port) = merging_config.metrics_port {
-            runtime.spawn(metrics::serve(port));
-        }
 
         let (event_tx, event_rx) = crossbeam_channel::bounded(merging_config.event_queue_capacity);
         let (output_tx, output_rx) = crossbeam_channel::bounded(64);

@@ -407,6 +407,12 @@ impl MergeSession {
                 .map_err(|e| MergeError::InvalidBaseBlock(format!("base tx failed: {e}")))?;
             tx_hashes.insert(decoded.hash);
         }
+        metrics::stage_latency(
+            "replay_txs",
+            (replay_start.elapsed().as_micros() as u64).saturating_sub(snapshot_us),
+        );
+        metrics::stage_latency("replay_snapshot", snapshot_us);
+        let probe_start = Instant::now();
         {
             let mut probe = ctx.vm.clone();
             if let Ok(updates) = probe.get_state_transitions() {
@@ -414,11 +420,7 @@ impl MergeSession {
                 metrics::account_updates("base", updates.len(), slots);
             }
         }
-        metrics::stage_latency(
-            "replay_txs",
-            (replay_start.elapsed().as_micros() as u64).saturating_sub(snapshot_us),
-        );
-        metrics::stage_latency("replay_snapshot", snapshot_us);
+        metrics::stage_latency("replay_state_probe", probe_start.elapsed().as_micros() as u64);
         let new_checkpoint = new_checkpoint
             .expect("base.txs is non-empty (checked above), so last_ix is always visited");
         debug!(
@@ -502,6 +504,7 @@ impl MergeSession {
     /// changed. Port of `append_greedily_until_gas_limit`.
     pub fn try_extend(&mut self, orders: &[PreparedOrder], excluded: &FxHashSet<B256>) -> bool {
         self.trace.sim_start_ns = utcnow_ns();
+        let screen_start = Instant::now();
         let header = self.ctx.payload.header.clone();
 
         let base_fee = header.base_fee_per_gas;
@@ -527,6 +530,8 @@ impl MergeSession {
                     .is_ok()
             })
             .collect();
+        metrics::stage_latency("extend_screen", screen_start.elapsed().as_micros() as u64);
+        metrics::extend_orders("candidates", candidates.len());
         if candidates.is_empty() {
             return false;
         }
@@ -537,6 +542,7 @@ impl MergeSession {
         let available_blobs = self.available_blobs();
         let vm = &self.ctx.vm;
         let beneficiary = self.beneficiary;
+        let presim_start = Instant::now();
         let results: Vec<Result<SimulatedOrder, SimulationError>> = {
             use rayon::prelude::*;
             candidates
@@ -571,7 +577,11 @@ impl MergeSession {
 
         // Highest payment first.
         simulated.sort_unstable_by_key(|s| std::cmp::Reverse(s.builder_payment));
+        metrics::stage_latency("extend_presim", presim_start.elapsed().as_micros() as u64);
+        metrics::extend_orders("presim_ok", simulated.len());
 
+        let apply_start = Instant::now();
+        let mut applied = 0;
         let mut changed = false;
         for candidate in simulated {
             let order = &orders[candidate.order_ix];
@@ -579,6 +589,7 @@ impl MergeSession {
             match self.try_apply(order, &header) {
                 Ok(true) => {
                     changed = true;
+                    applied += 1;
                     self.order_outcomes.insert(order.order_id, ("applied", headroom));
                 }
                 Ok(false) => {
@@ -590,6 +601,9 @@ impl MergeSession {
                 }
             }
         }
+
+        metrics::stage_latency("extend_apply", apply_start.elapsed().as_micros() as u64);
+        metrics::extend_orders("applied", applied);
 
         self.trace.sim_end_ns = utcnow_ns();
         metrics::stage_latency(
@@ -618,6 +632,7 @@ impl MergeSession {
         }
 
         // Re-sim on the current state: earlier appends may have invalidated it.
+        let resim_start = Instant::now();
         let mut sim_vm = self.ctx.vm.clone();
         let simulated = match simulate::simulate_order(
             &mut sim_vm,
@@ -631,8 +646,10 @@ impl MergeSession {
             Ok(simulated) => simulated,
             Err(_) => return Ok(false),
         };
+        metrics::stage_latency("apply_resim", resim_start.elapsed().as_micros() as u64);
 
         // Snapshot for rollback.
+        let txs_start = Instant::now();
         let vm_snapshot = self.ctx.vm.db.clone();
         let scalar_snapshot = (
             self.ctx.remaining_gas,
@@ -681,7 +698,10 @@ impl MergeSession {
             }
         }
 
+        metrics::stage_latency("apply_txs", txs_start.elapsed().as_micros() as u64);
+
         if rollback || applied_hashes.is_empty() {
+            let rollback_start = Instant::now();
             if rollback {
                 self.stats.apply_rollbacks += 1;
             }
@@ -697,6 +717,7 @@ impl MergeSession {
             self.ctx.receipts.truncate(receipts_len);
             self.blob_count = blob_snapshot.0;
             self.appended_blobs.truncate(blob_snapshot.1);
+            metrics::stage_latency("apply_rollback", rollback_start.elapsed().as_micros() as u64);
             return Ok(false);
         }
 
@@ -789,6 +810,7 @@ impl MergeSession {
 
         // Finalization clears the vm caches, so it runs on a clone; the live
         // session stays extendable.
+        metrics::stage_latency("emit_prepare", utcnow_ns().saturating_sub(emit_start_ns) / 1000);
         let clone_start = Instant::now();
         let mut ctx = self.ctx.clone();
         metrics::stage_latency("emit_clone", clone_start.elapsed().as_micros() as u64);
@@ -867,9 +889,12 @@ impl MergeSession {
         self.blockchain
             .apply_withdrawals(&mut ctx)
             .map_err(|e| MergeError::Internal(format!("apply withdrawals: {e}")))?;
+        metrics::stage_latency("emit_requests", finalize_start.elapsed().as_micros() as u64);
+        let state_root_start = Instant::now();
         self.blockchain
             .finalize_payload(&mut ctx)
             .map_err(|e| MergeError::Internal(format!("finalize payload: {e}")))?;
+        metrics::stage_latency("emit_state_root", state_root_start.elapsed().as_micros() as u64);
 
         metrics::stage_latency("emit_finalize", finalize_start.elapsed().as_micros() as u64);
         {
