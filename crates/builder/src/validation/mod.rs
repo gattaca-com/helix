@@ -4,6 +4,7 @@ pub mod server;
 mod server_tests;
 #[cfg(test)]
 pub(crate) mod tests;
+mod timed_reads;
 
 use std::{sync::Arc, time::Instant};
 
@@ -41,7 +42,7 @@ use crate::{
     },
     metrics,
     node::HeadInfo,
-    validation::error::ValidationError,
+    validation::{error::ValidationError, timed_reads::TimedReads},
 };
 
 #[derive(Debug)]
@@ -250,6 +251,8 @@ impl BlockValidator {
             .map_err(|e| ValidationError::Execution(e.to_string()))?;
         let mut vm = new_evm(&BlockchainType::L1, vm_db)
             .map_err(|e| ValidationError::Execution(e.to_string()))?;
+        let reads = TimedReads::wrap(vm.db.store.clone());
+        vm.db.store = reads.clone();
         metrics::sim_lap("vm_setup", t);
 
         let (receipts, tx_details, gas_used) = Self::execute_transactions(&mut vm, &block)?;
@@ -281,6 +284,7 @@ impl BlockValidator {
             .ok_or(ValidationError::MissingParentState)?
             .state_trie_hash;
         metrics::sim_lap("state_root", t);
+        reads.record();
         metrics::sim_block(block.body.transactions.len(), gas_used);
 
         if state_root != block.header.state_root {
