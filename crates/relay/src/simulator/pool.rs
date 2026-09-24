@@ -1050,9 +1050,9 @@ fn merged_block_to_submission(
     };
     Ok(SignedBidSubmission {
         message,
-        execution_payload: Arc::new(payload.clone()),
-        blobs_bundle: Arc::new(response.blobs_bundle.clone()),
-        execution_requests: Arc::new(response.execution_requests.clone()),
+        execution_payload: payload.clone(),
+        blobs_bundle: response.blobs_bundle.clone(),
+        execution_requests: response.execution_requests.clone(),
         signature: BlsSignatureBytes::default(),
     })
 }

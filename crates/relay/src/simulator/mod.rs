@@ -80,12 +80,12 @@ pub struct MergedValidationRequest {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BlockMergeResponse {
     pub base_block_hash: B256,
-    pub execution_payload: ExecutionPayload,
-    pub execution_requests: ExecutionRequests,
+    pub execution_payload: Arc<ExecutionPayload>,
+    pub execution_requests: Arc<ExecutionRequests>,
     /// The merged block's full blob set (base block's own blob txs plus any newly
     /// appended ones), re-attached from `BlockMergingTile`'s own cache of blobs seen in
     /// submissions this slot.
-    pub blobs_bundle: BlobsBundle,
+    pub blobs_bundle: Arc<BlobsBundle>,
     /// Total value for the proposer
     pub proposer_value: U256,
     pub base_builder_revenue: U256,
