@@ -6113,6 +6113,7 @@ dependencies = [
  "flux-utils",
  "flux-versioned-types",
  "serde",
+ "strum 0.27.2",
  "type-hash-derive",
  "uuid",
 ]

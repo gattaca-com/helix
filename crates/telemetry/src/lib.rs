@@ -6,9 +6,10 @@
 use alloy_primitives::{Address, B256, FixedBytes, U256};
 use bytes::Bytes;
 use flux::{timing::Nanos, type_hash_derive::type_hash_lock};
-use flux_utils::ArrayStr;
-use flux_versioned_types::{VersionedLeaves, versioned_telemetry};
+use flux_versioned_types::{ByteStable, TelemetrySchema, VersionedLeaves, versioned_telemetry};
+use serde::{Deserialize, Serialize};
 use ssz::Encode;
+use type_hash_derive::TypeHash;
 use uuid::Uuid;
 
 pub type BlsPublicKeyBytes = FixedBytes<48>;
@@ -91,16 +92,57 @@ versioned_telemetry!(SimTxIncluded, persist = "Helix.Sim.TxIncluded" =>
 
 versioned_telemetry!(SimFinished, persist = "Helix.Sim.Finished" =>
     #[derive(Default)]
-    #[type_hash_lock(hash = 4203843626743507220)]
+    #[type_hash_lock(hash = 3197928459100667086)]
     SimFinishedV1 {
         pub submission_id: Uuid,
         pub total_payment: U256,
         pub elapsed_us: u64,
         pub retried: bool,
-        pub _pad: [u8; 7],
-        pub error: ArrayStr<256>,
+        pub error: SimError,
+        pub _pad: [u8; 6],
     }
 );
+
+/// How a simulation ended: `BlockSimError`'s variants without their payloads,
+/// `None` for a valid block. `as_str` gives the text form.
+#[repr(u8)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    TypeHash,
+    ByteStable,
+    TelemetrySchema,
+    strum::IntoStaticStr,
+)]
+#[byte_stable(crate = "::flux_versioned_types::byte_stable")]
+#[strum(serialize_all = "snake_case")]
+pub enum SimError {
+    #[default]
+    None = 0,
+    BlockValidationFailed = 1,
+    InvalidTxRoot = 2,
+    Timeout = 3,
+    RpcError = 4,
+    SendError = 5,
+    NoSimulatorAvailable = 6,
+    SimulationDropped = 7,
+    HydrationMiss = 8,
+    RelayHydrationFailed = 9,
+    UnsupportedFork = 10,
+    PayloadTooLarge = 11,
+}
+
+impl SimError {
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+}
 
 /// Sim lifecycle family, queued on `sim_updates`. `Started` carries the
 /// identity; `TxIncluded` and `Finished` join to it on `submission_id`.

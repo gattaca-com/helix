@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use alloy_primitives::{Address, B256, U256};
+use helix_telemetry::SimError;
 use helix_types::{
     BidTrace, BlobsBundle, BlsSignatureBytes, ExecutionPayload, ExecutionRequests, ForkName,
     SignedBidSubmission,
@@ -107,6 +108,24 @@ pub enum BlockSimError {
     /// about the node's health: every simulator with the same limit refuses it.
     #[error("simulator refused the request body as too large")]
     PayloadTooLarge,
+}
+
+impl From<&BlockSimError> for SimError {
+    fn from(err: &BlockSimError) -> Self {
+        match err {
+            BlockSimError::BlockValidationFailed(_) => SimError::BlockValidationFailed,
+            BlockSimError::InvalidTxRoot { .. } => SimError::InvalidTxRoot,
+            BlockSimError::Timeout => SimError::Timeout,
+            BlockSimError::RpcError => SimError::RpcError,
+            BlockSimError::SendError => SimError::SendError,
+            BlockSimError::NoSimulatorAvailable => SimError::NoSimulatorAvailable,
+            BlockSimError::SimulationDropped => SimError::SimulationDropped,
+            BlockSimError::HydrationMiss => SimError::HydrationMiss,
+            BlockSimError::RelayHydrationFailed => SimError::RelayHydrationFailed,
+            BlockSimError::UnsupportedFork(_) => SimError::UnsupportedFork,
+            BlockSimError::PayloadTooLarge => SimError::PayloadTooLarge,
+        }
+    }
 }
 
 impl BlockSimError {

@@ -6,7 +6,6 @@ use std::{
 use alloy_primitives::{Address, B256, U256};
 use flux::timing::Nanos;
 use flux_profiler::timed;
-use flux_utils::ArrayStr;
 use helix_common::{
     SimulatorConfig, SubmissionTrace,
     api::builder_api::InclusionListWithMetadata,
@@ -1264,7 +1263,7 @@ pub(crate) fn sim_finish_events<'a>(
             total_payment: U256::ZERO,
             elapsed_us: elapsed.as_micros() as u64,
             retried,
-            error: ArrayStr::from_str_truncate(&err.to_string()),
+            error: err.into(),
             ..Default::default()
         }
     } else {
@@ -1275,7 +1274,6 @@ pub(crate) fn sim_finish_events<'a>(
                 .fold(U256::ZERO, |acc, tx| acc.saturating_add(tx.builder_payment)),
             elapsed_us: elapsed.as_micros() as u64,
             retried,
-            error: ArrayStr::default(),
             ..Default::default()
         }
     };
