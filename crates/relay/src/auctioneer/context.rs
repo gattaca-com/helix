@@ -8,7 +8,10 @@ use std::{
 };
 
 use alloy_primitives::{B256, U256};
-use flux::spine::{SpineProducer, SpineProducers};
+use flux::{
+    spine::{SpineProducer, SpineProducers},
+    timing::Nanos,
+};
 use flux_profiler::timed;
 use flux_utils::SharedVector;
 use helix_common::{
@@ -17,9 +20,10 @@ use helix_common::{
     chain_info::ChainInfo,
     is_local_dev,
     local_cache::LocalCache,
-    metrics::{CACHE_SIZE, SimulatorMetrics},
+    metrics::{CACHE_SIZE, MERGE_SIM, SimulatorMetrics},
+    simulator::BlockSimError,
     spawn_tracked,
-    utils::utcnow_ms,
+    utils::{alert_discord, utcnow_ms},
 };
 use helix_database::handle::DbHandle;
 use helix_operator::OperatorPubSub;
@@ -27,7 +31,7 @@ use helix_types::{
     BlsPublicKeyBytes, Demotion, HydrationCache, OperatorMessage, Slot, SubmissionVersion,
 };
 use rustc_hash::FxHashMap;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     SubmissionDataWithSpan,
@@ -37,13 +41,13 @@ use crate::{
         bid_adjustor::BidAdjustor,
         bid_sorter::BidSorter,
         block_merger::BlockMerger,
-        types::{PayloadEntry, PendingPayload, SubmissionRef},
+        types::{PayloadEntry, PendingPayload, SlotData, SubmissionRef},
     },
-    simulator::{SimRequest, tile::ValidationResult},
-    spine::{
-        HelixSpineProducers,
-        messages::{SubmissionResultWithRef, ToSimKind, ToSimMsg},
+    simulator::{
+        MergedValidationRequest,
+        pool::{MergedSimulationResultInner, SimPool, ValidationResult},
     },
+    spine::{HelixSpineProducers, messages::SubmissionResultWithRef},
 };
 
 // Context that is only valid for a given slot
@@ -71,8 +75,8 @@ pub struct Context<B: BidAdjustor> {
     pub decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
     pub future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
     pub auctioneer_handle: AuctioneerHandle,
-    pub sim_inbound: Arc<SharedVector<SimRequest>>,
-    pub accept_optimistic: Arc<AtomicBool>,
+    pub sims: SimPool,
+    pub block_merging_enabled: Arc<AtomicBool>,
     pub failsafe_triggered: Arc<AtomicBool>,
     pub alert_manager: Arc<AlertManager>,
     pub operator_api: Option<Arc<OperatorPubSub>>,
@@ -87,8 +91,8 @@ impl<B: BidAdjustor> Context<B> {
     pub fn new(
         chain_info: ChainInfo,
         config: RelayConfig,
-        sim_inbound: Arc<SharedVector<SimRequest>>,
-        accept_optimistic: Arc<AtomicBool>,
+        sims: SimPool,
+        block_merging_enabled: Arc<AtomicBool>,
         failsafe_triggered: Arc<AtomicBool>,
         db: DbHandle,
         bid_sorter: BidSorter,
@@ -141,8 +145,8 @@ impl<B: BidAdjustor> Context<B> {
             decoded,
             future_results,
             auctioneer_handle,
-            sim_inbound,
-            accept_optimistic,
+            sims,
+            block_merging_enabled,
             failsafe_triggered,
             alert_manager,
             operator_api,
@@ -217,7 +221,7 @@ impl<B: BidAdjustor> Context<B> {
     }
 
     #[timed]
-    pub fn on_new_slot(&mut self, bid_slot: Slot, producers: &mut HelixSpineProducers) {
+    pub fn on_new_slot(&mut self, bid_slot: Slot) {
         self.bid_slot = bid_slot;
         if let Some(pending) = self.pending_payload.take() {
             let _ = pending
@@ -243,11 +247,7 @@ impl<B: BidAdjustor> Context<B> {
         self.version.clear();
         self.hydration_cache.clear();
 
-        producers.produce(ToSimMsg {
-            kind: ToSimKind::NewSlot,
-            ix: 0,
-            bid_slot: bid_slot.as_u64(),
-        });
+        self.sims.on_new_slot(bid_slot.as_u64());
 
         let merged_blocks = self.cache.get_merged_blocks();
         if !merged_blocks.is_empty() {
@@ -287,7 +287,39 @@ impl<B: BidAdjustor> Context<B> {
         }
     }
 
-    pub fn handle_merge_response(&mut self, response: BlockMergeResponse) {
+    pub fn on_merged_sim_result(&mut self, inner: &MergedSimulationResultInner) {
+        match &inner.result {
+            Ok(()) => MERGE_SIM.with_label_values(&["ok"]).inc(),
+            Err(err) if is_merge_builder_attributable(err) => {
+                MERGE_SIM.with_label_values(&["failed_builder"]).inc()
+            }
+            Err(_) => MERGE_SIM.with_label_values(&["failed_infra"]).inc(),
+        }
+        let Some((block_hash, err)) = merge_sim_disable_check(inner) else {
+            return;
+        };
+
+        self.block_merging_enabled.store(false, Ordering::Relaxed);
+        let endpoint = self
+            .config
+            .block_merging_config
+            .tcp
+            .as_ref()
+            .map_or_else(|| "unknown".to_string(), |tcp| tcp.builder.addr.to_string());
+        error!(
+            %block_hash,
+            %err,
+            %endpoint,
+            "merged block simulation failed, disabling block merging"
+        );
+        let message = format!(
+            "CRITICAL: block merging disabled -- merged block simulation failed for block \
+             {block_hash:#x} from merge builder {endpoint} ({err})"
+        );
+        std::thread::spawn(move || alert_discord(&message));
+    }
+
+    pub fn handle_merge_response(&mut self, response: &BlockMergeResponse) {
         let block_hash = response.execution_payload.block_hash;
         let Some(original_payload) = self.payloads.get(&response.base_block_hash) else {
             warn!(%block_hash, "could not fetch original payload for merged block");
@@ -302,7 +334,7 @@ impl<B: BidAdjustor> Context<B> {
         let Some(payload) = self
             .block_merger
             .prepare_merged_payload_for_storage(
-                response,
+                response.clone(),
                 original_payload_and_blobs,
                 original_value,
                 builder_pubkey,
@@ -314,7 +346,54 @@ impl<B: BidAdjustor> Context<B> {
         };
         self.payloads.insert(block_hash, payload);
     }
+}
 
+pub(crate) fn merged_validation_request(
+    response: &BlockMergeResponse,
+    slot_data: &SlotData,
+) -> Option<MergedValidationRequest> {
+    let parent_hash = response.execution_payload.parent_hash;
+    let parent_beacon_block_root = slot_data
+        .payload_attributes_map
+        .get(&parent_hash)?
+        .parent_beacon_block_root
+        .unwrap_or_default();
+    Some(MergedValidationRequest {
+        base_block_hash: response.base_block_hash,
+        slot: slot_data.bid_slot.as_u64(),
+        parent_beacon_block_root,
+        proposer_fee_recipient: slot_data
+            .registration_data
+            .entry
+            .registration
+            .message
+            .fee_recipient,
+        registered_gas_limit: slot_data.registration_data.entry.registration.message.gas_limit,
+        apply_blacklist: slot_data.registration_data.entry.preferences.filtering.is_regional(),
+        inclusion_list: slot_data.il.clone().unwrap_or_default(),
+        receive_ns: Nanos::now().0,
+    })
+}
+
+fn is_merge_builder_attributable(err: &BlockSimError) -> bool {
+    err.is_demotable() &&
+        !matches!(
+            err,
+            BlockSimError::SendError |
+                BlockSimError::SimulationDropped |
+                BlockSimError::HydrationMiss
+        )
+}
+
+fn merge_sim_disable_check(result: &MergedSimulationResultInner) -> Option<(B256, BlockSimError)> {
+    let Err(err) = &result.result else { return None };
+    if !is_merge_builder_attributable(err) {
+        return None;
+    }
+    Some((result.block_hash, err.clone()))
+}
+
+impl<B: BidAdjustor> Context<B> {
     pub fn handle_builder_demotion(
         &mut self,
         slot: Slot,

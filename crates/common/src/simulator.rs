@@ -13,7 +13,7 @@ use crate::{
     decoder::SubmissionDecoderParams,
 };
 
-/// Wire format of `signed_bid_submission` in `SimRequest`.
+/// Wire format of `signed_bid_submission` in simulation requests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
 pub enum SubmissionFormat {

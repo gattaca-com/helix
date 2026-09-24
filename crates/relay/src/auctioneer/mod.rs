@@ -26,7 +26,9 @@ use helix_common::{
     api::builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
     chain_info::ChainInfo,
     local_cache::LocalCache,
-    metrics::{STATE_TRANSITION_COUNT, STATE_TRANSITION_LATENCY, WORKER_QUEUE_LEN, WORKER_UTIL},
+    metrics::{
+        MERGE_SIM, STATE_TRANSITION_COUNT, STATE_TRANSITION_LATENCY, WORKER_QUEUE_LEN, WORKER_UTIL,
+    },
     record_submission_step, record_submission_step_ns,
     utils::utcnow_ns,
 };
@@ -42,12 +44,12 @@ pub use types::{
 use crate::{
     HelixSpine, SubmissionDataWithSpan,
     api::{FutureBidSubmissionResult, builder::error::BuilderApiError, proposer::ProposerApiError},
-    auctioneer::types::PendingPayload,
+    auctioneer::{context::merged_validation_request, types::PendingPayload},
     housekeeper::SlotUpdate,
-    simulator::{SimRequest, SimResult},
+    simulator::{SimResult, pool::SimPool},
     spine::{
         HelixSpineProducers,
-        messages::{DecodedSubmission, FromSimMsg, MergedBlockMsg, SlotMsg},
+        messages::{DecodedSubmission, MergedBlockMsg, SlotMsg},
     },
 };
 pub use crate::{
@@ -57,7 +59,7 @@ pub use crate::{
         context::{Context, send_submission_result},
         types::{InternalBidSubmissionHeader, SubmissionRef},
     },
-    simulator::{SimulatorTile, ValidationRequest, client::SimulatorClient, *},
+    simulator::{ValidationRequest, client::SimulatorClient, *},
 };
 
 pub struct Auctioneer<B: BidAdjustor> {
@@ -65,7 +67,6 @@ pub struct Auctioneer<B: BidAdjustor> {
     state: State,
     tel: Telemetry,
     event_rx: crossbeam_channel::Receiver<Event>,
-    sim_results: Arc<SharedVector<SimResult>>,
     slot_events: Arc<SharedVector<SlotUpdate>>,
     merged_blocks: Arc<SharedVector<BlockMergeResponse>>,
 }
@@ -84,9 +85,8 @@ impl<B: BidAdjustor> Auctioneer<B> {
         future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
         decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
         auctioneer_handle: AuctioneerHandle,
-        sim_requests: Arc<SharedVector<SimRequest>>,
-        sim_results: Arc<SharedVector<SimResult>>,
-        accept_optimistic: Arc<AtomicBool>,
+        sims: SimPool,
+        block_merging_enabled: Arc<AtomicBool>,
         failsafe_triggered: Arc<AtomicBool>,
         slot_events: Arc<SharedVector<SlotUpdate>>,
         merged_blocks: Arc<SharedVector<BlockMergeResponse>>,
@@ -96,8 +96,8 @@ impl<B: BidAdjustor> Auctioneer<B> {
         let ctx = Context::new(
             chain_info,
             config,
-            sim_requests,
-            accept_optimistic,
+            sims,
+            block_merging_enabled,
             failsafe_triggered,
             db,
             bid_sorter,
@@ -114,7 +114,6 @@ impl<B: BidAdjustor> Auctioneer<B> {
             state: State::default(),
             tel: Telemetry::new(format!("auctioneer_{id}")),
             event_rx,
-            sim_results,
             slot_events,
             merged_blocks,
         }
@@ -127,10 +126,27 @@ impl<B: BidAdjustor> Tile<HelixSpine> for Auctioneer<B> {
             self.state.step(event, &mut self.ctx, &mut self.tel, &mut adapter.producers);
         }
 
+        for done in self.ctx.sims.poll() {
+            match done.result {
+                SimResult::Validate(result) => {
+                    self.state.step(
+                        Event::SimResult(result),
+                        &mut self.ctx,
+                        &mut self.tel,
+                        &mut adapter.producers,
+                    );
+                }
+                SimResult::ValidateMerged((_, Some(inner))) => {
+                    self.ctx.on_merged_sim_result(&inner);
+                }
+                SimResult::ValidateMerged((_, None)) => {}
+            }
+        }
+
         adapter.consume(|submission: DecodedSubmission, producers| {
             match self.ctx.decoded.get(submission.ix) {
                 Some(submission_data) => {
-                    let event = Event::Submission { submission_data, decoded_ix: submission.ix };
+                    let event = Event::Submission { submission_data };
                     self.state.step(event, &mut self.ctx, &mut self.tel, producers);
                 }
                 None => {
@@ -139,23 +155,13 @@ impl<B: BidAdjustor> Tile<HelixSpine> for Auctioneer<B> {
             }
         });
 
-        adapter.consume(|msg: FromSimMsg, producers| {
-            let Some(payload) = self.sim_results.get(msg.ix) else {
-                tracing::error!(?msg, "sim outbound payload not found");
-                return;
-            };
-            let SimResult::Validate(sim_result) = payload.as_ref() else { return };
-            let event = Event::SimResult(sim_result.clone());
-            self.state.step(event, &mut self.ctx, &mut self.tel, producers);
-        });
-
         adapter.consume(|msg: MergedBlockMsg, producers| {
             let Some(response) = self.merged_blocks.get(msg.ix) else {
                 tracing::error!(?msg, "merged block not found");
                 return;
             };
             info!(%response.execution_payload.block_hash, "received merged block from tile");
-            let event = Event::MergeResult((0, Ok(response.as_ref().clone())));
+            let event = Event::MergeResult((0, Ok(response.clone())));
             self.state.step(event, &mut self.ctx, &mut self.tel, producers);
         });
 
@@ -284,7 +290,7 @@ impl State {
                             );
                         }
 
-                        ctx.on_new_slot(bid_slot, producers);
+                        ctx.on_new_slot(bid_slot);
                         (registration_data, FxHashMap::default(), il)
                     }
                 };
@@ -331,7 +337,7 @@ impl State {
                         "gap in slot data received (sort)"
                     );
 
-                    ctx.on_new_slot(bid_slot, producers);
+                    ctx.on_new_slot(bid_slot);
                     // another relay delivered the payload
                     *self = Self::process_slot_data(
                         bid_slot,
@@ -366,7 +372,7 @@ impl State {
                             "new slot while broadcasting different block, was the slot missed?");
                     }
 
-                    ctx.on_new_slot(bid_slot, producers);
+                    ctx.on_new_slot(bid_slot);
                     *self = Self::process_slot_data(
                         bid_slot,
                         FxHashMap::default(),
@@ -384,14 +390,12 @@ impl State {
             }
 
             // late merge result
-            (State::Broadcasting { .. } | State::Slot { .. }, Event::MergeResult((id, _))) => {
-                ctx.handle_simulation_result((id, None), false, producers);
-            }
+            (State::Broadcasting { .. } | State::Slot { .. }, Event::MergeResult(_)) => {}
 
             ///////////// VALID STATES / EVENTS /////////////
 
             // submission
-            (State::Sorting(slot_data), Event::Submission { submission_data, decoded_ix }) => {
+            (State::Sorting(slot_data), Event::Submission { submission_data }) => {
                 record_submission_step("loop_recv", submission_data.sent_at.elapsed());
                 let loop_ns = utcnow_ns();
                 let trace = &submission_data.submission_data.trace;
@@ -401,12 +405,7 @@ impl State {
                 let _guard = submission_data.span.enter();
                 trace!("received in auctioneer");
 
-                ctx.handle_submission(
-                    &submission_data.submission_data,
-                    decoded_ix,
-                    slot_data,
-                    producers,
-                );
+                ctx.handle_submission(&submission_data.submission_data, slot_data, producers);
 
                 trace!("finished processing");
                 drop(_guard);
@@ -497,18 +496,25 @@ impl State {
                 }
             }
 
-            (State::Sorting(slot_data), Event::MergeResult((id, result))) => {
-                match result {
-                    Ok(response) => {
-                        ctx.handle_merge_response(response);
-                    }
-                    Err(err) => {
-                        error!(%err, bid_slot =% slot_data.bid_slot, "failed to merge block");
+            (State::Sorting(slot_data), Event::MergeResult((_, result))) => match result {
+                Ok(response) => {
+                    ctx.handle_merge_response(&response);
+                    match merged_validation_request(&response, slot_data) {
+                        Some(req) => ctx.sims.dispatch_merged(req, response),
+                        None => {
+                            MERGE_SIM.with_label_values(&["skipped_slot_data"]).inc();
+                            warn!(
+                                parent_hash = %response.execution_payload.parent_hash,
+                                "beacon parent root not yet known for this slot, skipping \
+                                 merged block simulation"
+                            );
+                        }
                     }
                 }
-
-                ctx.handle_simulation_result((id, None), false, producers);
-            }
+                Err(err) => {
+                    error!(%err, bid_slot =% slot_data.bid_slot, "failed to merge block");
+                }
+            },
 
             ///////////// INVALID STATES / EVENTS /////////////
 

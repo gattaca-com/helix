@@ -1,22 +1,25 @@
+use std::sync::Arc;
+
 use alloy_primitives::{Address, B256, U256};
 use helix_common::{
-    api::builder_api::InclusionListWithMetadata, bid_submission::OptimisticVersion,
-    simulator::BlockSimError,
+    SubmissionTrace, api::builder_api::InclusionListWithMetadata,
+    bid_submission::OptimisticVersion, simulator::BlockSimError,
 };
 use helix_types::{
     BlobsBundle, BuilderInclusionResult, ExecutionPayload, ExecutionRequests, MergedBlockTrace,
+    SignedBidSubmission, SubmissionVersion,
 };
 use rustc_hash::FxHashMap;
 
 use crate::{
     SubmissionRef,
-    simulator::tile::{MergedSimulationResult, ValidationResult},
+    simulator::pool::{MergedSimulationResult, ValidationResult},
 };
 
 pub mod client;
-pub mod tile;
+pub mod pool;
 
-pub use tile::SimulatorTile;
+pub use pool::{SimDone, SimPool};
 
 /// Dispatch class for a validation request, highest first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -48,21 +51,22 @@ pub struct ValidationRequest {
     pub registered_gas_limit: u64,
     pub parent_beacon_block_root: B256,
     pub inclusion_list: InclusionListWithMetadata,
-    pub decoded_ix: usize,
+    pub submission: SignedBidSubmission,
+    pub tx_root: Option<B256>,
+    pub version: SubmissionVersion,
+    pub trace: SubmissionTrace,
     pub receive_ns: u64,
     pub submission_ref: SubmissionRef,
 }
 
-pub type MergeResult = (usize, Result<BlockMergeResponse, BlockSimError>);
+pub type MergeResult = (usize, Result<Arc<BlockMergeResponse>, BlockSimError>);
 
 /// Simulation of an incoming merged block from the merge builder. Unlike `ValidationRequest`,
-/// there's no decoded bid submission to look up: the block itself lives in `merged_blocks`,
-/// indexed by `merged_block_ix`.
+/// there's no decoded bid submission to look up: the caller hands over the block itself
+/// alongside the request.
 #[derive(Debug, Clone)]
 pub struct MergedValidationRequest {
-    pub merged_block_ix: usize,
-    /// Kept alongside the index for `PendingMergeRequests`' eviction key, avoiding a
-    /// `merged_blocks` lookup at queue time.
+    /// Eviction key for `PendingMergeRequests`.
     pub base_block_hash: B256,
     pub slot: u64,
     pub parent_beacon_block_root: B256,
@@ -97,14 +101,7 @@ pub struct BlockMergeResponse {
     pub trace: MergedBlockTrace,
 }
 
-/// Large payload stored in `SharedVector` for auctioneer → sim tile transfer.
-pub enum SimRequest {
-    Validate { req: Box<ValidationRequest>, fast_track: bool },
-    ValidateMerged(Box<MergedValidationRequest>),
-}
-
-/// Large payload stored in `SharedVector` for sim tile → auctioneer transfer.
-// Stored inline in `SharedVector`; boxing would add a heap alloc on the hot path.
+// Stored inline; boxing would add a heap alloc on the hot path.
 #[allow(clippy::large_enum_variant)]
 pub enum SimResult {
     Validate(ValidationResult),

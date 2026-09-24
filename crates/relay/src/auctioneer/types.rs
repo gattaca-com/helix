@@ -35,7 +35,7 @@ use crate::{
     },
     auctioneer::MergeResult,
     gossip::BroadcastPayloadParams,
-    simulator::tile::ValidationResult,
+    simulator::pool::ValidationResult,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -424,7 +424,6 @@ pub enum Event {
     },
     Submission {
         submission_data: Arc<SubmissionDataWithSpan>,
-        decoded_ix: usize,
     },
     /// Assume already some validation (so we don't have to wait here)
     /// timing games already done

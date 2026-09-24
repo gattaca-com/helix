@@ -33,7 +33,7 @@ pub use crate::{
     },
     auctioneer::{
         Auctioneer, AuctioneerHandle, BidSorter, Context, Event, PayloadEntry, SimulatorClient,
-        SimulatorTile, SlotData, SubmissionPayload, SubmissionRef, ValidationRequest,
+        SlotData, SubmissionPayload, SubmissionRef, ValidationRequest,
     },
     bid_decoder::{DecoderTile, Lane, SubmissionDataWithSpan},
     block_merging::BlockMergingTile,
@@ -42,7 +42,7 @@ pub use crate::{
     housekeeper::{HousekeeperTile, SlotUpdate},
     network::RelayNetworkManager,
     registration::{RegWorkerHandle, RegistrationTile},
-    simulator::{BlockMergeResponse, SimPriority, SimRequest, SimResult},
+    simulator::{BlockMergeResponse, SimDone, SimPool, SimPriority, SimResult},
     spine::{
         HelixSpine, HelixSpineConfig,
         messages::{NewBidSubmission, NewTcpBidSubmission, SlotMsg},
