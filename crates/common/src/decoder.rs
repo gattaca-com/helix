@@ -438,15 +438,21 @@ impl SubmissionDecoder {
         body: &[u8],
     ) -> Result<(Submission, Option<BlockMergingDataV2>, Option<BidAdjustmentData>), DecoderError>
     {
-        let (submission, merging_data, bid_adjustment) = if self.with_adjustments {
-            let sub: SignedBidSubmissionWithAdjustmentsAndMergingData = self._decode(body)?;
-            let (submission, adjustment_data, merging_data) = sub.split();
-
-            (submission, merging_data, Some(adjustment_data))
+        let decoded = if self.with_adjustments {
+            self._decode::<SignedBidSubmissionWithAdjustmentsAndMergingData>(body).map(|sub| {
+                let (submission, adjustment_data, merging_data) = sub.split();
+                (submission, merging_data, Some(adjustment_data))
+            })
         } else {
-            let sub_with_merging: SignedBidSubmissionWithMergingData = self._decode(body)?;
-
-            (sub_with_merging.submission, sub_with_merging.merging_data, None)
+            self._decode::<SignedBidSubmissionWithMergingData>(body)
+                .map(|sub| (sub.submission, sub.merging_data, None))
+        };
+        let (submission, merging_data, bid_adjustment) = match decoded {
+            Ok(decoded) => decoded,
+            // AppendOnly bodies may omit the merging trailer; the plain path
+            // derives the append-only data from the fee recipient.
+            Err(_) if self.merge_type == MergeType::AppendOnly => return self.decode_default(body),
+            Err(e) => return Err(e),
         };
 
         let merging_data = match self.merge_type {
@@ -884,6 +890,34 @@ mod tests {
             decoded_merging_data.expect("mergeable submission should carry merging data"),
             merging_data.into()
         );
+    }
+
+    #[test]
+    fn decode_merge_append_only_accepts_a_body_without_merging_data() {
+        let mut submission = SignedBidSubmission::random_for_test(&mut rand::rng());
+        submission.blobs_bundle = BlobsBundle::default().into();
+        let fee_recipient = submission.fee_recipient();
+        let body = submission.as_ssz_bytes();
+
+        let params = SubmissionDecoderParams {
+            compression: Compression::None,
+            encoding: Encoding::Ssz,
+            merge_type: MergeType::AppendOnly,
+            is_dehydrated: false,
+            dehydrated_v2: false,
+            merging_v2: false,
+            with_mergeable_data: true,
+            with_adjustments: false,
+            mark_all_txs_mergeable: false,
+            fork_name: ForkName::Fulu,
+        };
+        let mut decoder = SubmissionDecoder::new(&params);
+        let mut buf = Vec::new();
+        let (decoded_submission, merging_data, _) =
+            decoder.decode(&body, &mut buf).expect("decode should succeed");
+
+        assert!(matches!(decoded_submission, Submission::Full(_)));
+        assert_eq!(merging_data, Some(BlockMergingDataV2::append_only(fee_recipient)));
     }
 
     #[test]
