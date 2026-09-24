@@ -23,7 +23,6 @@ use helix_common::{
     is_local_dev,
     local_cache::LocalCache,
     metrics::{CACHE_SIZE, MERGE_SIM, SimulatorMetrics},
-    simulator::BlockSimError,
     spawn_tracked,
     utils::{discord_payload, utcnow_ms},
 };
@@ -293,16 +292,15 @@ impl<B: BidAdjustor> Context<B> {
     }
 
     pub fn on_merged_sim_result(&mut self, inner: &MergedSimulationResultInner) {
-        match &inner.result {
-            Ok(()) => MERGE_SIM.with_label_values(&["ok"]).inc(),
-            Err(err) if is_merge_builder_attributable(err) => {
-                MERGE_SIM.with_label_values(&["failed_builder"]).inc()
+        let err = match &inner.result {
+            Ok(()) => return MERGE_SIM.with_label_values(&["ok"]).inc(),
+            Err(err) if !err.is_merge_builder_fault() => {
+                return MERGE_SIM.with_label_values(&["failed_infra"]).inc();
             }
-            Err(_) => MERGE_SIM.with_label_values(&["failed_infra"]).inc(),
-        }
-        let Some((block_hash, err)) = merge_sim_disable_check(inner) else {
-            return;
+            Err(err) => err,
         };
+        MERGE_SIM.with_label_values(&["failed_builder"]).inc();
+        let block_hash = inner.block_hash;
 
         self.block_merging_enabled.store(false, Ordering::Relaxed);
         let endpoint = self
@@ -398,24 +396,6 @@ pub(crate) fn merged_validation_request(
         inclusion_list: slot_data.il.clone().unwrap_or_default(),
         receive_ns: Nanos::now().0,
     })
-}
-
-fn is_merge_builder_attributable(err: &BlockSimError) -> bool {
-    err.is_demotable() &&
-        !matches!(
-            err,
-            BlockSimError::SendError |
-                BlockSimError::SimulationDropped |
-                BlockSimError::HydrationMiss
-        )
-}
-
-fn merge_sim_disable_check(result: &MergedSimulationResultInner) -> Option<(B256, BlockSimError)> {
-    let Err(err) = &result.result else { return None };
-    if !is_merge_builder_attributable(err) {
-        return None;
-    }
-    Some((result.block_hash, err.clone()))
 }
 
 impl<B: BidAdjustor> Context<B> {
