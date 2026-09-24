@@ -398,12 +398,12 @@ pub(crate) fn merged_validation_request(
     response: &BlockMergeResponse,
     slot_data: &SlotData,
 ) -> Option<MergedValidationRequest> {
-    let parent_hash = response.execution_payload.parent_hash;
     let parent_beacon_block_root = slot_data
-        .payload_attributes_map
-        .get(&parent_hash)?
-        .parent_beacon_block_root
-        .unwrap_or_default();
+        .attrs_for_submission(
+            &response.execution_payload.parent_hash,
+            &response.execution_payload.prev_randao,
+        )?
+        .parent_root();
     Some(MergedValidationRequest {
         submission_id: Uuid::new_v4(),
         base_block_hash: response.base_block_hash,

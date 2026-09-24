@@ -7,7 +7,7 @@ use alloy_primitives::{Address, B256, U256};
 use flux::spine::SpineProducers;
 use flux_profiler::timed;
 use helix_common::{
-    SubmissionTrace,
+    ForkKey, SubmissionTrace,
     api::builder_api::TopBidUpdate,
     metrics::{BID_SORTER_PROCESS_LATENCY_US, TopBidMetrics},
     record_submission_step_ns,
@@ -28,11 +28,16 @@ pub struct Bid {
     pub builder_pubkey: BlsPublicKeyBytes,
     pub block_number: u64,
     pub parent_hash: B256,
+    pub parent_root: B256,
     pub fee_recipient: Address,
 }
 
 impl Bid {
-    pub fn new(version: SubmissionVersion, submission: &SignedBidSubmission) -> Self {
+    pub fn new(
+        version: SubmissionVersion,
+        submission: &SignedBidSubmission,
+        parent_root: B256,
+    ) -> Self {
         let bid_trace = submission.bid_trace();
 
         Self {
@@ -43,11 +48,12 @@ impl Bid {
             builder_pubkey: bid_trace.builder_pubkey,
             block_number: submission.block_number(),
             parent_hash: bid_trace.parent_hash,
+            parent_root,
             fee_recipient: submission.fee_recipient(),
         }
     }
 
-    pub fn from_submission_data(submission: &SubmissionData) -> Self {
+    pub fn from_submission_data(submission: &SubmissionData, parent_root: B256) -> Self {
         let bid_trace = submission.bid_trace();
 
         Self {
@@ -58,6 +64,7 @@ impl Bid {
             builder_pubkey: bid_trace.builder_pubkey,
             block_number: submission.block_number(),
             parent_hash: bid_trace.parent_hash,
+            parent_root,
             fee_recipient: submission.fee_recipient(),
         }
     }
@@ -165,7 +172,7 @@ pub struct BidSorter {
     /// Head slot + 1
     curr_bid_slot: u64,
     /// Parent hash -> fork state
-    forks: FxHashMap<B256, ForkState>,
+    forks: FxHashMap<ForkKey, ForkState>,
     /// Demoted builders in this slot for live demotions
     demotions: FxHashSet<BlsPublicKeyBytes>,
     local_telemetry: BidSorterTelemetry,
@@ -219,13 +226,13 @@ impl BidSorter {
         self.process_demotion(demoted, producers);
     }
 
-    /// Value of the bid that would be served for this parent right now.
-    pub fn top_bid_value(&self, parent_hash: &B256) -> Option<U256> {
-        self.forks.get(parent_hash).and_then(|s| s.curr_bid.as_ref().map(|b| b.value))
+    /// Value of the bid that would be served for this fork right now.
+    pub fn top_bid_value(&self, fork: &ForkKey) -> Option<U256> {
+        self.forks.get(fork).and_then(|s| s.curr_bid.as_ref().map(|b| b.value))
     }
 
-    pub fn get_header(&self, parent_hash: &B256) -> Option<B256> {
-        self.forks.get(parent_hash).and_then(|s| s.curr_bid.as_ref().map(|b| b.block_hash))
+    pub fn get_header(&self, fork: &ForkKey) -> Option<B256> {
+        self.forks.get(fork).and_then(|s| s.curr_bid.as_ref().map(|b| b.block_hash))
     }
 
     #[timed]
@@ -236,7 +243,8 @@ impl BidSorter {
         is_optimistic: bool,
         producers: &mut HelixSpineProducers,
     ) -> bool {
-        let state = self.forks.entry(new_bid.parent_hash).or_default();
+        let fork = ForkKey { parent_hash: new_bid.parent_hash, parent_root: new_bid.parent_root };
+        let state = self.forks.entry(fork).or_default();
         match state.bids.entry(new_bid.builder_pubkey) {
             Entry::Occupied(mut entry) => {
                 let entry = entry.get_mut();
@@ -321,7 +329,12 @@ impl BidSorter {
         let fork_report: Vec<_> = self
             .forks
             .iter()
-            .map(|(k, s)| format!("parent: {k}, subs: {}, top_bids: {}", s.subs, s.top_bids))
+            .map(|(k, s)| {
+                format!(
+                    "parent: {}, root: {}, subs: {}, top_bids: {}",
+                    k.parent_hash, k.parent_root, s.subs, s.top_bids
+                )
+            })
             .collect();
 
         info!(
@@ -353,6 +366,7 @@ mod tests {
             },
             block_number: 1,
             parent_hash: B256::repeat_byte(1),
+            parent_root: B256::ZERO,
             fee_recipient: Address::ZERO,
         }
     }

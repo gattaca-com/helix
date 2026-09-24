@@ -93,13 +93,13 @@ impl<B: BidAdjustor> Context<B> {
                 &builder_info,
                 slot_data,
             ) {
-            let bid = Bid::new(version, &submission);
+            let bid = Bid::new(version, &submission, payload_attributes.parent_root());
             let is_top_bid = self.bid_sorter.sort(bid, &mut trace, true, producers);
             (OptimisticVersion::V1, is_top_bid)
         } else {
             let beats_top_bid = self
                 .bid_sorter
-                .top_bid_value(&submission.message.parent_hash)
+                .top_bid_value(&payload_attributes.fork())
                 .is_none_or(|top| submission.message.value > top);
             (OptimisticVersion::NotOptimistic, beats_top_bid)
         };
@@ -122,9 +122,7 @@ impl<B: BidAdjustor> Context<B> {
             is_optimistic,
             apply_blacklist: slot_data.registration_data.entry.preferences.filtering.is_regional(),
             registered_gas_limit: slot_data.registration_data.entry.registration.message.gas_limit,
-            parent_beacon_block_root: payload_attributes
-                .parent_beacon_block_root
-                .unwrap_or_default(),
+            parent_beacon_block_root: payload_attributes.parent_root(),
             inclusion_list: slot_data.il.clone().unwrap_or_default(),
             submission: submission.clone(),
             block_access_list: block_access_list.clone(),
