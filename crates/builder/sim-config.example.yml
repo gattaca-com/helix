@@ -11,3 +11,7 @@ validation_window: 3
 
 # Defaults to the core count.
 max_concurrent_validations: 32
+
+# Prometheus endpoint; null disables it. The merging config's port wins when
+# both roles run.
+metrics_port: 9600

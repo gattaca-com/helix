@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc, time::Instant};
 
 use alloy_primitives::Address;
 use alloy_rpc_types::beacon::relay::SignedBidSubmissionV5;
@@ -23,6 +23,7 @@ use tracing::{error, info};
 
 use crate::{
     engine::convert::eblobs,
+    metrics,
     validation::{BlockValidator, error::ValidationError},
 };
 
@@ -77,18 +78,32 @@ fn decode_submission(
 }
 
 async fn validate(State(state): State<ServerState>, body: axum::body::Bytes) -> Response {
+    let start = Instant::now();
     let request = match SszValidationRequest::from_ssz_bytes(&body) {
         Ok(request) => request,
-        Err(err) => return bad_request(format!("{err:?}")),
+        Err(err) => {
+            return finish("validate", "bad_request", start, bad_request(format!("{err:?}")))
+        }
     };
+    let t = metrics::sim_lap("decode_request", start);
     let submission = match decode_submission(request.decoder_params, &request.signed_bid_submission)
     {
         Ok(Some(submission)) => submission,
-        Ok(None) => return StatusCode::FAILED_DEPENDENCY.into_response(),
-        Err(err) => return bad_request(err.to_string()),
+        Ok(None) => {
+            return finish(
+                "validate",
+                "dehydrated",
+                start,
+                StatusCode::FAILED_DEPENDENCY.into_response(),
+            );
+        }
+        Err(err) => {
+            return finish("validate", "bad_submission", start, bad_request(err.to_string()))
+        }
     };
+    metrics::sim_lap("decode_submission", t);
 
-    run_validation(state, move |validator| {
+    run_validation(state, "validate", start, move |validator| {
         validator.validate(
             &submission.execution_payload,
             &submission.message,
@@ -102,18 +117,32 @@ async fn validate(State(state): State<ServerState>, body: axum::body::Bytes) -> 
 }
 
 async fn validate_merged(State(state): State<ServerState>, body: axum::body::Bytes) -> Response {
+    let start = Instant::now();
     let request = match SszMergedValidationRequest::from_ssz_bytes(&body) {
         Ok(request) => request,
-        Err(err) => return bad_request(format!("{err:?}")),
+        Err(err) => {
+            return finish("validate_merged", "bad_request", start, bad_request(format!("{err:?}")))
+        }
     };
+    let t = metrics::sim_lap("decode_request", start);
     let submission = match decode_submission(request.decoder_params, &request.signed_bid_submission)
     {
         Ok(Some(submission)) => submission,
-        Ok(None) => return StatusCode::FAILED_DEPENDENCY.into_response(),
-        Err(err) => return bad_request(err.to_string()),
+        Ok(None) => {
+            return finish(
+                "validate_merged",
+                "dehydrated",
+                start,
+                StatusCode::FAILED_DEPENDENCY.into_response(),
+            );
+        }
+        Err(err) => {
+            return finish("validate_merged", "bad_submission", start, bad_request(err.to_string()))
+        }
     };
+    metrics::sim_lap("decode_submission", t);
 
-    run_validation(state, move |validator| {
+    run_validation(state, "validate_merged", start, move |validator| {
         validator.validate_merged(
             &submission.execution_payload,
             &submission.message,
@@ -130,30 +159,48 @@ async fn validate_merged(State(state): State<ServerState>, body: axum::body::Byt
 /// Validation is CPU-bound and synchronous, so it runs on a blocking thread.
 /// The semaphore caps how many run at once. A pass answers with the SSZ
 /// [`SszValidationResponse`].
-async fn run_validation<F>(state: ServerState, validate: F) -> Response
+async fn run_validation<F>(
+    state: ServerState,
+    route: &'static str,
+    start: Instant,
+    validate: F,
+) -> Response
 where
     F: FnOnce(&BlockValidator) -> Result<crate::validation::ExecutedBlock, ValidationError>
         + Send
         + 'static,
 {
+    let t = Instant::now();
     let Ok(_permit) = state.permits.clone().acquire_owned().await else {
-        return bad_request("validation server is shutting down".to_string());
+        let response = bad_request("validation server is shutting down".to_string());
+        return finish(route, "shutting_down", start, response);
     };
+    let queued = metrics::sim_lap("permit_wait", t);
     let validator = state.validator.clone();
     let result = tokio::task::spawn_blocking(move || {
-        validate(&validator)
-            .map(|executed| SszValidationResponse { txs: executed.tx_details }.as_ssz_bytes())
+        let _in_flight = metrics::SimInFlight::enter();
+        metrics::sim_lap("blocking_wait", queued);
+        let executed = validate(&validator)?;
+        let t = Instant::now();
+        let body = SszValidationResponse { txs: executed.tx_details }.as_ssz_bytes();
+        metrics::sim_lap("encode_response", t);
+        Ok::<_, ValidationError>(body)
     })
     .await;
 
     match result {
-        Ok(Ok(body)) => body.into_response(),
-        Ok(Err(err)) => bad_request(err.to_string()),
+        Ok(Ok(body)) => finish(route, "ok", start, body.into_response()),
+        Ok(Err(err)) => finish(route, err.metric_label(), start, bad_request(err.to_string())),
         Err(err) => {
             error!(%err, "validation task panicked");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            finish(route, "panicked", start, StatusCode::INTERNAL_SERVER_ERROR.into_response())
         }
     }
+}
+
+fn finish(route: &str, result: &str, start: Instant, response: Response) -> Response {
+    metrics::sim_request(route, result, start);
+    response
 }
 
 fn bad_request(message: String) -> Response {

@@ -5,7 +5,7 @@ mod server_tests;
 #[cfg(test)]
 pub(crate) mod tests;
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use alloy_primitives::B256;
 use alloy_rpc_types::{
@@ -39,6 +39,7 @@ use crate::{
         convert::{aaddr, au256, b256, eaddr, eu256, h256, payload_v3_to_block},
         simulate::balance_of,
     },
+    metrics,
     node::HeadInfo,
     validation::error::ValidationError,
 };
@@ -83,9 +84,13 @@ impl BlockValidator {
         parent_beacon_block_root: B256,
         requests: &ExecutionRequestsV4,
     ) -> Result<PreparedBlock, ValidationError> {
+        let t = Instant::now();
         let block = self.to_block(payload, parent_beacon_block_root, requests)?;
+        let t = metrics::sim_lap("to_block", t);
         self.validate_message_against_header(&block, message)?;
+        let t = metrics::sim_lap("check_trace", t);
         let parent_header = self.parent_header(&block.header)?;
+        metrics::sim_lap("parent_header", t);
         Ok(PreparedBlock { block, parent_header })
     }
 
@@ -99,12 +104,17 @@ impl BlockValidator {
         apply_blacklist: bool,
     ) -> Result<ExecutedBlock, ValidationError> {
         let prepared = self.prepare(payload, message, parent_beacon_block_root, requests)?;
+        let t = Instant::now();
         self.validate_blobs_bundle(&prepared.block, blobs)?;
+        metrics::sim_lap("blobs", t);
         let executed = self.execute(prepared)?;
+        let mut t = Instant::now();
         if apply_blacklist {
             self.ensure_not_blacklisted(&executed, message)?;
+            t = metrics::sim_lap("blacklist", t);
         }
         self.ensure_payment(&executed, message)?;
+        metrics::sim_lap("payment", t);
         Ok(executed)
     }
 
@@ -122,12 +132,17 @@ impl BlockValidator {
         base_payment_tx_index: u64,
     ) -> Result<ExecutedBlock, ValidationError> {
         let prepared = self.prepare(payload, message, parent_beacon_block_root, requests)?;
+        let t = Instant::now();
         self.validate_blobs_bundle(&prepared.block, blobs)?;
+        metrics::sim_lap("blobs", t);
         let executed = self.execute(prepared)?;
+        let mut t = Instant::now();
         if apply_blacklist {
             self.ensure_not_blacklisted(&executed, message)?;
+            t = metrics::sim_lap("blacklist", t);
         }
         self.ensure_merged_payment(&executed, message, base_payment_tx_index as usize)?;
+        metrics::sim_lap("payment", t);
         Ok(executed)
     }
 
@@ -225,16 +240,20 @@ impl BlockValidator {
         let PreparedBlock { block, parent_header } = prepared;
         let chain_config = self.store.get_chain_config();
 
+        let t = Instant::now();
         validate_block_pre_execution(&block, &parent_header, &chain_config, ELASTICITY_MULTIPLIER)
             .map_err(|e| ValidationError::PreExecution(e.to_string()))?;
+        let t = metrics::sim_lap("pre_execution", t);
 
         let parent_header_for_reads = parent_header.clone();
         let vm_db = StoreVmDatabase::new(self.store.clone(), parent_header)
             .map_err(|e| ValidationError::Execution(e.to_string()))?;
         let mut vm = new_evm(&BlockchainType::L1, vm_db)
             .map_err(|e| ValidationError::Execution(e.to_string()))?;
+        metrics::sim_lap("vm_setup", t);
 
         let (receipts, tx_details, gas_used) = Self::execute_transactions(&mut vm, &block)?;
+        let t = Instant::now();
         let requests = vm
             .extract_requests(&receipts, &block.header)
             .map_err(|e| ValidationError::Execution(e.to_string()))?;
@@ -242,6 +261,7 @@ impl BlockValidator {
             vm.process_withdrawals(withdrawals)
                 .map_err(|e| ValidationError::Execution(e.to_string()))?;
         }
+        let t = metrics::sim_lap("requests_withdrawals", t);
 
         validate_gas_used(gas_used, &block.header)
             .map_err(|e| ValidationError::PostExecution(e.to_string()))?;
@@ -249,15 +269,19 @@ impl BlockValidator {
             .map_err(|e| ValidationError::PostExecution(e.to_string()))?;
         validate_requests_hash(&block.header, &chain_config, &requests)
             .map_err(|e| ValidationError::PostExecution(e.to_string()))?;
+        let t = metrics::sim_lap("post_execution", t);
 
         let account_updates =
             vm.get_state_transitions().map_err(|e| ValidationError::Execution(e.to_string()))?;
+        let t = metrics::sim_lap("state_transitions", t);
         let state_root = self
             .store
             .apply_account_updates_batch(block.header.parent_hash, &account_updates)
             .map_err(|e| ValidationError::Store(e.to_string()))?
             .ok_or(ValidationError::MissingParentState)?
             .state_trie_hash;
+        metrics::sim_lap("state_root", t);
+        metrics::sim_block(block.body.transactions.len(), gas_used);
 
         if state_root != block.header.state_root {
             return Err(ValidationError::StateRootMismatch {
@@ -284,11 +308,14 @@ impl BlockValidator {
     ) -> Result<(Vec<Receipt>, Vec<TxDetail>, u64), ValidationError> {
         let execution = |e: EvmError| ValidationError::Execution(e.to_string());
         let header = &block.header;
+        let t = Instant::now();
         vm.apply_system_calls(header).map_err(execution)?;
+        let t = metrics::sim_lap("system_calls", t);
         let transactions = block
             .body
             .get_transactions_with_sender(&NativeCrypto)
             .map_err(|e| ValidationError::Execution(format!("could not recover senders: {e}")))?;
+        let t = metrics::sim_lap("sender_recovery", t);
 
         let coinbase_balance = |vm: &mut Evm| {
             balance_of(vm, header.coinbase).map_err(|e| ValidationError::Execution(e.to_string()))
@@ -322,6 +349,7 @@ impl BlockValidator {
             });
             balance = after;
         }
+        metrics::sim_lap("txs", t);
         Ok((receipts, tx_details, gas_used))
     }
 

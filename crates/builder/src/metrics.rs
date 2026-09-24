@@ -1,10 +1,10 @@
-//! Prometheus metrics for the merging role. The names follow the questions the
-//! design needs answered: how much value the pool actually yields, how stale
-//! our base is when we emit, and whether the merged bid beats the base
-//! builder's own next bid.
+//! Prometheus metrics for the merging and simulation roles. The merging names
+//! follow the questions the design needs answered: how much value the pool
+//! actually yields, how stale our base is when we emit, and whether the merged
+//! bid beats the base builder's own next bid.
 #![allow(clippy::disallowed_types)]
 
-use std::net::SocketAddr;
+use std::{net::SocketAddr, time::Instant};
 
 use alloy_primitives::U256;
 use axum::{Router, http::StatusCode, routing::get};
@@ -294,6 +294,51 @@ lazy_static! {
         &BUILDER_METRICS_REGISTRY
     )
     .unwrap();
+
+    static ref EXTEND_ORDERS: HistogramVec = register_histogram_vec_with_registry!(
+        "merge_extend_orders",
+        "Orders per extend pass, by step",
+        &["step"],
+        vec![0., 1., 2., 4., 8., 16., 32., 64., 128., 256., 512., 1_024., 2_048., 4_096.],
+        &BUILDER_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    //////////////// SIMULATION ////////////////
+
+    static ref SIM_STAGE: HistogramVec = register_histogram_vec_with_registry!(
+        "sim_stage_latency_us",
+        "Block validation latency by stage",
+        &["stage"],
+        micros_buckets(),
+        &BUILDER_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    static ref SIM_REQUEST: HistogramVec = register_histogram_vec_with_registry!(
+        "sim_request_latency_us",
+        "Validation request latency from body received to response, by route and result",
+        &["route", "result"],
+        micros_buckets(),
+        &BUILDER_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    static ref SIM_BLOCK: HistogramVec = register_histogram_vec_with_registry!(
+        "sim_block_size",
+        "Size of each executed block, by unit",
+        &["unit"],
+        vec![0., 10., 25., 50., 100., 200., 300., 500., 750., 1_000., 1_500., 2_000., 3_000.],
+        &BUILDER_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    static ref SIM_IN_FLIGHT: IntGauge = register_int_gauge_with_registry!(
+        "sim_in_flight",
+        "Validations running on the blocking pool",
+        &BUILDER_METRICS_REGISTRY
+    )
+    .unwrap();
 }
 
 pub fn ingest(kind: &str) {
@@ -440,6 +485,41 @@ pub fn activation_source(source: &str) {
 
 pub fn rejection(stage: &str, reason: &str) {
     REJECTION.with_label_values(&[stage, reason]).inc();
+}
+
+pub fn extend_orders(step: &str, count: usize) {
+    EXTEND_ORDERS.with_label_values(&[step]).observe(count as f64);
+}
+
+pub fn sim_lap(stage: &str, since: Instant) -> Instant {
+    let now = Instant::now();
+    SIM_STAGE.with_label_values(&[stage]).observe(now.duration_since(since).as_micros() as f64);
+    now
+}
+
+pub fn sim_request(route: &str, result: &str, since: Instant) {
+    SIM_REQUEST.with_label_values(&[route, result]).observe(since.elapsed().as_micros() as f64);
+}
+
+pub fn sim_block(txs: usize, gas_used: u64) {
+    SIM_BLOCK.with_label_values(&["txs"]).observe(txs as f64);
+    SIM_BLOCK.with_label_values(&["mgas"]).observe(gas_used as f64 / 1e6);
+}
+
+/// Held by the blocking task, so a request its client abandoned still counts.
+pub struct SimInFlight;
+
+impl SimInFlight {
+    pub fn enter() -> Self {
+        SIM_IN_FLIGHT.inc();
+        Self
+    }
+}
+
+impl Drop for SimInFlight {
+    fn drop(&mut self) {
+        SIM_IN_FLIGHT.dec();
+    }
 }
 
 pub async fn serve(port: u16) {
