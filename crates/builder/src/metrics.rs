@@ -341,6 +341,24 @@ lazy_static! {
     )
     .unwrap();
 
+    static ref SIM_STATE_READ_TIME: HistogramVec = register_histogram_vec_with_registry!(
+        "sim_state_read_us",
+        "Time one validation's execution spends in state reads, by kind",
+        &["kind"],
+        micros_buckets(),
+        &BUILDER_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    static ref SIM_STATE_READS: HistogramVec = register_histogram_vec_with_registry!(
+        "sim_state_reads",
+        "State reads one validation's execution makes, by kind",
+        &["kind"],
+        vec![0., 10., 25., 50., 100., 250., 500., 1_000., 2_500., 5_000., 10_000., 25_000.],
+        &BUILDER_METRICS_REGISTRY
+    )
+    .unwrap();
+
     static ref SIM_IN_FLIGHT: IntGauge = register_int_gauge_with_registry!(
         "sim_in_flight",
         "Validations running on the blocking pool",
@@ -517,6 +535,11 @@ pub fn sim_block(txs: usize, gas_used: u64) {
 pub fn sim_blob_cache(hits: usize, misses: usize) {
     SIM_BLOB_CACHE.with_label_values(&["hit"]).inc_by(hits as u64);
     SIM_BLOB_CACHE.with_label_values(&["miss"]).inc_by(misses as u64);
+}
+
+pub fn sim_state_reads(kind: &str, reads: u64, micros: f64) {
+    SIM_STATE_READS.with_label_values(&[kind]).observe(reads as f64);
+    SIM_STATE_READ_TIME.with_label_values(&[kind]).observe(micros);
 }
 
 /// Held by the blocking task, so a request its client abandoned still counts.
