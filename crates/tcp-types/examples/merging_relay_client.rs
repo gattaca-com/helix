@@ -1,5 +1,5 @@
-//! Example relay-side client for the builder block-merging TCP protocol
-//! (`doc/block-merging.md` in the builder repo). Connects to a builder
+//! Example relay-side client for the builder block-merging TCP protocol.
+//! Connects to a builder
 //! running with `block_merging_builder: true` and walks through a full
 //! interaction:
 //!

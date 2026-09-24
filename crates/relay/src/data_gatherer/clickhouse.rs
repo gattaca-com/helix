@@ -1,8 +1,8 @@
-#![allow(clippy::future_not_send)]
-
-use std::{collections::hash_map::Entry, future::Future, time::Duration};
+use std::{collections::VecDeque, time::Duration};
 
 use alloy_primitives::B256;
+use flux_clickhouse::{ClickHouse, Error};
+use flux_network::tcp::{TcpEvent, TcpNetworkCore};
 use flux_utils::ArrayStr;
 use helix_common::{config::ClickhouseConfig, expect_env_var};
 use helix_types::BlsPublicKeyBytes;
@@ -11,10 +11,17 @@ use tracing::{error, info};
 
 const TABLE: &str = "relay_bid_submission_data";
 const ENV_CLICKHOUSE_PASSWORD: &str = "CLICKHOUSE_PASSWORD";
-
-fn serialize_str<T: AsRef<str>, S: serde::Serializer>(v: &T, s: S) -> Result<S::Ok, S::Error> {
-    s.serialize_str(v.as_ref())
-}
+/// A slot's snapshot is one insert; the spare covers a slow predecessor.
+const CONNECTIONS: usize = 2;
+/// Rows per insert: a row encodes to a few hundred bytes, so a batch stays
+/// far under the HTTP client's 1 MiB body cap whatever the slot holds.
+const BATCH_ROWS: usize = 1000;
+/// Unsent batches retained across a stall. Past this the oldest batch drops
+/// (counted and logged): telemetry yields to memory.
+const MAX_UNSENT_BATCHES: usize = 64;
+/// Bytes the client may hold across queued and in-flight inserts.
+const MAX_QUEUED_BYTES: usize = 64 * 1024 * 1024;
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Default)]
 pub struct BlockInfo {
@@ -28,9 +35,8 @@ pub struct BlockInfo {
     pub top_bid_ns: Option<i64>,
 }
 
-#[derive(clickhouse::Row, serde::Serialize)]
+#[derive(Clone, serde::Serialize)]
 pub struct BlockInfoRow {
-    #[serde(serialize_with = "serialize_str")]
     pub instance_id: ArrayStr<64>,
     pub slot: u64,
     pub is_dehydrated: bool,
@@ -61,23 +67,32 @@ impl BlockInfoRow {
 }
 
 pub struct ClickhouseData {
-    client: clickhouse::Client,
+    client: ClickHouse,
     instance_id: ArrayStr<64>,
     map: FxHashMap<B256, BlockInfo>,
+    in_flight: usize,
+    /// Batches the client refused (full queue); retried on every drive.
+    /// Refused work was never sent, so retrying duplicates nothing.
+    unsent: VecDeque<Vec<BlockInfoRow>>,
+    dropped_rows: u64,
 }
 
 impl ClickhouseData {
-    pub fn new(config: &ClickhouseConfig, instance_id: String) -> Self {
+    pub fn new(config: &ClickhouseConfig, instance_id: String, net: &mut TcpNetworkCore) -> Self {
         let password = expect_env_var(ENV_CLICKHOUSE_PASSWORD);
-        let client = clickhouse::Client::default()
-            .with_url(&config.url)
+        let mut client = ClickHouse::new(config.addr, CONNECTIONS)
+            .with_credentials(&config.user, &password)
             .with_database(&config.database)
-            .with_user(&config.user)
-            .with_password(password);
+            .with_request_timeout(REQUEST_TIMEOUT)
+            .with_max_queued_bytes(MAX_QUEUED_BYTES);
+        client.connect(net);
         Self {
             client,
             instance_id: ArrayStr::from_str_truncate(&instance_id),
             map: FxHashMap::with_capacity_and_hasher(5000, Default::default()),
+            in_flight: 0,
+            unsent: VecDeque::new(),
+            dropped_rows: 0,
         }
     }
 
@@ -89,16 +104,15 @@ impl ClickhouseData {
         self.map.get_mut(hash)
     }
 
-    pub fn entry(&mut self, hash: B256) -> Entry<'_, B256, BlockInfo> {
-        self.map.entry(hash)
+    /// Inserts still awaiting an outcome, plus batches still awaiting a send.
+    pub fn pending(&self) -> usize {
+        self.in_flight + self.unsent.len()
     }
 
-    pub fn publish_snapshot(
-        &mut self,
-        new_slot: u64,
-    ) -> Option<impl Future<Output = ()> + Send + 'static> {
+    /// Queues every row belonging to a slot before `new_slot`.
+    pub fn publish_snapshot(&mut self, new_slot: u64) {
         if self.map.is_empty() {
-            return None;
+            return;
         }
 
         let rows = self
@@ -108,32 +122,64 @@ impl ClickhouseData {
             .collect::<Vec<BlockInfoRow>>();
 
         if rows.is_empty() {
-            return None;
+            return;
         }
 
-        let client = self.client.clone();
-        Some(async move {
-            match Self::insert_rows(&client, rows.into_iter()).await {
-                Ok(len) => info!("inserted {len} rows to {TABLE}"),
-                Err(err) => error!(?err, "failed to insert rows to {TABLE}"),
+        for batch in rows.chunks(BATCH_ROWS) {
+            if self.unsent.len() >= MAX_UNSENT_BATCHES {
+                let dropped = self.unsent.pop_front().expect("full queue has a front");
+                self.dropped_rows += dropped.len() as u64;
+                error!(
+                    rows = dropped.len(),
+                    total_dropped = self.dropped_rows,
+                    "{TABLE} insert backlog full, oldest batch dropped"
+                );
             }
-        })
+            self.unsent.push_back(batch.to_vec());
+        }
+        self.push_batches();
     }
 
-    async fn insert_rows(
-        client: &clickhouse::Client,
-        rows: impl Iterator<Item = BlockInfoRow>,
-    ) -> Result<usize, clickhouse::error::Error> {
-        let mut insert = client
-            .insert::<BlockInfoRow>(TABLE)
-            .await?
-            .with_timeouts(Some(Duration::from_secs(5)), Some(Duration::from_secs(5)));
-        let mut len = 0;
-        for row in rows {
-            insert.write(&row).await?;
-            len += 1;
+    /// Sends retained batches until the client refuses one.
+    fn push_batches(&mut self) {
+        while let Some(batch) = self.unsent.front() {
+            match self.client.insert_rows(TABLE, batch) {
+                Ok(_) => {
+                    let batch = self.unsent.pop_front().expect("just peeked");
+                    self.in_flight += 1;
+                    info!(rows = batch.len(), "queued insert to {TABLE}");
+                }
+                Err(_) => break,
+            }
         }
-        insert.end().await?;
-        Ok(len)
+    }
+
+    /// Returns whether the event belonged to this client.
+    pub fn on_event(&mut self, event: &TcpEvent<'_>) -> bool {
+        self.client.on_event(event)
+    }
+
+    /// Sends what is queued and retires finished inserts. A sent insert
+    /// that times out is logged, not retried: it may have run, and the
+    /// table has no key to dedupe a repeat.
+    pub fn drive(&mut self, net: &mut TcpNetworkCore) -> bool {
+        self.push_batches();
+        let in_flight = &mut self.in_flight;
+        let mut worked = false;
+        self.client.drive(net, |_, result| {
+            worked = true;
+            *in_flight = in_flight.saturating_sub(1);
+            match result {
+                Ok(_) => {}
+                Err(Error::Server { code, name, message }) => error!(
+                    code,
+                    name,
+                    detail = %message,
+                    "failed to insert rows to {TABLE}"
+                ),
+                Err(other) => error!(?other, "failed to insert rows to {TABLE}"),
+            }
+        });
+        worked
     }
 }

@@ -57,29 +57,28 @@ impl<A: Api> BuilderApi<A> {
 
         let header = InternalBidSubmissionHeader::from_http_headers(id, headers);
 
-        let future_ix = api.future_results.push(FutureBidSubmissionResult::new());
+        let future_result_id = api.future_results.push(FutureBidSubmissionResult::new());
 
-        let ix = api.submission_payloads.push(body);
         let new_bid = NewBidSubmission {
             payload_offset: 0,
             header,
-            submission_ref: SubmissionRef::Http(future_ix),
+            submission_ref: SubmissionRef::http(future_result_id),
             trace,
             expected_pubkey: BlsPublicKeyBytes::default(),
             has_expected_pubkey: false,
-            http_submission_ix: ix,
+            ..Default::default()
         };
 
-        if let Err(e) = api.producer.produce_with_ingestion::<fn(&mut [u8])>(
+        if let Err(e) = api.producer.produce_with_ingestion(
             new_bid,
-            None,
+            Some((body.len(), |buf: &mut [u8]| buf.copy_from_slice(&body))),
             IngestionTime::now(),
         ) {
             tracing::error!("failed to write the request payload: {e}");
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
 
-        let Some(future) = api.future_results.get(future_ix) else {
+        let Some(future) = api.future_results.get(future_result_id) else {
             tracing::error!("failed to find future response in the shared vec");
             return BuilderApiError::InternalError.into_response();
         };

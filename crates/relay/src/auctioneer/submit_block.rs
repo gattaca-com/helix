@@ -23,7 +23,7 @@ use crate::{
     simulator::{SimPriority, ValidationRequest, ValidationResult},
     spine::{
         HelixSpineProducers,
-        messages::{BidEvent, BidUpdate},
+        messages::{BidUpdate, SimUpdate},
     },
 };
 
@@ -36,6 +36,7 @@ impl<B: BidAdjustor> Context<B> {
         producers: &mut HelixSpineProducers,
     ) {
         let submission_ref = submission_data.submission_ref;
+        let submission_id = submission_data.submission_id;
 
         let builder_info = self.builder_info(submission_data.submission.builder_pubkey());
         tracing::Span::current()
@@ -53,6 +54,7 @@ impl<B: BidAdjustor> Context<B> {
                     send_submission_result(
                         producers,
                         &self.future_results,
+                        submission_id,
                         submission_ref,
                         Err(BuilderApiError::BidValidation(e)),
                     );
@@ -74,6 +76,7 @@ impl<B: BidAdjustor> Context<B> {
                 send_submission_result(
                     producers,
                     &self.future_results,
+                    submission_id,
                     submission_ref,
                     Err(BuilderApiError::InternalError),
                 );
@@ -102,11 +105,18 @@ impl<B: BidAdjustor> Context<B> {
 
         let is_optimistic = optimistic_version.is_optimistic();
         if is_optimistic {
-            send_submission_result(producers, &self.future_results, submission_ref, Ok(()));
+            send_submission_result(
+                producers,
+                &self.future_results,
+                submission_id,
+                submission_ref,
+                Ok(()),
+            );
         }
 
         let req = ValidationRequest {
             priority: sim_priority(is_top_bid, is_optimistic),
+            submission_id,
             is_top_bid,
             is_optimistic,
             apply_blacklist: slot_data.registration_data.entry.preferences.filtering.is_regional(),
@@ -123,7 +133,7 @@ impl<B: BidAdjustor> Context<B> {
             submission_ref,
         };
 
-        self.send_to_sim(req, false);
+        self.send_to_sim(req, false, producers);
 
         let entry = PayloadEntry::new_submission(
             submission,
@@ -136,7 +146,7 @@ impl<B: BidAdjustor> Context<B> {
         );
 
         self.try_adjustments_dry_run(&entry, slot_data, producers);
-        self.store_data(entry, is_optimistic, producers);
+        self.store_data(entry, is_optimistic, submission_id, producers);
     }
 
     #[timed]
@@ -160,8 +170,14 @@ impl<B: BidAdjustor> Context<B> {
                     .with_label_values(&[strategy])
                     .observe(start.elapsed().as_micros());
 
-                self.store_data(adjusted_block, sim_request.is_optimistic, producers);
-                self.send_to_sim(sim_request, true);
+                let submission_id = sim_request.submission_id;
+                self.store_data(
+                    adjusted_block,
+                    sim_request.is_optimistic,
+                    submission_id,
+                    producers,
+                );
+                self.send_to_sim(sim_request, true, producers);
             }
         }
     }
@@ -186,6 +202,7 @@ impl<B: BidAdjustor> Context<B> {
                     send_submission_result(
                         producers,
                         &self.future_results,
+                        result.submission_id,
                         result.submission_ref,
                         Err(BuilderApiError::BlockSimulation(err.clone())),
                     );
@@ -198,6 +215,7 @@ impl<B: BidAdjustor> Context<B> {
                     send_submission_result(
                         producers,
                         &self.future_results,
+                        result.submission_id,
                         result.submission_ref,
                         Err(BuilderApiError::InternalError),
                     );
@@ -210,11 +228,13 @@ impl<B: BidAdjustor> Context<B> {
                 self.bid_sorter.sort(*bid, trace, false, producers);
 
                 if need_send_result {
-                    producers.produce(BidUpdate { block_hash, event: BidEvent::Live });
+                    producers
+                        .produce(BidUpdate { submission_id: result.submission_id, block_hash });
                     self.db.update_block_submission_live_ts(block_hash, Nanos::now().0);
                     send_submission_result(
                         producers,
                         &self.future_results,
+                        result.submission_id,
                         result.submission_ref,
                         Ok(()),
                     );
@@ -229,6 +249,7 @@ impl<B: BidAdjustor> Context<B> {
         &mut self,
         entry: PayloadEntry,
         is_optimistic: bool,
+        submission_id: uuid::Uuid,
         producers: &mut HelixSpineProducers,
     ) {
         let block_hash = *entry.block_hash();
@@ -243,7 +264,7 @@ impl<B: BidAdjustor> Context<B> {
             // For optimistic submissions the bid is live as soon as it is stored.
             // For non-optimistic, live_ts is updated when the simulation result arrives.
             let live_ts = if is_optimistic {
-                producers.produce(BidUpdate { block_hash, event: BidEvent::Live });
+                producers.produce(BidUpdate { submission_id, block_hash });
                 Some(Nanos::now().0)
             } else {
                 None
@@ -260,8 +281,15 @@ impl<B: BidAdjustor> Context<B> {
         self.payloads.insert(block_hash, entry);
     }
 
-    pub fn send_to_sim(&mut self, req: ValidationRequest, fast_track: bool) {
-        self.sims.dispatch(req, fast_track);
+    pub fn send_to_sim(
+        &mut self,
+        req: ValidationRequest,
+        fast_track: bool,
+        producers: &mut HelixSpineProducers,
+    ) {
+        if let Some(started) = self.sims.dispatch(req, fast_track) {
+            producers.produce(SimUpdate::Started(started));
+        }
     }
 
     fn should_process_optimistically(

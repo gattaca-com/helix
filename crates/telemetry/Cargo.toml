@@ -1,0 +1,18 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "helix-telemetry"
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+alloy-primitives.workspace = true
+bytes.workspace = true
+ethereum_ssz.workspace = true
+flux.workspace = true
+flux-utils.workspace = true
+flux-versioned-types.workspace = true
+serde.workspace = true
+type-hash-derive.workspace = true
+uuid = { workspace = true, features = ["serde"] }

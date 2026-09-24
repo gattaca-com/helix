@@ -241,7 +241,11 @@ impl Fixture {
     }
 
     /// Deploys empty code, so the created account exists in state.
-    fn signed_create(&self, signer: &alloy_signer_local::PrivateKeySigner, nonce: u64) -> Vec<u8> {
+    pub(crate) fn signed_create(
+        &self,
+        signer: &alloy_signer_local::PrivateKeySigner,
+        nonce: u64,
+    ) -> Vec<u8> {
         use alloy_consensus::SignableTransaction;
         use alloy_signer::SignerSync;
         let tx = alloy_consensus::TxEip1559 {

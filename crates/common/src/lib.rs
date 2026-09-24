@@ -11,6 +11,7 @@ pub mod builder_info;
 pub mod chain_info;
 pub mod config;
 pub mod decoder;
+pub mod gather;
 pub mod http;
 pub mod local_cache;
 pub mod metrics;

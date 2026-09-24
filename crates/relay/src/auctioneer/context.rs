@@ -34,6 +34,7 @@ use helix_types::{
 };
 use rustc_hash::FxHashMap;
 use tracing::{debug, error, info, warn};
+use uuid::Uuid;
 
 use crate::{
     SubmissionDataWithSpan,
@@ -43,7 +44,7 @@ use crate::{
         bid_adjustor::BidAdjustor,
         bid_sorter::BidSorter,
         block_merger::BlockMerger,
-        types::{PayloadEntry, PendingPayload, SlotData, SubmissionRef},
+        types::{PayloadEntry, PendingPayload, SlotData, SubmissionRef, SubmissionRefKind},
     },
     simulator::{
         MergedSimulationResultInner, MergedValidationRequest, Simulators, ValidationResult,
@@ -226,6 +227,7 @@ impl<B: BidAdjustor> Context<B> {
             send_submission_result(
                 producers,
                 &self.future_results,
+                result.submission_id,
                 result.submission_ref,
                 Err(BuilderApiError::SimOnNextSlot),
             );
@@ -394,6 +396,7 @@ pub(crate) fn merged_validation_request(
         .parent_beacon_block_root
         .unwrap_or_default();
     Some(MergedValidationRequest {
+        submission_id: Uuid::new_v4(),
         base_block_hash: response.base_block_hash,
         slot: slot_data.bid_slot.as_u64(),
         parent_beacon_block_root,
@@ -496,24 +499,26 @@ impl<B: BidAdjustor> DerefMut for Context<B> {
 pub fn send_submission_result<P>(
     producers: &mut P,
     future_results: &Arc<SharedVector<FutureBidSubmissionResult>>,
+    submission_id: Uuid,
     sub_ref: SubmissionRef,
     result: Result<(), BuilderApiError>,
 ) where
     P: SpineProducers + AsRef<SpineProducer<SubmissionResultWithRef>>,
 {
-    let result = SubmissionResultWithRef::new(sub_ref, result);
-    match result.sub_ref {
-        SubmissionRef::Http(future_ix) => {
-            if let Some(future) = future_results.get(future_ix) {
+    let result = SubmissionResultWithRef::new(submission_id, sub_ref, result);
+    match result.sub_ref.kind {
+        SubmissionRefKind::Http => {
+            let future_result_id = result.sub_ref.id;
+            if let Some(future) = future_results.get(future_result_id) {
                 future.set(result);
             } else {
                 tracing::warn!(
-                    future_ix,
+                    future_result_id,
                     "submission result dropped: no future found (connection may have closed)"
                 );
             }
         }
-        SubmissionRef::Tcp { .. } => producers.produce(result),
-        SubmissionRef::Internal => {}
+        SubmissionRefKind::Tcp => producers.produce(result),
+        SubmissionRefKind::Internal => {}
     }
 }

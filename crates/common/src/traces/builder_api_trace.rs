@@ -1,14 +1,16 @@
 use std::sync::atomic::Ordering;
 
-use flux::timing::Nanos;
+use flux::{timing::Nanos, type_hash_derive::type_hash_lock};
 use flux_utils::ArrayStr;
+use flux_versioned_types::versioned_struct;
 use serde::{Deserialize, Serialize};
 
 use crate::{RequestTimings, metrics::SUB_TRACE_LATENCY, utils::utcnow_ns};
 
-#[derive(Debug, Clone, Copy, Default)]
-#[repr(C)]
-pub struct SubmissionTrace {
+versioned_struct!(SubmissionTrace =>
+    #[derive(Default)]
+    #[type_hash_lock(hash = 11267690528330172066)]
+    SubmissionTraceV1 {
     // first packet
     pub receive_ns: Nanos,
     // when body finished being read
@@ -19,7 +21,8 @@ pub struct SubmissionTrace {
     /// `Option<ArrayStr<128>>` because this type crosses the spine's
     /// extern "C" queues, and `Option` has no guaranteed layout.
     pub metadata: ArrayStr<128>,
-}
+    }
+);
 
 impl SubmissionTrace {
     pub fn init_from_timings(timings: RequestTimings) -> Self {

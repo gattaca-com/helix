@@ -135,6 +135,7 @@ impl ForkState {
             builder_pubkey: bid.builder_pubkey,
             fee_recipient: bid.fee_recipient,
             value: bid.value,
+            ..Default::default()
         };
 
         producers.produce(top_bid_update);

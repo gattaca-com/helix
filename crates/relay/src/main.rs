@@ -7,7 +7,6 @@ use std::{
     time::Duration,
 };
 
-use bytes::Bytes;
 use flux::{
     spine::FluxSpine,
     tile::{TileConfig, TileName, attach_tile},
@@ -23,20 +22,20 @@ use helix_common::{
     metrics::start_metrics_server,
     signing::RelaySigningContext,
     task::{block_on, init_runtime},
-    utils::{init_panic_hook, init_tracing_log, install_default_crypto_provider},
+    utils::{init_panic_hook, init_tracing_log, install_default_crypto_provider, utcnow_ns},
 };
 use helix_operator::spawn_operator_connection;
 use helix_relay::{
     Api, Auctioneer, AuctioneerHandle, BidSorter, BidSubmissionTcpListener, BlockMergeResponse,
-    BlockMergingTile, BroadcastPayloadParams, DataGatherer, DbHandle, DecoderTile,
-    DefaultBidAdjustor, FutureBidSubmissionResult, GossipedMessage, HelixSpine, HelixSpineConfig,
-    HousekeeperTile, Lane, NewTcpBidSubmission, RegWorkerHandle, RegistrationTile,
+    BlockMergingTile, BroadcastPayloadParams, DbHandle, DecoderTile, DefaultBidAdjustor,
+    FutureBidSubmissionResult, GossipedMessage, HelixSpine, HelixSpineConfig, HousekeeperTile,
+    Lane, NewTcpBidSubmission, RegWorkerHandle, RegistrationTile, RelayConfigExt,
     RelayNetworkManager, Simulators, SlotUpdate, SubmissionDataWithSpan, TopBidTile, UdpTopBidTile,
-    spawn_tokio_monitoring, start_admin_service, start_api_service, start_db_service,
+    spawn_tokio_monitoring, spine_epoch_path, start_admin_service, start_api_service,
+    start_db_service,
 };
 use helix_types::BlsKeypair;
 use helix_website::WebsiteService;
-use serde::Deserialize;
 use tikv_jemallocator::Jemalloc;
 use tokio::signal::unix::{SignalKind, signal};
 use tracing::{error, info};
@@ -47,7 +46,6 @@ static GLOBAL: Jemalloc = Jemalloc;
 const ADMIN_TOKEN_ENV_VAR: &str = "ADMIN_TOKEN";
 
 const MAX_SUBMISSIONS_PER_SLOT: usize = 10_000;
-const MAX_IN_FLIGHT_SUBMISSIONS: usize = 1_000;
 
 #[derive(Clone)]
 struct ApiProd;
@@ -56,16 +54,13 @@ impl Api for ApiProd {
     type ApiProvider = DefaultApiProvider;
 }
 
-#[derive(Deserialize)]
-pub struct RelayConfigExt {
-    #[serde(flatten)]
-    pub config: RelayConfig,
-    pub spine_config: Option<HelixSpineConfig>,
-}
-
-impl AsRef<RelayConfig> for RelayConfigExt {
-    fn as_ref(&self) -> &RelayConfig {
-        &self.config
+/// Marks this relay generation after the queues exist. The standalone data
+/// gatherer exits when the marker changes: a relay restart wipes the queues
+/// it has mapped, and polling the marker is the only cross-process signal.
+fn write_spine_epoch() {
+    let path = spine_epoch_path();
+    if let Err(e) = std::fs::write(&path, utcnow_ns().to_string()) {
+        tracing::warn!(?path, %e, "could not write spine epoch");
     }
 }
 
@@ -183,6 +178,7 @@ async fn run(
     } else {
         HelixSpine::new(None)
     };
+    write_spine_epoch();
 
     let alert_manager = Arc::new(AlertManager::from_relay_config(&config));
     let failsafe_triggered = Arc::new(AtomicBool::new(false));
@@ -228,9 +224,6 @@ async fn run(
 
         let (web_socket_send, web_socket_recv) = crossbeam_channel::bounded(1024);
 
-        let http_submissions =
-            Arc::new(SharedVector::<Bytes>::with_capacity(MAX_IN_FLIGHT_SUBMISSIONS));
-
         let future_results = Arc::new(SharedVector::<FutureBidSubmissionResult>::with_capacity(
             MAX_SUBMISSIONS_PER_SLOT,
         ));
@@ -258,7 +251,6 @@ async fn run(
             registrations_handle,
             bid_producer,
             future_results.clone(),
-            http_submissions.clone(),
             web_socket_send,
             alert_manager.clone(),
             operator_api.clone(),
@@ -288,20 +280,6 @@ async fn run(
         });
 
         if config.is_submission_instance {
-            if config.clickhouse.is_some() || config.s3_config.is_some() {
-                let data_gatherer = DataGatherer::new(
-                    decoded.clone(),
-                    instance_id.clone(),
-                    config.clickhouse.as_ref(),
-                    config.s3_config.clone(),
-                );
-                attach_tile(
-                    data_gatherer,
-                    spine,
-                    TileConfig::new(config.cores.data_gatherer, None),
-                );
-            }
-
             let tcp_lane = &config.cores.decoder_tcp_only;
             let decoders = config.cores.decoder.iter().map(|c| (*c, Lane::All));
             for (core, lane) in decoders.chain(tcp_lane.iter().map(|c| (*c, Lane::TcpOnly))) {
@@ -311,7 +289,6 @@ async fn run(
                     config.clone(),
                     future_results.clone(),
                     decoded.clone(),
-                    http_submissions.clone(),
                     slot_events.clone(),
                     core,
                     lane,
@@ -326,7 +303,6 @@ async fn run(
                 local_cache.api_key_cache.clone(),
                 config.tcp_max_connections,
                 spine.spine.dcache_ptr_for::<NewTcpBidSubmission>(),
-                http_submissions.clone(),
                 slot_events.clone(),
             );
             attach_tile(

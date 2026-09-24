@@ -1,5 +1,8 @@
 use alloy_primitives::{Address, U256};
-use helix_common::{SimulatorConfig, simulator::BlockSimError};
+use helix_common::{
+    SimulatorConfig,
+    simulator::{BlockSimError, SszValidationResponse, TxDetail},
+};
 use helix_types::ForkName;
 use reqwest::{
     RequestBuilder,
@@ -7,7 +10,7 @@ use reqwest::{
 };
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
-use ssz::Encode;
+use ssz::{Decode, Encode};
 use tracing::error;
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -124,10 +127,25 @@ impl SimulatorClient {
         is_top_bid: bool,
         to_send: RequestBuilder,
         endpoint: &str,
-    ) -> Result<(), BlockSimError> {
+    ) -> Result<Vec<TxDetail>, BlockSimError> {
         let body = ssz_req.as_ssz_bytes();
         let body_len = body.len();
         Self::ssz_request(to_send.body(body), is_top_bid, endpoint, body_len).await
+    }
+
+    /// Decodes a `200` body from the ethrex validator. An empty body is a
+    /// legacy endpoint (Reth) that predates `SszValidationResponse`: the
+    /// empty struct still encodes to bytes, so empty unambiguously means
+    /// legacy success with no transaction detail. A corrupt non-empty body is
+    /// the validator misbehaving, not the builder: report it as infra error.
+    pub fn decode_ssz_validation_response(body: &[u8]) -> Result<Vec<TxDetail>, BlockSimError> {
+        if body.is_empty() {
+            return Ok(Vec::new());
+        }
+        SszValidationResponse::from_ssz_bytes(body).map(|r| r.txs).map_err(|err| {
+            error!(?err, "corrupt ssz validation response");
+            BlockSimError::RpcError
+        })
     }
 
     async fn ssz_request(
@@ -135,7 +153,7 @@ impl SimulatorClient {
         is_top_bid: bool,
         endpoint: &str,
         body_len: usize,
-    ) -> Result<(), BlockSimError> {
+    ) -> Result<Vec<TxDetail>, BlockSimError> {
         let mut headers = HeaderMap::new();
         headers.insert("Content-Type", HeaderValue::from_static("application/octet-stream"));
         if is_top_bid {
@@ -151,7 +169,13 @@ impl SimulatorClient {
         };
 
         match res.status().as_u16() {
-            200 => Ok(()),
+            200 => match res.bytes().await {
+                Ok(body) => Self::decode_ssz_validation_response(&body),
+                Err(err) => {
+                    error!(%err, "failed reading ssz simulation body");
+                    Err(BlockSimError::RpcError)
+                }
+            },
             400 => Err(BlockSimError::BlockValidationFailed(res.text().await.unwrap_or_default())),
             413 => {
                 error!(endpoint, body_len, "ssz simulation request over the simulator body limit");

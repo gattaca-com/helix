@@ -1,6 +1,5 @@
 use std::{net::SocketAddr, sync::Arc};
 
-use bytes::Bytes;
 use dashmap::DashMap;
 use flux::{tile::Tile, timing::Nanos};
 use flux_network::{NetworkDriver, PollEvent, SendBehavior, Token, tcp::TcpTelemetry};
@@ -17,7 +16,7 @@ use uuid::Uuid;
 
 use crate::{
     HelixSpine,
-    auctioneer::{InternalBidSubmissionHeader, SubmissionRef},
+    auctioneer::{InternalBidSubmissionHeader, SubmissionRef, SubmissionRefKind},
     housekeeper::SlotUpdate,
     spine::messages::{NewBidSubmission, NewTcpBidSubmission, SlotMsg, SubmissionResultWithRef},
 };
@@ -57,10 +56,6 @@ pub struct BidSubmissionTcpListener {
     registered: FxHashMap<Token, BlsPublicKeyBytes>,
     submission_errors: Vec<SubmissionError>,
 
-    // dcache bypass: stage a stable copy of the payload, the dcache slot can be
-    // mutated out from under the decoder between publish and consume.
-    http_submissions: Arc<SharedVector<Bytes>>,
-
     slot_events: Arc<SharedVector<SlotUpdate>>,
     bid_slot: u64,
     stats: Stats,
@@ -72,7 +67,6 @@ impl BidSubmissionTcpListener {
         api_key_cache: Arc<DashMap<String, Vec<BlsPublicKeyBytes>>>,
         max_connections: usize,
         dcache_ptr: DCachePtr,
-        http_submissions: Arc<SharedVector<Bytes>>,
         slot_events: Arc<SharedVector<SlotUpdate>>,
     ) -> Self {
         // TODO: enable telemetry once the per-connection shm queue leak is fixed
@@ -91,7 +85,6 @@ impl BidSubmissionTcpListener {
             to_disconnect: Vec::with_capacity(max_connections),
             registered: FxHashMap::with_capacity_and_hasher(max_connections, Default::default()),
             submission_errors: Vec::with_capacity(max_connections),
-            http_submissions,
             slot_events,
             bid_slot: 0,
             stats: Stats::default(),
@@ -99,7 +92,7 @@ impl BidSubmissionTcpListener {
     }
 
     fn on_slot_msg(&mut self, msg: SlotMsg) {
-        let Some(ev) = self.slot_events.get(msg.ix) else { return };
+        let Some(ev) = self.slot_events.get(msg.slot_update_id) else { return };
         let bid_slot = ev.bid_slot.as_u64();
         if bid_slot <= self.bid_slot {
             return;
@@ -180,8 +173,7 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                     )
                     .entered();
 
-                    let submission_ref =
-                        SubmissionRef::Tcp { id, token: token.0, seq_num: header.sequence_number };
+                    let submission_ref = SubmissionRef::tcp(token.0, header.sequence_number);
 
                     let now = utcnow_ns();
                     SUB_CLIENT_TO_SERVER_LATENCY
@@ -194,18 +186,17 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                         ..Default::default()
                     };
 
-                    let http_submission_ix =
-                        self.http_submissions.push(Bytes::copy_from_slice(payload));
-
-                    Some(NewTcpBidSubmission(NewBidSubmission {
-                        payload_offset: BID_SUB_HEADER_SIZE,
-                        header: InternalBidSubmissionHeader::from_tcp_header(id, header),
-                        submission_ref,
-                        trace,
-                        expected_pubkey: *expected_pubkey,
-                        has_expected_pubkey: true,
-                        http_submission_ix,
-                    }))
+                    Some(NewTcpBidSubmission {
+                        inner: NewBidSubmission {
+                            payload_offset: BID_SUB_HEADER_SIZE,
+                            header: InternalBidSubmissionHeader::from_tcp_header(id, header),
+                            submission_ref,
+                            trace,
+                            expected_pubkey: *expected_pubkey,
+                            has_expected_pubkey: true,
+                            ..Default::default()
+                        },
+                    })
                 } else {
                     match RegistrationMsg::from_ssz_bytes(payload) {
                         Ok(msg) => {
@@ -251,7 +242,10 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
         }
 
         adapter.consume(|r: SubmissionResultWithRef, _producers| {
-            let SubmissionRef::Tcp { id, token, seq_num } = r.sub_ref else { return };
+            if r.sub_ref.kind != SubmissionRefKind::Tcp {
+                return;
+            }
+            let (id, token, seq_num) = (r.submission_id, r.sub_ref.id, r.sub_ref.seq_num);
             let response =
                 response_from_submission_result(seq_num, id, r.tcp_status, r.error_msg.as_str());
             tracing::debug!("submission result: {}", response);

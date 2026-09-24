@@ -663,13 +663,13 @@ fn send_slot_event(
         curr_slot_info.handle_new_payload_attributes(attr.clone());
     }
 
-    let ix = slot_events.push(SlotUpdate {
+    let slot_update_id = slot_events.push(SlotUpdate {
         bid_slot,
         registration_data: next_duty,
         payload_attributes: next_payload_attributes,
         il,
     });
-    adapter.producers.produce(SlotMsg { ix });
+    adapter.producers.produce(SlotMsg { slot_update_id, slot: bid_slot.as_u64() });
 
     chain_head.sent();
 }

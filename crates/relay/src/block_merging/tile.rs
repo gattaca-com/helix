@@ -210,7 +210,7 @@ pub struct BlockMergingTile {
     handshaken: Vec<Token>,
     pongs: Vec<(Token, u64)>,
     rejects: Vec<(Token, RejectV1)>,
-    merged_ixs: Vec<usize>,
+    merged_block_response_ids: Vec<usize>,
     encode_buf: Vec<u8>,
     // Scratch space for `find_unbundled_txs`, reused across calls.
     unbundled_scratch_bundled: Vec<bool>,
@@ -221,8 +221,8 @@ impl Tile<HelixSpine> for BlockMergingTile {
     fn loop_body(&mut self, adapter: &mut flux::spine::SpineAdapter<HelixSpine>) {
         self.poll_sockets();
 
-        for ix in std::mem::take(&mut self.merged_ixs) {
-            adapter.producers.produce(MergedBlockMsg { ix });
+        for merged_block_response_id in std::mem::take(&mut self.merged_block_response_ids) {
+            adapter.producers.produce(MergedBlockMsg { merged_block_response_id });
         }
 
         if self.redial.fired() {
@@ -235,7 +235,9 @@ impl Tile<HelixSpine> for BlockMergingTile {
         }
 
         adapter.consume(|msg: SlotMsg, _| self.on_slot_msg(msg));
-        adapter.consume(|msg: DecodedSubmission, _| self.forward_decoded(msg.ix, None));
+        adapter.consume(|msg: DecodedSubmission, _| {
+            self.forward_decoded(msg.decoded_submission_id, None)
+        });
         adapter.consume(|top_bid: TopBidUpdate, _| self.on_top_bid(top_bid));
     }
 
@@ -360,6 +362,12 @@ fn record_round_trip(slot: &mut SlotState, base_block_hash: B256) {
     }
 }
 
+/// Whether a merged-block simulation failure is attributable to the merge builder, as
+/// opposed to a relay/simulator-side infra hiccup. Builds on `is_demotable()` (the same
+/// logic that decides whether a failed bid-submission simulation demotes its builder) but
+/// additionally excludes internal channel/queue failures, which are never the builder's
+/// fault even though `is_demotable()` -- calibrated for bid-submission demotion -- doesn't
+/// exclude them.
 fn reject_label(code: RejectCode) -> &'static str {
     match code {
         RejectCode::HeadMismatch => "head_mismatch",
@@ -447,7 +455,7 @@ impl BlockMergingTile {
             handshaken: Vec::new(),
             pongs: Vec::new(),
             rejects: Vec::new(),
-            merged_ixs: Vec::new(),
+            merged_block_response_ids: Vec::new(),
             encode_buf: Vec::new(),
             unbundled_scratch_bundled: Vec::new(),
             unbundled_scratch_covered: Vec::new(),
@@ -498,7 +506,9 @@ impl BlockMergingTile {
             });
             for event in self.slot.replay_log.clone() {
                 match event {
-                    ReplayEvent::Forward(ix) => self.forward_decoded(ix, Some(token)),
+                    ReplayEvent::Forward(decoded_submission_id) => {
+                        self.forward_decoded(decoded_submission_id, Some(token))
+                    }
                 }
             }
         }
@@ -521,7 +531,7 @@ impl BlockMergingTile {
             handshaken,
             pongs,
             rejects,
-            merged_ixs,
+            merged_block_response_ids,
             merged_blocks,
             blob_sidecars,
             tx_hash_cache,
@@ -614,8 +624,8 @@ impl BlockMergingTile {
                             unbundled_scratch_covered,
                             max_blobs_per_block,
                         ) {
-                            let ix = merged_blocks.push(response);
-                            merged_ixs.push(ix);
+                            let merged_block_response_id = merged_blocks.push(response);
+                            merged_block_response_ids.push(merged_block_response_id);
                         }
                     }
                     MergingMsgId::RejectV1 => {
@@ -689,7 +699,7 @@ impl BlockMergingTile {
     }
 
     fn on_slot_msg(&mut self, msg: SlotMsg) {
-        let Some(ev) = self.slot_events.get(msg.ix) else { return };
+        let Some(ev) = self.slot_events.get(msg.slot_update_id) else { return };
         let bid_slot = ev.bid_slot.as_u64();
         if bid_slot < self.slot.bid_slot {
             return;
@@ -819,10 +829,10 @@ impl BlockMergingTile {
         }
     }
 
-    /// Forwards the decoded submission at `ix` as a `MergeableBlockV1`, or
+    /// Forwards the decoded submission at `decoded_submission_id` as a `MergeableBlockV1`, or
     /// replays it to `only` on re-handshake. A no-op while block merging is
     /// administratively disabled.
-    fn forward_decoded(&mut self, ix: usize, only: Option<Token>) {
+    fn forward_decoded(&mut self, decoded_submission_id: usize, only: Option<Token>) {
         if !self.block_merging_enabled.load(Ordering::Relaxed) {
             self.stats.skipped_disabled += 1;
             return;
@@ -831,7 +841,7 @@ impl BlockMergingTile {
         if is_replay {
             self.stats.replayed += 1;
         }
-        let Some(data) = self.decoded.get(ix) else { return };
+        let Some(data) = self.decoded.get(decoded_submission_id) else { return };
         let sub = &data.submission_data;
 
         if self.slot.slot_start.is_none() {
@@ -973,7 +983,7 @@ impl BlockMergingTile {
             if msg.allow_appending {
                 self.slot.appendable.insert(block_hash);
             }
-            self.slot.replay_log.push(ReplayEvent::Forward(ix));
+            self.slot.replay_log.push(ReplayEvent::Forward(decoded_submission_id));
         }
 
         let Some(token) = self.token else { return };
@@ -1215,7 +1225,8 @@ mod tests {
         // this submission carries no blobs so it isn't touched.
         signed.blobs_bundle = Arc::new(Default::default());
         let submission_data = SubmissionData {
-            submission_ref: SubmissionRef::Internal,
+            submission_id: Uuid::nil(),
+            submission_ref: SubmissionRef::default(),
             submission: Submission::Full(signed),
             merging_data: Some(BlockMergingDataV2 {
                 allow_appending,
@@ -1255,9 +1266,9 @@ mod tests {
             parent_beacon_block_root: B256::ZERO,
         });
         let block_hash = B256::repeat_byte(7);
-        let ix = tile.decoded.push(test_submission(5, block_hash, true));
+        let decoded_submission_id = tile.decoded.push(test_submission(5, block_hash, true));
 
-        tile.forward_decoded(ix, None);
+        tile.forward_decoded(decoded_submission_id, None);
 
         assert!(tile.slot.appendable.is_empty());
         assert!(tile.slot.replay_log.is_empty());
@@ -1274,9 +1285,9 @@ mod tests {
             parent_beacon_block_root: B256::ZERO,
         });
         let block_hash = B256::repeat_byte(7);
-        let ix = tile.decoded.push(test_submission(5, block_hash, true));
+        let decoded_submission_id = tile.decoded.push(test_submission(5, block_hash, true));
 
-        tile.forward_decoded(ix, None);
+        tile.forward_decoded(decoded_submission_id, None);
 
         assert!(tile.slot.appendable.contains(&block_hash));
         assert_eq!(tile.slot.replay_log.len(), 1);
@@ -1302,6 +1313,7 @@ mod tests {
             builder_pubkey: BlsPublicKeyBytes::default(),
             fee_recipient: Address::ZERO,
             value: U256::ZERO,
+            ..Default::default()
         });
 
         assert!(tile.conn.activated.is_none());
@@ -1327,6 +1339,7 @@ mod tests {
             builder_pubkey: BlsPublicKeyBytes::default(),
             fee_recipient: Address::ZERO,
             value: U256::ZERO,
+            ..Default::default()
         }
     }
 
@@ -1357,8 +1370,8 @@ mod tests {
         tile.on_reject(Token(0), reject(5, RejectCode::StaleSlot));
 
         let block_hash = B256::repeat_byte(1);
-        let ix = tile.decoded.push(test_submission(5, block_hash, true));
-        tile.forward_decoded(ix, None);
+        let decoded_submission_id = tile.decoded.push(test_submission(5, block_hash, true));
+        tile.forward_decoded(decoded_submission_id, None);
 
         assert!(tile.slot.appendable.is_empty(), "nothing should be forwarded");
         assert!(tile.slot.replay_log.is_empty());
@@ -1374,8 +1387,9 @@ mod tests {
         let mut tile = tile_in_slot(5);
         tile.on_reject(Token(0), reject(6, RejectCode::Busy));
 
-        let ix = tile.decoded.push(test_submission(5, B256::repeat_byte(2), true));
-        tile.forward_decoded(ix, None);
+        let decoded_submission_id =
+            tile.decoded.push(test_submission(5, B256::repeat_byte(2), true));
+        tile.forward_decoded(decoded_submission_id, None);
 
         assert!(tile.slot.appendable.is_empty());
         assert_eq!(tile.stats.skipped_builder_ahead, 1);
@@ -1390,8 +1404,8 @@ mod tests {
         tile.on_reject(Token(0), reject(5, RejectCode::InvalidOrder));
 
         let block_hash = B256::repeat_byte(3);
-        let ix = tile.decoded.push(test_submission(5, block_hash, true));
-        tile.forward_decoded(ix, None);
+        let decoded_submission_id = tile.decoded.push(test_submission(5, block_hash, true));
+        tile.forward_decoded(decoded_submission_id, None);
 
         assert!(tile.slot.appendable.contains(&block_hash));
         assert_eq!(tile.stats.skipped_builder_ahead, 0);
@@ -1404,8 +1418,8 @@ mod tests {
         tile.on_reject(Token(1), reject(5, RejectCode::StaleSlot));
 
         let block_hash = B256::repeat_byte(4);
-        let ix = tile.decoded.push(test_submission(5, block_hash, true));
-        tile.forward_decoded(ix, None);
+        let decoded_submission_id = tile.decoded.push(test_submission(5, block_hash, true));
+        tile.forward_decoded(decoded_submission_id, None);
 
         assert!(tile.slot.appendable.contains(&block_hash));
         assert_eq!(tile.stats.skipped_builder_ahead, 0);
@@ -1444,8 +1458,8 @@ mod tests {
 
         let mut data = test_submission(bid_slot, B256::repeat_byte(8), true);
         data.submission_data.submission = Submission::Dehydrated(dehydrated);
-        let ix = tile.decoded.push(data);
-        tile.forward_decoded(ix, None);
+        let decoded_submission_id = tile.decoded.push(data);
+        tile.forward_decoded(decoded_submission_id, None);
 
         assert_eq!(tile.stats.skipped_builder_ahead, 1, "the skip under test must be the reason");
         assert_eq!(tile.stats.skipped_wrong_slot, 0);
@@ -1518,8 +1532,8 @@ mod tests {
         tile.conn.max_orders_per_slot = u32::MAX;
         let block_hash = B256::repeat_byte(4);
 
-        let ix = tile.decoded.push(test_submission(5, block_hash, true));
-        tile.forward_decoded(ix, None);
+        let decoded_submission_id = tile.decoded.push(test_submission(5, block_hash, true));
+        tile.forward_decoded(decoded_submission_id, None);
         assert!(tile.conn.forwarded.contains(&block_hash));
 
         tile.on_reject(
@@ -1528,7 +1542,7 @@ mod tests {
         );
         assert!(!tile.conn.forwarded.contains(&block_hash));
 
-        tile.forward_decoded(ix, None);
+        tile.forward_decoded(decoded_submission_id, None);
         assert!(tile.conn.forwarded.contains(&block_hash));
     }
 
