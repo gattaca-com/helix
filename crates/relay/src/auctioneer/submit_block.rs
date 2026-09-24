@@ -1,6 +1,6 @@
 use std::sync::atomic::Ordering;
 
-use alloy_primitives::B256;
+use alloy_primitives::{B256, U256};
 use flux::{spine::SpineProducers, timing::Nanos};
 use flux_profiler::timed;
 use helix_common::{
@@ -20,10 +20,10 @@ use crate::{
         context::{Context, send_submission_result},
         types::{PayloadEntry, SlotData, SubmissionData},
     },
-    simulator::{SimPriority, SimRequest, ValidationRequest, tile::ValidationResult},
+    simulator::{SimPriority, ValidationRequest, ValidationResult},
     spine::{
         HelixSpineProducers,
-        messages::{BidEvent, BidUpdate, ToSimKind, ToSimMsg},
+        messages::{BidEvent, BidUpdate},
     },
 };
 
@@ -32,7 +32,6 @@ impl<B: BidAdjustor> Context<B> {
     pub(super) fn handle_submission(
         &mut self,
         submission_data: &SubmissionData,
-        decoded_ix: usize,
         slot_data: &SlotData,
         producers: &mut HelixSpineProducers,
     ) {
@@ -48,15 +47,9 @@ impl<B: BidAdjustor> Context<B> {
             match self.validate_submission(submission_data, &builder_info, slot_data) {
                 Ok(v) => v,
                 Err(e) => {
-                    // Both hydration caches must still learn this submission's txs, otherwise
-                    // subsequent submissions referencing them fail: the auctioneer's here, and
-                    // the sim tile's, which never sees a submission it is not asked to simulate.
+                    // The auctioneer's hydration cache must still learn this submission's
+                    // txs, otherwise subsequent submissions referencing them fail.
                     let _ = self.hydrate(submission_data.submission.clone());
-                    self.feed_sim_cache(
-                        decoded_ix,
-                        submission_data.submission.bid_slot(),
-                        producers,
-                    );
                     send_submission_result(
                         producers,
                         &self.future_results,
@@ -69,21 +62,41 @@ impl<B: BidAdjustor> Context<B> {
         record_submission_step("validated", start_val.elapsed());
         trace!("validated");
 
-        let mut submission_data = submission_data.clone();
+        let version = submission_data.version;
+        let is_pessimistic = submission_data.is_pessimistic;
+        let bid_adjustment_data = submission_data.bid_adjustment_data.clone();
+        let mut trace = submission_data.trace;
 
-        let (optimistic_version, is_top_bid) = if self.accept_optimistic.load(Ordering::Relaxed) &&
+        let (submission, maybe_tx_root) = match self.hydrate(submission_data.submission.clone()) {
+            Ok(v) => v,
+            Err(e) => {
+                error!(?e, "hydration failed after pre-check passed");
+                send_submission_result(
+                    producers,
+                    &self.future_results,
+                    submission_ref,
+                    Err(BuilderApiError::InternalError),
+                );
+                return;
+            }
+        };
+
+        let (optimistic_version, is_top_bid) = if self.sims.accept_optimistic() &&
             !self.failsafe_triggered.load(Ordering::Relaxed) &&
-            self.should_process_optimistically(&submission_data, &builder_info, slot_data)
-        {
-            let bid = Bid::from_submission_data(&submission_data);
-            let is_top_bid = self.bid_sorter.sort(bid, &mut submission_data.trace, true, producers);
+            self.should_process_optimistically(
+                is_pessimistic,
+                submission.message.value,
+                &builder_info,
+                slot_data,
+            ) {
+            let bid = Bid::new(version, &submission);
+            let is_top_bid = self.bid_sorter.sort(bid, &mut trace, true, producers);
             (OptimisticVersion::V1, is_top_bid)
         } else {
-            let bid_trace = submission_data.bid_trace();
             let beats_top_bid = self
                 .bid_sorter
-                .top_bid_value(&bid_trace.parent_hash)
-                .is_none_or(|top| bid_trace.value > top);
+                .top_bid_value(&submission.message.parent_hash)
+                .is_none_or(|top| submission.message.value > top);
             (OptimisticVersion::NotOptimistic, beats_top_bid)
         };
 
@@ -102,38 +115,23 @@ impl<B: BidAdjustor> Context<B> {
                 .parent_beacon_block_root
                 .unwrap_or_default(),
             inclusion_list: slot_data.il.clone().unwrap_or_default(),
-            decoded_ix,
-            receive_ns: submission_data.trace.receive_ns.0,
+            submission: submission.clone(),
+            tx_root: maybe_tx_root,
+            version,
+            trace,
+            receive_ns: trace.receive_ns.0,
             submission_ref,
         };
 
-        self.send_to_sim(req, false, producers);
-
-        let (submission, maybe_tx_root) = match self.hydrate(submission_data.submission) {
-            Ok(v) => v,
-            Err(e) => {
-                error!(?e, "hydration failed after pre-check passed");
-                // Optimistic submissions already received Ok(()) above; only non-optimistic
-                // builders are still waiting for a response at this point.
-                if !is_optimistic {
-                    send_submission_result(
-                        producers,
-                        &self.future_results,
-                        submission_ref,
-                        Err(BuilderApiError::InternalError),
-                    );
-                }
-                return;
-            }
-        };
+        self.send_to_sim(req, false);
 
         let entry = PayloadEntry::new_submission(
             submission,
             payload_attributes.withdrawals_root,
             maybe_tx_root,
-            submission_data.bid_adjustment_data,
-            submission_data.version,
-            submission_data.trace,
+            bid_adjustment_data,
+            version,
+            trace,
             payload_attributes.parent_beacon_block_root,
         );
 
@@ -163,7 +161,7 @@ impl<B: BidAdjustor> Context<B> {
                     .observe(start.elapsed().as_micros());
 
                 self.store_data(adjusted_block, sim_request.is_optimistic, producers);
-                self.send_to_sim(sim_request, true, producers);
+                self.send_to_sim(sim_request, true);
             }
         }
     }
@@ -262,35 +260,21 @@ impl<B: BidAdjustor> Context<B> {
         self.payloads.insert(block_hash, entry);
     }
 
-    pub fn feed_sim_cache(
-        &self,
-        decoded_ix: usize,
-        bid_slot: u64,
-        producers: &mut HelixSpineProducers,
-    ) {
-        producers.produce(ToSimMsg { kind: ToSimKind::FeedCache, ix: decoded_ix, bid_slot });
-    }
-
-    pub fn send_to_sim(
-        &mut self,
-        req: ValidationRequest,
-        fast_track: bool,
-        producers: &mut HelixSpineProducers,
-    ) {
-        let ix = self.sim_inbound.push(SimRequest::Validate { req: Box::new(req), fast_track });
-        producers.produce(ToSimMsg { kind: ToSimKind::Request, ix, bid_slot: 0 });
+    pub fn send_to_sim(&mut self, req: ValidationRequest, fast_track: bool) {
+        self.sims.dispatch(req, fast_track);
     }
 
     fn should_process_optimistically(
         &self,
-        submission: &SubmissionData,
+        is_pessimistic: bool,
+        value: U256,
         builder_info: &BuilderInfo,
         slot_data: &SlotData,
     ) -> bool {
-        !submission.is_pessimistic &&
+        !is_pessimistic &&
             !slot_data.registration_data.entry.preferences.disable_optimistic &&
             builder_info.is_optimistic &&
-            submission.bid_trace().value <= builder_info.collateral &&
+            value <= builder_info.collateral &&
             (!slot_data.registration_data.entry.preferences.filtering.is_regional() ||
                 builder_info.can_process_regional_slot_optimistically())
     }

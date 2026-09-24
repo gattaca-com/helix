@@ -1,4 +1,8 @@
-use std::{net::ToSocketAddrs, sync::Arc, task::Poll};
+use std::{
+    net::{SocketAddr, ToSocketAddrs},
+    sync::Arc,
+    task::Poll,
+};
 
 use eventsource_stream::Event;
 use http_body_util::Full;
@@ -30,19 +34,31 @@ impl HttpClient {
         Ok(Self { tls_config })
     }
 
+    /// Blocking DNS lookup. Callers on a hot loop resolve once up front and use `post_to`.
+    pub fn resolve(url: &Url) -> Result<SocketAddr, HttpClientError> {
+        let host = url.host_str().ok_or(HttpClientError::MissingHost)?;
+        let port = url.port_or_known_default().ok_or(HttpClientError::MissingPort)?;
+        (host, port)
+            .to_socket_addrs()?
+            .next()
+            .ok_or_else(|| HttpClientError::DnsError(host.to_string()))
+    }
+
     fn connect(&self, url: &Url) -> Result<(Transport, MioPoll), HttpClientError> {
+        self.connect_to(url, Self::resolve(url)?)
+    }
+
+    fn connect_to(
+        &self,
+        url: &Url,
+        addr: SocketAddr,
+    ) -> Result<(Transport, MioPoll), HttpClientError> {
         let https = match url.scheme() {
             "https" => true,
             "http" => false,
             s => return Err(HttpClientError::UnsupportedScheme(s.to_string())),
         };
         let host = url.host_str().ok_or(HttpClientError::MissingHost)?;
-        let port = url.port_or_known_default().ok_or(HttpClientError::MissingPort)?;
-
-        let addr = (host, port)
-            .to_socket_addrs()?
-            .next()
-            .ok_or_else(|| HttpClientError::DnsError(host.to_string()))?;
         let mut tcp = TcpStream::connect(addr)?;
         let mio = MioPoll::new()?;
         mio.registry().register(&mut tcp, CONN, Interest::READABLE | Interest::WRITABLE)?;
@@ -66,12 +82,12 @@ impl HttpClient {
         req: Request<Full<Bytes>>,
     ) -> Result<PendingResponse, HttpClientError> {
         let (transport, mio) = self.connect(url)?;
+        Ok(Self::pending(transport, mio, req))
+    }
+
+    fn pending(transport: Transport, mio: MioPoll, req: Request<Full<Bytes>>) -> PendingResponse {
         let handshake = Box::pin(http1::handshake::<_, Full<Bytes>>(transport));
-        Ok(PendingResponse::new(
-            State::Handshaking { handshake, req },
-            mio,
-            Events::with_capacity(8),
-        ))
+        PendingResponse::new(State::Handshaking { handshake, req }, mio, Events::with_capacity(8))
     }
 
     pub fn get(&self, url: &Url) -> Result<PendingResponse, HttpClientError> {
@@ -85,6 +101,21 @@ impl HttpClient {
     }
 
     pub fn post(&self, url: &Url, body: Bytes) -> Result<PendingResponse, HttpClientError> {
+        self.send(url, Self::post_request(url, body)?)
+    }
+
+    /// `post` to an address already resolved with `resolve`, so no DNS lookup blocks.
+    pub fn post_to(
+        &self,
+        url: &Url,
+        addr: SocketAddr,
+        body: Bytes,
+    ) -> Result<PendingResponse, HttpClientError> {
+        let (transport, mio) = self.connect_to(url, addr)?;
+        Ok(Self::pending(transport, mio, Self::post_request(url, body)?))
+    }
+
+    fn post_request(url: &Url, body: Bytes) -> Result<Request<Full<Bytes>>, HttpClientError> {
         let host = url.host_str().unwrap_or_default().to_string();
         let path = match url.query() {
             Some(q) => format!("{}?{}", url.path(), q),
@@ -96,7 +127,7 @@ impl HttpClient {
             .header("content-type", "application/json")
             .header("content-length", len.to_string())
             .body(Full::new(body))?;
-        self.send(url, req)
+        Ok(req)
     }
 
     /// Create a reconnecting SSE stream. Call `poll()` once per loop iteration.

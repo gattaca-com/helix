@@ -13,7 +13,7 @@ use crate::{
     decoder::SubmissionDecoderParams,
 };
 
-/// Wire format of `signed_bid_submission` in `SimRequest`.
+/// Wire format of `signed_bid_submission` in simulation requests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
 pub enum SubmissionFormat {
@@ -167,6 +167,20 @@ impl BlockSimError {
 
     pub fn is_demotable(&self) -> bool {
         !self.is_already_known() && !self.is_temporary() && !self.is_too_old()
+    }
+
+    /// Whether a failed merged-block simulation is the merge builder's fault, and so should
+    /// disable block merging, rather than a relay or simulator hiccup. `is_demotable` is
+    /// calibrated for bid submissions and still counts relay-internal failures, which never
+    /// say anything about the merged block.
+    pub fn is_merge_builder_fault(&self) -> bool {
+        self.is_demotable() &&
+            !matches!(
+                self,
+                BlockSimError::SendError |
+                    BlockSimError::SimulationDropped |
+                    BlockSimError::HydrationMiss
+            )
     }
 }
 

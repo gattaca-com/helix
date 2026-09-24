@@ -72,12 +72,12 @@ aws-sdk-s3 = "=1.35.0"
 clickhouse = "0.14.2"
 flate2 = "1.0"
 
-flux = { git = "https://github.com/gattaca-com/flux", rev = "e59fe83be3d31f29b5a149d736bc0c5cb399cbea" }
-flux-network = { package = "flux-network", git = "https://github.com/gattaca-com/flux", rev = "e59fe83be3d31f29b5a149d736bc0c5cb399cbea" }
-flux-profiler = { package = "flux-profiler", git = "https://github.com/gattaca-com/flux", rev = "e59fe83be3d31f29b5a149d736bc0c5cb399cbea" }
-flux-utils = { package = "flux-utils", git = "https://github.com/gattaca-com/flux", rev = "e59fe83be3d31f29b5a149d736bc0c5cb399cbea" }
-type-hash = { git = "https://github.com/gattaca-com/flux", rev = "e59fe83be3d31f29b5a149d736bc0c5cb399cbea" }
-type-hash-derive = { git = "https://github.com/gattaca-com/flux", rev = "e59fe83be3d31f29b5a149d736bc0c5cb399cbea" }
+flux = { git = "https://github.com/gattaca-com/flux", rev = "c3532a59453340ac9c800756b2d155dcd4d63a6d" }
+flux-network = { package = "flux-network", git = "https://github.com/gattaca-com/flux", rev = "c3532a59453340ac9c800756b2d155dcd4d63a6d" }
+flux-profiler = { package = "flux-profiler", git = "https://github.com/gattaca-com/flux", rev = "c3532a59453340ac9c800756b2d155dcd4d63a6d" }
+flux-utils = { package = "flux-utils", git = "https://github.com/gattaca-com/flux", rev = "c3532a59453340ac9c800756b2d155dcd4d63a6d" }
+type-hash = { git = "https://github.com/gattaca-com/flux", rev = "c3532a59453340ac9c800756b2d155dcd4d63a6d" }
+type-hash-derive = { git = "https://github.com/gattaca-com/flux", rev = "c3532a59453340ac9c800756b2d155dcd4d63a6d" }
 
 futures = "0.3"
 futures-util = { version = "0.3", features = ["compat"] }

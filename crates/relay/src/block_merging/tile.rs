@@ -13,15 +13,13 @@ use flux_network::{NetworkDriver, PollEvent, SendBehavior, Token, tcp::TcpTeleme
 use flux_utils::SharedVector;
 use helix_common::{
     BlockMergingTcpConfig,
-    api::builder_api::{InclusionListWithMetadata, TopBidUpdate},
+    api::builder_api::TopBidUpdate,
     chain_info::ChainInfo,
     metrics::{
         MERGE_ACTIVATION, MERGE_BUILDER_LATENCY, MERGE_CONNECTED, MERGE_ENABLED, MERGE_FORWARD,
-        MERGE_ORDERS_FORWARDED, MERGE_RECEIVED, MERGE_REJECT, MERGE_ROUND_TRIP, MERGE_SIM,
+        MERGE_ORDERS_FORWARDED, MERGE_RECEIVED, MERGE_REJECT, MERGE_ROUND_TRIP,
         MERGE_SLOT_APPENDABLE, MERGE_TOP_BID_GAP, MERGE_TXS_SENT,
     },
-    simulator::BlockSimError,
-    utils::alert_discord,
 };
 use helix_tcp_types::merging::{
     MERGING_HEADER_SIZE, MERGING_PROTOCOL_VERSION, MergingFrameHeader, MergingHeaderError,
@@ -40,17 +38,15 @@ use tracing::{debug, error, info, trace, warn};
 use uuid::Uuid;
 
 use crate::{
-    HelixSpine, SimRequest, SimResult, SubmissionDataWithSpan,
+    HelixSpine, SubmissionDataWithSpan,
     block_merging::{
         append_frame, appended_tx_hashes, merged_block_to_response, order_ref_hash, order_to_ref,
         submission_blob_sidecars,
         unbundling::{OrderTxs, find_unbundled_txs},
     },
     housekeeper::SlotUpdate,
-    simulator::{BlockMergeResponse, MergedValidationRequest, tile::MergedSimulationResultInner},
-    spine::messages::{
-        DecodedSubmission, FromSimMsg, MergedBlockMsg, SlotMsg, ToSimKind, ToSimMsg,
-    },
+    simulator::BlockMergeResponse,
+    spine::messages::{DecodedSubmission, MergedBlockMsg, SlotMsg},
 };
 
 const REDIAL_INTERVAL_S: u64 = 2;
@@ -110,12 +106,6 @@ struct SlotState {
     /// went out; cached for handshake replay.
     slot_start: Option<SlotStartV1>,
     fee_recipient: Option<alloy_primitives::Address>,
-    /// Registered gas limit of the current proposer, for merged-block simulation requests.
-    registered_gas_limit: Option<u64>,
-    /// Current proposer's blacklist-filtering preference, for merged-block simulation requests.
-    apply_blacklist: Option<bool>,
-    /// Current inclusion list, for merged-block simulation requests.
-    inclusion_list: Option<InclusionListWithMetadata>,
     /// parent_hash -> parent_beacon_block_root.
     attrs: FxHashMap<B256, B256>,
     /// Appendable block hashes forwarded this slot.
@@ -161,10 +151,6 @@ struct SlotStats {
     merged_stale: usize,
     /// Merged blocks dropped because an appended blob's sidecar wasn't in our cache.
     merged_blob_missing: usize,
-    /// Merged blocks whose simulation was skipped because a required piece of this
-    /// slot's state (beacon parent root, fee recipient, or registered gas limit)
-    /// isn't known yet.
-    merged_slot_data_missing: usize,
     /// Merged blocks dropped because the builder broke an order's atomicity.
     merged_unbundled: usize,
     /// TopBidUpdate messages received for the current bid slot.
@@ -210,8 +196,6 @@ pub struct BlockMergingTile {
     decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
     slot_events: Arc<SharedVector<SlotUpdate>>,
     merged_blocks: Arc<SharedVector<BlockMergeResponse>>,
-    sim_requests: Arc<SharedVector<SimRequest>>,
-    sim_results: Arc<SharedVector<SimResult>>,
     /// Admin-toggled kill switch. The connection itself (dial, handshake,
     /// ping/pong) is unaffected — only an admin can set this back to `true`
     /// (never automatic). While `false`, the tile stops forwarding
@@ -227,7 +211,6 @@ pub struct BlockMergingTile {
     pongs: Vec<(Token, u64)>,
     rejects: Vec<(Token, RejectV1)>,
     merged_ixs: Vec<usize>,
-    merge_sim_ixs: Vec<usize>,
     encode_buf: Vec<u8>,
     // Scratch space for `find_unbundled_txs`, reused across calls.
     unbundled_scratch_bundled: Vec<bool>,
@@ -240,9 +223,6 @@ impl Tile<HelixSpine> for BlockMergingTile {
 
         for ix in std::mem::take(&mut self.merged_ixs) {
             adapter.producers.produce(MergedBlockMsg { ix });
-        }
-        for ix in std::mem::take(&mut self.merge_sim_ixs) {
-            adapter.producers.produce(ToSimMsg { kind: ToSimKind::Request, ix, bid_slot: 0 });
         }
 
         if self.redial.fired() {
@@ -257,7 +237,6 @@ impl Tile<HelixSpine> for BlockMergingTile {
         adapter.consume(|msg: SlotMsg, _| self.on_slot_msg(msg));
         adapter.consume(|msg: DecodedSubmission, _| self.forward_decoded(msg.ix, None));
         adapter.consume(|top_bid: TopBidUpdate, _| self.on_top_bid(top_bid));
-        adapter.consume(|msg: FromSimMsg, _| self.on_merge_sim_result(msg));
     }
 
     fn try_init(&mut self, _adapter: &mut flux::spine::SpineAdapter<HelixSpine>) -> bool {
@@ -381,43 +360,6 @@ fn record_round_trip(slot: &mut SlotState, base_block_hash: B256) {
     }
 }
 
-/// Builds the simulation request for a freshly accepted merged block, resolving
-/// `parent_beacon_block_root`, `proposer_fee_recipient`, and `registered_gas_limit`
-/// from this slot's cached state. `None` if any of them isn't known yet, rather than
-/// silently defaulting: the external validator checks the merge builder's payment tx
-/// against `proposer_fee_recipient` and re-executes with `parent_beacon_block_root`
-/// (written into the EIP-4788 beacon-roots contract), so a zero-defaulted value
-/// produces a genuine validation failure that isn't actually the merge builder's
-/// fault.
-fn merged_validation_request(
-    base_block_hash: B256,
-    parent_hash: B256,
-    slot: &SlotState,
-    merged_block_ix: usize,
-    receive_ns: u64,
-) -> Option<MergedValidationRequest> {
-    let parent_beacon_block_root = *slot.attrs.get(&parent_hash)?;
-    let proposer_fee_recipient = slot.fee_recipient?;
-    let registered_gas_limit = slot.registered_gas_limit?;
-    Some(MergedValidationRequest {
-        merged_block_ix,
-        base_block_hash,
-        slot: slot.bid_slot,
-        parent_beacon_block_root,
-        proposer_fee_recipient,
-        registered_gas_limit,
-        apply_blacklist: slot.apply_blacklist.unwrap_or(true),
-        inclusion_list: slot.inclusion_list.clone().unwrap_or_default(),
-        receive_ns,
-    })
-}
-
-/// Whether a merged-block simulation failure is attributable to the merge builder, as
-/// opposed to a relay/simulator-side infra hiccup. Builds on `is_demotable()` (the same
-/// logic that decides whether a failed bid-submission simulation demotes its builder) but
-/// additionally excludes internal channel/queue failures, which are never the builder's
-/// fault even though `is_demotable()` -- calibrated for bid-submission demotion -- doesn't
-/// exclude them.
 fn reject_label(code: RejectCode) -> &'static str {
     match code {
         RejectCode::HeadMismatch => "head_mismatch",
@@ -433,33 +375,6 @@ fn reject_label(code: RejectCode) -> &'static str {
     }
 }
 
-fn is_merge_builder_attributable(err: &BlockSimError) -> bool {
-    err.is_demotable() &&
-        !matches!(
-            err,
-            BlockSimError::SendError |
-                BlockSimError::SimulationDropped |
-                BlockSimError::HydrationMiss
-        )
-}
-
-/// Decides whether a merged-block simulation result should disable block merging.
-/// Returns the block's hash and the failure reason to report if so.
-fn merge_sim_disable_check(
-    result: &MergedSimulationResultInner,
-    merged_blocks: &SharedVector<BlockMergeResponse>,
-) -> Option<(B256, BlockSimError)> {
-    let Err(err) = &result.result else { return None };
-    if !is_merge_builder_attributable(err) {
-        return None;
-    }
-    let block_hash = merged_blocks
-        .get(result.merged_block_ix)
-        .map(|r| r.execution_payload.block_hash)
-        .unwrap_or_default();
-    Some((block_hash, err.clone()))
-}
-
 impl BlockMergingTile {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -468,8 +383,6 @@ impl BlockMergingTile {
         decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
         slot_events: Arc<SharedVector<SlotUpdate>>,
         merged_blocks: Arc<SharedVector<BlockMergeResponse>>,
-        sim_requests: Arc<SharedVector<SimRequest>>,
-        sim_results: Arc<SharedVector<SimResult>>,
         chain_info: ChainInfo,
         block_merging_enabled: Arc<AtomicBool>,
     ) -> Self {
@@ -528,8 +441,6 @@ impl BlockMergingTile {
             decoded,
             slot_events,
             merged_blocks,
-            sim_requests,
-            sim_results,
             block_merging_enabled,
             to_disconnect: Vec::new(),
             to_register: Vec::new(),
@@ -537,7 +448,6 @@ impl BlockMergingTile {
             pongs: Vec::new(),
             rejects: Vec::new(),
             merged_ixs: Vec::new(),
-            merge_sim_ixs: Vec::new(),
             encode_buf: Vec::new(),
             unbundled_scratch_bundled: Vec::new(),
             unbundled_scratch_covered: Vec::new(),
@@ -613,8 +523,6 @@ impl BlockMergingTile {
             rejects,
             merged_ixs,
             merged_blocks,
-            sim_requests,
-            merge_sim_ixs,
             blob_sidecars,
             tx_hash_cache,
             unbundled_scratch_bundled,
@@ -706,34 +614,8 @@ impl BlockMergingTile {
                             unbundled_scratch_covered,
                             max_blobs_per_block,
                         ) {
-                            let base_block_hash = response.base_block_hash;
-                            let parent_hash = response.execution_payload.parent_hash;
                             let ix = merged_blocks.push(response);
                             merged_ixs.push(ix);
-
-                            match merged_validation_request(
-                                base_block_hash,
-                                parent_hash,
-                                slot,
-                                ix,
-                                Nanos::now().0,
-                            ) {
-                                Some(sim_req) => {
-                                    let sim_ix = sim_requests
-                                        .push(SimRequest::ValidateMerged(Box::new(sim_req)));
-                                    merge_sim_ixs.push(sim_ix);
-                                }
-                                None => {
-                                    stats.merged_slot_data_missing += 1;
-                                    warn!(
-                                        ?token,
-                                        %parent_hash,
-                                        "beacon parent root, fee recipient, or gas limit not \
-                                         yet known for this slot, skipping merged block \
-                                         simulation"
-                                    );
-                                }
-                            }
                         }
                     }
                     MergingMsgId::RejectV1 => {
@@ -826,11 +708,6 @@ impl BlockMergingTile {
         // housekeeper sends incremental updates for the same slot
         if let Some(reg) = &ev.registration_data {
             self.slot.fee_recipient = Some(reg.entry.registration.message.fee_recipient);
-            self.slot.registered_gas_limit = Some(reg.entry.registration.message.gas_limit);
-            self.slot.apply_blacklist = Some(reg.entry.preferences.filtering.is_regional());
-        }
-        if let Some(il) = &ev.il {
-            self.slot.inclusion_list = Some(il.clone());
         }
         for attr in &ev.payload_attributes {
             self.slot
@@ -893,7 +770,6 @@ impl BlockMergingTile {
             merged_blocks = stats.merged_blocks,
             merged_stale = stats.merged_stale,
             merged_blob_missing = stats.merged_blob_missing,
-            merged_slot_data_missing = stats.merged_slot_data_missing,
             merged_unbundled = stats.merged_unbundled,
             appendable_blocks = self.slot.appendable.len(),
             hydration_txs = self.hydration_cache.tx_count(),
@@ -931,9 +807,6 @@ impl BlockMergingTile {
         }
         MERGE_TXS_SENT.with_label_values(&["bytes"]).inc_by(stats.tx_bytes_sent as u64);
         MERGE_TXS_SENT.with_label_values(&["reference"]).inc_by(stats.tx_refs_sent as u64);
-        MERGE_SIM
-            .with_label_values(&["skipped_slot_data"])
-            .inc_by(stats.merged_slot_data_missing as u64);
         MERGE_SLOT_APPENDABLE.observe(self.slot.appendable.len() as f64);
     }
 
@@ -1192,43 +1065,6 @@ impl BlockMergingTile {
         });
     }
 
-    /// Ignores results for anything other than this tile's own `ValidateMerged` requests
-    /// (the `from_sim` queue also carries the auctioneer's ordinary submission-validation
-    /// results). On a builder-attributable failure, disables block merging -- this alone
-    /// triggers the existing force-disconnect gating in `poll_sockets`/`dial_endpoint`, so
-    /// no separate disconnect call is needed here. Nothing re-enables the flag except the
-    /// admin API.
-    fn on_merge_sim_result(&mut self, msg: FromSimMsg) {
-        let Some(result) = self.sim_results.get(msg.ix) else {
-            error!(?msg, "sim outbound payload not found");
-            return;
-        };
-        let SimResult::ValidateMerged((_, Some(inner))) = result.as_ref() else { return };
-        match &inner.result {
-            Ok(()) => MERGE_SIM.with_label_values(&["ok"]).inc(),
-            Err(err) if is_merge_builder_attributable(err) => {
-                MERGE_SIM.with_label_values(&["failed_builder"]).inc()
-            }
-            Err(_) => MERGE_SIM.with_label_values(&["failed_infra"]).inc(),
-        }
-        let Some((block_hash, err)) = merge_sim_disable_check(inner, &self.merged_blocks) else {
-            return;
-        };
-
-        self.block_merging_enabled.store(false, Ordering::Relaxed);
-        error!(
-            %block_hash,
-            %err,
-            endpoint = %self.endpoint.addr,
-            "merged block simulation failed, disabling block merging"
-        );
-        alert_discord(&format!(
-            "CRITICAL: block merging disabled -- merged block simulation failed for block \
-             {block_hash:#x} from merge builder {} ({err})",
-            self.endpoint.addr
-        ));
-    }
-
     /// Median of unsorted samples; 0 if empty.
     fn median(samples: &mut [u64]) -> u64 {
         if samples.is_empty() {
@@ -1270,38 +1106,13 @@ mod tests {
     };
     use helix_tcp_types::{MergeType, merging::builder_to_relay::MergeTraceV1};
     use helix_types::{
-        BlobsBundle, BlockMergingDataV2, BlsPublicKeyBytes, BuilderInclusionResult, Compression,
-        ExecutionPayload, ExecutionRequests, ForkName, MergedBlockTrace, SignedBidSubmission,
-        SubmissionVersion, TestRandom, TestRandomSeed, dehydrated_submission_with_txs_for_test,
-        full_tx_for_test,
+        BlockMergingDataV2, BlsPublicKeyBytes, BuilderInclusionResult, Compression, ForkName,
+        SignedBidSubmission, SubmissionVersion, TestRandomSeed,
+        dehydrated_submission_with_txs_for_test, full_tx_for_test,
     };
-    use rand::{SeedableRng, rngs::SmallRng};
 
     use super::*;
     use crate::{SubmissionRef, auctioneer::SubmissionData};
-
-    fn merge_response(
-        payload: ExecutionPayload,
-        proposer_value: U256,
-        blobs: Vec<BlobWithMetadata>,
-    ) -> BlockMergeResponse {
-        let mut blobs_bundle = BlobsBundle::default();
-        for blob in blobs {
-            blobs_bundle.push_blob(blob.commitment, &blob.proofs, blob.blob, 9).unwrap();
-        }
-        BlockMergeResponse {
-            base_block_hash: payload.parent_hash,
-            execution_payload: payload,
-            execution_requests: ExecutionRequests::default(),
-            blobs_bundle,
-            proposer_value,
-            base_builder_revenue: U256::ZERO,
-            relay_revenue: U256::ZERO,
-            builder_inclusions: Default::default(),
-            base_payment_tx_index: 0,
-            trace: MergedBlockTrace::default(),
-        }
-    }
 
     fn inclusion(txs: Vec<B256>) -> BuilderInclusionResult {
         BuilderInclusionResult { contribution: U256::ZERO, revenue: U256::ZERO, txs }
@@ -1380,8 +1191,6 @@ mod tests {
         BlockMergingTile::new(
             config,
             "test-relay".to_string(),
-            Arc::new(SharedVector::default()),
-            Arc::new(SharedVector::default()),
             Arc::new(SharedVector::default()),
             Arc::new(SharedVector::default()),
             Arc::new(SharedVector::default()),
@@ -1870,152 +1679,5 @@ mod tests {
 
         assert!(result.is_some());
         assert_eq!(stats.merged_blocks, 1);
-    }
-
-    #[test]
-    fn merge_sim_disable_check_table() {
-        let mut rng = SmallRng::seed_from_u64(3);
-        let payload = ExecutionPayload::random_for_test(&mut rng);
-        let merged_blocks = SharedVector::<BlockMergeResponse>::with_capacity(4);
-        let ix = merged_blocks.push(merge_response(payload, U256::from(1u64), vec![]));
-
-        let cases: &[(BlockSimError, bool)] = &[
-            (BlockSimError::RpcError, false),
-            (BlockSimError::Timeout, false),
-            (BlockSimError::NoSimulatorAvailable, false),
-            (BlockSimError::SendError, false),
-            (BlockSimError::SimulationDropped, false),
-            (BlockSimError::HydrationMiss, false),
-            (BlockSimError::BlockValidationFailed("unknown ancestor".to_owned()), false),
-            (BlockSimError::BlockValidationFailed("parent block not found".to_owned()), false),
-            (BlockSimError::BlockValidationFailed("block requires a reorg".to_owned()), false),
-            (BlockSimError::BlockValidationFailed("block already known".to_owned()), false),
-            (
-                BlockSimError::BlockValidationFailed(
-                    "block is too old, outside validation window".to_owned(),
-                ),
-                false,
-            ),
-            (
-                BlockSimError::BlockValidationFailed("some other validation failure".to_owned()),
-                true,
-            ),
-            (
-                BlockSimError::InvalidTxRoot { got: B256::ZERO, expected: B256::repeat_byte(1) },
-                true,
-            ),
-        ];
-
-        for (err, expect_disable) in cases {
-            let inner =
-                MergedSimulationResultInner { merged_block_ix: ix, result: Err(err.clone()) };
-            let outcome = merge_sim_disable_check(&inner, &merged_blocks);
-            assert_eq!(outcome.is_some(), *expect_disable, "case: {err:?}");
-        }
-    }
-
-    #[test]
-    fn merge_sim_disable_check_reports_block_hash() {
-        let mut rng = SmallRng::seed_from_u64(4);
-        let payload = ExecutionPayload::random_for_test(&mut rng);
-        let merged_blocks = SharedVector::<BlockMergeResponse>::with_capacity(4);
-        let ix = merged_blocks.push(merge_response(payload.clone(), U256::from(1u64), vec![]));
-
-        let inner = MergedSimulationResultInner {
-            merged_block_ix: ix,
-            result: Err(BlockSimError::InvalidTxRoot {
-                got: B256::ZERO,
-                expected: B256::repeat_byte(1),
-            }),
-        };
-        let (block_hash, err) = merge_sim_disable_check(&inner, &merged_blocks).unwrap();
-        assert_eq!(block_hash, payload.block_hash);
-        assert!(matches!(err, BlockSimError::InvalidTxRoot { .. }));
-    }
-
-    #[test]
-    fn merge_sim_disable_check_none_on_success() {
-        let merged_blocks = SharedVector::<BlockMergeResponse>::with_capacity(4);
-        let ix = merged_blocks.push(merge_response(
-            ExecutionPayload::random_for_test(&mut SmallRng::seed_from_u64(5)),
-            U256::ZERO,
-            vec![],
-        ));
-        let inner = MergedSimulationResultInner { merged_block_ix: ix, result: Ok(()) };
-        assert!(merge_sim_disable_check(&inner, &merged_blocks).is_none());
-    }
-
-    /// RELAY-FR: when this slot has no cached beacon payload attributes for the merged
-    /// block's own parent hash, the request must be skipped rather than silently carry
-    /// a zero `parent_beacon_block_root`. EIP-4788 writes this value into the
-    /// beacon-roots contract during execution, so sending zero when the real root is
-    /// non-zero produces a genuine state-root mismatch downstream ("invalid merkle
-    /// root").
-    #[test]
-    fn merged_validation_request_none_when_attrs_missing() {
-        let slot = SlotState { bid_slot: 5, ..Default::default() }; // attrs empty
-        let base_block_hash = B256::repeat_byte(1);
-        let parent_hash = B256::repeat_byte(2);
-
-        let req = merged_validation_request(base_block_hash, parent_hash, &slot, 0, 0);
-
-        assert!(req.is_none(), "must not silently send a zero beacon root when it's unknown");
-    }
-
-    /// RELAY-FR: `proposer_fee_recipient` must not silently default to the zero
-    /// address when this slot's registered fee recipient isn't known yet -- the
-    /// external validator checks the merge builder's payment tx against it, so a
-    /// zero-defaulted recipient produces "could not verify proposer payment" for a
-    /// perfectly valid block.
-    #[test]
-    fn merged_validation_request_none_when_fee_recipient_missing() {
-        let mut slot = SlotState { bid_slot: 5, ..Default::default() };
-        let base_block_hash = B256::repeat_byte(1);
-        let parent_hash = B256::repeat_byte(2);
-        slot.attrs.insert(parent_hash, B256::repeat_byte(3));
-        slot.registered_gas_limit = Some(30_000_000);
-        // fee_recipient left unset
-
-        let req = merged_validation_request(base_block_hash, parent_hash, &slot, 0, 0);
-
-        assert!(req.is_none(), "must not silently send a zero fee recipient when it's unknown");
-    }
-
-    /// Same silent-default hazard as the fee recipient: a gas limit of zero would
-    /// simulate a merged block against the wrong registered limit for this proposer.
-    #[test]
-    fn merged_validation_request_none_when_gas_limit_missing() {
-        let mut slot = SlotState { bid_slot: 5, ..Default::default() };
-        let base_block_hash = B256::repeat_byte(1);
-        let parent_hash = B256::repeat_byte(2);
-        slot.attrs.insert(parent_hash, B256::repeat_byte(3));
-        slot.fee_recipient = Some(alloy_primitives::Address::repeat_byte(4));
-        // registered_gas_limit left unset
-
-        let req = merged_validation_request(base_block_hash, parent_hash, &slot, 0, 0);
-
-        assert!(req.is_none(), "must not silently send a zero gas limit when it's unknown");
-    }
-
-    #[test]
-    fn merged_validation_request_uses_known_slot_fields() {
-        let mut slot = SlotState { bid_slot: 5, ..Default::default() };
-        let base_block_hash = B256::repeat_byte(1);
-        let parent_hash = B256::repeat_byte(2);
-        let expected_root = B256::repeat_byte(3);
-        let expected_fee_recipient = alloy_primitives::Address::repeat_byte(4);
-        slot.attrs.insert(parent_hash, expected_root);
-        slot.fee_recipient = Some(expected_fee_recipient);
-        slot.registered_gas_limit = Some(30_000_000);
-
-        let req = merged_validation_request(base_block_hash, parent_hash, &slot, 7, 42)
-            .expect("known fields resolve");
-
-        assert_eq!(req.parent_beacon_block_root, expected_root);
-        assert_eq!(req.proposer_fee_recipient, expected_fee_recipient);
-        assert_eq!(req.registered_gas_limit, 30_000_000);
-        assert_eq!(req.base_block_hash, base_block_hash);
-        assert_eq!(req.merged_block_ix, 7);
-        assert_eq!(req.receive_ns, 42);
     }
 }

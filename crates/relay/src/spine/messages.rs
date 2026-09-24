@@ -91,35 +91,6 @@ pub struct DecodedSubmission {
     pub ix: usize,
 }
 
-/// Auctioneer → SimulatorTile: spine signal for a new sim/merge request or slot transition.
-#[derive(Debug, Clone, Copy)]
-#[repr(C)]
-pub struct ToSimMsg {
-    pub kind: ToSimKind,
-    /// Index into `SharedVector<SimInboundPayload>` (unused for `NewSlot`).
-    pub ix: usize,
-    /// Slot number; only meaningful for `NewSlot`.
-    pub bid_slot: u64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C)]
-pub enum ToSimKind {
-    /// SimRequest or MergeRequest stored at `ix`.
-    Request,
-    NewSlot,
-    /// Feed the sim tile's hydration cache from the `decoded` entry at `ix`, for a
-    /// submission that is never simulated. `ix` indexes `decoded`, not `SimInboundPayload`.
-    FeedCache,
-}
-
-/// SimulatorTile → Auctioneer: index into `SharedVector<SimOutboundPayload>`.
-#[derive(Debug, Clone, Copy)]
-#[repr(C)]
-pub struct FromSimMsg {
-    pub ix: usize,
-}
-
 /// BlockMergingTile → Auctioneer: index into `SharedVector<BlockMergeResponse>`.
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
