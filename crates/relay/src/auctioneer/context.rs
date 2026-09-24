@@ -4,7 +4,8 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::Instant,
+    task::Poll,
+    time::{Duration, Instant},
 };
 
 use alloy_primitives::{B256, U256};
@@ -18,12 +19,13 @@ use helix_common::{
     BuilderInfo, RelayConfig,
     alerts::{AlertManager, format_demotion_alert},
     chain_info::ChainInfo,
+    http::client::{HttpClient, PendingResponse},
     is_local_dev,
     local_cache::LocalCache,
     metrics::{CACHE_SIZE, MERGE_SIM, SimulatorMetrics},
     simulator::BlockSimError,
     spawn_tracked,
-    utils::{alert_discord, utcnow_ms},
+    utils::{discord_payload, utcnow_ms},
 };
 use helix_database::handle::DbHandle;
 use helix_operator::OperatorPubSub;
@@ -79,6 +81,8 @@ pub struct Context<B: BidAdjustor> {
     pub failsafe_triggered: Arc<AtomicBool>,
     pub alert_manager: Arc<AlertManager>,
     pub operator_api: Option<Arc<OperatorPubSub>>,
+    http: HttpClient,
+    discord_alert: Option<PendingResponse>,
 }
 
 const EXPECTED_PAYLOADS_PER_SLOT: usize = 5000;
@@ -149,6 +153,8 @@ impl<B: BidAdjustor> Context<B> {
             failsafe_triggered,
             alert_manager,
             operator_api,
+            http: HttpClient::new().expect("http client"),
+            discord_alert: None,
         }
     }
 
@@ -315,7 +321,27 @@ impl<B: BidAdjustor> Context<B> {
             "CRITICAL: block merging disabled -- merged block simulation failed for block \
              {block_hash:#x} from merge builder {endpoint} ({err})"
         );
-        std::thread::spawn(move || alert_discord(&message));
+        let Some((webhook_url, content)) = discord_payload(&message) else { return };
+        let body = serde_json::to_vec(&content).expect("string map serializes");
+        self.discord_alert = self
+            .http
+            .post(webhook_url, body.into())
+            .map(|req| req.with_timeout(Duration::from_secs(10)))
+            .inspect_err(|err| error!(%err, "failed to send discord alert"))
+            .ok();
+    }
+
+    pub fn poll_discord_alert(&mut self) {
+        let Some(req) = self.discord_alert.as_mut() else { return };
+        let Poll::Ready(res) = req.poll_bytes() else { return };
+        match res {
+            Ok((status, _)) if (200..300).contains(&status) => {}
+            Ok((status, body)) => {
+                error!(status, body = %String::from_utf8_lossy(&body), "discord alert rejected")
+            }
+            Err(err) => error!(%err, "failed to send discord alert"),
+        }
+        self.discord_alert = None;
     }
 
     pub fn handle_merge_response(&mut self, response: &BlockMergeResponse) {

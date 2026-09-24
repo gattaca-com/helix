@@ -155,11 +155,11 @@ pub fn init_panic_hook(
     }));
 }
 
-pub fn alert_discord(message: &str) {
+pub fn discord_payload(message: &str) -> Option<(&'static Url, FxHashMap<&'static str, String>)> {
     let Some(webhook_url) = DISCORD_WEBHOOK_URL.get() else {
         error!("discord hook not set!");
         error!("{message}");
-        return;
+        return None;
     };
 
     let app_id = APP_ID.get().map(String::as_str).unwrap_or("unknown");
@@ -167,7 +167,13 @@ pub fn alert_discord(message: &str) {
     let max_len = 1850.min(message.len());
     let msg = format!("Instance: {app_id}\n{}", &message[..max_len]);
 
-    let content = FxHashMap::from_iter([("content", msg)]);
+    Some((webhook_url, FxHashMap::from_iter([("content", msg)])))
+}
+
+pub fn alert_discord(message: &str) {
+    let Some((webhook_url, content)) = discord_payload(message) else {
+        return;
+    };
 
     if let Err(err) =
         reqwest::blocking::Client::new().post(webhook_url.clone()).json(&content).send()

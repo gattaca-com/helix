@@ -126,6 +126,8 @@ impl<B: BidAdjustor> Tile<HelixSpine> for Auctioneer<B> {
             self.state.step(event, &mut self.ctx, &mut self.tel, &mut adapter.producers);
         }
 
+        self.ctx.poll_discord_alert();
+
         for done in self.ctx.sims.poll() {
             match done.result {
                 SimResult::Validate(result) => {
