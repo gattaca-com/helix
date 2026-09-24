@@ -133,18 +133,16 @@ impl SimulatorClient {
         Self::ssz_request(to_send.body(body), is_top_bid, endpoint, body_len).await
     }
 
-    /// Decodes a `200` body from the ethrex validator. An empty body is a
-    /// legacy endpoint (Reth) that predates `SszValidationResponse`: the
-    /// empty struct still encodes to bytes, so empty unambiguously means
-    /// legacy success with no transaction detail. A corrupt non-empty body is
-    /// the validator misbehaving, not the builder: report it as infra error.
-    pub fn decode_ssz_validation_response(body: &[u8]) -> Result<Vec<TxDetail>, BlockSimError> {
+    /// Transaction detail from a `200` body. The status alone means the block
+    /// is valid; the body is telemetry only, so an unreadable body loses the
+    /// detail but never fails the simulation. Reth answers with an empty body.
+    fn validation_tx_details(body: &[u8]) -> Vec<TxDetail> {
         if body.is_empty() {
-            return Ok(Vec::new());
+            return Vec::new();
         }
-        SszValidationResponse::from_ssz_bytes(body).map(|r| r.txs).map_err(|err| {
+        SszValidationResponse::from_ssz_bytes(body).map(|r| r.txs).unwrap_or_else(|err| {
             error!(?err, "corrupt ssz validation response");
-            BlockSimError::RpcError
+            Vec::new()
         })
     }
 
@@ -170,10 +168,10 @@ impl SimulatorClient {
 
         match res.status().as_u16() {
             200 => match res.bytes().await {
-                Ok(body) => Self::decode_ssz_validation_response(&body),
+                Ok(body) => Ok(Self::validation_tx_details(&body)),
                 Err(err) => {
                     error!(%err, "failed reading ssz simulation body");
-                    Err(BlockSimError::RpcError)
+                    Ok(Vec::new())
                 }
             },
             400 => Err(BlockSimError::BlockValidationFailed(res.text().await.unwrap_or_default())),
