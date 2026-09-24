@@ -20,7 +20,7 @@ use crate::{
         context::{Context, send_submission_result},
         types::{PayloadEntry, SlotData, SubmissionData},
     },
-    simulator::{SimPriority, ValidationRequest, pool::ValidationResult},
+    simulator::{SimPriority, ValidationRequest, ValidationResult},
     spine::{
         HelixSpineProducers,
         messages::{BidEvent, BidUpdate},

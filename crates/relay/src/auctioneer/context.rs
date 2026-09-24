@@ -44,8 +44,7 @@ use crate::{
         types::{PayloadEntry, PendingPayload, SlotData, SubmissionRef},
     },
     simulator::{
-        MergedValidationRequest,
-        pool::{MergedSimulationResultInner, SimPool, ValidationResult},
+        MergedSimulationResultInner, MergedValidationRequest, Simulators, ValidationResult,
     },
     spine::{HelixSpineProducers, messages::SubmissionResultWithRef},
 };
@@ -75,7 +74,7 @@ pub struct Context<B: BidAdjustor> {
     pub decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
     pub future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
     pub auctioneer_handle: AuctioneerHandle,
-    pub sims: SimPool,
+    pub sims: Simulators,
     pub block_merging_enabled: Arc<AtomicBool>,
     pub failsafe_triggered: Arc<AtomicBool>,
     pub alert_manager: Arc<AlertManager>,
@@ -91,7 +90,7 @@ impl<B: BidAdjustor> Context<B> {
     pub fn new(
         chain_info: ChainInfo,
         config: RelayConfig,
-        sims: SimPool,
+        sims: Simulators,
         block_merging_enabled: Arc<AtomicBool>,
         failsafe_triggered: Arc<AtomicBool>,
         db: DbHandle,

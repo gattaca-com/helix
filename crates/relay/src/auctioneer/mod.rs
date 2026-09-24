@@ -46,7 +46,7 @@ use crate::{
     api::{FutureBidSubmissionResult, builder::error::BuilderApiError, proposer::ProposerApiError},
     auctioneer::{context::merged_validation_request, types::PendingPayload},
     housekeeper::SlotUpdate,
-    simulator::{SimResult, pool::SimPool},
+    simulator::{SimResult, Simulators},
     spine::{
         HelixSpineProducers,
         messages::{DecodedSubmission, MergedBlockMsg, SlotMsg},
@@ -85,7 +85,7 @@ impl<B: BidAdjustor> Auctioneer<B> {
         future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
         decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
         auctioneer_handle: AuctioneerHandle,
-        sims: SimPool,
+        sims: Simulators,
         block_merging_enabled: Arc<AtomicBool>,
         failsafe_triggered: Arc<AtomicBool>,
         slot_events: Arc<SharedVector<SlotUpdate>>,

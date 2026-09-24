@@ -31,7 +31,7 @@ use helix_relay::{
     BlockMergingTile, BroadcastPayloadParams, DataGatherer, DbHandle, DecoderTile,
     DefaultBidAdjustor, FutureBidSubmissionResult, GossipedMessage, HelixSpine, HelixSpineConfig,
     HousekeeperTile, Lane, NewTcpBidSubmission, RegWorkerHandle, RegistrationTile,
-    RelayNetworkManager, SimPool, SlotUpdate, SubmissionDataWithSpan, TopBidTile, UdpTopBidTile,
+    RelayNetworkManager, Simulators, SlotUpdate, SubmissionDataWithSpan, TopBidTile, UdpTopBidTile,
     spawn_tokio_monitoring, start_admin_service, start_api_service, start_db_service,
 };
 use helix_types::BlsKeypair;
@@ -361,7 +361,7 @@ async fn run(
 
             let merged_blocks = Arc::new(SharedVector::<BlockMergeResponse>::with_capacity(1024));
 
-            let sims = SimPool::new(config.simulators.clone());
+            let sims = Simulators::new(config.simulators.clone());
 
             if config.block_merging_config.is_enabled &&
                 let Some(merging_tcp) = config.block_merging_config.tcp.clone()

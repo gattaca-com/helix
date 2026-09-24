@@ -35,7 +35,7 @@ use crate::{
     },
     auctioneer::MergeResult,
     gossip::BroadcastPayloadParams,
-    simulator::pool::ValidationResult,
+    simulator::ValidationResult,
 };
 
 #[derive(Clone, Copy, Debug)]
