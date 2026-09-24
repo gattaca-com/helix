@@ -153,14 +153,12 @@ impl S3Data {
         }
     }
 
-    /// Sends due retries until one is refused.
+    /// Sends due retries until one is refused. Backoff grows with each
+    /// attempt, so the queue is not ordered by `not_before`: any entry may be due.
     fn pump(&mut self) {
-        loop {
-            let due = matches!(self.retry.front(), Some(up) if up.not_before <= Instant::now());
-            if !due {
-                break;
-            }
-            let up = self.retry.pop_front().expect("just peeked");
+        let now = Instant::now();
+        while let Some(pos) = self.retry.iter().position(|up| up.not_before <= now) {
+            let up = self.retry.remove(pos).expect("position is in bounds");
             self.retry_bytes -= up.body.len();
             match self.s3.put_object(&self.bucket, &up.key, up.body.clone()) {
                 Ok(id) => {
