@@ -136,7 +136,6 @@ impl DecoderTile {
                 } else {
                     &dcache_payload[new_bid.payload_offset..]
                 };
-                let sent_at = msg.tracking_timestamp().publish_t();
                 DecoderTile::handle_block_submission(
                     &self.cache,
                     &self.chain_info,
@@ -146,7 +145,6 @@ impl DecoderTile {
                     payload,
                     &mut self.buffer.borrow_mut(),
                     new_bid.trace,
-                    sent_at,
                     new_bid.expected_pubkey(),
                 )
             },
@@ -154,12 +152,10 @@ impl DecoderTile {
                 DCacheRead::Ok((msg, result)) => {
                     let new_bid = msg.bid();
                     self.record_decode_result(&result);
-                    let sent_at = msg.tracking_timestamp().publish_t();
                     Self::handle_result(
                         &self.decoded,
                         &self.future_results,
                         result,
-                        sent_at,
                         new_bid.submission_ref,
                         producers,
                     );
@@ -181,7 +177,6 @@ impl DecoderTile {
                         );
                     };
 
-                    let sent_at = msg.tracking_timestamp().publish_t();
                     let result = DecoderTile::handle_block_submission(
                         &self.cache,
                         &self.chain_info,
@@ -191,7 +186,6 @@ impl DecoderTile {
                         &payload,
                         &mut self.buffer.borrow_mut(),
                         new_bid.trace,
-                        sent_at,
                         new_bid.expected_pubkey(),
                     );
                     self.record_decode_result(&result);
@@ -199,7 +193,6 @@ impl DecoderTile {
                         &self.decoded,
                         &self.future_results,
                         result,
-                        sent_at,
                         new_bid.submission_ref,
                         producers,
                     );
@@ -299,11 +292,9 @@ impl DecoderTile {
         payload: &[u8],
         buffer: &mut Vec<u8>,
         mut trace: SubmissionTrace,
-        sent_at: Nanos,
         expected_pubkey: Option<&BlsPublicKeyBytes>,
     ) -> Result<(SubmissionData, tracing::Span), BuilderApiError> {
         tracing::Span::current().record("id", tracing::field::display(header.id));
-        record_submission_step("worker_recv", sent_at.elapsed());
         record_submission_step_ns("recv_worker", trace.receive_ns.0, utcnow_ns());
         trace!("received by worker");
         let (
@@ -465,17 +456,12 @@ impl DecoderTile {
         decoded: &SharedVector<SubmissionDataWithSpan>,
         future_results: &Arc<SharedVector<FutureBidSubmissionResult>>,
         result: Result<(SubmissionData, tracing::Span), BuilderApiError>,
-        sent_at: Nanos,
         submission_ref: SubmissionRef,
         producers: &mut HelixSpineProducers,
     ) {
         match result {
             Ok((submission, span)) => {
-                let ix = decoded.push(SubmissionDataWithSpan {
-                    submission_data: submission,
-                    span,
-                    sent_at,
-                });
+                let ix = decoded.push(SubmissionDataWithSpan { submission_data: submission, span });
                 producers.produce(DecodedSubmission { ix });
             }
             Err(e) => {

@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use dashmap::DashMap;
 use futures::{FutureExt, future::Shared};
-use helix_common::{GetPayloadTrace, api::proposer_api::GetHeaderParams, chain_info::ChainInfo};
+use helix_common::{
+    GetPayloadTrace, api::proposer_api::GetHeaderParams, chain_info::ChainInfo, utils::utcnow_ns,
+};
 use helix_types::{
     BlsPublicKey, BlsPublicKeyBytes, ExecPayload, GetPayloadResponse, SigError,
     SignedBlindedBeaconBlock,
@@ -71,7 +73,7 @@ impl AuctioneerHandle {
         api_version: ProposerApiVersion,
         proposer_pubkey: BlsPublicKeyBytes,
         blinded_block: SignedBlindedBeaconBlock,
-        trace: GetPayloadTrace,
+        mut trace: GetPayloadTrace,
     ) -> Result<GetPayloadKind, ChannelFull> {
         let sig_key: SignatureKey = blinded_block.signature().serialize();
 
@@ -95,6 +97,10 @@ impl AuctioneerHandle {
                         .map_err(|_| ProposerApiError::InvalidFork)
                         .map(|p| p.block_hash().0)
                 })();
+
+                if blinded_block_hash.is_ok() {
+                    trace.signature_validated = utcnow_ns();
+                }
 
                 match blinded_block_hash {
                     Ok(block_hash) => {

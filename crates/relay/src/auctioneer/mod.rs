@@ -29,7 +29,7 @@ use helix_common::{
     metrics::{
         MERGE_SIM, STATE_TRANSITION_COUNT, STATE_TRANSITION_LATENCY, WORKER_QUEUE_LEN, WORKER_UTIL,
     },
-    record_submission_step, record_submission_step_ns,
+    record_submission_step_ns,
     utils::utcnow_ns,
 };
 use helix_database::handle::DbHandle;
@@ -398,7 +398,6 @@ impl State {
 
             // submission
             (State::Sorting(slot_data), Event::Submission { submission_data }) => {
-                record_submission_step("loop_recv", submission_data.sent_at.elapsed());
                 let loop_ns = utcnow_ns();
                 let trace = &submission_data.submission_data.trace;
                 record_submission_step_ns("recv_loop", trace.receive_ns.0, loop_ns);
