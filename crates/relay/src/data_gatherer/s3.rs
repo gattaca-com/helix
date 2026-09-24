@@ -27,6 +27,8 @@ const RETRY_BASE: Duration = Duration::from_millis(100);
 /// Retained retry bodies past this shed the oldest first.
 const MAX_RETRY_BYTES: usize = 256 * 1024 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// Least gap between endpoint lookups triggered by connection failures.
+const RERESOLVE_INTERVAL: Duration = Duration::from_secs(10);
 
 struct InflightUpload {
     key: String,
@@ -44,7 +46,10 @@ struct RetryUpload {
 
 pub struct S3Data {
     s3: S3,
-    bucket: String,
+    config: S3Config,
+    /// Address the client is connected to; the endpoint's DNS rotates.
+    addr: SocketAddr,
+    resolved_at: Instant,
     /// Keyed by request so a failure can name the object it lost. The body
     /// is kept for a retryable failure.
     in_flight: FxHashMap<RequestId, InflightUpload>,
@@ -55,28 +60,17 @@ pub struct S3Data {
 
 impl S3Data {
     pub fn new(config: &S3Config, net: &mut TcpNetworkCore) -> Self {
-        let access_key_id = expect_env_var(ENV_ACCESS_KEY_ID);
-        let secret_access_key = expect_env_var(ENV_SECRET_ACCESS_KEY);
-
-        let addr = Self::resolve(&config.endpoint);
-        let host = config.endpoint.rsplit_once(':').map_or(config.endpoint.as_str(), |(h, _)| h);
-        let mut s3 = if config.tls {
-            S3::new_tls(addr, host, CONNECTIONS)
-        } else {
-            S3::new(addr, CONNECTIONS)
-        }
-        .with_region(&config.region)
-        .with_credentials(&access_key_id, &secret_access_key)
-        .with_http(|http| {
-            http.with_max_body_bytes(MAX_BODY_BYTES)
-                .with_max_queued_bytes(MAX_QUEUED_BYTES)
-                .with_request_timeout(REQUEST_TIMEOUT.into())
+        let addr = Self::resolve(&config.endpoint).unwrap_or_else(|| {
+            panic!("s3 endpoint `{}` is not a host:port with an IPv4 address", config.endpoint)
         });
+        let mut s3 = Self::client(config, addr);
         s3.connect(net);
 
         Self {
             s3,
-            bucket: config.bucket.clone(),
+            config: config.clone(),
+            addr,
+            resolved_at: Instant::now(),
             in_flight: FxHashMap::default(),
             retry: VecDeque::new(),
             retry_bytes: 0,
@@ -84,14 +78,47 @@ impl S3Data {
         }
     }
 
-    // ponytail: resolved once, so a rotated endpoint address needs a restart. Re-resolve on a
-    // run of connection failures if that ever bites.
-    fn resolve(endpoint: &str) -> SocketAddr {
-        endpoint
-            .to_socket_addrs()
-            .unwrap_or_else(|err| panic!("s3 endpoint `{endpoint}` is not host:port: {err}"))
-            .find(SocketAddr::is_ipv4)
-            .unwrap_or_else(|| panic!("s3 endpoint `{endpoint}` resolved to no IPv4 address"))
+    fn client(config: &S3Config, addr: SocketAddr) -> S3 {
+        let access_key_id = expect_env_var(ENV_ACCESS_KEY_ID);
+        let secret_access_key = expect_env_var(ENV_SECRET_ACCESS_KEY);
+        let host = config.endpoint.rsplit_once(':').map_or(config.endpoint.as_str(), |(h, _)| h);
+        if config.tls { S3::new_tls(addr, host, CONNECTIONS) } else { S3::new(addr, CONNECTIONS) }
+            .with_region(&config.region)
+            .with_credentials(&access_key_id, &secret_access_key)
+            .with_http(|http| {
+                http.with_max_body_bytes(MAX_BODY_BYTES)
+                    .with_max_queued_bytes(MAX_QUEUED_BYTES)
+                    .with_request_timeout(REQUEST_TIMEOUT.into())
+            })
+    }
+
+    fn resolve(endpoint: &str) -> Option<SocketAddr> {
+        endpoint.to_socket_addrs().ok()?.find(SocketAddr::is_ipv4)
+    }
+
+    /// Moves to the endpoint's current address after connection failures.
+    /// Closing the old client drops its in-flight requests without outcomes,
+    /// so their retained bodies are queued for another attempt.
+    fn follow_endpoint(&mut self, net: &mut TcpNetworkCore) {
+        if self.resolved_at.elapsed() < RERESOLVE_INTERVAL {
+            return;
+        }
+        self.resolved_at = Instant::now();
+        let Some(addr) = Self::resolve(&self.config.endpoint) else {
+            tracing::warn!(endpoint = %self.config.endpoint, "s3 endpoint did not resolve");
+            return;
+        };
+        if addr == self.addr {
+            return;
+        }
+        tracing::info!(old = %self.addr, new = %addr, "s3 endpoint address changed, reconnecting");
+        self.addr = addr;
+        let mut s3 = Self::client(&self.config, addr);
+        s3.connect(net);
+        std::mem::replace(&mut self.s3, s3).close(net);
+        for (_, up) in std::mem::take(&mut self.in_flight) {
+            self.requeue(up.key, up.body, up.attempts);
+        }
     }
 
     /// Failures since the last call. Drained once per slot by the stats log.
@@ -116,7 +143,7 @@ impl S3Data {
         body.extend_from_slice(header);
         body.extend_from_slice(payload);
 
-        match self.s3.put_object(&self.bucket, &key, body.clone()) {
+        match self.s3.put_object(&self.config.bucket, &key, body.clone()) {
             Ok(id) => {
                 self.in_flight.insert(id, InflightUpload { key, body, attempts: 1 });
             }
@@ -160,7 +187,7 @@ impl S3Data {
         while let Some(pos) = self.retry.iter().position(|up| up.not_before <= now) {
             let up = self.retry.remove(pos).expect("position is in bounds");
             self.retry_bytes -= up.body.len();
-            match self.s3.put_object(&self.bucket, &up.key, up.body.clone()) {
+            match self.s3.put_object(&self.config.bucket, &up.key, up.body.clone()) {
                 Ok(id) => {
                     self.in_flight.insert(id, InflightUpload {
                         key: up.key,
@@ -188,12 +215,14 @@ impl S3Data {
         // holds the client.
         let mut requeues = Vec::new();
         let mut worked = false;
+        let mut unreachable = false;
         {
             let Self { s3, in_flight, failures, .. } = self;
             s3.drive(net, |id, result| {
                 worked = true;
                 let Some(up) = in_flight.remove(&id) else { return };
                 let Err(err) = result else { return };
+                unreachable |= matches!(err, Error::Disconnected | Error::TimedOut);
                 if Self::is_retryable(&err) && up.attempts < MAX_ATTEMPTS {
                     requeues.push((up.key, up.body, up.attempts));
                     return;
@@ -215,6 +244,9 @@ impl S3Data {
         }
         for (key, body, attempts) in requeues {
             self.requeue(key, body, attempts);
+        }
+        if unreachable {
+            self.follow_endpoint(net);
         }
         worked
     }
