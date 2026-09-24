@@ -6,6 +6,8 @@
 mod tile;
 mod unbundling;
 
+use std::sync::Arc;
+
 use alloy_consensus::{Bytes48, Transaction as _, TxEnvelope};
 use alloy_primitives::{Address, B256};
 use alloy_rlp::Decodable;
@@ -146,9 +148,9 @@ fn merged_block_to_response(
         execution_payload.transactions.len().checked_sub(appended_order_txs + 2)?;
     Some(BlockMergeResponse {
         base_block_hash: m.base_block_hash,
-        execution_payload,
-        execution_requests: requests_from_v4(m.execution_requests)?,
-        blobs_bundle,
+        execution_payload: Arc::new(execution_payload),
+        execution_requests: Arc::new(requests_from_v4(m.execution_requests)?),
+        blobs_bundle: Arc::new(blobs_bundle),
         proposer_value: m.proposer_value,
         base_builder_revenue: m.base_builder_revenue,
         relay_revenue: m.relay_revenue,

@@ -1,7 +1,4 @@
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 use alloy_primitives::{Address, B256, U256};
 use flux_profiler::timed;
@@ -244,13 +241,13 @@ impl BlockMerger {
         let withdrawals_root = response.execution_payload.withdrawals_root();
 
         let payload_and_blobs = PayloadAndBlobs {
-            execution_payload: Arc::new(response.execution_payload),
-            blobs_bundle: Arc::new(response.blobs_bundle),
+            execution_payload: response.execution_payload,
+            blobs_bundle: response.blobs_bundle,
         };
 
         let bid_data = PayloadBidData {
             withdrawals_root,
-            execution_requests: Arc::new(response.execution_requests),
+            execution_requests: response.execution_requests,
             value: response.proposer_value,
             tx_root: None,
             builder_pubkey,

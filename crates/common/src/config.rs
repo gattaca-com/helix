@@ -129,7 +129,6 @@ impl RelayConfig {
                 tcp_bid_submissions_tile: 2,
                 decoder: vec![4],
                 decoder_tcp_only: vec![],
-                simulator: 5,
                 top_bid: 1,
                 udp_top_bid: Some(1),
                 data_gatherer: 3,
@@ -195,8 +194,6 @@ pub struct CoresConfig {
     pub decoder: Vec<usize>,
     #[serde(default)]
     pub decoder_tcp_only: Vec<usize>,
-    #[serde(default)]
-    pub simulator: usize,
     #[serde(default)]
     pub top_bid: usize,
     /// Required when `udp_top_bid_enabled`

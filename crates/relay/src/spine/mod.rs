@@ -20,14 +20,6 @@ pub struct HelixSpine {
     #[queue(size(2usize.pow(16)))]
     pub decoded: SpineQueue<messages::DecodedSubmission>,
 
-    /// Auctioneer → SimulatorTile.
-    #[queue(size(2usize.pow(16)))]
-    pub to_sim: SpineQueue<messages::ToSimMsg>,
-
-    /// SimulatorTile → Auctioneer.
-    #[queue(size(2usize.pow(16)))]
-    pub from_sim: SpineQueue<messages::FromSimMsg>,
-
     /// BlockMergingTile → Auctioneer.
     #[queue(size(2usize.pow(10)))]
     pub merged_block: SpineQueue<messages::MergedBlockMsg>,
