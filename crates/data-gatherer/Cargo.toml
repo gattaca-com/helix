@@ -1,0 +1,28 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "helix-data-gatherer"
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "data-gatherer"
+path = "src/main.rs"
+
+[dependencies]
+alloy-primitives.workspace = true
+flux.workspace = true
+flux-clickhouse.workspace = true
+flux-gather.workspace = true
+flux-network.workspace = true
+flux-s3.workspace = true
+flux-utils.workspace = true
+helix-common.workspace = true
+helix-relay.workspace = true
+helix-telemetry.workspace = true
+helix-types.workspace = true
+rustc-hash.workspace = true
+serde.workspace = true
+tikv-jemallocator.workspace = true
+tracing.workspace = true

@@ -6,6 +6,7 @@ use std::{
 use axum::response::{IntoResponse, Response};
 use flate2::read::GzDecoder;
 use flux_profiler::timed;
+use flux_versioned_types::ByteStable;
 use helix_types::{
     BidAdjustmentData, BlockMergingData, BlockMergingDataV2, Compression, DehydratedBidSubmission,
     DehydratedBidSubmissionFulu, DehydratedBidSubmissionFuluV1,
@@ -20,11 +21,12 @@ use http::{
     HeaderMap, HeaderValue, StatusCode,
     header::{ACCEPT, CONTENT_TYPE},
 };
-use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use ssz::Decode;
 use ssz_derive::{Decode, Encode};
 use strum::{AsRefStr, EnumString};
 use tracing::{error, trace};
+use type_hash_derive::TypeHash;
 use zstd::{
     stream::read::Decoder as ZstdDecoder,
     zstd_safe::{CONTENTSIZE_ERROR, CONTENTSIZE_UNKNOWN, get_frame_content_size},
@@ -105,8 +107,11 @@ impl SubmissionType {
 }
 
 #[repr(u8)]
-#[derive(Clone, Copy, Debug)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TypeHash, ByteStable,
+)]
 pub enum Encoding {
+    #[default]
     Json = 0,
     Ssz = 1,
 }

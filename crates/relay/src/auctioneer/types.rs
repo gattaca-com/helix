@@ -1,7 +1,9 @@
 use std::{ops::Deref, sync::Arc, time::Instant};
 
 use alloy_primitives::{B256, U256};
+use flux::type_hash_derive::type_hash_lock;
 use flux_utils::ArrayStr;
+use flux_versioned_types::{versioned_enum, versioned_struct};
 use helix_common::{
     GetPayloadTrace, PayloadAttributesUpdate, SubmissionTrace,
     api::{
@@ -38,39 +40,61 @@ use crate::{
     simulator::ValidationResult,
 };
 
-#[derive(Clone, Copy, Debug)]
-#[repr(C)]
-pub enum SubmissionRef {
-    Http(usize),
-    // `token` is a `flux_network::Token` (mio::Token) stored as its inner usize:
-    // mio::Token has no repr, so keeping it here would make this type FFI-unsafe
-    // for the spine's extern "C" queue functions.
-    Tcp { id: Uuid, token: usize, seq_num: u32 },
-    Internal,
+versioned_enum!(SubmissionRefKind =>
+    #[derive(Default, Eq)]
+    #[type_hash_lock(hash = 1422469567283149399)]
+    SubmissionRefKindV1 {
+        Http,
+        Tcp,
+        #[default]
+        Internal,
+    }
+);
+
+versioned_struct!(SubmissionRef =>
+    #[derive(Default, Eq)]
+    #[type_hash_lock(hash = 8988068418347201577)]
+    SubmissionRefV1 {
+        pub kind: SubmissionRefKind,
+        pub _pad: [u8; 3],
+        pub seq_num: u32,
+        /// `future_result_id` for `Http`, connection token for `Tcp`.
+        pub id: usize,
+    }
+);
+
+impl SubmissionRef {
+    pub fn http(future_result_id: usize) -> Self {
+        Self { kind: SubmissionRefKind::Http, id: future_result_id, ..Default::default() }
+    }
+
+    pub fn tcp(token: usize, seq_num: u32) -> Self {
+        Self { kind: SubmissionRefKind::Tcp, id: token, seq_num, ..Default::default() }
+    }
 }
 
 pub type GetHeaderResult = Result<PayloadEntry, ProposerApiError>;
 pub type GetPayloadResult = Result<GetPayloadResultData, ProposerApiError>;
 
-#[derive(Debug, Clone, Copy)]
-#[repr(C)]
-pub struct InternalBidSubmissionHeader {
-    pub id: Uuid,
-    // `Option<u32>`/`Option<ArrayStr<128>>` would make this type FFI-unsafe for
-    // the spine's extern "C" queue functions (Option has no guaranteed layout
-    // for non-niche inner types), so absence is tracked out of band here.
-    pub sequence_number: u32,
-    pub has_sequence_number: bool,
-    pub merge_type: MergeType,
-    pub flags: BidSubmissionFlags,
-    pub encoding: Encoding,
-    pub compression: Compression,
-    /// Empty when no API key was provided.
-    pub api_key: ArrayStr<128>,
-}
+versioned_struct!(InternalBidSubmissionHeader =>
+    #[derive(Default)]
+    #[type_hash_lock(hash = 15636987773094025926)]
+    InternalBidSubmissionHeaderV1 {
+        pub submission_id: Uuid,
+        pub sequence_number: u32,
+        pub has_sequence_number: bool,
+        pub merge_type: MergeType,
+        pub flags: BidSubmissionFlags,
+        pub encoding: Encoding,
+        pub compression: Compression,
+        _pad: [u8; 7],
+        /// Empty when no API key was provided.
+        pub api_key: ArrayStr<128>,
+    }
+);
 
 impl InternalBidSubmissionHeader {
-    pub fn from_http_headers(request_id: Uuid, headers: http::header::HeaderMap) -> Self {
+    pub fn from_http_headers(submission_id: Uuid, headers: http::header::HeaderMap) -> Self {
         let mut flags = BidSubmissionFlags::default();
         if matches!(headers.get(HEADER_WITH_ADJUSTMENTS), Some(header) if header == HeaderValue::from_static("true"))
         {
@@ -121,7 +145,7 @@ impl InternalBidSubmissionHeader {
             .unwrap_or_default();
 
         Self {
-            id: request_id,
+            submission_id,
             sequence_number,
             has_sequence_number,
             merge_type,
@@ -129,6 +153,7 @@ impl InternalBidSubmissionHeader {
             encoding,
             compression,
             api_key,
+            ..Default::default()
         }
     }
 
@@ -152,9 +177,9 @@ impl InternalBidSubmissionHeader {
         }
     }
 
-    pub fn from_tcp_header(request_id: Uuid, header: BidSubmissionHeader) -> Self {
+    pub fn from_tcp_header(submission_id: Uuid, header: BidSubmissionHeader) -> Self {
         Self {
-            id: request_id,
+            submission_id,
             sequence_number: header.sequence_number,
             has_sequence_number: true,
             merge_type: header.merge_type,
@@ -162,12 +187,13 @@ impl InternalBidSubmissionHeader {
             encoding: Encoding::Ssz,
             compression: header.compression(),
             api_key: ArrayStr::default(),
+            ..Default::default()
         }
     }
 
     pub fn to_bytes(self) -> SerialisedHeader {
         let mut buf = [0u8; Self::MAX_SERIALISED_LEN];
-        buf[0..16].copy_from_slice(self.id.as_bytes());
+        buf[0..16].copy_from_slice(self.submission_id.as_bytes());
         buf[16] = self.has_sequence_number as u8;
         buf[17..21].copy_from_slice(&self.sequence_number.to_le_bytes());
         buf[21] = self.merge_type as u8;
@@ -186,8 +212,8 @@ impl InternalBidSubmissionHeader {
         SerialisedHeader { buf, len }
     }
 
-    // 16 (id) + 1 (seq flag) + 4 (seq value) + 1 (merge_type) + 1 (flags) + 1 (encoding) + 1
-    // (compression) + 1 (key len) + 128 (api_key bytes)
+    // 16 (submission_id) + 1 (seq flag) + 4 (seq value) + 1 (merge_type) + 1 (flags) + 1 (encoding)
+    // + 1 (compression) + 1 (key len) + 128 (api_key bytes)
     pub const MAX_SERIALISED_LEN: usize = 154;
 }
 
@@ -212,6 +238,9 @@ pub struct GetPayloadResultData {
 
 #[derive(Clone, Debug)]
 pub struct SubmissionData {
+    /// Ingress id from `InternalBidSubmissionHeader`. Joins sim telemetry to
+    /// the stored submission.
+    pub submission_id: Uuid,
     pub submission_ref: SubmissionRef,
     pub submission: Submission,
     pub merging_data: Option<BlockMergingDataV2>,

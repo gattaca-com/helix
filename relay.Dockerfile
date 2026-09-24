@@ -14,10 +14,10 @@ RUN cargo chef prepare --recipe-path recipe.json
 FROM chef AS builder
 COPY --from=planner /app/recipe.json recipe.json
 COPY crates/vendored ./crates/vendored
-RUN cargo chef cook --profile release-prod --recipe-path recipe.json -p helix-relay --bin helix-relay
+RUN cargo chef cook --profile release-prod --recipe-path recipe.json -p helix-relay -p helix-data-gatherer
 
 COPY . .
-RUN cargo build --profile release-prod -p helix-relay --bin helix-relay
+RUN cargo build --profile release-prod -p helix-relay --bin helix-relay -p helix-data-gatherer --bin data-gatherer
 
 FROM debian:stable-slim AS runtime
 WORKDIR /app
@@ -27,5 +27,7 @@ RUN apt-get update && apt-get install -y \
   rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/target/release-prod/helix-relay ./
+COPY --from=builder /app/target/release-prod/data-gatherer ./
+COPY relay-entrypoint.sh ./
 
-ENTRYPOINT ["/app/helix-relay"]
+ENTRYPOINT ["/app/relay-entrypoint.sh"]

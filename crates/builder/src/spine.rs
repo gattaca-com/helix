@@ -1,4 +1,8 @@
-use flux::{communication::ShmemData, spine::SpineQueue, spine_derive::from_spine, tile::TileInfo};
+use flux::{
+    communication::ShmemData, spine::SpineQueue, spine_derive::from_spine, tile::TileInfo,
+    type_hash_derive::type_hash_lock,
+};
+use flux_versioned_types::versioned_struct;
 
 // Minimal flux spine: the builder's only tile is the merging TCP server, and
 // all cross-thread traffic is crossbeam channels. The spine still provides
@@ -13,9 +17,10 @@ pub struct BuilderSpine {
     pub unused: SpineQueue<Heartbeat>,
 }
 
-/// Placeholder message; never produced.
-#[derive(Debug, Clone, Copy)]
-#[repr(C)]
-pub struct Heartbeat {
-    pub nonce: u64,
-}
+versioned_struct!(Heartbeat =>
+    /// Placeholder message; never produced.
+    #[type_hash_lock(hash = 10473874028190775778)]
+    HeartbeatV1 {
+        pub nonce: u64,
+    }
+);

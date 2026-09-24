@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use alloy_primitives::Bytes;
 use clap::Parser;
-use helix_common::{config::ClickhouseConfig, utils::install_default_crypto_provider};
+use helix_common::utils::install_default_crypto_provider;
 use reth_chain_state::CanonStateSubscriptions;
 use reth_ethereum::{
     cli::{chainspec::EthereumChainSpecParser, interface::Cli},
@@ -72,7 +72,9 @@ fn main() {
                         let user =
                             args.clickhouse_user.clone().unwrap_or_else(|| "default".to_string());
                         let sink = Arc::new(TxSimSink::new(
-                            &ClickhouseConfig { url, database, user },
+                            &url,
+                            &database,
+                            &user,
                             &ctx.node().task_executor,
                         ));
                         validation_api = validation_api.with_tx_sink(sink);

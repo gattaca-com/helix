@@ -36,7 +36,7 @@ struct SlotEventPrinter {
 impl Tile<HelixSpine> for SlotEventPrinter {
     fn loop_body(&mut self, adapter: &mut flux::spine::SpineAdapter<HelixSpine>) {
         adapter.consume(|msg: SlotMsg, _producers| {
-            let Some(ev) = self.slot_events.get(msg.ix) else { return };
+            let Some(ev) = self.slot_events.get(msg.slot_update_id) else { return };
             let ts = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()

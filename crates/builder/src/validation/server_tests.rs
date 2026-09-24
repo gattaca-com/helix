@@ -1,15 +1,16 @@
 use std::sync::Arc;
 
-use alloy_primitives::{Address, B256, U256};
+use alloy_primitives::{Address, B256, U256, keccak256};
 use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
 use helix_common::{
-    api::builder_api::MAX_PAYLOAD_LENGTH, blacklist::DisallowListPayload,
-    simulator::SszMergedValidationRequest,
+    api::builder_api::MAX_PAYLOAD_LENGTH,
+    blacklist::DisallowListPayload,
+    simulator::{SszMergedValidationRequest, SszValidationResponse, TxDetail},
 };
-use ssz::Encode;
+use ssz::{Decode, Encode};
 use tower::ServiceExt;
 
 use crate::{
@@ -20,13 +21,18 @@ use crate::{
     },
 };
 
-async fn post(fixture: &Fixture, route: &str, body: Vec<u8>) -> (StatusCode, String) {
+async fn post_raw(fixture: &Fixture, route: &str, body: Vec<u8>) -> (StatusCode, Vec<u8>) {
     let response = router(fixture.validator(), 4)
         .oneshot(Request::post(route).body(Body::from(body)).unwrap())
         .await
         .unwrap();
     let status = response.status();
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    (status, bytes.to_vec())
+}
+
+async fn post(fixture: &Fixture, route: &str, body: Vec<u8>) -> (StatusCode, String) {
+    let (status, bytes) = post_raw(fixture, route, body).await;
     (status, String::from_utf8_lossy(&bytes).to_string())
 }
 
@@ -61,6 +67,79 @@ async fn a_valid_submission_is_accepted() {
     let (status, body) = post(&fixture, "/validate", request.as_ssz_bytes()).await;
 
     assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+/// One block covers every shape: a creation (no recipient), a tip-only
+/// payment, a direct transfer to the coinbase, and the builder's own payout,
+/// where the coinbase spends and its payment saturates to zero.
+#[tokio::test]
+async fn a_valid_submission_reports_each_transaction() {
+    let fixture = Fixture::new().await;
+    let coinbase = fixture.signers[0].address();
+    let deployer = &fixture.signers[1];
+    let direct = &fixture.signers[2];
+    let recipient = Address::repeat_byte(0x66);
+    let txs = vec![
+        fixture.signed_create(deployer, 0),
+        signed_transfer(
+            deployer,
+            fixture.chain_id,
+            1,
+            recipient,
+            U256::from(GWEI),
+            100 * GWEI,
+            2 * GWEI,
+        ),
+        signed_transfer(direct, fixture.chain_id, 0, coinbase, U256::from(3 * GWEI), 100 * GWEI, 0),
+        signed_transfer(
+            &fixture.signers[0],
+            fixture.chain_id,
+            0,
+            fixture.proposer,
+            U256::from(ETH / 2),
+            100 * GWEI,
+            0,
+        ),
+    ];
+    let hashes: Vec<B256> = txs.iter().map(keccak256).collect();
+    let built =
+        fixture.build_block(fixture.genesis_hash, fixture.genesis_timestamp + 12, txs, Vec::new());
+    let request = fixture.ssz_request(&built, true);
+
+    let (status, body) = post_raw(&fixture, "/validate", request.as_ssz_bytes()).await;
+
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    let response = SszValidationResponse::from_ssz_bytes(&body).unwrap();
+    assert_eq!(response.txs, vec![
+        TxDetail {
+            hash: hashes[0],
+            sender: deployer.address(),
+            nonce: 0,
+            to: None,
+            builder_payment: U256::ZERO,
+        },
+        TxDetail {
+            hash: hashes[1],
+            sender: deployer.address(),
+            nonce: 1,
+            to: Some(recipient),
+            builder_payment: U256::from(21_000 * 2 * GWEI),
+        },
+        TxDetail {
+            hash: hashes[2],
+            sender: direct.address(),
+            nonce: 0,
+            to: Some(coinbase),
+            builder_payment: U256::from(3 * GWEI),
+        },
+        TxDetail {
+            hash: hashes[3],
+            sender: coinbase,
+            nonce: 0,
+            to: Some(fixture.proposer),
+            builder_payment: U256::ZERO,
+        },
+    ]);
 }
 
 #[tokio::test]
@@ -104,6 +183,7 @@ async fn the_merged_route_accepts_a_split_payment() {
             0,
         ),
     ];
+    let hashes: Vec<B256> = txs.iter().map(keccak256).collect();
     let built =
         fixture.build_block(fixture.genesis_hash, fixture.genesis_timestamp + 12, txs, Vec::new());
     let mut submission = fixture.submission(&built);
@@ -118,9 +198,12 @@ async fn the_merged_route_accepts_a_split_payment() {
         base_payment_tx_index: 1,
     };
 
-    let (status, body) = post(&fixture, "/validate_merged", request.as_ssz_bytes()).await;
+    let (status, body) = post_raw(&fixture, "/validate_merged", request.as_ssz_bytes()).await;
 
-    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    let response = SszValidationResponse::from_ssz_bytes(&body).unwrap();
+    let reported: Vec<B256> = response.txs.iter().map(|tx| tx.hash).collect();
+    assert_eq!(reported, hashes);
 }
 
 /// The request's `apply_blacklist` carries the proposer's filtering preference,

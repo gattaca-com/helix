@@ -1,7 +1,6 @@
-use std::{cell::RefCell, sync::Arc};
+use std::{borrow::Borrow, cell::RefCell, sync::Arc};
 
 use alloy_primitives::B256;
-use bytes::Bytes;
 use flux::{
     spine::{DCacheRead, SpineDCacheConsumer, SpineProducers},
     tile::Tile,
@@ -24,6 +23,7 @@ use helix_types::{
 };
 use rustc_hash::FxHashMap;
 use tracing::{info, trace, warn};
+use uuid::Uuid;
 
 use crate::{
     HelixSpine,
@@ -53,7 +53,6 @@ pub struct DecoderTile {
     config: RelayConfig,
     decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
     future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
-    http_submissions: Arc<SharedVector<Bytes>>,
     buffer: RefCell<Vec<u8>>,
     core: usize,
     slot_events: Arc<SharedVector<SlotUpdate>>,
@@ -68,19 +67,9 @@ pub enum Lane {
     TcpOnly,
 }
 
-pub trait SubmissionMsg: 'static + Copy {
-    fn bid(&self) -> &NewBidSubmission;
-}
-
-impl SubmissionMsg for NewBidSubmission {
-    fn bid(&self) -> &NewBidSubmission {
-        self
-    }
-}
-
-impl SubmissionMsg for NewTcpBidSubmission {
-    fn bid(&self) -> &NewBidSubmission {
-        &self.0
+impl Borrow<NewBidSubmission> for NewTcpBidSubmission {
+    fn borrow(&self) -> &NewBidSubmission {
+        &self.inner
     }
 }
 
@@ -120,22 +109,13 @@ impl Tile<HelixSpine> for DecoderTile {
 impl DecoderTile {
     fn consume<T>(&mut self, adapter: &mut flux::spine::SpineAdapter<HelixSpine>)
     where
-        T: SubmissionMsg,
+        T: Borrow<NewBidSubmission> + Copy + 'static,
         <HelixSpine as flux::spine::FluxSpine>::Consumers: AsMut<SpineDCacheConsumer<T>>,
     {
         adapter.consume_with_dcache_collaborative_internal_message(
             |msg: &InternalMessage<T>, dcache_payload, _| {
-                let new_bid = msg.bid();
-                // dcache bypass: the dcache slot can be mutated between publish and
-                // consume, read the stable staged copy when one is present.
-                let bytes;
-                let payload = if let Some(b) = self.http_submissions.get(new_bid.http_submission_ix)
-                {
-                    bytes = b;
-                    &bytes[new_bid.payload_offset..]
-                } else {
-                    &dcache_payload[new_bid.payload_offset..]
-                };
+                let new_bid: &NewBidSubmission = (**msg).borrow();
+                let payload = &dcache_payload[new_bid.payload_offset..];
                 DecoderTile::handle_block_submission(
                     &self.cache,
                     &self.chain_info,
@@ -148,57 +128,30 @@ impl DecoderTile {
                     new_bid.expected_pubkey(),
                 )
             },
-            |read, producers| match read {
+            |res, producers| match res {
                 DCacheRead::Ok((msg, result)) => {
-                    let new_bid = msg.bid();
+                    let new_bid: &NewBidSubmission = (*msg).borrow();
                     self.record_decode_result(&result);
                     Self::handle_result(
                         &self.decoded,
                         &self.future_results,
                         result,
+                        new_bid.header.submission_id,
                         new_bid.submission_ref,
                         producers,
                     );
                 }
-                DCacheRead::NoRef(msg) => {
-                    let new_bid = msg.bid();
-                    let Some(payload) = self.http_submissions.get(new_bid.http_submission_ix)
-                    else {
-                        tracing::error!(
-                            "failed to find the payload for bid submission with id = {}",
-                            new_bid.header.id
-                        );
-                        self.record_decode_result(&Err(BuilderApiError::InternalError));
-                        return send_submission_result(
-                            producers,
-                            &self.future_results,
-                            new_bid.submission_ref,
-                            Err(BuilderApiError::InternalError),
-                        );
-                    };
-
-                    let result = DecoderTile::handle_block_submission(
-                        &self.cache,
-                        &self.chain_info,
-                        &self.config,
-                        &new_bid.submission_ref,
-                        &new_bid.header,
-                        &payload,
-                        &mut self.buffer.borrow_mut(),
-                        new_bid.trace,
-                        new_bid.expected_pubkey(),
-                    );
-                    self.record_decode_result(&result);
-                    Self::handle_result(
-                        &self.decoded,
+                DCacheRead::NoRef(msg) | DCacheRead::Lost(msg) => {
+                    let new_bid: &NewBidSubmission = (*msg).borrow();
+                    warn!(id = %new_bid.header.submission_id, "bid submission payload lost");
+                    self.record_decode_result(&Err(BuilderApiError::InternalError));
+                    send_submission_result(
+                        producers,
                         &self.future_results,
-                        result,
+                        new_bid.header.submission_id,
                         new_bid.submission_ref,
-                        producers,
+                        Err(BuilderApiError::InternalError),
                     );
-                }
-                DCacheRead::Lost(msg) => {
-                    warn!(id = %msg.bid().header.id, "bid submission payload lost");
                 }
                 DCacheRead::SpedPast => {}
             },
@@ -212,7 +165,6 @@ impl DecoderTile {
         config: RelayConfig,
         future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
         decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
-        http_submissions: Arc<SharedVector<Bytes>>,
         slot_events: Arc<SharedVector<SlotUpdate>>,
         core: usize,
         lane: Lane,
@@ -223,7 +175,6 @@ impl DecoderTile {
             config,
             decoded,
             future_results,
-            http_submissions,
             buffer: RefCell::new(Vec::with_capacity(MAX_PAYLOAD_LENGTH)),
             core,
             slot_events,
@@ -234,7 +185,7 @@ impl DecoderTile {
     }
 
     fn on_slot_msg(&mut self, msg: SlotMsg) {
-        let Some(ev) = self.slot_events.get(msg.ix) else { return };
+        let Some(ev) = self.slot_events.get(msg.slot_update_id) else { return };
         let bid_slot = ev.bid_slot.as_u64();
         if bid_slot <= self.bid_slot {
             return;
@@ -294,7 +245,7 @@ impl DecoderTile {
         mut trace: SubmissionTrace,
         expected_pubkey: Option<&BlsPublicKeyBytes>,
     ) -> Result<(SubmissionData, tracing::Span), BuilderApiError> {
-        tracing::Span::current().record("id", tracing::field::display(header.id));
+        tracing::Span::current().record("id", tracing::field::display(header.submission_id));
         record_submission_step_ns("recv_worker", trace.receive_ns.0, utcnow_ns());
         trace!("received by worker");
         let (
@@ -345,6 +296,7 @@ impl DecoderTile {
         };
 
         let submission_data = SubmissionData {
+            submission_id: header.submission_id,
             submission_ref: *submission_ref,
             submission,
             version,
@@ -456,16 +408,35 @@ impl DecoderTile {
         decoded: &SharedVector<SubmissionDataWithSpan>,
         future_results: &Arc<SharedVector<FutureBidSubmissionResult>>,
         result: Result<(SubmissionData, tracing::Span), BuilderApiError>,
+        submission_id: Uuid,
         submission_ref: SubmissionRef,
         producers: &mut HelixSpineProducers,
     ) {
         match result {
             Ok((submission, span)) => {
-                let ix = decoded.push(SubmissionDataWithSpan { submission_data: submission, span });
-                producers.produce(DecodedSubmission { ix });
+                let decoded_msg = DecodedSubmission {
+                    decoded_submission_id: 0,
+                    submission_id: submission.submission_id,
+                    block_hash: *submission.block_hash(),
+                    builder_pubkey: *submission.builder_pubkey(),
+                    slot: submission.bid_slot(),
+                    is_dehydrated: submission.decoder_params.is_dehydrated,
+                    receive_ns: submission.trace.receive_ns,
+                    read_body_ns: submission.trace.read_body_ns,
+                    ..Default::default()
+                };
+                let decoded_submission_id =
+                    decoded.push(SubmissionDataWithSpan { submission_data: submission, span });
+                producers.produce(DecodedSubmission { decoded_submission_id, ..decoded_msg });
             }
             Err(e) => {
-                send_submission_result(producers, future_results, submission_ref, Err(e));
+                send_submission_result(
+                    producers,
+                    future_results,
+                    submission_id,
+                    submission_ref,
+                    Err(e),
+                );
             }
         }
     }

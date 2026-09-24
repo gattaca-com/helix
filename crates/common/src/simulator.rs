@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use alloy_primitives::B256;
+use alloy_primitives::{Address, B256, U256};
+use helix_telemetry::SimError;
 use helix_types::{
     BidTrace, BlobsBundle, BlsSignatureBytes, ExecutionPayload, ExecutionRequests, ForkName,
     SignedBidSubmission,
@@ -109,6 +110,24 @@ pub enum BlockSimError {
     PayloadTooLarge,
 }
 
+impl From<&BlockSimError> for SimError {
+    fn from(err: &BlockSimError) -> Self {
+        match err {
+            BlockSimError::BlockValidationFailed(_) => SimError::BlockValidationFailed,
+            BlockSimError::InvalidTxRoot { .. } => SimError::InvalidTxRoot,
+            BlockSimError::Timeout => SimError::Timeout,
+            BlockSimError::RpcError => SimError::RpcError,
+            BlockSimError::SendError => SimError::SendError,
+            BlockSimError::NoSimulatorAvailable => SimError::NoSimulatorAvailable,
+            BlockSimError::SimulationDropped => SimError::SimulationDropped,
+            BlockSimError::HydrationMiss => SimError::HydrationMiss,
+            BlockSimError::RelayHydrationFailed => SimError::RelayHydrationFailed,
+            BlockSimError::UnsupportedFork(_) => SimError::UnsupportedFork,
+            BlockSimError::PayloadTooLarge => SimError::PayloadTooLarge,
+        }
+    }
+}
+
 impl BlockSimError {
     pub fn is_temporary(&self) -> bool {
         match self {
@@ -207,6 +226,27 @@ pub struct SszMergedValidationRequest {
     pub decoder_params: Option<SubmissionDecoderParams>,
     pub signed_bid_submission: Vec<u8>,
     pub base_payment_tx_index: u64,
+}
+
+/// One transaction of a validated block.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+pub struct TxDetail {
+    pub hash: B256,
+    pub sender: Address,
+    pub nonce: u64,
+    /// `None` for a contract creation.
+    pub to: Option<Address>,
+    /// Coinbase balance rise across this transaction: the priority fee plus any
+    /// value it moved to the coinbase. Zero when the coinbase spent more than it
+    /// received, as in the builder's own payout.
+    pub builder_payment: U256,
+}
+
+/// Body of a `200` from the ethrex validator's `/validate` and
+/// `/validate_merged`: one entry per transaction, in block order.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+pub struct SszValidationResponse {
+    pub txs: Vec<TxDetail>,
 }
 
 // TODO: refactor this in a SignedBidSubmission + extra fields

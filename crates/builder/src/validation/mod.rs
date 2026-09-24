@@ -18,7 +18,7 @@ use ethrex_common::{
     Address as EAddress, U256 as EU256,
     types::{
         AccountUpdate, BlobsBundle, Block, BlockHeader, CELLS_PER_EXT_BLOB, ELASTICITY_MULTIPLIER,
-        Receipt, Transaction,
+        Receipt, Transaction, TxKind,
     },
     validation::{
         validate_block_pre_execution, validate_gas_used, validate_receipts_root_and_logs_bloom,
@@ -27,15 +27,18 @@ use ethrex_common::{
 };
 use ethrex_crypto::NativeCrypto;
 use ethrex_storage::Store;
-use ethrex_vm::VmDatabase;
+use ethrex_vm::{Evm, EvmError, VmDatabase};
 use helix_common::{
     PAYMENT_FORWARDER, PAYMENT_FORWARDER_CODE_HASH, payment::multisend_paid_amount,
-    payment_forwarder_recipient,
+    payment_forwarder_recipient, simulator::TxDetail,
 };
 use tokio::sync::watch;
 
 use crate::{
-    engine::convert::{aaddr, b256, eaddr, eu256, h256, payload_v3_to_block},
+    engine::{
+        convert::{aaddr, au256, b256, eaddr, eu256, h256, payload_v3_to_block},
+        simulate::balance_of,
+    },
     node::HeadInfo,
     validation::error::ValidationError,
 };
@@ -52,6 +55,7 @@ pub struct ExecutedBlock {
     pub parent_header: BlockHeader,
     pub receipts: Vec<Receipt>,
     pub account_updates: Vec<AccountUpdate>,
+    pub tx_details: Vec<TxDetail>,
 }
 
 #[derive(Clone)]
@@ -230,14 +234,20 @@ impl BlockValidator {
         let mut vm = new_evm(&BlockchainType::L1, vm_db)
             .map_err(|e| ValidationError::Execution(e.to_string()))?;
 
-        let (result, _bal) =
-            vm.execute_block(&block).map_err(|e| ValidationError::Execution(e.to_string()))?;
+        let (receipts, tx_details, gas_used) = Self::execute_transactions(&mut vm, &block)?;
+        let requests = vm
+            .extract_requests(&receipts, &block.header)
+            .map_err(|e| ValidationError::Execution(e.to_string()))?;
+        if let Some(withdrawals) = &block.body.withdrawals {
+            vm.process_withdrawals(withdrawals)
+                .map_err(|e| ValidationError::Execution(e.to_string()))?;
+        }
 
-        validate_gas_used(result.block_gas_used, &block.header)
+        validate_gas_used(gas_used, &block.header)
             .map_err(|e| ValidationError::PostExecution(e.to_string()))?;
-        validate_receipts_root_and_logs_bloom(&block.header, &result.receipts, &NativeCrypto)
+        validate_receipts_root_and_logs_bloom(&block.header, &receipts, &NativeCrypto)
             .map_err(|e| ValidationError::PostExecution(e.to_string()))?;
-        validate_requests_hash(&block.header, &chain_config, &result.requests)
+        validate_requests_hash(&block.header, &chain_config, &requests)
             .map_err(|e| ValidationError::PostExecution(e.to_string()))?;
 
         let account_updates =
@@ -259,9 +269,60 @@ impl BlockValidator {
         Ok(ExecutedBlock {
             block,
             parent_header: parent_header_for_reads,
-            receipts: result.receipts,
+            receipts,
             account_updates,
+            tx_details,
         })
+    }
+
+    /// The transaction loop of ethrex's `execute_block`, reading the coinbase
+    /// balance after each transaction. Mirrors the pre-Amsterdam gas accounting
+    /// only: the V3 payloads this server decodes predate that fork.
+    fn execute_transactions(
+        vm: &mut Evm,
+        block: &Block,
+    ) -> Result<(Vec<Receipt>, Vec<TxDetail>, u64), ValidationError> {
+        let execution = |e: EvmError| ValidationError::Execution(e.to_string());
+        let header = &block.header;
+        vm.apply_system_calls(header).map_err(execution)?;
+        let transactions = block
+            .body
+            .get_transactions_with_sender(&NativeCrypto)
+            .map_err(|e| ValidationError::Execution(format!("could not recover senders: {e}")))?;
+
+        let coinbase_balance = |vm: &mut Evm| {
+            balance_of(vm, header.coinbase).map_err(|e| ValidationError::Execution(e.to_string()))
+        };
+        let mut balance = coinbase_balance(vm)?;
+        let mut receipts = Vec::with_capacity(transactions.len());
+        let mut tx_details = Vec::with_capacity(transactions.len());
+        let mut gas_used = 0;
+        for (tx, sender) in transactions {
+            if tx.gas_limit() > header.gas_limit.saturating_sub(gas_used) {
+                return Err(ValidationError::Execution(format!(
+                    "gas allowance exceeded: used {gas_used} + tx limit {} > block limit {}",
+                    tx.gas_limit(),
+                    header.gas_limit
+                )));
+            }
+            let (receipt, _) =
+                vm.execute_tx(tx, header, &mut gas_used, sender).map_err(execution)?;
+            receipts.push(receipt);
+
+            let after = coinbase_balance(vm)?;
+            tx_details.push(TxDetail {
+                hash: b256(tx.hash(&NativeCrypto)),
+                sender: aaddr(sender),
+                nonce: tx.nonce(),
+                to: match tx.to() {
+                    TxKind::Call(to) => Some(aaddr(to)),
+                    TxKind::Create => None,
+                },
+                builder_payment: au256(after.saturating_sub(balance)),
+            });
+            balance = after;
+        }
+        Ok((receipts, tx_details, gas_used))
     }
 
     /// The balance delta is the ground truth. It falls short when the proposer

@@ -1,7 +1,6 @@
 use std::time::Duration;
 
 use clickhouse::types::UInt256;
-use helix_common::config::ClickhouseConfig;
 use reth_tasks::TaskExecutor;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::{error, info, warn};
@@ -37,12 +36,12 @@ pub struct TxSimSink {
 }
 
 impl TxSimSink {
-    pub fn new(config: &ClickhouseConfig, task_executor: &TaskExecutor) -> Self {
+    pub fn new(url: &str, database: &str, user: &str, task_executor: &TaskExecutor) -> Self {
         let password = std::env::var(ENV_CLICKHOUSE_PASSWORD).unwrap_or_default();
         let client = clickhouse::Client::default()
-            .with_url(&config.url)
-            .with_database(&config.database)
-            .with_user(&config.user)
+            .with_url(url)
+            .with_database(database)
+            .with_user(user)
             .with_password(password);
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Vec<TxSimRow>>();

@@ -3,6 +3,7 @@ pub mod merging;
 use std::fmt::{self, Display};
 
 use bytes::Bytes;
+use flux_versioned_types::ByteStable;
 use serde::{Deserialize, Serialize};
 use strum::{AsRefStr, EnumString};
 use type_hash_derive::TypeHash;
@@ -19,9 +20,12 @@ use type_hash_derive::TypeHash;
     AsRefStr,
     Serialize,
     Deserialize,
+    TypeHash,
+    ByteStable,
     ssz_derive::Encode,
     ssz_derive::Decode,
 )]
+#[byte_stable(crate = "::flux_versioned_types::byte_stable")]
 #[strum(serialize_all = "snake_case", ascii_case_insensitive)]
 #[ssz(enum_behaviour = "tag")]
 pub enum MergeType {
@@ -62,13 +66,16 @@ impl TryFrom<u8> for MergeType {
     Copy,
     Serialize,
     Deserialize,
+    TypeHash,
     Hash,
     PartialOrd,
     Ord,
     Default,
+    ByteStable,
     ssz_derive::Encode,
     ssz_derive::Decode,
 )]
+#[byte_stable(crate = "::flux_versioned_types::byte_stable")]
 #[ssz(enum_behaviour = "tag")]
 pub enum Compression {
     #[default]
@@ -174,7 +181,10 @@ impl BidSubmissionHeader {
 }
 
 #[repr(transparent)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize, TypeHash, ByteStable,
+)]
+#[byte_stable(crate = "::flux_versioned_types::byte_stable")]
 pub struct BidSubmissionFlags(u8);
 
 bitflags::bitflags! {
@@ -222,9 +232,11 @@ impl BidSubmissionFlags {
     Serialize,
     Hash,
     TypeHash,
+    ByteStable,
     ssz_derive::Encode,
     ssz_derive::Decode,
 )]
+#[byte_stable(crate = "::flux_versioned_types::byte_stable")]
 #[ssz(enum_behaviour = "tag")]
 pub enum Status {
     #[default]

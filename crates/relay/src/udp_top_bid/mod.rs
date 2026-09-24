@@ -163,11 +163,11 @@ impl Tile<HelixSpine> for UdpTopBidTile {
                 }
             }
             PollEvent::Message { token, payload, send_ts: _ } => {
-                let Some(ix) = pending.iter().position(|(t, _)| *t == token) else {
+                let Some(pending_bid_id) = pending.iter().position(|(t, _)| *t == token) else {
                     // Registered peers have nothing to say on this feed.
                     return;
                 };
-                pending.swap_remove(ix);
+                pending.swap_remove(pending_bid_id);
                 let msg = match RegistrationMsg::from_ssz_bytes(payload) {
                     Ok(msg) => msg,
                     Err(e) => {

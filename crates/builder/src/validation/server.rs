@@ -14,10 +14,10 @@ use helix_common::{
     api::builder_api::MAX_PAYLOAD_LENGTH,
     blacklist::{DisallowListPayload, changed_disallow_hash},
     decoder::{DecoderError, SubmissionDecoder, SubmissionDecoderParams},
-    simulator::{SszMergedValidationRequest, SszValidationRequest},
+    simulator::{SszMergedValidationRequest, SszValidationRequest, SszValidationResponse},
 };
 use helix_types::Submission;
-use ssz::Decode;
+use ssz::{Decode, Encode};
 use tokio::{net::TcpListener, sync::Semaphore, time};
 use tracing::{error, info};
 
@@ -128,7 +128,8 @@ async fn validate_merged(State(state): State<ServerState>, body: axum::body::Byt
 }
 
 /// Validation is CPU-bound and synchronous, so it runs on a blocking thread.
-/// The semaphore caps how many run at once.
+/// The semaphore caps how many run at once. A pass answers with the SSZ
+/// [`SszValidationResponse`].
 async fn run_validation<F>(state: ServerState, validate: F) -> Response
 where
     F: FnOnce(&BlockValidator) -> Result<crate::validation::ExecutedBlock, ValidationError>
@@ -139,10 +140,14 @@ where
         return bad_request("validation server is shutting down".to_string());
     };
     let validator = state.validator.clone();
-    let result = tokio::task::spawn_blocking(move || validate(&validator).map(|_| ())).await;
+    let result = tokio::task::spawn_blocking(move || {
+        validate(&validator)
+            .map(|executed| SszValidationResponse { txs: executed.tx_details }.as_ssz_bytes())
+    })
+    .await;
 
     match result {
-        Ok(Ok(())) => StatusCode::OK.into_response(),
+        Ok(Ok(body)) => body.into_response(),
         Ok(Err(err)) => bad_request(err.to_string()),
         Err(err) => {
             error!(%err, "validation task panicked");

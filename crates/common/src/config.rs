@@ -1,4 +1,4 @@
-use std::{env, fs::File, path::PathBuf};
+use std::{env, fs::File, net::SocketAddr, path::PathBuf};
 
 use alloy_primitives::Address;
 use clap::Parser;
@@ -78,10 +78,10 @@ pub struct RelayConfig {
     /// Max UDP top-bid sessions per API key. Further registrations from that key are dropped.
     #[serde(default = "default_usize::<5>")]
     pub udp_top_bid_max_connections_per_key: usize,
-    pub s3_config: Option<S3Config>,
     /// Directory for local cache snapshots (bincode). Enables fast startup.
     pub snapshot_dir: Option<PathBuf>,
-    pub clickhouse: Option<ClickhouseConfig>,
+    #[serde(default)]
+    pub data_gather: DataGatherConfig,
     #[serde(default)]
     pub enable_flux_profiler: bool,
     #[serde(default)]
@@ -89,9 +89,22 @@ pub struct RelayConfig {
     pub blacklist_provider: Option<Url>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct DataGatherConfig {
+    #[serde(default)]
+    pub addresses: Vec<SocketAddr>,
+    #[serde(default)]
+    pub persist_dir: Option<PathBuf>,
+    #[serde(default)]
+    pub clickhouse: Option<ClickhouseConfig>,
+    #[serde(default)]
+    pub s3: Option<S3Config>,
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct ClickhouseConfig {
-    pub url: String,
+    /// Native `host:port` of the HTTP interface; the client speaks plaintext.
+    pub addr: SocketAddr,
     pub database: String,
     pub user: String,
 }
@@ -142,9 +155,8 @@ impl RelayConfig {
             tcp_max_connections: 512,
             udp_top_bid_enabled: false,
             udp_top_bid_max_connections_per_key: 5,
-            s3_config: None,
             snapshot_dir: None,
-            clickhouse: None,
+            data_gather: Default::default(),
             enable_flux_profiler: false,
             operator_config: None,
             blacklist_provider: None,
@@ -773,6 +785,10 @@ fn default_get_payload_v1_response_buffer_ms() -> u64 {
 pub struct S3Config {
     pub bucket: String,
     pub region: String,
+    /// `host:port` of the endpoint, resolved once at startup.
+    pub endpoint: String,
+    #[serde(default = "default_bool::<true>")]
+    pub tls: bool,
 }
 
 #[derive(Clone, Deserialize, Serialize)]

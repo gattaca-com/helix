@@ -1,5 +1,8 @@
 use alloy_primitives::{Address, U256};
-use helix_common::{SimulatorConfig, simulator::BlockSimError};
+use helix_common::{
+    SimulatorConfig,
+    simulator::{BlockSimError, SszValidationResponse, TxDetail},
+};
 use helix_types::ForkName;
 use reqwest::{
     RequestBuilder,
@@ -7,7 +10,7 @@ use reqwest::{
 };
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
-use ssz::Encode;
+use ssz::{Decode, Encode};
 use tracing::error;
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -124,10 +127,23 @@ impl SimulatorClient {
         is_top_bid: bool,
         to_send: RequestBuilder,
         endpoint: &str,
-    ) -> Result<(), BlockSimError> {
+    ) -> Result<Vec<TxDetail>, BlockSimError> {
         let body = ssz_req.as_ssz_bytes();
         let body_len = body.len();
         Self::ssz_request(to_send.body(body), is_top_bid, endpoint, body_len).await
+    }
+
+    /// Transaction detail from a `200` body. The status alone means the block
+    /// is valid; the body is telemetry only, so an unreadable body loses the
+    /// detail but never fails the simulation. Reth answers with an empty body.
+    fn validation_tx_details(body: &[u8]) -> Vec<TxDetail> {
+        if body.is_empty() {
+            return Vec::new();
+        }
+        SszValidationResponse::from_ssz_bytes(body).map(|r| r.txs).unwrap_or_else(|err| {
+            error!(?err, "corrupt ssz validation response");
+            Vec::new()
+        })
     }
 
     async fn ssz_request(
@@ -135,7 +151,7 @@ impl SimulatorClient {
         is_top_bid: bool,
         endpoint: &str,
         body_len: usize,
-    ) -> Result<(), BlockSimError> {
+    ) -> Result<Vec<TxDetail>, BlockSimError> {
         let mut headers = HeaderMap::new();
         headers.insert("Content-Type", HeaderValue::from_static("application/octet-stream"));
         if is_top_bid {
@@ -151,7 +167,13 @@ impl SimulatorClient {
         };
 
         match res.status().as_u16() {
-            200 => Ok(()),
+            200 => match res.bytes().await {
+                Ok(body) => Ok(Self::validation_tx_details(&body)),
+                Err(err) => {
+                    error!(%err, "failed reading ssz simulation body");
+                    Ok(Vec::new())
+                }
+            },
             400 => Err(BlockSimError::BlockValidationFailed(res.text().await.unwrap_or_default())),
             413 => {
                 error!(endpoint, body_len, "ssz simulation request over the simulator body limit");

@@ -1,6 +1,6 @@
 [workspace]
-default-members = ["crates/relay"]
-members = ["crates/admin", "crates/builder", "crates/common", "crates/data-api", "crates/database", "crates/relay", "crates/simulator", "crates/tcp-types", "crates/types", "crates/test-harness", "crates/website", "crates/operator"]
+default-members = ["crates/relay", "crates/data-gatherer"]
+members = ["crates/admin", "crates/builder", "crates/common", "crates/data-api", "crates/database", "crates/relay", "crates/simulator", "crates/tcp-types", "crates/telemetry", "crates/data-gatherer", "crates/types", "crates/test-harness", "crates/website", "crates/operator"]
 resolver = "2"
 
 [workspace.package]
@@ -68,14 +68,17 @@ ethrex-storage = { git = "https://github.com/lambdaclass/ethrex", rev = "ee98e87
 ethrex-vm = { git = "https://github.com/lambdaclass/ethrex", rev = "ee98e879880aee80440bcd59936c384c26629814", default-features = false, features = ["secp256k1", "c-kzg"] }
 
 eyre = "0.6.12"
-aws-sdk-s3 = "=1.35.0"
 clickhouse = "0.14.2"
 flate2 = "1.0"
 
 flux = { git = "https://github.com/gattaca-com/flux", rev = "c3532a59453340ac9c800756b2d155dcd4d63a6d" }
+flux-clickhouse = { git = "https://github.com/gattaca-com/flux", rev = "c3532a59453340ac9c800756b2d155dcd4d63a6d" }
+flux-gather = { git = "https://github.com/gattaca-com/flux", rev = "c3532a59453340ac9c800756b2d155dcd4d63a6d" }
 flux-network = { package = "flux-network", git = "https://github.com/gattaca-com/flux", rev = "c3532a59453340ac9c800756b2d155dcd4d63a6d" }
 flux-profiler = { package = "flux-profiler", git = "https://github.com/gattaca-com/flux", rev = "c3532a59453340ac9c800756b2d155dcd4d63a6d" }
+flux-s3 = { git = "https://github.com/gattaca-com/flux", rev = "c3532a59453340ac9c800756b2d155dcd4d63a6d" }
 flux-utils = { package = "flux-utils", git = "https://github.com/gattaca-com/flux", rev = "c3532a59453340ac9c800756b2d155dcd4d63a6d" }
+flux-versioned-types = { git = "https://github.com/gattaca-com/flux", rev = "c3532a59453340ac9c800756b2d155dcd4d63a6d" }
 type-hash = { git = "https://github.com/gattaca-com/flux", rev = "c3532a59453340ac9c800756b2d155dcd4d63a6d" }
 type-hash-derive = { git = "https://github.com/gattaca-com/flux", rev = "c3532a59453340ac9c800756b2d155dcd4d63a6d" }
 
@@ -87,7 +90,9 @@ helix-common = { path = "crates/common" }
 helix-data-api = { path = "crates/data-api" }
 helix-database = { path = "crates/database" }
 helix-operator = { path = "crates/operator" }
+helix-relay = { path = "crates/relay" }
 helix-tcp-types = { path = "./crates/tcp-types" }
+helix-telemetry = { path = "./crates/telemetry" }
 helix-types = { path = "./crates/types" }
 helix-website = { path = "crates/website" }
 hex = "0.4.3"

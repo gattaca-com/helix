@@ -5,7 +5,6 @@ use std::{
 };
 
 use axum::serve::ListenerExt;
-use bytes::Bytes;
 use crossbeam_channel::Sender;
 use flux::spine::StandaloneDCacheProducer;
 use flux_utils::SharedVector;
@@ -53,7 +52,6 @@ pub fn start_api_service<A: Api>(
     registrations_handle: RegWorkerHandle,
     bid_producer: StandaloneDCacheProducer<NewBidSubmission>,
     future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
-    http_submissions: Arc<SharedVector<Bytes>>,
     web_socket_connections: Sender<(RawWebSocket, TopBidPrecision)>,
     alert_manager: Arc<AlertManager>,
     operator_api: Option<Arc<OperatorPubSub>>,
@@ -77,7 +75,6 @@ pub fn start_api_service<A: Api>(
         registrations_handle,
         bid_producer,
         future_results,
-        http_submissions,
         web_socket_connections,
         alert_manager,
         operator_api,
@@ -103,7 +100,6 @@ pub async fn run_api_service<A: Api>(
     registrations_handle: RegWorkerHandle,
     bid_producer: StandaloneDCacheProducer<NewBidSubmission>,
     future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
-    http_submissions: Arc<SharedVector<Bytes>>,
     web_socket_connections: Sender<(RawWebSocket, TopBidPrecision)>,
     alert_manager: Arc<AlertManager>,
     operator_api: Option<Arc<OperatorPubSub>>,
@@ -128,7 +124,6 @@ pub async fn run_api_service<A: Api>(
         alert_manager.clone(),
         bid_producer,
         future_results,
-        http_submissions,
         web_socket_connections,
         operator_api.clone(),
     );

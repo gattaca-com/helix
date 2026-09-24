@@ -115,7 +115,7 @@ impl RegistrationTile {
     }
 
     fn on_slot_msg(&mut self, msg: SlotMsg) {
-        let Some(ev) = self.slot_events.get(msg.ix) else { return };
+        let Some(ev) = self.slot_events.get(msg.slot_update_id) else { return };
         let bid_slot = ev.bid_slot.as_u64();
         if bid_slot <= self.bid_slot {
             return;

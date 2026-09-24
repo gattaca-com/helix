@@ -6,7 +6,7 @@ mod get_header;
 mod get_payload;
 mod handle;
 mod submit_block;
-mod types;
+pub(crate) mod types;
 mod validation;
 
 use std::{
@@ -16,7 +16,7 @@ use std::{
 };
 
 use alloy_primitives::B256;
-use flux::tile::Tile;
+use flux::{spine::SpineProducers as _, tile::Tile};
 use flux_profiler::timed;
 use flux_utils::SharedVector;
 pub use handle::{AuctioneerHandle, GetPayloadKind};
@@ -38,7 +38,8 @@ use helix_types::Slot;
 use rustc_hash::FxHashMap;
 use tracing::{debug, error, info, trace, warn};
 pub use types::{
-    Event, GetPayloadResultData, PayloadEntry, SlotData, SubmissionData, SubmissionPayload,
+    Event, GetPayloadResultData, InternalBidSubmissionHeader, PayloadEntry, SlotData,
+    SubmissionData, SubmissionPayload,
 };
 
 use crate::{
@@ -46,10 +47,10 @@ use crate::{
     api::{FutureBidSubmissionResult, builder::error::BuilderApiError, proposer::ProposerApiError},
     auctioneer::{context::merged_validation_request, types::PendingPayload},
     housekeeper::SlotUpdate,
-    simulator::{SimResult, Simulators},
+    simulator::{SimDone, SimResult, Simulators, sim_finish_events},
     spine::{
         HelixSpineProducers,
-        messages::{DecodedSubmission, MergedBlockMsg, SlotMsg},
+        messages::{DecodedSubmission, MergedBlockMsg, SimUpdate, SlotMsg},
     },
 };
 pub use crate::{
@@ -57,7 +58,7 @@ pub use crate::{
         bid_adjustor::{BidAdjustor, DefaultBidAdjustor},
         bid_sorter::{Bid, BidSorter},
         context::{Context, send_submission_result},
-        types::{InternalBidSubmissionHeader, SubmissionRef},
+        types::{SubmissionRef, SubmissionRefKind},
     },
     simulator::{ValidationRequest, client::SimulatorClient, *},
 };
@@ -128,7 +129,9 @@ impl<B: BidAdjustor> Tile<HelixSpine> for Auctioneer<B> {
 
         self.ctx.poll_discord_alert();
 
-        while let Some(done) = self.ctx.sims.next_done() {
+        let mut started = Vec::new();
+        while let Some(done) = self.ctx.sims.next_done(&mut started) {
+            emit_sim_outcome(&done, &mut adapter.producers);
             match done.result {
                 SimResult::Validate(result) => {
                     self.state.step(
@@ -144,9 +147,12 @@ impl<B: BidAdjustor> Tile<HelixSpine> for Auctioneer<B> {
                 SimResult::ValidateMerged((_, None)) => {}
             }
         }
+        for s in started {
+            adapter.producers.produce(SimUpdate::Started(s));
+        }
 
         adapter.consume(|submission: DecodedSubmission, producers| {
-            match self.ctx.decoded.get(submission.ix) {
+            match self.ctx.decoded.get(submission.decoded_submission_id) {
                 Some(submission_data) => {
                     let event = Event::Submission { submission_data };
                     self.state.step(event, &mut self.ctx, &mut self.tel, producers);
@@ -158,17 +164,17 @@ impl<B: BidAdjustor> Tile<HelixSpine> for Auctioneer<B> {
         });
 
         adapter.consume(|msg: MergedBlockMsg, producers| {
-            let Some(response) = self.merged_blocks.get(msg.ix) else {
+            let Some(response) = self.merged_blocks.get(msg.merged_block_response_id) else {
                 tracing::error!(?msg, "merged block not found");
                 return;
             };
             info!(%response.execution_payload.block_hash, "received merged block from tile");
-            let event = Event::MergeResult((0, Ok(response.clone())));
+            let event = Event::MergeResult((0, Ok(response)));
             self.state.step(event, &mut self.ctx, &mut self.tel, producers);
         });
 
         adapter.consume(|msg: SlotMsg, producers| {
-            let Some(ev) = self.slot_events.get(msg.ix) else {
+            let Some(ev) = self.slot_events.get(msg.slot_update_id) else {
                 tracing::error!(?msg, "slot event not found");
                 return;
             };
@@ -188,6 +194,29 @@ impl<B: BidAdjustor> Tile<HelixSpine> for Auctioneer<B> {
         info!("starting");
         true
     }
+}
+
+fn emit_sim_outcome(done: &SimDone, producers: &mut HelixSpineProducers) {
+    let (submission_id, txs, error, retried) = match &done.result {
+        SimResult::Validate((_, Some(inner))) => {
+            if inner.block_hash == B256::ZERO {
+                return;
+            }
+            (inner.submission_id, &inner.txs, inner.result.as_ref().err(), inner.retried)
+        }
+        SimResult::ValidateMerged((_, Some(inner))) => {
+            if inner.block_hash == B256::ZERO {
+                return;
+            }
+            (inner.submission_id, &inner.txs, inner.result.as_ref().err(), false)
+        }
+        SimResult::Validate((_, None)) | SimResult::ValidateMerged((_, None)) => return,
+    };
+    let (tx_events, finished) = sim_finish_events(submission_id, txs, error, done.elapsed, retried);
+    for tx in tx_events {
+        producers.produce(SimUpdate::TxIncluded(tx));
+    }
+    producers.produce(SimUpdate::Finished(finished));
 }
 
 enum State {
@@ -501,7 +530,11 @@ impl State {
                 Ok(response) => {
                     ctx.handle_merge_response(&response);
                     match merged_validation_request(&response, slot_data) {
-                        Some(req) => ctx.sims.dispatch_merged(req, response),
+                        Some(req) => {
+                            if let Some(started) = ctx.sims.dispatch_merged(req, response) {
+                                producers.produce(SimUpdate::Started(started));
+                            }
+                        }
                         None => {
                             MERGE_SIM.with_label_values(&["skipped_slot_data"]).inc();
                             warn!(
@@ -524,6 +557,7 @@ impl State {
                 send_submission_result(
                     producers,
                     &ctx.future_results,
+                    submission_data.submission_data.submission_id,
                     submission_data.submission_data.submission_ref,
                     Err(BuilderApiError::DeliveringPayload {
                         bid_slot: submission_data.submission_data.bid_slot(),
@@ -578,6 +612,7 @@ impl State {
                     send_submission_result(
                         producers,
                         &ctx.future_results,
+                        submission_data.submission_data.submission_id,
                         submission_data.submission_data.submission_ref,
                         Err(BuilderApiError::ProposerDutyNotFound),
                     );
@@ -585,6 +620,7 @@ impl State {
                     send_submission_result(
                         producers,
                         &ctx.future_results,
+                        submission_data.submission_data.submission_id,
                         submission_data.submission_data.submission_ref,
                         Err(BuilderApiError::BidValidation(
                             helix_types::BlockValidationError::SubmissionForWrongSlot {

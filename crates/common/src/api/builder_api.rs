@@ -4,15 +4,13 @@ use std::{
 };
 
 use alloy_consensus::TxEnvelope;
-use alloy_primitives::{Address, B256, U256};
+use alloy_primitives::B256;
 use alloy_rlp::Decodable;
-use bytes::Bytes;
 use futures::task::AtomicWaker;
 use helix_types::{
     BlsPublicKeyBytes, SignedValidatorRegistration, Slot, Transaction, Transactions,
 };
 use serde::{Deserialize, Serialize};
-use ssz::Encode;
 use ssz_derive::{Decode, Encode};
 use tree_hash_derive::TreeHash;
 
@@ -48,44 +46,7 @@ impl From<BuilderGetValidatorsResponseEntry> for BuilderGetValidatorsResponse {
     }
 }
 
-#[derive(Clone, Copy)]
-pub enum TopBidPrecision {
-    Millis,
-    Nanos,
-}
-
-#[derive(Clone, Copy, Debug, Encode, Decode)]
-#[repr(C)]
-pub struct TopBidUpdate {
-    pub timestamp: u64,
-    pub slot: u64,
-    pub block_number: u64,
-    pub block_hash: B256,
-    pub parent_hash: B256,
-    pub builder_pubkey: BlsPublicKeyBytes,
-    pub fee_recipient: Address,
-    pub value: U256,
-}
-
-impl TopBidUpdate {
-    const SSZ_SIZE: usize = 188;
-
-    pub fn as_ssz_bytes_with_precision(mut self, precision: TopBidPrecision) -> Bytes {
-        match precision {
-            TopBidPrecision::Nanos => self.as_ssz_bytes_fast().into(),
-            TopBidPrecision::Millis => {
-                self.timestamp /= 1_000_000;
-                self.as_ssz_bytes_fast().into()
-            }
-        }
-    }
-
-    fn as_ssz_bytes_fast(&self) -> Vec<u8> {
-        let mut vec = Vec::with_capacity(Self::SSZ_SIZE);
-        self.ssz_append(&mut vec);
-        vec
-    }
-}
+pub use helix_telemetry::{TopBidPrecision, TopBidUpdate};
 
 pub type SlotCoordinate = (u64, BlsPublicKeyBytes, B256);
 
@@ -148,7 +109,7 @@ impl TryFrom<&InclusionListWithMetadata> for InclusionList {
 
 #[cfg(test)]
 mod tests {
-    use alloy_primitives::{B256, Bytes, U256};
+    use alloy_primitives::{B256, Bytes};
     use helix_types::Transaction;
 
     use super::*;
@@ -171,26 +132,6 @@ mod tests {
                 .unwrap(),
             bytes: Transaction("0x02f87582426801850221646a70850221646a7082520894acabf6c2d38973a5f2ebab6b5e85623db1005a4e880ddf2f839aa3d97080c080a0088ae2635655e314949dae343ac296c3fb6ac56802e1024639f9603c61e253669f2bf33fe18ce70520abc6a662794c1ef5bb310248b7b7c4acc6be93e7885d62".parse::<Bytes>().unwrap())
         });
-    }
-
-    #[test]
-    fn top_bid_ssz_fast_path() {
-        let x = TopBidUpdate {
-            timestamp: u64::MAX,
-            slot: u64::MAX,
-            block_number: u64::MAX,
-            block_hash: B256::random(),
-            parent_hash: B256::random(),
-            builder_pubkey: BlsPublicKeyBytes::random(),
-            fee_recipient: Address::random(),
-            value: U256::ZERO,
-        };
-
-        let ssz = x.as_ssz_bytes();
-        let ssz_check = x.as_ssz_bytes_fast();
-
-        assert_eq!(ssz, ssz_check);
-        assert_eq!(ssz.len(), TopBidUpdate::SSZ_SIZE);
     }
 }
 

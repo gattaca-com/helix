@@ -14,7 +14,7 @@ use helix_common::{
     record_submission_step,
     simulator::{
         BlockSimError, JsonValidationRequest, MergedJsonValidationRequest,
-        SszMergedValidationRequest, SszValidationRequest,
+        SszMergedValidationRequest, SszValidationRequest, TxDetail,
     },
     spawn_tracked,
     utils::avg_duration,
@@ -27,8 +27,14 @@ use helix_types::{
 use rustc_hash::FxHashMap;
 use ssz::Encode as _;
 use tracing::{debug, error, info, warn};
+use uuid::Uuid;
 
-use crate::{SubmissionRef, auctioneer::Bid, simulator::client::SimulatorClient};
+use crate::{
+    SubmissionRef,
+    auctioneer::Bid,
+    simulator::client::SimulatorClient,
+    spine::messages::{SimFinished, SimStarted, SimTxIncluded},
+};
 
 pub mod client;
 
@@ -55,6 +61,8 @@ impl SimPriority {
 
 #[derive(Debug, Clone)]
 pub struct ValidationRequest {
+    /// Ingress id, copied from `SubmissionData`. Keys the sim telemetry.
+    pub submission_id: Uuid,
     pub priority: SimPriority,
     pub is_top_bid: bool,
     pub is_optimistic: bool,
@@ -77,6 +85,9 @@ pub type MergeResult = (usize, Result<Arc<BlockMergeResponse>, BlockSimError>);
 /// alongside the request.
 #[derive(Debug, Clone)]
 pub struct MergedValidationRequest {
+    /// Minted with the request, since a merged block has no ingress id. Every
+    /// message about this sim carries it.
+    pub submission_id: Uuid,
     /// Eviction key for `PendingMergeRequests`.
     pub base_block_hash: B256,
     pub slot: u64,
@@ -228,11 +239,11 @@ impl Simulators {
 
     /// Next finished simulation, if any. Pulled one at a time rather than through a callback
     /// because handling a result needs `&mut` access to the owner of `self`.
-    pub fn next_done(&mut self) -> Option<SimDone> {
+    pub fn next_done(&mut self, started: &mut Vec<SimStarted>) -> Option<SimDone> {
         while let Ok(event) = self.rx.try_recv() {
             match event {
                 SimulatorsEvent::TaskDone { id, error, result, elapsed } => {
-                    self.on_task_response(id, error, elapsed);
+                    self.on_task_response(id, error, elapsed, started);
                     return Some(SimDone {
                         result: *result,
                         elapsed: elapsed.unwrap_or(Duration::ZERO),
@@ -315,6 +326,11 @@ impl Simulators {
                     optimistic_version: req.optimistic_version(),
                     bid: None,
                     result: Err(BlockSimError::SimulationDropped),
+                    submission_id: req.submission_id,
+                    // Never dispatched: zero skips sim telemetry in `emit_sim_outcome`.
+                    block_hash: B256::ZERO,
+                    txs: Vec::new(),
+                    retried: false,
                 }),
             )),
             elapsed: Duration::ZERO,
@@ -322,7 +338,11 @@ impl Simulators {
     }
 
     #[timed]
-    pub fn dispatch(&mut self, req: crate::simulator::ValidationRequest, fast_track: bool) {
+    pub fn dispatch(
+        &mut self,
+        req: crate::simulator::ValidationRequest,
+        fast_track: bool,
+    ) -> Option<SimStarted> {
         let builder_pubkey = req.submission.message.builder_pubkey;
         let queue_key =
             QueueKey { parent_hash: req.submission.message.parent_hash, builder_pubkey };
@@ -341,7 +361,7 @@ impl Simulators {
         if req.priority == SimPriority::Sample && !self.take_sample(builder_pubkey) {
             self.local_telemetry.sample_skipped += 1;
             self.answer_dropped(&req);
-            return;
+            return None;
         }
 
         let sim_id = self.select_simulator();
@@ -359,6 +379,7 @@ impl Simulators {
             if let Some(dropped) = dropped {
                 self.answer_dropped(&dropped);
             }
+            None
         }
     }
 
@@ -367,15 +388,16 @@ impl Simulators {
         &mut self,
         req: MergedValidationRequest,
         response: Arc<BlockMergeResponse>,
-    ) {
+    ) -> Option<SimStarted> {
         self.local_telemetry.sims_reqs += 1;
 
         if let Some(id) = self.next_client(Instant::now()) {
             self.local_telemetry.sims_sent_immediately += 1;
-            self.spawn_merge_sim(id, req, response);
+            self.spawn_merge_sim(id, req, response)
         } else {
             self.local_telemetry.queued += 1;
             self.merge_requests.store(req, response);
+            None
         }
     }
 
@@ -384,6 +406,7 @@ impl Simulators {
         id: usize,
         error: Option<BlockSimError>,
         elapsed: Option<Duration>,
+        started: &mut Vec<SimStarted>,
     ) {
         let now = Instant::now();
         let sim = &mut self.simulators[id];
@@ -409,15 +432,18 @@ impl Simulators {
         if let Some(id) = self.next_client(now) {
             if let Some(req) = self.priority_requests.next_req().or(self.requests.next_req()) {
                 self.local_telemetry.sims_sent_from_queue += 1;
-                self.spawn_sim(id, req);
+                started.extend(self.spawn_sim(id, req));
             } else if let Some((req, response)) = self.merge_requests.next_req() {
-                self.spawn_merge_sim(id, req, response);
+                started.extend(self.spawn_merge_sim(id, req, response));
             }
         }
     }
 
     #[timed]
-    fn spawn_sim(&mut self, id: usize, req: ValidationRequest) {
+    /// Returns the `Started` event for the caller to publish, or `None` when
+    /// the request died before dispatch without an attributable block, or the
+    /// block hash is zero (completion skips those too, keeping the pair).
+    fn spawn_sim(&mut self, id: usize, req: ValidationRequest) -> Option<SimStarted> {
         let submission = req.submission.clone();
         let tx_root = req.tx_root;
         let version = req.version;
@@ -435,19 +461,33 @@ impl Simulators {
             let fork = submission.fork_name();
             let Some((builder, method)) = sim.client.sim_request_builder(fork) else {
                 warn!(%fork, "no validation RPC method for fork, dropping submission");
-                self.answered.push(SimDone {
-                    result: SimResult::Validate((
-                        id,
-                        Some(SimulationResultInner {
-                            submission_ref: req.submission_ref,
-                            optimistic_version: req.optimistic_version(),
-                            bid: None,
-                            result: Err(BlockSimError::UnsupportedFork(fork)),
-                        }),
-                    )),
-                    elapsed: Duration::ZERO,
+                sim.pending += 1;
+                let result = SimResult::Validate((
+                    id,
+                    Some(SimulationResultInner {
+                        submission_ref: req.submission_ref,
+                        optimistic_version: req.optimistic_version(),
+                        bid: None,
+                        result: Err(BlockSimError::UnsupportedFork(fork)),
+                        submission_id: req.submission_id,
+                        block_hash: *submission.block_hash(),
+                        txs: Vec::new(),
+                        retried: false,
+                    }),
+                ));
+                let started = sim_started_event(
+                    req.submission_id,
+                    *submission.block_hash(),
+                    false,
+                    req.is_top_bid,
+                );
+                let _ = self.task_tx.send(SimulatorsEvent::TaskDone {
+                    id,
+                    error: None,
+                    result: Box::new(result),
+                    elapsed: None,
                 });
-                return;
+                return (*submission.block_hash() != B256::ZERO).then_some(started);
             };
             SimDispatch::Json { to_send: builder, method: method.to_owned() }
         };
@@ -456,9 +496,12 @@ impl Simulators {
         self.local_telemetry.max_in_flight = self.local_telemetry.max_in_flight.max(sim.pending);
         let timer = SimulatorMetrics::timer(sim.client.endpoint());
         let task_tx = self.task_tx.clone();
+        let track = *submission.block_hash() != B256::ZERO;
+        let started =
+            sim_started_event(req.submission_id, *submission.block_hash(), false, req.is_top_bid);
         spawn_tracked!(async move {
             let start_sim = Nanos::now();
-            let block_hash = submission.block_hash();
+            let block_hash = *submission.block_hash();
             debug!(%block_hash, "sending simulation request");
 
             let optimistic_version = req.optimistic_version();
@@ -492,12 +535,13 @@ impl Simulators {
                         to_send,
                     )
                     .await;
-                    (res, None)
+                    (res.map(|()| Vec::new()), None)
                 }
             };
 
             // On cache miss, retry with full uncompressed SSZ so the simulator
             // can process the submission without a hydration cache entry.
+            let mut retried = false;
             if matches!(res, Err(BlockSimError::HydrationMiss)) {
                 debug!(%block_hash, "hydration miss — retrying with full SSZ");
                 if let Some((request, ssz_url, http)) = ssz_retry {
@@ -511,6 +555,7 @@ impl Simulators {
                         &ssz_url,
                     )
                     .await;
+                    retried = true;
                 } else {
                     res = Err(BlockSimError::RpcError);
                 }
@@ -538,11 +583,19 @@ impl Simulators {
                 req.priority.label(),
                 sim_outcome(error.as_ref()),
             );
+            let result = match &res {
+                Ok(_) => Ok(trace),
+                Err(err) => Err(err.clone()),
+            };
             let inner = SimulationResultInner {
                 submission_ref,
-                result: res.map(|()| trace),
+                result,
                 bid: Some(bid),
                 optimistic_version,
+                submission_id: req.submission_id,
+                block_hash,
+                txs: res.unwrap_or_default(),
+                retried,
             };
 
             let _ = task_tx.send(SimulatorsEvent::TaskDone {
@@ -552,17 +605,22 @@ impl Simulators {
                 elapsed: Some(Duration::from_secs_f64(time)),
             });
         });
+        track.then_some(started)
     }
 
     #[timed]
+    /// Returns the `Started` event for the caller to publish, or `None` when
+    /// the block hash is zero (completion skips those too, keeping the pair).
+    /// The payload conversion runs inside the spawned task, off the caller's thread.
     fn spawn_merge_sim(
         &mut self,
         id: usize,
         req: MergedValidationRequest,
         response: Arc<BlockMergeResponse>,
-    ) {
-        let base_payment_tx_index = response.base_payment_tx_index as u64;
+    ) -> Option<SimStarted> {
+        let submission_id = req.submission_id;
         let block_hash = response.execution_payload.block_hash;
+        let base_payment_tx_index = response.base_payment_tx_index as u64;
 
         let sim = &mut self.simulators[id];
         let dispatch = if let Some(url) = &sim.client.ssz_url {
@@ -582,13 +640,20 @@ impl Simulators {
         let apply_blacklist = req.apply_blacklist;
         let registered_gas_limit = req.registered_gas_limit;
         let parent_beacon_block_root = req.parent_beacon_block_root;
+        let track = block_hash != B256::ZERO;
+        let started = sim_started_event(submission_id, block_hash, true, false);
         spawn_tracked!(async move {
             let start_sim = Nanos::now();
             let inclusion_list = req.inclusion_list.clone();
             let submission = match merged_block_to_submission(&response, &req) {
                 Ok(submission) => submission,
                 Err(err) => {
-                    let inner = MergedSimulationResultInner { block_hash, result: Err(err) };
+                    let inner = MergedSimulationResultInner {
+                        result: Err(err),
+                        submission_id: req.submission_id,
+                        block_hash,
+                        txs: Vec::new(),
+                    };
                     let _ = task_tx.send(SimulatorsEvent::TaskDone {
                         id,
                         error: None,
@@ -627,7 +692,9 @@ impl Simulators {
                         ),
                         base_payment_tx_index,
                     };
-                    SimulatorClient::do_json_sim_request(&json_req, false, &method, to_send).await
+                    SimulatorClient::do_json_sim_request(&json_req, false, &method, to_send)
+                        .await
+                        .map(|()| Vec::new())
                 }
             };
 
@@ -639,7 +706,16 @@ impl Simulators {
             record_submission_step("merge_simulation", start_sim.elapsed());
 
             let error = res.as_ref().err().cloned();
-            let inner = MergedSimulationResultInner { block_hash, result: res };
+            let (result, txs) = match res {
+                Ok(txs) => (Ok(()), txs),
+                Err(err) => (Err(err), Vec::new()),
+            };
+            let inner = MergedSimulationResultInner {
+                result,
+                submission_id: req.submission_id,
+                block_hash,
+                txs,
+            };
             let _ = task_tx.send(SimulatorsEvent::TaskDone {
                 id,
                 error,
@@ -647,6 +723,7 @@ impl Simulators {
                 elapsed: Some(Duration::from_secs_f64(time)),
             });
         });
+        track.then_some(started)
     }
 
     /// Selection priority:
@@ -951,7 +1028,6 @@ struct LocalTelemetry {
 }
 
 pub type ValidationResult = (usize, Option<SimulationResultInner>);
-#[derive(Clone)]
 pub struct SimulationResultInner {
     pub submission_ref: crate::auctioneer::SubmissionRef,
     pub optimistic_version: OptimisticVersion,
@@ -959,14 +1035,25 @@ pub struct SimulationResultInner {
     pub bid: Option<Bid>,
     /// Ok carries the trace; Err carries the simulation failure.
     pub result: Result<SubmissionTrace, BlockSimError>,
+    /// Telemetry for the data gatherer. A zero block hash marks an infra
+    /// failure the tile could not attribute to a block; both ends skip
+    /// telemetry then.
+    pub submission_id: Uuid,
+    pub block_hash: B256,
+    pub txs: Vec<TxDetail>,
+    pub retried: bool,
 }
 
 pub type MergedSimulationResult = (usize, Option<MergedSimulationResultInner>);
-#[derive(Clone)]
 pub struct MergedSimulationResultInner {
-    pub block_hash: B256,
     /// Ok on a valid merged block; Err carries the simulation failure.
     pub result: Result<(), BlockSimError>,
+    /// Telemetry for the data gatherer. `submission_id` comes from the
+    /// request, minted there since a merged block has no ingress id. Zero
+    /// block hash skips emission, as in `SimulationResultInner`.
+    pub submission_id: Uuid,
+    pub block_hash: B256,
+    pub txs: Vec<TxDetail>,
 }
 
 enum SimDispatch {
@@ -1149,6 +1236,61 @@ fn merged_block_to_submission(
         execution_requests: response.execution_requests.clone(),
         signature: BlsSignatureBytes::default(),
     })
+}
+
+fn sim_started_event(
+    submission_id: Uuid,
+    block_hash: B256,
+    merged: bool,
+    is_top_bid: bool,
+) -> SimStarted {
+    SimStarted { submission_id, block_hash, merged, is_top_bid, ..Default::default() }
+}
+
+/// One event per simulated transaction plus the terminal result. `Started`
+/// went out at dispatch; every event here joins to it on `submission_id`.
+/// Borrows the stored outcome so completion copies no transaction data.
+pub(crate) fn sim_finish_events<'a>(
+    submission_id: Uuid,
+    txs: &'a [TxDetail],
+    error: Option<&BlockSimError>,
+    elapsed: Duration,
+    retried: bool,
+) -> (impl Iterator<Item = SimTxIncluded> + 'a, SimFinished) {
+    let finished = if let Some(err) = error {
+        SimFinished {
+            submission_id,
+            total_payment: U256::ZERO,
+            elapsed_us: elapsed.as_micros() as u64,
+            retried,
+            error: err.into(),
+            ..Default::default()
+        }
+    } else {
+        SimFinished {
+            submission_id,
+            total_payment: txs
+                .iter()
+                .fold(U256::ZERO, |acc, tx| acc.saturating_add(tx.builder_payment)),
+            elapsed_us: elapsed.as_micros() as u64,
+            retried,
+            ..Default::default()
+        }
+    };
+    let tx_events = txs.iter().enumerate().take(if error.is_some() { 0 } else { txs.len() }).map(
+        move |(index, tx)| SimTxIncluded {
+            submission_id,
+            nonce: tx.nonce,
+            hash: tx.hash,
+            sender: tx.sender,
+            to: tx.to.unwrap_or(Address::ZERO),
+            builder_payment: tx.builder_payment,
+            index: index as u32,
+            has_to: tx.to.is_some(),
+            ..Default::default()
+        },
+    );
+    (tx_events, finished)
 }
 
 fn create_ssz_request(

@@ -42,6 +42,9 @@ It serves the relay's SSZ routes only, `/validate` and `/validate_merged`, so
 the relay must reach it through the simulator's `ssz_url`. Differences from
 `crates/simulator` worth knowing before pointing traffic at it:
 
+- A `200` carries an SSZ `helix_common::simulator::SszValidationResponse`:
+  per transaction its hash, sender, nonce, recipient and the coinbase balance
+  rise. `crates/simulator` answers with an empty body.
 - Inclusion lists are not enforced. A block that violates a submitted list
   passes here and fails there.
 - The disallow list rejects interaction by effect -- a state change, or a

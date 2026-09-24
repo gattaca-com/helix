@@ -2,7 +2,6 @@ mod api;
 mod auctioneer;
 mod bid_decoder;
 mod block_merging;
-mod data_gatherer;
 mod gossip;
 mod housekeeper;
 mod network;
@@ -32,20 +31,24 @@ pub use crate::{
         start_admin_service, start_api_service,
     },
     auctioneer::{
-        Auctioneer, AuctioneerHandle, BidSorter, Context, Event, PayloadEntry, SimulatorClient,
-        SlotData, SubmissionPayload, SubmissionRef, ValidationRequest,
+        Auctioneer, AuctioneerHandle, BidSorter, Context, Event, InternalBidSubmissionHeader,
+        PayloadEntry, SimulatorClient, SlotData, SubmissionPayload, SubmissionRef,
+        SubmissionRefKind, ValidationRequest,
     },
     bid_decoder::{DecoderTile, Lane, SubmissionDataWithSpan},
     block_merging::BlockMergingTile,
-    data_gatherer::DataGatherer,
     gossip::{BroadcastPayloadParams, GossipedMessage},
     housekeeper::{HousekeeperTile, SlotUpdate},
     network::RelayNetworkManager,
     registration::{RegWorkerHandle, RegistrationTile},
     simulator::{BlockMergeResponse, SimDone, SimPriority, SimResult, Simulators},
     spine::{
-        HelixSpine, HelixSpineConfig,
-        messages::{NewBidSubmission, NewTcpBidSubmission, SlotMsg},
+        HelixSpine, HelixSpineConfig, RelayConfigExt,
+        messages::{
+            NewBidSubmission, NewTcpBidSubmission, SimFinished, SimStarted, SimTxIncluded,
+            SimUpdate, SlotMsg,
+        },
+        read_spine_epoch, spine_epoch_path,
     },
     tcp_bid_recv::{
         BidSubmissionFlags, BidSubmissionHeader, BidSubmissionResponse, BidSubmissionTcpListener,
