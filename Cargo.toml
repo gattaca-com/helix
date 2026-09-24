@@ -1,6 +1,6 @@
 [workspace]
-default-members = ["crates/relay"]
-members = ["crates/admin", "crates/builder", "crates/common", "crates/data-api", "crates/database", "crates/relay", "crates/simulator", "crates/tcp-types", "crates/telemetry", "crates/types", "crates/test-harness", "crates/website", "crates/operator"]
+default-members = ["crates/relay", "crates/data-gatherer"]
+members = ["crates/admin", "crates/builder", "crates/common", "crates/data-api", "crates/database", "crates/relay", "crates/simulator", "crates/tcp-types", "crates/telemetry", "crates/data-gatherer", "crates/types", "crates/test-harness", "crates/website", "crates/operator"]
 resolver = "2"
 
 [workspace.package]
@@ -90,6 +90,7 @@ helix-common = { path = "crates/common" }
 helix-data-api = { path = "crates/data-api" }
 helix-database = { path = "crates/database" }
 helix-operator = { path = "crates/operator" }
+helix-relay = { path = "crates/relay" }
 helix-tcp-types = { path = "./crates/tcp-types" }
 helix-telemetry = { path = "./crates/telemetry" }
 helix-types = { path = "./crates/types" }

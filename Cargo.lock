@@ -5889,6 +5889,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "helix-data-gatherer"
+version = "0.0.1"
+dependencies = [
+ "alloy-primitives",
+ "flux",
+ "flux-clickhouse",
+ "flux-gather",
+ "flux-network",
+ "flux-s3",
+ "flux-utils",
+ "helix-common",
+ "helix-relay",
+ "helix-telemetry",
+ "helix-types",
+ "rustc-hash",
+ "serde",
+ "tikv-jemallocator",
+ "tracing",
+]
+
+[[package]]
 name = "helix-database"
 version = "0.0.1"
 dependencies = [
@@ -5959,11 +5980,9 @@ dependencies = [
  "eyre",
  "flate2",
  "flux",
- "flux-clickhouse",
  "flux-gather",
  "flux-network",
  "flux-profiler",
- "flux-s3",
  "flux-utils",
  "flux-versioned-types",
  "futures",

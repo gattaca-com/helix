@@ -7,9 +7,8 @@ use std::{
 use flux_network::tcp::{TcpEvent, TcpNetworkCore};
 use flux_s3::{Error, RequestId, S3};
 use helix_common::{S3Config, api::builder_api::MAX_PAYLOAD_LENGTH, expect_env_var};
+use helix_relay::InternalBidSubmissionHeader;
 use rustc_hash::FxHashMap;
-
-use crate::auctioneer::InternalBidSubmissionHeader;
 
 const ENV_ACCESS_KEY_ID: &str = "S3_ACCESS_KEY_ID";
 const ENV_SECRET_ACCESS_KEY: &str = "S3_SECRET_ACCESS_KEY";

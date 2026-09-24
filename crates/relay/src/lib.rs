@@ -2,7 +2,6 @@ mod api;
 mod auctioneer;
 mod bid_decoder;
 mod block_merging;
-mod data_gatherer;
 mod gossip;
 mod housekeeper;
 mod network;
@@ -32,12 +31,12 @@ pub use crate::{
         start_admin_service, start_api_service,
     },
     auctioneer::{
-        Auctioneer, AuctioneerHandle, BidSorter, Context, Event, PayloadEntry, SimulatorClient,
-        SlotData, SubmissionPayload, SubmissionRef, SubmissionRefKind, ValidationRequest,
+        Auctioneer, AuctioneerHandle, BidSorter, Context, Event, InternalBidSubmissionHeader,
+        PayloadEntry, SimulatorClient, SlotData, SubmissionPayload, SubmissionRef,
+        SubmissionRefKind, ValidationRequest,
     },
     bid_decoder::{DecoderTile, Lane, SubmissionDataWithSpan},
     block_merging::BlockMergingTile,
-    data_gatherer::{DataGatherer, SHUTDOWN_DRAIN},
     gossip::{BroadcastPayloadParams, GossipedMessage},
     housekeeper::{HousekeeperTile, SlotUpdate},
     network::RelayNetworkManager,

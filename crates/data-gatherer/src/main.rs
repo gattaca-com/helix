@@ -6,9 +6,15 @@ use helix_common::{
     task::{block_on, init_runtime},
     utils::{init_panic_hook, init_tracing_log, install_default_crypto_provider},
 };
-use helix_relay::{DataGatherer, HelixSpine, RelayConfigExt, SHUTDOWN_DRAIN};
+use helix_relay::{HelixSpine, RelayConfigExt};
 use tikv_jemallocator::Jemalloc;
 use tracing::info;
+
+use crate::tile::{DataGatherer, SHUTDOWN_DRAIN};
+
+mod clickhouse;
+mod s3;
+mod tile;
 
 #[global_allocator]
 static GLOBAL: Jemalloc = Jemalloc;

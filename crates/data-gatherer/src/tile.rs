@@ -5,18 +5,13 @@ use flux_gather::{BlobCache, BlobShipper, BlobWriter};
 use flux_network::tcp::TcpNetwork;
 use flux_utils::ArrayStr;
 use helix_common::{api::builder_api::TopBidUpdate, config::DataGatherConfig, gather::GatherMeta};
+use helix_relay::{HelixSpine, NewBidSubmission, NewTcpBidSubmission, read_spine_epoch};
+use helix_telemetry::{BidUpdate, DecodedSubmission, MergedBlockMsg, SimUpdate, SlotMsg};
 use tracing::info;
 
 use crate::{
-    HelixSpine,
-    data_gatherer::{
-        clickhouse::{BlockInfo, ClickhouseData},
-        s3::S3Data,
-    },
-    spine::messages::{
-        BidUpdate, DecodedSubmission, MergedBlockMsg, NewBidSubmission, NewTcpBidSubmission,
-        SimUpdate, SlotMsg,
-    },
+    clickhouse::{BlockInfo, ClickhouseData},
+    s3::S3Data,
 };
 
 /// Per-slot counters, logged and reset on slot transition.
@@ -70,7 +65,7 @@ impl DataGatherer {
             writer: BlobWriter::new(),
             config,
             instance: ArrayStr::from_str_truncate(&instance_id),
-            epoch: crate::spine::read_spine_epoch(),
+            epoch: read_spine_epoch(),
             epoch_check_at: Instant::now(),
         }
     }
@@ -195,7 +190,7 @@ impl Tile<HelixSpine> for DataGatherer {
         // this process now reads deleted files: drain and exit for restart.
         if self.epoch_check_at.elapsed() >= Duration::from_secs(1) {
             self.epoch_check_at = Instant::now();
-            if crate::spine::read_spine_epoch() != self.epoch {
+            if read_spine_epoch() != self.epoch {
                 info!("spine epoch changed, exiting for restart");
                 self.shutdown_drain();
                 std::process::exit(0);

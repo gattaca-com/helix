@@ -38,7 +38,8 @@ use helix_types::Slot;
 use rustc_hash::FxHashMap;
 use tracing::{debug, error, info, trace, warn};
 pub use types::{
-    Event, GetPayloadResultData, PayloadEntry, SlotData, SubmissionData, SubmissionPayload,
+    Event, GetPayloadResultData, InternalBidSubmissionHeader, PayloadEntry, SlotData,
+    SubmissionData, SubmissionPayload,
 };
 
 use crate::{
@@ -57,7 +58,7 @@ pub use crate::{
         bid_adjustor::{BidAdjustor, DefaultBidAdjustor},
         bid_sorter::{Bid, BidSorter},
         context::{Context, send_submission_result},
-        types::{InternalBidSubmissionHeader, SubmissionRef, SubmissionRefKind},
+        types::{SubmissionRef, SubmissionRefKind},
     },
     simulator::{ValidationRequest, client::SimulatorClient, *},
 };
