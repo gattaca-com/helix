@@ -155,6 +155,10 @@ pub fn init_panic_hook(
     }));
 }
 
+pub fn discord_webhook_url() -> Option<&'static Url> {
+    DISCORD_WEBHOOK_URL.get()
+}
+
 pub fn discord_payload(message: &str) -> Option<(&'static Url, FxHashMap<&'static str, String>)> {
     let Some(webhook_url) = DISCORD_WEBHOOK_URL.get() else {
         error!("discord hook not set!");
