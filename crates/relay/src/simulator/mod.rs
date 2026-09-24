@@ -366,7 +366,7 @@ impl Simulators {
                 Some(SimulationResultInner {
                     submission_ref: req.submission_ref,
                     optimistic_version: req.optimistic_version(),
-                    bid: Some(Bid::new(req.version, &req.submission)),
+                    bid: Some(Bid::new(req.version, &req.submission, req.parent_beacon_block_root)),
                     result: result.map(|()| req.trace),
                     submission_id: req.submission_id,
                     // Never dispatched: zero skips sim telemetry in `emit_sim_outcome`.
@@ -683,7 +683,7 @@ impl Simulators {
             record_submission_step("simulation", start_sim.elapsed());
 
             let error = res.as_ref().err().cloned();
-            let bid = Bid::new(version, &submission);
+            let bid = Bid::new(version, &submission, req.parent_beacon_block_root);
             SimulatorMetrics::sim_builder_outcome(
                 &bid.builder_pubkey.to_string(),
                 req.priority.label(),

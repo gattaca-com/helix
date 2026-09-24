@@ -5,7 +5,7 @@ use flux::type_hash_derive::type_hash_lock;
 use flux_utils::ArrayStr;
 use flux_versioned_types::{versioned_enum, versioned_struct};
 use helix_common::{
-    GetPayloadTrace, PayloadAttributesUpdate, SubmissionTrace,
+    ForkKey, GetPayloadTrace, PayloadAttributesUpdate, SubmissionTrace,
     api::{
         builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
         proposer_api::{GetExecutionPayloadBidParams, GetHeaderParams},
@@ -433,8 +433,8 @@ pub struct SlotData {
     pub bid_slot: Slot,
     /// Data about the validator registration
     pub registration_data: BuilderGetValidatorsResponseEntry,
-    /// Parent hash -> payload attributes for the incoming blocks
-    pub payload_attributes_map: FxHashMap<B256, PayloadAttributesUpdate>,
+    /// Fork -> payload attributes for the incoming blocks
+    pub payload_attributes_map: FxHashMap<ForkKey, PayloadAttributesUpdate>,
     /// Current fork
     pub current_fork: ForkName,
     /// Inclusion list
@@ -455,6 +455,28 @@ pub struct PendingPayload {
 impl SlotData {
     pub fn proposer_pubkey(&self) -> &BlsPublicKeyBytes {
         &self.registration_data.entry.registration.message.pubkey
+    }
+
+    pub fn parent_hashes(&self) -> Vec<B256> {
+        self.payload_attributes_map.keys().map(|k| k.parent_hash).collect()
+    }
+
+    pub fn fork_for_parent_hash(&self, parent_hash: &B256) -> Option<ForkKey> {
+        self.payload_attributes_map.keys().find(|k| k.parent_hash == *parent_hash).copied()
+    }
+
+    pub fn attrs_for_submission(
+        &self,
+        parent_hash: &B256,
+        prev_randao: &B256,
+    ) -> Option<&PayloadAttributesUpdate> {
+        let mut candidates =
+            self.payload_attributes_map.values().filter(|a| a.parent_hash == *parent_hash);
+        let first = candidates.next()?;
+        if first.prev_randao == *prev_randao {
+            return Some(first);
+        }
+        candidates.find(|a| a.prev_randao == *prev_randao).or(Some(first))
     }
 }
 
@@ -536,6 +558,39 @@ impl Event {
             Event::SimResult(_) => "SimResult",
             Event::MergeResult(_) => "MergeResult",
             Event::BuilderDemotion { .. } => "BuilderDemotion",
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn attrs(parent_hash: B256, parent_root: B256, prev_randao: B256) -> PayloadAttributesUpdate {
+        let mut update = PayloadAttributesUpdate { parent_hash, ..Default::default() };
+        update.payload_attributes.parent_beacon_block_root = Some(parent_root);
+        update.payload_attributes.prev_randao = prev_randao;
+        update
+    }
+
+    #[test]
+    fn a_submission_gets_the_fork_whose_prev_randao_it_matches() {
+        let parent_hash = B256::repeat_byte(1);
+        let forks = [
+            attrs(parent_hash, B256::repeat_byte(2), B256::repeat_byte(3)),
+            attrs(parent_hash, B256::repeat_byte(4), B256::repeat_byte(5)),
+        ];
+        let slot_data = SlotData {
+            bid_slot: Default::default(),
+            registration_data: Default::default(),
+            payload_attributes_map: forks.iter().map(|a| (a.fork(), a.clone())).collect(),
+            current_fork: ForkName::Gloas,
+            il: None,
+        };
+
+        for fork in &forks {
+            let got = slot_data.attrs_for_submission(&parent_hash, &fork.prev_randao).unwrap();
+            assert_eq!(got.parent_root(), fork.parent_root());
         }
     }
 }

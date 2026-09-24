@@ -27,11 +27,11 @@ impl<B: BidAdjustor> Context<B> {
         }
 
         let Some(payload_attributes) =
-            slot_data.payload_attributes_map.get(submission.parent_hash())
+            slot_data.attrs_for_submission(submission.parent_hash(), submission.prev_randao())
         else {
             return Err(BlockValidationError::UknnownParentHash {
                 submission: *submission.parent_hash(),
-                have: slot_data.payload_attributes_map.keys().cloned().collect(),
+                have: slot_data.parent_hashes(),
             });
         };
 
