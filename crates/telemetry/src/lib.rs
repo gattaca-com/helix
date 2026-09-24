@@ -150,18 +150,12 @@ impl TopBidUpdate {
 
     pub fn as_ssz_bytes_with_precision(mut self, precision: TopBidPrecision) -> Bytes {
         match precision {
-            TopBidPrecision::Nanos => self.as_ssz_bytes_fast().into(),
+            TopBidPrecision::Nanos => self.as_ssz_bytes().into(),
             TopBidPrecision::Millis => {
                 self.timestamp /= 1_000_000;
-                self.as_ssz_bytes_fast().into()
+                self.as_ssz_bytes().into()
             }
         }
-    }
-
-    fn as_ssz_bytes_fast(&self) -> Vec<u8> {
-        let mut vec = Vec::with_capacity(Self::SSZ_SIZE);
-        self.ssz_append(&mut vec);
-        vec
     }
 }
 
@@ -187,31 +181,5 @@ impl Encode for TopBidUpdate {
         self.builder_pubkey.ssz_append(buf);
         self.fee_recipient.ssz_append(buf);
         self.value.ssz_append(buf);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn top_bid_ssz_fast_path() {
-        let x = TopBidUpdate {
-            timestamp: u64::MAX,
-            slot: u64::MAX,
-            block_number: u64::MAX,
-            block_hash: B256::random(),
-            parent_hash: B256::random(),
-            builder_pubkey: BlsPublicKeyBytes::random(),
-            fee_recipient: Address::random(),
-            value: U256::ZERO,
-            ..Default::default()
-        };
-
-        let ssz = x.as_ssz_bytes();
-        let ssz_check = x.as_ssz_bytes_fast();
-
-        assert_eq!(ssz, ssz_check);
-        assert_eq!(ssz.len(), TopBidUpdate::SSZ_SIZE);
     }
 }
