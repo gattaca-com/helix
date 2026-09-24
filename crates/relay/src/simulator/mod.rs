@@ -10,7 +10,6 @@ use helix_common::{
     SimulatorConfig, SubmissionTrace,
     api::builder_api::InclusionListWithMetadata,
     bid_submission::OptimisticVersion,
-    is_local_dev,
     metrics::SimulatorMetrics,
     record_submission_step,
     simulator::{
@@ -180,29 +179,26 @@ impl Simulators {
         let priority_requests = PendingRequests::with_capacity(30);
         let merge_requests = PendingMergeRequests::with_capacity(30);
 
-        if !is_local_dev() {
-            let clients: Vec<SimulatorClient> =
-                simulators.iter().map(|e| e.client.clone()).collect();
-            spawn_tracked!({
-                let sync_tx = task_tx.clone();
-                async move {
-                    loop {
-                        for (id, simulator) in clients.iter().enumerate() {
-                            let reported = simulator.is_synced().await.ok();
-                            if sync_tx.send(SimulatorsEvent::SyncStatus { id, reported }).is_err() {
-                                error!("failed to send sync status to sim pool");
-                            }
-                            SimulatorMetrics::simulator_sync(
-                                simulator.endpoint(),
-                                reported.unwrap_or(false),
-                            );
+        let clients: Vec<SimulatorClient> = simulators.iter().map(|e| e.client.clone()).collect();
+        spawn_tracked!({
+            let sync_tx = task_tx.clone();
+            async move {
+                loop {
+                    for (id, simulator) in clients.iter().enumerate() {
+                        let reported = simulator.is_synced().await.ok();
+                        if sync_tx.send(SimulatorsEvent::SyncStatus { id, reported }).is_err() {
+                            error!("failed to send sync status to sim pool");
                         }
-
-                        tokio::time::sleep(Duration::from_secs(1)).await;
+                        SimulatorMetrics::simulator_sync(
+                            simulator.endpoint(),
+                            reported.unwrap_or(false),
+                        );
                     }
+
+                    tokio::time::sleep(Duration::from_secs(1)).await;
                 }
-            });
-        }
+            }
+        });
 
         let ssz_sim_indices: Vec<usize> = simulators
             .iter()
