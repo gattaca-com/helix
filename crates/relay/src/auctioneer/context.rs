@@ -83,7 +83,6 @@ pub struct Context<B: BidAdjustor> {
     pub operator_api: Option<Arc<OperatorPubSub>>,
     http: HttpClient,
     /// Resolved at startup: the webhook's DNS lookup blocks, so it must stay off the loop.
-    // ponytail: never re-resolved; re-resolve on connect failure if the webhook IP moves.
     discord_addr: Option<SocketAddr>,
     discord_alert: Option<PendingResponse>,
 }
