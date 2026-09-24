@@ -115,17 +115,14 @@ impl ClickhouseData {
             return;
         }
 
-        let rows = self
+        let mut rows = self
             .map
             .extract_if(|_, v| v.slot < new_slot)
             .map(|(hash, info)| BlockInfoRow::from(self.instance_id, hash, info))
-            .collect::<Vec<BlockInfoRow>>();
+            .peekable();
 
-        if rows.is_empty() {
-            return;
-        }
-
-        for batch in rows.chunks(BATCH_ROWS) {
+        while rows.peek().is_some() {
+            let batch: Vec<BlockInfoRow> = rows.by_ref().take(BATCH_ROWS).collect();
             if self.unsent.len() >= MAX_UNSENT_BATCHES {
                 let dropped = self.unsent.pop_front().expect("full queue has a front");
                 self.dropped_rows += dropped.len() as u64;
@@ -135,7 +132,7 @@ impl ClickhouseData {
                     "{TABLE} insert backlog full, oldest batch dropped"
                 );
             }
-            self.unsent.push_back(batch.to_vec());
+            self.unsent.push_back(batch);
         }
         self.push_batches();
     }
