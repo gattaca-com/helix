@@ -226,13 +226,14 @@ impl Simulators {
         }
     }
 
-    pub fn poll(&mut self) -> Vec<SimDone> {
-        let mut done = Vec::new();
+    /// Next finished simulation, if any. Pulled one at a time rather than through a callback
+    /// because handling a result needs `&mut` access to the owner of `self`.
+    pub fn next_done(&mut self) -> Option<SimDone> {
         while let Ok(event) = self.rx.try_recv() {
             match event {
                 SimulatorsEvent::TaskDone { id, error, result, elapsed } => {
                     self.on_task_response(id, error, elapsed);
-                    done.push(SimDone {
+                    return Some(SimDone {
                         result: *result,
                         elapsed: elapsed.unwrap_or(Duration::ZERO),
                     });
@@ -242,8 +243,7 @@ impl Simulators {
                 }
             }
         }
-        done.append(&mut self.answered);
-        done
+        self.answered.pop()
     }
 
     pub fn on_new_slot(&mut self, bid_slot: u64) {

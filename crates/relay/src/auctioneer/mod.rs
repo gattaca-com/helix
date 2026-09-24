@@ -128,7 +128,7 @@ impl<B: BidAdjustor> Tile<HelixSpine> for Auctioneer<B> {
 
         self.ctx.poll_discord_alert();
 
-        for done in self.ctx.sims.poll() {
+        while let Some(done) = self.ctx.sims.next_done() {
             match done.result {
                 SimResult::Validate(result) => {
                     self.state.step(
