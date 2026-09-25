@@ -7,7 +7,6 @@
 
 use std::{sync::Arc, time::Instant};
 
-use alloy_eips::eip7825::MAX_TX_GAS_LIMIT_OSAKA;
 use alloy_primitives::{Address, B256, U256};
 use alloy_rpc_types::beacon::BlsPublicKey;
 use ethrex_blockchain::{
@@ -180,8 +179,6 @@ pub struct MergeSession {
     applied_orders: FxHashSet<B256>,
     initial_beneficiary_balance: ethrex_common::U256,
     distribution_gas_limit: u64,
-    /// EIP-7825 per-transaction gas cap at the block's timestamp.
-    max_tx_gas_limit: u64,
     chain_id: u64,
     best_emitted: U256,
     last_emit: Option<Instant>,
@@ -255,13 +252,6 @@ impl MergeSession {
             ));
         }
         let chain_id = chain_config.chain_id;
-        // EIP-7825: the per-transaction gas cap applies from Osaka onwards
-        // (Amsterdam, with its different cap, is rejected above).
-        let max_tx_gas_limit = if chain_config.is_osaka_activated(v1.timestamp) {
-            MAX_TX_GAS_LIMIT_OSAKA
-        } else {
-            u64::MAX
-        };
 
         // Blob budget pre-check.
         let max_blobs = chain_config
@@ -472,7 +462,6 @@ impl MergeSession {
             applied_orders: FxHashSet::default(),
             initial_beneficiary_balance,
             distribution_gas_limit,
-            max_tx_gas_limit,
             chain_id,
             best_emitted: U256::ZERO,
             last_emit: None,
@@ -816,8 +805,6 @@ impl MergeSession {
         metrics::stage_latency("emit_clone", clone_start.elapsed().as_micros() as u64);
         let payment_start = Instant::now();
 
-        let payment_gas_limit =
-            self.max_tx_gas_limit.min(ctx.payload.header.gas_limit.saturating_sub(ctx.gas_used()));
         let safe = eaddr(self.builder_safe);
         let safe_balance =
             balance_of(&mut ctx.vm, safe).map_err(|e| MergeError::Internal(e.to_string()))?;
@@ -857,7 +844,7 @@ impl MergeSession {
             safe_nonce,
             signer_nonce,
             chain_id: self.chain_id,
-            gas_limit: payment_gas_limit,
+            gas_limit: self.distribution_gas_limit,
             base_fee_per_gas: base_fee as u128,
             multisend_contract: relay_config.multisend_contract,
         };
