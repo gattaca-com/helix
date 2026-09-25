@@ -438,6 +438,30 @@ async fn a_parent_inside_the_validation_window_is_accepted() {
         .expect("a block built on the head must prepare");
 }
 
+/// One validator caches state per parent; a sibling parent must never see another's state.
+#[tokio::test]
+async fn cached_parent_state_is_not_shared_across_parents() {
+    let fixture = Fixture::new().await;
+    let validator = fixture.validator();
+    let on_genesis = fixture.build_on(fixture.genesis_hash, fixture.genesis_timestamp + 12, 0);
+    let validate = |built: &Built| {
+        validator.validate(
+            &built.payload,
+            &fixture.bid_trace(built),
+            B256::ZERO,
+            &built.requests,
+            &empty_bundle(),
+            false,
+        )
+    };
+    validate(&on_genesis).expect("a block on genesis must validate");
+
+    let head = fixture.extend_canonical(1).await;
+    let on_head = fixture.build_on(head, fixture.genesis_timestamp + 24, 1);
+    validate(&on_head).expect("a block on the new head must see the head's nonce");
+    validate(&on_genesis).expect("genesis state must survive the head's validation");
+}
+
 /// The chain moves on while a submission is in flight. A parent further back
 /// than the window is refused rather than validated against stale state.
 #[tokio::test]
