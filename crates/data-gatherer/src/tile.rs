@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use flux::{spine::SpineAdapter, tile::Tile, timing::InternalMessage};
-use flux_gather::{BlobCache, BlobShipper, BlobWriter};
+use flux_gather::{BlobCache, BlobIo, BlobShipper};
 use flux_network::tcp::TcpNetwork;
 use flux_utils::ArrayStr;
 use helix_common::{api::builder_api::TopBidUpdate, config::DataGatherConfig, gather::GatherMeta};
@@ -36,7 +36,7 @@ pub struct DataGatherer {
     stats: SlotStats,
     cache: BlobCache,
     shipper: BlobShipper,
-    writer: BlobWriter,
+    writer: BlobIo,
     config: DataGatherConfig,
     instance: ArrayStr<64>,
     epoch: Option<String>,
@@ -62,7 +62,7 @@ impl DataGatherer {
             shipper: BlobShipper::new(config.addresses.clone())
                 .with_max_backlog(4096, Duration::from_secs(30).into())
                 .with_drop_outbound_backlog_on_disconnect(true),
-            writer: BlobWriter::new(),
+            writer: BlobIo::new(),
             config,
             instance: ArrayStr::from_str_truncate(&instance_id),
             epoch: read_spine_epoch(),
@@ -116,8 +116,8 @@ impl DataGatherer {
         self.cache.flush(&meta, 1, |blob| {
             self.shipper.ship(blob);
             if let Some(base) = persist_dir {
-                // The writer truncates: a restart within the same slot must not
-                // replace the earlier segment.
+                // The writer replaces an existing file: a restart within the
+                // same slot must not replace the earlier segment.
                 let dir = base.join(instance.as_str()).join(blob.type_name());
                 let mut path = dir.join(format!("{slot}.bin"));
                 for n in 1.. {
@@ -126,7 +126,9 @@ impl DataGatherer {
                     }
                     path = dir.join(format!("{slot}.{n}.bin"));
                 }
-                self.writer.write(blob, &path);
+                if let Err(error) = self.writer.write(blob, &path) {
+                    tracing::warn!(?path, %error, "couldn't persist blob");
+                }
             }
         });
     }
