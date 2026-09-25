@@ -60,6 +60,7 @@ ethrex-common = { git = "https://github.com/lambdaclass/ethrex", rev = "ee98e879
 ethrex-config = { git = "https://github.com/lambdaclass/ethrex", rev = "ee98e879880aee80440bcd59936c384c26629814" }
 # default features minus `aws-lc-rs` (see note above); P-256 verify uses the portable fallback
 ethrex-crypto = { git = "https://github.com/lambdaclass/ethrex", rev = "ee98e879880aee80440bcd59936c384c26629814", default-features = false, features = ["std", "kzg-rs", "secp256k1", "blst", "c-kzg"] }
+ethrex-levm = { git = "https://github.com/lambdaclass/ethrex", rev = "ee98e879880aee80440bcd59936c384c26629814", default-features = false }
 ethrex-metrics = { git = "https://github.com/lambdaclass/ethrex", rev = "ee98e879880aee80440bcd59936c384c26629814" }
 ethrex-p2p = { git = "https://github.com/lambdaclass/ethrex", rev = "ee98e879880aee80440bcd59936c384c26629814", features = ["c-kzg", "rocksdb", "metrics"] }
 ethrex-rlp = { git = "https://github.com/lambdaclass/ethrex", rev = "ee98e879880aee80440bcd59936c384c26629814" }
