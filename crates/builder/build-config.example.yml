@@ -20,7 +20,9 @@ beacon_url: "http://localhost:3500"
 subsidy_wei: 1000000000000000
 
 # Gas held back from the fill for the trailing payout transaction. A contract
-# fee recipient that needs more than this makes the payout fail.
+# fee recipient that needs more than this makes the payout fail. From Amsterdam
+# the builder adds EIP-8037's state gas on top when the recipient does not exist
+# yet, so this covers the transfer alone.
 payout_gas_reserve: 21000
 
 extra_data: "helix-builder"

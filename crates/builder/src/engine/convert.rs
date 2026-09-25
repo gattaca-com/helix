@@ -95,6 +95,16 @@ pub fn block_to_payload_v3(block: &Block) -> ExecutionPayloadV3 {
     }
 }
 
+/// The Amsterdam header fields no `ExecutionPayloadV3` carries: the EIP-7928
+/// block access list and the EIP-7843 slot number. `None` for an earlier fork.
+#[derive(Clone, Copy)]
+pub struct Amsterdam<'a> {
+    /// The list as the builder encoded it. It is hashed as received and never
+    /// re-encoded, because the block hash commits to these exact bytes.
+    pub block_access_list: &'a [u8],
+    pub slot: u64,
+}
+
 /// Inverse of [`block_to_payload_v3`]. The roots the payload omits are
 /// recomputed, so the hash this yields is the one the submission is bound to.
 #[allow(dead_code)]
@@ -102,7 +112,13 @@ pub fn payload_v3_to_block(
     payload: &ExecutionPayloadV3,
     parent_beacon_block_root: B256,
     requests: &ExecutionRequestsV4,
+    amsterdam: Option<Amsterdam<'_>>,
 ) -> Result<Block, ValidationError> {
+    // An empty list hashes to something no builder committed to, which would
+    // surface as a block hash mismatch. Name the real fault instead.
+    if amsterdam.is_some_and(|a| a.block_access_list.is_empty()) {
+        return Err(ValidationError::EmptyBlockAccessList);
+    }
     let inner = &payload.payload_inner.payload_inner;
 
     let transactions = inner
@@ -139,6 +155,9 @@ pub fn payload_v3_to_block(
         excess_blob_gas: Some(payload.excess_blob_gas),
         parent_beacon_block_root: Some(h256(parent_beacon_block_root)),
         requests_hash: Some(compute_requests_hash(&encoded_requests(requests))),
+        block_access_list_hash: amsterdam
+            .map(|a| ethrex_common::utils::keccak(a.block_access_list)),
+        slot_number: amsterdam.map(|a| a.slot),
         ..Default::default()
     };
 

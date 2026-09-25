@@ -1,9 +1,11 @@
+use std::marker::PhantomData;
+
 use alloy_primitives::FixedBytes;
 use lh_types::{EthSpec, MainnetEthSpec};
 use rand::Rng;
-use ssz_types::{FixedVector, VariableList};
+use ssz_types::{FixedVector, ProgressiveVariableList, VariableList};
 
-use crate::{SszError, TestRandom, ssz_bytes_wrapper};
+use crate::{ExecutionRequestsGloas, SszError, TestRandom, ssz_bytes_wrapper};
 
 pub type Withdrawal = lh_types::Withdrawal;
 pub type Withdrawals = lh_types::Withdrawals<MainnetEthSpec>;
@@ -32,6 +34,36 @@ pub fn convert_transactions_to_lighthouse(
     VariableList::new(new)
 }
 
+/// Real, progressive-list Gloas transactions shape, per EIP-7688.
+pub fn convert_transactions_to_progressive(
+    txs: &Transactions,
+) -> lh_types::ProgressiveTransactions {
+    ProgressiveVariableList::new(
+        txs.iter().map(|tx| ProgressiveVariableList::new(tx.as_ref().to_vec())).collect(),
+    )
+}
+
+/// Real, progressive-list Gloas KZG commitments shape, per EIP-7688.
+pub fn convert_kzg_commitments_to_progressive(
+    commitments: &KzgCommitments,
+) -> lh_types::ProgressiveKzgCommitments {
+    ProgressiveVariableList::new(commitments.iter().map(|c| lh_types::KzgCommitment(c.0)).collect())
+}
+
+/// Converts helix's Electra-shaped builder-submission execution requests into the real,
+/// progressive-list Gloas shape. `builder_deposits`/`builder_exits` are left empty --
+/// TODO(gloas): populate once EIP-8282 builder deposit/exit submission exists.
+pub fn execution_requests_to_gloas(requests: &ExecutionRequests) -> ExecutionRequestsGloas {
+    ExecutionRequestsGloas {
+        deposits: requests.deposits.iter().cloned().collect(),
+        withdrawals: requests.withdrawals.iter().cloned().collect(),
+        consolidations: requests.consolidations.iter().cloned().collect(),
+        builder_deposits: Default::default(),
+        builder_exits: Default::default(),
+        _phantom: PhantomData,
+    }
+}
+
 const LOGS_BLOOM_SIZE: usize = 256;
 pub type Bloom = FixedBytes<LOGS_BLOOM_SIZE>; // FixedVector<u8, E::BytesPerLogsBloom>;
 
@@ -51,6 +83,23 @@ ssz_bytes_wrapper! {
     /// VariableList<u8, E::MaxBytesPerTransaction>
     pub struct Transaction;
     max  = <MainnetEthSpec as EthSpec>::MaxBytesPerTransaction;
+}
+
+ssz_bytes_wrapper! {
+    /// The opaque encoded EIP-7928 block access list, as the builder produced
+    /// it. Gloas's own `BlockAccessList` is a `ProgressiveVariableList<u8>`,
+    /// so nothing here mirrors its structure.
+    pub struct BlockAccessListBytes;
+    max  = <MainnetEthSpec as EthSpec>::MaxBytesPerTransaction;
+}
+
+impl TestRandom for BlockAccessListBytes {
+    fn random_for_test(rng: &mut impl rand::RngCore) -> Self {
+        let n = rng.random_range(0..=1000) as usize;
+        let mut bytes = vec![0u8; n];
+        rng.fill_bytes(&mut bytes);
+        Self(bytes.into())
+    }
 }
 
 impl TestRandom for Transaction {
@@ -123,5 +172,46 @@ mod tests {
         let our_tree_hash = our_transaction.tree_hash_root();
         let lh_tree_hash = lh_transaction.tree_hash_root();
         assert_eq!(our_tree_hash, lh_tree_hash, "Tree hash root should match lighthouse");
+    }
+
+    #[test]
+    fn convert_transactions_to_progressive_preserves_bytes() {
+        let txs = Transactions::random_for_test(&mut rand::rng());
+
+        let progressive = convert_transactions_to_progressive(&txs);
+
+        assert_eq!(progressive.len(), txs.len());
+        for (converted, original) in progressive.as_slice().iter().zip(txs.iter()) {
+            assert_eq!(converted.as_slice(), original.as_ref());
+        }
+    }
+
+    #[test]
+    fn convert_kzg_commitments_to_progressive_preserves_bytes() {
+        let commitments = KzgCommitments::new(vec![
+            KzgCommitment::repeat_byte(0x11),
+            KzgCommitment::repeat_byte(0x22),
+        ])
+        .unwrap();
+
+        let progressive = convert_kzg_commitments_to_progressive(&commitments);
+
+        assert_eq!(progressive.len(), commitments.len());
+        for (converted, original) in progressive.as_slice().iter().zip(commitments.iter()) {
+            assert_eq!(converted.0, original.0);
+        }
+    }
+
+    #[test]
+    fn execution_requests_to_gloas_preserves_lists_and_defaults_builder_requests() {
+        let requests = ExecutionRequests::random_for_test(&mut rand::rng());
+
+        let gloas = execution_requests_to_gloas(&requests);
+
+        assert!(gloas.deposits.iter().eq(requests.deposits.iter()));
+        assert!(gloas.withdrawals.iter().eq(requests.withdrawals.iter()));
+        assert!(gloas.consolidations.iter().eq(requests.consolidations.iter()));
+        assert!(gloas.builder_deposits.is_empty());
+        assert!(gloas.builder_exits.is_empty());
     }
 }

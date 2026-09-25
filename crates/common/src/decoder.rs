@@ -8,12 +8,12 @@ use flate2::read::GzDecoder;
 use flux_profiler::timed;
 use flux_versioned_types::ByteStable;
 use helix_types::{
-    BidAdjustmentData, BlockMergingData, BlockMergingDataV2, Compression, DehydratedBidSubmission,
-    DehydratedBidSubmissionFulu, DehydratedBidSubmissionFuluV1,
+    BidAdjustmentData, BlockAccessListBytes, BlockMergingData, BlockMergingDataV2, Compression,
+    DehydratedBidSubmission, DehydratedBidSubmissionFulu, DehydratedBidSubmissionFuluV1,
     DehydratedBidSubmissionFuluWithAdjustments,
     DehydratedBidSubmissionFuluWithAdjustmentsAndMergingData,
     DehydratedBidSubmissionFuluWithMergingData, ForkName, ForkVersionDecode, MergeType,
-    SignedBidSubmission, SignedBidSubmissionWithAdjustments,
+    SignedBidSubmission, SignedBidSubmissionGloas, SignedBidSubmissionWithAdjustments,
     SignedBidSubmissionWithAdjustmentsAndMergingData, SignedBidSubmissionWithMergingData,
     Submission, WithAdjustments, WithAdjustmentsAndMergingData, WithMergingData,
 };
@@ -41,6 +41,15 @@ use crate::{
     },
 };
 
+/// What one submission decodes into: the submission itself plus the sidecars
+/// only some forks and headers carry.
+pub type DecodedParts = (
+    Submission,
+    Option<BlockMergingDataV2>,
+    Option<BidAdjustmentData>,
+    Option<BlockAccessListBytes>,
+);
+
 #[derive(Debug, thiserror::Error)]
 pub enum DecoderError {
     #[error("json decode error: {0}")]
@@ -57,6 +66,9 @@ pub enum DecoderError {
 
     #[error("v2 shapes are SSZ over TCP; merging v2 requires Mergeable")]
     V2Unsupported,
+
+    #[error("unsupported combination: {0}")]
+    UnsupportedCombination(&'static str),
 }
 
 impl IntoResponse for DecoderError {
@@ -84,7 +96,8 @@ impl DecoderError {
             DecoderError::SszDecode(_) |
             DecoderError::IOError(_) |
             DecoderError::PayloadDecode |
-            DecoderError::V2Unsupported => StatusCode::BAD_REQUEST,
+            DecoderError::V2Unsupported |
+            DecoderError::UnsupportedCombination(_) => StatusCode::BAD_REQUEST,
         }
     }
 }
@@ -185,6 +198,25 @@ pub struct SubmissionDecoderParams {
     pub fork_name: ForkName,
 }
 
+impl SubmissionDecoderParams {
+    /// Uncompressed SSZ bytes of the fork's plain submission shape, with no
+    /// sidecars. This is what the relay re-encodes for an SSZ simulator.
+    pub fn plain(fork_name: ForkName) -> Self {
+        Self {
+            compression: Compression::None,
+            encoding: Encoding::Ssz,
+            merge_type: MergeType::None,
+            is_dehydrated: false,
+            with_mergeable_data: false,
+            with_adjustments: false,
+            mark_all_txs_mergeable: false,
+            dehydrated_v2: false,
+            merging_v2: false,
+            fork_name,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct SubmissionDecoder {
     compression: Compression,
@@ -275,8 +307,7 @@ impl SubmissionDecoder {
         &mut self,
         payload: &[u8],
         buf: &mut Vec<u8>,
-    ) -> Result<(Submission, Option<BlockMergingDataV2>, Option<BidAdjustmentData>), DecoderError>
-    {
+    ) -> Result<DecodedParts, DecoderError> {
         let body: &[u8] = match self.decompress(payload, buf) {
             None => payload,
             Some(Ok(())) => buf,
@@ -298,11 +329,7 @@ impl SubmissionDecoder {
     /// header flags. `dehydrated_v2` selects the v2 submission shape,
     /// `merging_v2` the v2 merging shape; each pairs with the other's v1.
     #[timed]
-    fn decode_v2(
-        &mut self,
-        body: &[u8],
-    ) -> Result<(Submission, Option<BlockMergingDataV2>, Option<BidAdjustmentData>), DecoderError>
-    {
+    fn decode_v2(&mut self, body: &[u8]) -> Result<DecodedParts, DecoderError> {
         let mergeable = self.merge_type == MergeType::Mergeable;
         if !matches!(self.encoding, Encoding::Ssz) ||
             self.fork_name != ForkName::Fulu ||
@@ -340,7 +367,7 @@ impl SubmissionDecoder {
             }
             MergeType::None | MergeType::Pause => None,
         };
-        Ok((submission, merging_data, adjustments))
+        Ok((submission, merging_data, adjustments, None))
     }
 
     fn v2_parts<S: Decode>(
@@ -379,11 +406,13 @@ impl SubmissionDecoder {
     }
 
     #[timed]
-    fn decode_dehydrated(
-        &mut self,
-        body: &[u8],
-    ) -> Result<(Submission, Option<BlockMergingDataV2>, Option<BidAdjustmentData>), DecoderError>
-    {
+    fn decode_dehydrated(&mut self, body: &[u8]) -> Result<DecodedParts, DecoderError> {
+        // Every shape below is Fulu's, which has no block access list. Decoding
+        // a Gloas submission into one would drop it and simulate a block the
+        // builder never committed to.
+        if self.fork_name == ForkName::Gloas {
+            return Err(DecoderError::UnsupportedCombination("dehydrated Gloas"));
+        }
         if self.merge_type == MergeType::Mergeable {
             if self.with_adjustments {
                 let sub: DehydratedBidSubmissionFuluWithAdjustmentsAndMergingData =
@@ -394,6 +423,7 @@ impl SubmissionDecoder {
                     Submission::Dehydrated(submission),
                     Some(merging_data.into()),
                     Some(adjustment_data),
+                    None,
                 ));
             }
 
@@ -401,7 +431,7 @@ impl SubmissionDecoder {
                 self.decode_by_fork(body, self.fork_name)?;
             let (submission, merging_data) = sub_with_merging.split();
 
-            return Ok((Submission::Dehydrated(submission), Some(merging_data.into()), None));
+            return Ok((Submission::Dehydrated(submission), Some(merging_data.into()), None, None));
         }
 
         let (submission, bid_adjustment) = if self.with_adjustments {
@@ -434,15 +464,16 @@ impl SubmissionDecoder {
             MergeType::Pause => None,
         };
 
-        Ok((Submission::Dehydrated(submission), merging_data, bid_adjustment))
+        Ok((Submission::Dehydrated(submission), merging_data, bid_adjustment, None))
     }
 
     #[timed]
-    fn decode_merge(
-        &mut self,
-        body: &[u8],
-    ) -> Result<(Submission, Option<BlockMergingDataV2>, Option<BidAdjustmentData>), DecoderError>
-    {
+    fn decode_merge(&mut self, body: &[u8]) -> Result<DecodedParts, DecoderError> {
+        // Gloas merging data comes with the merge builder's own step; until then
+        // these Fulu shapes would drop the block access list.
+        if self.fork_name == ForkName::Gloas {
+            return Err(DecoderError::UnsupportedCombination("Gloas with merging data"));
+        }
         let decoded = if self.with_adjustments {
             self._decode::<SignedBidSubmissionWithAdjustmentsAndMergingData>(body).map(|sub| {
                 let (submission, adjustment_data, merging_data) = sub.split();
@@ -474,24 +505,32 @@ impl SubmissionDecoder {
             MergeType::None => Some(merging_data),
             MergeType::Pause => None,
         };
-        Ok((Submission::Full(submission), merging_data.map(Into::into), bid_adjustment))
+        Ok((Submission::Full(submission), merging_data.map(Into::into), bid_adjustment, None))
     }
 
     #[timed]
-    fn decode_default(
-        &mut self,
-        body: &[u8],
-    ) -> Result<(Submission, Option<BlockMergingDataV2>, Option<BidAdjustmentData>), DecoderError>
-    {
-        let (submission, bid_adjustment) = if self.with_adjustments {
+    fn decode_default(&mut self, body: &[u8]) -> Result<DecodedParts, DecoderError> {
+        let is_gloas = self.fork_name == ForkName::Gloas;
+        let (submission, bid_adjustment, block_access_list) = if self.with_adjustments {
+            if is_gloas {
+                // Refused rather than decoded into the wrong shape. Adjustments
+                // are a BuilderNet feature and Gloas does not need them yet.
+                return Err(DecoderError::UnsupportedCombination("Gloas with bid adjustments"));
+            }
             let sub_with_adjustment: SignedBidSubmissionWithAdjustments = self._decode(body)?;
             let (sub, adjustment_data) = sub_with_adjustment.split();
 
-            (sub, Some(adjustment_data))
+            (sub, Some(adjustment_data), None)
+        } else if is_gloas {
+            // Gloas carries the builder's EIP-7928 block access list.
+            let gloas: SignedBidSubmissionGloas = self._decode(body)?;
+            let (submission, block_access_list) = gloas.split();
+
+            (submission, None, Some(block_access_list))
         } else {
             let submission: SignedBidSubmission = self._decode(body)?;
 
-            (submission, None)
+            (submission, None, None)
         };
 
         let merging_data = match self.merge_type {
@@ -515,7 +554,7 @@ impl SubmissionDecoder {
             }
             MergeType::Pause => None,
         };
-        Ok((Submission::Full(submission), merging_data, bid_adjustment))
+        Ok((Submission::Full(submission), merging_data, bid_adjustment, block_access_list))
     }
 
     // TODO: pass a buffer pool to avoid allocations
@@ -621,7 +660,7 @@ mod tests {
         BidAdjData, BidAdjustmentDataV1, BlobsBundle, BundleOrder, DehydratedBidSubmissionFuluV1,
         DehydratedBidSubmissionFuluWithAdjustmentsAndMergingData,
         DehydratedBidSubmissionFuluWithMergingData, MergeType, Order,
-        SignedBidSubmissionWithAdjustmentsAndMergingData, TestRandom,
+        SignedBidSubmissionWithAdjustmentsAndMergingData, TestRandom, TestRandomSeed,
     };
     use ssz::Encode;
 
@@ -654,6 +693,85 @@ mod tests {
     fn test_merge_type_serialization() {
         assert_eq!(MergeType::Mergeable.as_ref(), "mergeable");
         assert_eq!(MergeType::AppendOnly.as_ref(), "append_only");
+    }
+
+    /// Plain SSZ params for `fork`, nothing else enabled.
+    #[test]
+    fn the_decoder_selects_the_gloas_shape_by_fork() {
+        let mut submission = SignedBidSubmissionGloas::test_random();
+        submission.blobs_bundle = Default::default();
+        submission.block_access_list = BlockAccessListBytes(vec![3u8; 32].into());
+        let body = submission.as_ssz_bytes();
+
+        let params = SubmissionDecoderParams::plain(ForkName::Gloas);
+        let mut buf = Vec::new();
+        let (_, _, _, block_access_list) = SubmissionDecoder::new(&params)
+            .decode(&body, &mut buf)
+            .expect("a Gloas submission must decode");
+
+        assert_eq!(block_access_list.expect("Gloas carries a block access list").to_vec(), vec![
+            3u8;
+            32
+        ],);
+    }
+
+    #[test]
+    fn the_decoder_keeps_the_fulu_shape_for_fulu() {
+        let mut submission = SignedBidSubmission::test_random();
+        submission.blobs_bundle = Default::default();
+        let body = submission.as_ssz_bytes();
+
+        let params = SubmissionDecoderParams::plain(ForkName::Fulu);
+        let mut buf = Vec::new();
+        let (_, _, _, block_access_list) = SubmissionDecoder::new(&params)
+            .decode(&body, &mut buf)
+            .expect("the Fulu shape must be unchanged");
+
+        assert!(block_access_list.is_none(), "only Gloas carries one");
+    }
+
+    #[test]
+    fn gloas_with_adjustments_is_refused() {
+        let mut submission = SignedBidSubmissionGloas::test_random();
+        submission.blobs_bundle = Default::default();
+        let body = submission.as_ssz_bytes();
+
+        let mut params = SubmissionDecoderParams::plain(ForkName::Gloas);
+        params.with_adjustments = true;
+        let mut buf = Vec::new();
+        let err = SubmissionDecoder::new(&params)
+            .decode(&body, &mut buf)
+            .expect_err("the combination has no wire shape");
+
+        assert!(
+            matches!(err, DecoderError::UnsupportedCombination(_)),
+            "refused explicitly, not decoded into the wrong shape: {err}",
+        );
+    }
+
+    /// Both wire shapes below are Fulu's, with no room for a block access list.
+    #[test]
+    fn gloas_with_the_other_submission_types_is_refused() {
+        let mut submission = SignedBidSubmissionGloas::test_random();
+        submission.blobs_bundle = Default::default();
+        let body = submission.as_ssz_bytes();
+
+        for adjust in [
+            |params: &mut SubmissionDecoderParams| params.is_dehydrated = true,
+            |params: &mut SubmissionDecoderParams| params.with_mergeable_data = true,
+        ] {
+            let mut params = SubmissionDecoderParams::plain(ForkName::Gloas);
+            adjust(&mut params);
+            let mut buf = Vec::new();
+            let err = SubmissionDecoder::new(&params)
+                .decode(&body, &mut buf)
+                .expect_err("the combination has no wire shape");
+
+            assert!(
+                matches!(err, DecoderError::UnsupportedCombination(_)),
+                "refused explicitly, not decoded into a shape that drops the list: {err}",
+            );
+        }
     }
 
     #[test]
@@ -702,7 +820,7 @@ mod tests {
         };
         let mut decoder = SubmissionDecoder::new(&params);
         let mut buf = Vec::new();
-        let (decoded_submission, merging_data, bid_adjustment_data) =
+        let (decoded_submission, merging_data, bid_adjustment_data, _) =
             decoder.decode(&body, &mut buf).expect("decode should succeed");
 
         assert!(matches!(decoded_submission, Submission::Dehydrated(_)));
@@ -736,7 +854,7 @@ mod tests {
         };
         let mut decoder = SubmissionDecoder::new(&params);
         let mut buf = Vec::new();
-        let (decoded_submission, merging_data, bid_adjustment_data) =
+        let (decoded_submission, merging_data, bid_adjustment_data, _) =
             decoder.decode(&body, &mut buf).expect("decode should succeed");
 
         assert!(matches!(decoded_submission, Submission::Full(_)));
@@ -763,7 +881,7 @@ mod tests {
         };
         let mut decoder = SubmissionDecoder::new(&params);
         let mut buf = Vec::new();
-        let (decoded_submission, merging_data, bid_adjustment_data) =
+        let (decoded_submission, merging_data, bid_adjustment_data, _) =
             decoder.decode(&body, &mut buf).expect("decode should succeed");
 
         assert!(matches!(decoded_submission, Submission::Dehydrated(_)));
@@ -808,7 +926,7 @@ mod tests {
         };
         let mut decoder = SubmissionDecoder::new(&params);
         let mut buf = Vec::new();
-        let (decoded_submission, merging_data, bid_adjustment) =
+        let (decoded_submission, merging_data, bid_adjustment, _) =
             decoder.decode(&body, &mut buf).expect("decode should succeed");
 
         assert!(matches!(decoded_submission, Submission::Full(_)));
@@ -839,7 +957,7 @@ mod tests {
         };
         let mut decoder = SubmissionDecoder::new(&params);
         let mut buf = Vec::new();
-        let (decoded_submission, decoded_merging_data, bid_adjustment) =
+        let (decoded_submission, decoded_merging_data, bid_adjustment, _) =
             decoder.decode(&body, &mut buf).expect("decode should succeed");
 
         assert!(matches!(decoded_submission, Submission::Full(_)));
@@ -887,7 +1005,7 @@ mod tests {
         };
         let mut decoder = SubmissionDecoder::new(&params);
         let mut buf = Vec::new();
-        let (decoded_submission, decoded_merging_data, _) =
+        let (decoded_submission, decoded_merging_data, _, _) =
             decoder.decode(&body, &mut buf).expect("decode should succeed");
 
         assert!(matches!(decoded_submission, Submission::Full(_)));
@@ -918,7 +1036,7 @@ mod tests {
         };
         let mut decoder = SubmissionDecoder::new(&params);
         let mut buf = Vec::new();
-        let (decoded_submission, merging_data, _) =
+        let (decoded_submission, merging_data, _, _) =
             decoder.decode(&body, &mut buf).expect("decode should succeed");
 
         assert!(matches!(decoded_submission, Submission::Full(_)));
@@ -958,7 +1076,7 @@ mod tests {
         };
         let mut decoder = SubmissionDecoder::new(&params);
         let mut buf = Vec::new();
-        let (decoded_submission, merging_data, _) =
+        let (decoded_submission, merging_data, _, _) =
             decoder.decode(&body, &mut buf).expect("decode should succeed");
 
         assert!(matches!(decoded_submission, Submission::Full(_)));
@@ -1002,7 +1120,7 @@ mod tests {
         };
         let mut decoder = SubmissionDecoder::new(&params);
         let mut buf = Vec::new();
-        let (decoded_submission, merging_data, bid_adjustment) =
+        let (decoded_submission, merging_data, bid_adjustment, _) =
             decoder.decode(&body, &mut buf).expect("decode should succeed");
 
         assert!(matches!(decoded_submission, Submission::Dehydrated(_)));
@@ -1030,7 +1148,7 @@ mod tests {
         };
         let mut decoder = SubmissionDecoder::new(&params);
         let mut buf = Vec::new();
-        let (decoded_submission, merging_data, bid_adjustment) =
+        let (decoded_submission, merging_data, bid_adjustment, _) =
             decoder.decode(&body, &mut buf).expect("decode should succeed");
 
         assert!(matches!(decoded_submission, Submission::Full(_)));
@@ -1057,7 +1175,7 @@ mod tests {
         };
         let mut decoder = SubmissionDecoder::new(&params);
         let mut buf = Vec::new();
-        let (decoded_submission, merging_data, bid_adjustment) =
+        let (decoded_submission, merging_data, bid_adjustment, _) =
             decoder.decode(&body, &mut buf).expect("decode should succeed");
 
         assert!(matches!(decoded_submission, Submission::Dehydrated(_)));
@@ -1087,7 +1205,7 @@ mod tests {
         };
         let mut decoder = SubmissionDecoder::new(&params);
         let mut buf = Vec::new();
-        let (decoded_submission, merging_data, bid_adjustment_data) =
+        let (decoded_submission, merging_data, bid_adjustment_data, _) =
             decoder.decode(&body, &mut buf).expect("decode should succeed");
 
         assert!(matches!(decoded_submission, Submission::Dehydrated(_)));
@@ -1123,7 +1241,7 @@ mod tests {
         };
         let mut decoder = SubmissionDecoder::new(&params);
         let mut buf = Vec::new();
-        let (decoded_submission, merging_data, bid_adjustment_data) =
+        let (decoded_submission, merging_data, bid_adjustment_data, _) =
             decoder.decode(&body, &mut buf).expect("decode should succeed");
 
         match decoded_submission {
@@ -1179,7 +1297,7 @@ mod tests {
         };
         let mut decoder = SubmissionDecoder::new(&params);
         let mut buf = Vec::new();
-        let (decoded_submission, merging_data, bid_adjustment_data) =
+        let (decoded_submission, merging_data, bid_adjustment_data, _) =
             decoder.decode(&body, &mut buf).expect("decode should succeed");
 
         assert!(matches!(decoded_submission, Submission::Full(_)));

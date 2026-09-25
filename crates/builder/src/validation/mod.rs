@@ -21,8 +21,8 @@ use ethrex_common::{
         Receipt, Transaction, TxKind,
     },
     validation::{
-        validate_block_pre_execution, validate_gas_used, validate_receipts_root_and_logs_bloom,
-        validate_requests_hash,
+        validate_block_access_list_hash, validate_block_pre_execution, validate_gas_used,
+        validate_receipts_root_and_logs_bloom, validate_requests_hash,
     },
 };
 use ethrex_crypto::NativeCrypto;
@@ -36,7 +36,7 @@ use tokio::sync::watch;
 
 use crate::{
     engine::{
-        convert::{aaddr, au256, b256, eaddr, eu256, h256, payload_v3_to_block},
+        convert::{Amsterdam, aaddr, au256, b256, eaddr, eu256, h256, payload_v3_to_block},
         simulate::balance_of,
     },
     metrics,
@@ -83,9 +83,10 @@ impl BlockValidator {
         message: &BidTrace,
         parent_beacon_block_root: B256,
         requests: &ExecutionRequestsV4,
+        amsterdam: Option<Amsterdam<'_>>,
     ) -> Result<PreparedBlock, ValidationError> {
         let t = Instant::now();
-        let block = self.to_block(payload, parent_beacon_block_root, requests)?;
+        let block = self.to_block(payload, parent_beacon_block_root, requests, amsterdam)?;
         let t = metrics::sim_lap("to_block", t);
         self.validate_message_against_header(&block, message)?;
         let t = metrics::sim_lap("check_trace", t);
@@ -94,6 +95,9 @@ impl BlockValidator {
         Ok(PreparedBlock { block, parent_header })
     }
 
+    // A request struct would read better at nine fields. That refactor touches
+    // every caller, so it is not this change's job.
+    #[allow(clippy::too_many_arguments)]
     pub fn validate(
         &self,
         payload: &ExecutionPayloadV3,
@@ -102,8 +106,10 @@ impl BlockValidator {
         requests: &ExecutionRequestsV4,
         blobs: &BlobsBundle,
         apply_blacklist: bool,
+        amsterdam: Option<Amsterdam<'_>>,
     ) -> Result<ExecutedBlock, ValidationError> {
-        let prepared = self.prepare(payload, message, parent_beacon_block_root, requests)?;
+        let prepared =
+            self.prepare(payload, message, parent_beacon_block_root, requests, amsterdam)?;
         let t = Instant::now();
         self.validate_blobs_bundle(&prepared.block, blobs)?;
         metrics::sim_lap("blobs", t);
@@ -130,8 +136,10 @@ impl BlockValidator {
         blobs: &BlobsBundle,
         apply_blacklist: bool,
         base_payment_tx_index: u64,
+        amsterdam: Option<Amsterdam<'_>>,
     ) -> Result<ExecutedBlock, ValidationError> {
-        let prepared = self.prepare(payload, message, parent_beacon_block_root, requests)?;
+        let prepared =
+            self.prepare(payload, message, parent_beacon_block_root, requests, amsterdam)?;
         let t = Instant::now();
         self.validate_blobs_bundle(&prepared.block, blobs)?;
         metrics::sim_lap("blobs", t);
@@ -252,16 +260,25 @@ impl BlockValidator {
             .map_err(|e| ValidationError::Execution(e.to_string()))?;
         metrics::sim_lap("vm_setup", t);
 
-        let (receipts, tx_details, gas_used) = Self::execute_transactions(&mut vm, &block)?;
-        let t = Instant::now();
-        let requests = vm
-            .extract_requests(&receipts, &block.header)
-            .map_err(|e| ValidationError::Execution(e.to_string()))?;
-        if let Some(withdrawals) = &block.body.withdrawals {
-            vm.process_withdrawals(withdrawals)
+        let is_amsterdam = chain_config.is_amsterdam_activated(block.header.timestamp);
+        let (receipts, requests, gas_used, tx_details, bal) = if is_amsterdam {
+            let (result, bal) =
+                vm.execute_block(&block).map_err(|e| ValidationError::Execution(e.to_string()))?;
+            (result.receipts, result.requests, result.block_gas_used, Vec::new(), bal)
+        } else {
+            let (receipts, tx_details, gas_used) = Self::execute_transactions(&mut vm, &block)?;
+            let t = Instant::now();
+            let requests = vm
+                .extract_requests(&receipts, &block.header)
                 .map_err(|e| ValidationError::Execution(e.to_string()))?;
-        }
-        let t = metrics::sim_lap("requests_withdrawals", t);
+            if let Some(withdrawals) = &block.body.withdrawals {
+                vm.process_withdrawals(withdrawals)
+                    .map_err(|e| ValidationError::Execution(e.to_string()))?;
+            }
+            metrics::sim_lap("requests_withdrawals", t);
+            (receipts, requests, gas_used, tx_details, None)
+        };
+        let t = Instant::now();
 
         validate_gas_used(gas_used, &block.header)
             .map_err(|e| ValidationError::PostExecution(e.to_string()))?;
@@ -270,6 +287,23 @@ impl BlockValidator {
         validate_requests_hash(&block.header, &chain_config, &requests)
             .map_err(|e| ValidationError::PostExecution(e.to_string()))?;
         let t = metrics::sim_lap("post_execution", t);
+
+        // The header commits to the list the builder submitted, so this compares
+        // that list against what execution produced. ethrex skips the check when
+        // the VM returns no list; a relay simulator must fail closed instead.
+        if is_amsterdam {
+            let bal = bal.ok_or_else(|| {
+                ValidationError::PostExecution("no block access list from execution".to_string())
+            })?;
+            validate_block_access_list_hash(
+                &block.header,
+                &chain_config,
+                &bal,
+                block.body.transactions.len(),
+                &NativeCrypto,
+            )
+            .map_err(|e| ValidationError::PostExecution(e.to_string()))?;
+        }
 
         let account_updates =
             vm.get_state_transitions().map_err(|e| ValidationError::Execution(e.to_string()))?;
@@ -301,7 +335,7 @@ impl BlockValidator {
 
     /// The transaction loop of ethrex's `execute_block`, reading the coinbase
     /// balance after each transaction. Mirrors the pre-Amsterdam gas accounting
-    /// only: the V3 payloads this server decodes predate that fork.
+    /// only; Amsterdam blocks go through `execute_block` itself.
     fn execute_transactions(
         vm: &mut Evm,
         block: &Block,
@@ -517,8 +551,9 @@ impl BlockValidator {
         payload: &ExecutionPayloadV3,
         parent_beacon_block_root: B256,
         requests: &ExecutionRequestsV4,
+        amsterdam: Option<Amsterdam<'_>>,
     ) -> Result<Block, ValidationError> {
-        payload_v3_to_block(payload, parent_beacon_block_root, requests)
+        payload_v3_to_block(payload, parent_beacon_block_root, requests, amsterdam)
     }
 
     /// The relay serves the trace's fields, so a trace that misdescribes a valid

@@ -5,7 +5,7 @@ use flux::type_hash_derive::type_hash_lock;
 use flux_utils::ArrayStr;
 use flux_versioned_types::{versioned_enum, versioned_struct};
 use helix_common::{
-    GetPayloadTrace, PayloadAttributesUpdate, SubmissionTrace,
+    ForkKey, GetPayloadTrace, PayloadAttributesUpdate, SubmissionTrace,
     api::{
         builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
         proposer_api::{GetExecutionPayloadBidParams, GetHeaderParams},
@@ -15,10 +15,11 @@ use helix_common::{
 };
 use helix_tcp_types::{BidSubmissionFlags, BidSubmissionHeader};
 use helix_types::{
-    BidAdjustmentData, BlockMergingDataV2, BlsPublicKeyBytes, BuilderBid, Compression,
-    ExecutionPayload, ForkName, GetPayloadResponse, MergeType, PayloadAndBlobs, PayloadBidData,
-    PayloadBidDataRef, SignedBidSubmission, SignedBlindedBeaconBlock, SignedExecutionPayloadBid,
-    Slot, Submission, SubmissionVersion, VersionedSignedProposal, mock_public_key_bytes,
+    BidAdjustmentData, BlockAccessListBytes, BlockMergingDataV2, BlsPublicKeyBytes, BuilderBid,
+    Compression, ExecutionPayload, ForkName, GetPayloadResponse, MergeType, PayloadAndBlobs,
+    PayloadBidData, PayloadBidDataRef, SignedBidSubmission, SignedBlindedBeaconBlock,
+    SignedExecutionPayloadBid, Slot, Submission, SubmissionVersion, VersionedSignedProposal,
+    mock_public_key_bytes,
 };
 use http::{
     HeaderMap, HeaderValue,
@@ -33,7 +34,8 @@ use crate::{
     SubmissionDataWithSpan,
     api::{
         HEADER_API_KEY, HEADER_API_TOKEN, HEADER_HYDRATE, HEADER_IS_MERGEABLE, HEADER_MERGE_TYPE,
-        HEADER_PESSIMISTIC, HEADER_SEQUENCE, HEADER_WITH_ADJUSTMENTS, proposer::ProposerApiError,
+        HEADER_PESSIMISTIC, HEADER_SEQUENCE, HEADER_WITH_ADJUSTMENTS,
+        proposer::{HeldGloasPayload, ProposerApiError},
     },
     auctioneer::MergeResult,
     gossip::BroadcastPayloadParams,
@@ -247,6 +249,7 @@ pub struct SubmissionData {
     pub submission: Submission,
     pub merging_data: Option<BlockMergingDataV2>,
     pub bid_adjustment_data: Option<BidAdjustmentData>,
+    pub block_access_list: Option<BlockAccessListBytes>,
     pub version: SubmissionVersion,
     pub withdrawals_root: B256,
     pub trace: SubmissionTrace,
@@ -274,6 +277,8 @@ pub struct SubmissionPayload {
     pub withdrawals_root: B256,
     pub tx_root: Option<B256>,
     pub bid_adjustment_data: Option<BidAdjustmentData>,
+    /// The builder's EIP-7928 list, present only for Gloas submissions.
+    pub block_access_list: Option<BlockAccessListBytes>,
     pub is_adjusted: bool,
     pub submission_version: SubmissionVersion,
     pub submission_trace: SubmissionTrace,
@@ -288,16 +293,19 @@ pub enum PayloadEntry {
 }
 
 impl PayloadEntry {
+    #[allow(clippy::too_many_arguments)]
     pub fn new_submission(
         signed_bid_submission: SignedBidSubmission,
         withdrawals_root: B256,
         tx_root: Option<B256>,
         bid_adjustment_data: Option<BidAdjustmentData>,
+        block_access_list: Option<BlockAccessListBytes>,
         submission_version: SubmissionVersion,
         submission_trace: SubmissionTrace,
         parent_beacon_block_root: Option<B256>,
     ) -> Self {
         Self::Submission(SubmissionPayload {
+            block_access_list,
             signed_bid_submission,
             withdrawals_root,
             tx_root,
@@ -362,6 +370,16 @@ impl PayloadEntry {
         }
     }
 
+    /// The submitted EIP-7928 list. Empty when the fork does not carry one, in
+    /// which case a Gloas conversion would produce an invalid payload -- the
+    /// caller is expected to only reach this on a Gloas submission.
+    pub fn block_access_list(&self) -> BlockAccessListBytes {
+        match self {
+            Self::Submission(bid) => bid.block_access_list.clone().unwrap_or_default(),
+            Self::Gossip(_) => BlockAccessListBytes::default(),
+        }
+    }
+
     pub fn execution_payload_make_mut(&mut self) -> &mut ExecutionPayload {
         match self {
             Self::Submission(bid) => bid.signed_bid_submission.execution_payload_make_mut(),
@@ -415,8 +433,8 @@ pub struct SlotData {
     pub bid_slot: Slot,
     /// Data about the validator registration
     pub registration_data: BuilderGetValidatorsResponseEntry,
-    /// Parent hash -> payload attributes for the incoming blocks
-    pub payload_attributes_map: FxHashMap<B256, PayloadAttributesUpdate>,
+    /// Fork -> payload attributes for the incoming blocks
+    pub payload_attributes_map: FxHashMap<ForkKey, PayloadAttributesUpdate>,
     /// Current fork
     pub current_fork: ForkName,
     /// Inclusion list
@@ -437,6 +455,28 @@ pub struct PendingPayload {
 impl SlotData {
     pub fn proposer_pubkey(&self) -> &BlsPublicKeyBytes {
         &self.registration_data.entry.registration.message.pubkey
+    }
+
+    pub fn parent_hashes(&self) -> Vec<B256> {
+        self.payload_attributes_map.keys().map(|k| k.parent_hash).collect()
+    }
+
+    pub fn fork_for_parent_hash(&self, parent_hash: &B256) -> Option<ForkKey> {
+        self.payload_attributes_map.keys().find(|k| k.parent_hash == *parent_hash).copied()
+    }
+
+    pub fn attrs_for_submission(
+        &self,
+        parent_hash: &B256,
+        prev_randao: &B256,
+    ) -> Option<&PayloadAttributesUpdate> {
+        let mut candidates =
+            self.payload_attributes_map.values().filter(|a| a.parent_hash == *parent_hash);
+        let first = candidates.next()?;
+        if first.prev_randao == *prev_randao {
+            return Some(first);
+        }
+        candidates.find(|a| a.prev_randao == *prev_randao).or(Some(first))
     }
 }
 
@@ -478,6 +518,13 @@ pub enum Event {
         max_execution_payment: u64,
         res_tx: oneshot::Sender<SubmitBuilderPreferencesResult>,
     },
+    /// Looks up the execution payload a submission held for `block_hash`, so
+    /// `submitSignedBeaconBlock` can build the envelope fulfilling a proposer's committed bid.
+    TakeHeldGloasPayload {
+        block_hash: B256,
+        slot: Slot,
+        res_tx: oneshot::Sender<Option<HeldGloasPayload>>,
+    },
     // Receive multiple of these potentially, assume some light validation
     GetPayload {
         block_hash: B256,
@@ -505,11 +552,45 @@ impl Event {
             Event::GetHeader { .. } => "GetHeader",
             Event::GetExecutionPayloadBid { .. } => "GetExecutionPayloadBid",
             Event::SubmitBuilderPreferences { .. } => "SubmitBuilderPreferences",
+            Event::TakeHeldGloasPayload { .. } => "TakeHeldGloasPayload",
             Event::GetPayload { .. } => "GetPayload",
             Event::GossipPayload(_) => "GossipPayload",
             Event::SimResult(_) => "SimResult",
             Event::MergeResult(_) => "MergeResult",
             Event::BuilderDemotion { .. } => "BuilderDemotion",
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn attrs(parent_hash: B256, parent_root: B256, prev_randao: B256) -> PayloadAttributesUpdate {
+        let mut update = PayloadAttributesUpdate { parent_hash, ..Default::default() };
+        update.payload_attributes.parent_beacon_block_root = Some(parent_root);
+        update.payload_attributes.prev_randao = prev_randao;
+        update
+    }
+
+    #[test]
+    fn a_submission_gets_the_fork_whose_prev_randao_it_matches() {
+        let parent_hash = B256::repeat_byte(1);
+        let forks = [
+            attrs(parent_hash, B256::repeat_byte(2), B256::repeat_byte(3)),
+            attrs(parent_hash, B256::repeat_byte(4), B256::repeat_byte(5)),
+        ];
+        let slot_data = SlotData {
+            bid_slot: Default::default(),
+            registration_data: Default::default(),
+            payload_attributes_map: forks.iter().map(|a| (a.fork(), a.clone())).collect(),
+            current_fork: ForkName::Gloas,
+            il: None,
+        };
+
+        for fork in &forks {
+            let got = slot_data.attrs_for_submission(&parent_hash, &fork.prev_randao).unwrap();
+            assert_eq!(got.parent_root(), fork.parent_root());
         }
     }
 }

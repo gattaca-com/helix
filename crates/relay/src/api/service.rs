@@ -146,7 +146,6 @@ pub async fn run_api_service<A: Api>(
         registrations_handle,
         alert_manager,
         operator_api,
-        Arc::default(),
     ));
 
     tokio::spawn(process_gossip_messages(
