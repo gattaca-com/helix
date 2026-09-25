@@ -1,5 +1,6 @@
 mod blob_cache;
 pub mod error;
+mod parent_state;
 pub mod server;
 #[cfg(test)]
 mod server_tests;
@@ -43,7 +44,10 @@ use crate::{
     },
     metrics,
     node::HeadInfo,
-    validation::{blob_cache::BlobCache, error::ValidationError, timed_reads::TimedReads},
+    validation::{
+        blob_cache::BlobCache, error::ValidationError, parent_state::ParentStateCache,
+        timed_reads::TimedReads,
+    },
 };
 
 #[derive(Debug)]
@@ -68,6 +72,7 @@ pub struct BlockValidator {
     validation_window: u64,
     disallow: Arc<DashSet<alloy_primitives::Address>>,
     blob_cache: Arc<BlobCache>,
+    parent_state: Arc<ParentStateCache>,
 }
 
 impl BlockValidator {
@@ -77,7 +82,14 @@ impl BlockValidator {
         validation_window: u64,
         disallow: Arc<DashSet<alloy_primitives::Address>>,
     ) -> Self {
-        Self { store, head, validation_window, disallow, blob_cache: Arc::default() }
+        Self {
+            store,
+            head,
+            validation_window,
+            disallow,
+            blob_cache: Arc::default(),
+            parent_state: Arc::default(),
+        }
     }
 
     pub fn prepare(
@@ -240,12 +252,18 @@ impl BlockValidator {
             .map_err(|e| ValidationError::PreExecution(e.to_string()))?;
         let t = metrics::sim_lap("pre_execution", t);
 
-        let parent_header_for_reads = parent_header.clone();
-        let vm_db = StoreVmDatabase::new(self.store.clone(), parent_header)
+        let (vm_db, parent_reads) = self
+            .parent_state
+            .get(
+                &self.store,
+                block.header.parent_hash,
+                &parent_header,
+                chain_config.fork(block.header.timestamp),
+            )
             .map_err(|e| ValidationError::Execution(e.to_string()))?;
         let mut vm = new_evm(&BlockchainType::L1, vm_db)
             .map_err(|e| ValidationError::Execution(e.to_string()))?;
-        let reads = TimedReads::wrap(vm.db.store.clone());
+        let reads = TimedReads::wrap(parent_reads);
         vm.db.store = reads.clone();
         metrics::sim_lap("vm_setup", t);
 
@@ -288,13 +306,7 @@ impl BlockValidator {
             });
         }
 
-        Ok(ExecutedBlock {
-            block,
-            parent_header: parent_header_for_reads,
-            receipts,
-            account_updates,
-            tx_details,
-        })
+        Ok(ExecutedBlock { block, parent_header, receipts, account_updates, tx_details })
     }
 
     /// The transaction loop of ethrex's `execute_block`, reading the coinbase
