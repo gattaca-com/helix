@@ -33,7 +33,6 @@ impl ReadTimer {
     }
 }
 
-/// Sees only misses of the EVM's own cache: what a cache shared across validations could serve.
 pub struct TimedReads {
     inner: Arc<dyn Database>,
     account: ReadTimer,
