@@ -25,12 +25,8 @@ use tracing::{error, info};
 use crate::{
     AuctioneerHandle, DbHandle, PostgresDatabaseService, RegWorkerHandle,
     api::{
-        Api, FutureBidSubmissionResult,
-        blacklist::BlacklistCache,
-        builder::api::BuilderApi,
-        extract::raw_web_socket::RawWebSocket,
-        proposer::{NoHeldPayloads, ProposerApi},
-        router::build_router,
+        Api, FutureBidSubmissionResult, blacklist::BlacklistCache, builder::api::BuilderApi,
+        extract::raw_web_socket::RawWebSocket, proposer::ProposerApi, router::build_router,
     },
     gossip::{GossipedMessage, GrpcGossiperClientManager, process_gossip_messages},
     network::api::RelayNetworkApi,
@@ -150,7 +146,7 @@ pub async fn run_api_service<A: Api>(
         registrations_handle,
         alert_manager,
         operator_api,
-        Arc::new(NoHeldPayloads),
+        Arc::default(),
     ));
 
     tokio::spawn(process_gossip_messages(
