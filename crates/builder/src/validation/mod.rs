@@ -1,4 +1,5 @@
 pub mod error;
+mod merkle;
 mod parent_state;
 pub mod server;
 #[cfg(test)]
@@ -7,7 +8,10 @@ mod server_tests;
 pub(crate) mod tests;
 mod timed_reads;
 
-use std::{sync::Arc, time::Instant};
+use std::{
+    sync::{Arc, atomic::AtomicUsize, mpsc},
+    time::Instant,
+};
 
 use alloy_primitives::B256;
 use alloy_rpc_types::{
@@ -43,7 +47,12 @@ use crate::{
     },
     metrics,
     node::HeadInfo,
-    validation::{error::ValidationError, parent_state::ParentStateCache, timed_reads::TimedReads},
+    validation::{
+        error::ValidationError,
+        merkle::{MerklePools, UpdateStream},
+        parent_state::ParentStateCache,
+        timed_reads::TimedReads,
+    },
 };
 
 #[derive(Debug)]
@@ -68,6 +77,7 @@ pub struct BlockValidator {
     validation_window: u64,
     disallow: Arc<DashSet<alloy_primitives::Address>>,
     parent_state: Arc<ParentStateCache>,
+    merkle_pools: Arc<MerklePools>,
 }
 
 impl BlockValidator {
@@ -76,8 +86,17 @@ impl BlockValidator {
         head: watch::Receiver<HeadInfo>,
         validation_window: u64,
         disallow: Arc<DashSet<alloy_primitives::Address>>,
+        merkle_pools: usize,
     ) -> Self {
-        Self { store, head, validation_window, disallow, parent_state: Arc::default() }
+        let merkle_pools = Arc::new(MerklePools::new(&store, merkle_pools));
+        Self {
+            store,
+            head,
+            validation_window,
+            disallow,
+            parent_state: Arc::default(),
+            merkle_pools,
+        }
     }
 
     pub fn prepare(
@@ -263,44 +282,87 @@ impl BlockValidator {
         vm.db.store = reads.clone();
         metrics::sim_lap("vm_setup", t);
 
-        let (receipts, tx_details, gas_used) = Self::execute_transactions(&mut vm, &block)?;
-        let t = Instant::now();
-        let requests = vm
-            .extract_requests(&receipts, &block.header)
-            .map_err(|e| ValidationError::Execution(e.to_string()))?;
-        if let Some(withdrawals) = &block.body.withdrawals {
-            vm.process_withdrawals(withdrawals)
+        let merkle_pool = self.merkle_pools.checkout();
+        let queue_length = AtomicUsize::new(0);
+        let (receipts, tx_details, account_updates) = std::thread::scope(|scope| {
+            let (mut stream, merkleizer) = merkle_pool
+                .as_ref()
+                .map(|pool| {
+                    let (tx, rx) = mpsc::channel();
+                    let (parent_header, queue_length) = (&parent_header, &queue_length);
+                    let merkleizer = scope.spawn(move || {
+                        pool.blockchain.merkleize_stream(rx, parent_header, queue_length)
+                    });
+                    (UpdateStream::new(tx, queue_length), merkleizer)
+                })
+                .unzip();
+
+            let (receipts, tx_details, gas_used) =
+                Self::execute_transactions(&mut vm, &block, stream.as_mut())?;
+            let t = Instant::now();
+            let requests = vm
+                .extract_requests(&receipts, &block.header)
                 .map_err(|e| ValidationError::Execution(e.to_string()))?;
-        }
-        let t = metrics::sim_lap("requests_withdrawals", t);
+            if let Some(withdrawals) = &block.body.withdrawals {
+                vm.process_withdrawals(withdrawals)
+                    .map_err(|e| ValidationError::Execution(e.to_string()))?;
+            }
+            let t = metrics::sim_lap("requests_withdrawals", t);
 
-        validate_gas_used(gas_used, &block.header)
-            .map_err(|e| ValidationError::PostExecution(e.to_string()))?;
-        validate_receipts_root_and_logs_bloom(&block.header, &receipts, &NativeCrypto)
-            .map_err(|e| ValidationError::PostExecution(e.to_string()))?;
-        validate_requests_hash(&block.header, &chain_config, &requests)
-            .map_err(|e| ValidationError::PostExecution(e.to_string()))?;
-        let t = metrics::sim_lap("post_execution", t);
+            let serial_updates = match stream.take() {
+                Some(mut stream) => {
+                    stream.flush(&mut vm)?;
+                    None
+                }
+                None => Some(
+                    vm.get_state_transitions()
+                        .map_err(|e| ValidationError::Execution(e.to_string()))?,
+                ),
+            };
+            let t = metrics::sim_lap("state_transitions", t);
 
-        let account_updates =
-            vm.get_state_transitions().map_err(|e| ValidationError::Execution(e.to_string()))?;
-        let t = metrics::sim_lap("state_transitions", t);
-        let state_root = self
-            .store
-            .apply_account_updates_batch(block.header.parent_hash, &account_updates)
-            .map_err(|e| ValidationError::Store(e.to_string()))?
-            .ok_or(ValidationError::MissingParentState)?
-            .state_trie_hash;
-        metrics::sim_lap("state_root", t);
-        reads.record();
-        metrics::sim_block(block.body.transactions.len(), gas_used);
+            validate_gas_used(gas_used, &block.header)
+                .map_err(|e| ValidationError::PostExecution(e.to_string()))?;
+            validate_receipts_root_and_logs_bloom(&block.header, &receipts, &NativeCrypto)
+                .map_err(|e| ValidationError::PostExecution(e.to_string()))?;
+            validate_requests_hash(&block.header, &chain_config, &requests)
+                .map_err(|e| ValidationError::PostExecution(e.to_string()))?;
+            let t = metrics::sim_lap("post_execution", t);
 
-        if state_root != block.header.state_root {
-            return Err(ValidationError::StateRootMismatch {
-                got: b256(block.header.state_root),
-                expected: b256(state_root),
-            });
-        }
+            let (account_updates, state_root) = match (merkleizer, serial_updates) {
+                (Some(merkleizer), _) => {
+                    let (updates_list, account_updates) = merkleizer
+                        .join()
+                        .map_err(|_| ValidationError::Execution("merkleizer panicked".into()))?
+                        .map_err(|e| ValidationError::Store(e.to_string()))?;
+                    (account_updates, updates_list.state_trie_hash)
+                }
+                (None, Some(account_updates)) => {
+                    let state_root = self
+                        .store
+                        .apply_account_updates_batch(block.header.parent_hash, &account_updates)
+                        .map_err(|e| ValidationError::Store(e.to_string()))?
+                        .ok_or(ValidationError::MissingParentState)?
+                        .state_trie_hash;
+                    (account_updates, state_root)
+                }
+                (None, None) => {
+                    return Err(ValidationError::Execution("no account updates collected".into()));
+                }
+            };
+            metrics::sim_lap("state_root", t);
+            reads.record();
+            metrics::sim_block(block.body.transactions.len(), gas_used);
+
+            if state_root != block.header.state_root {
+                return Err(ValidationError::StateRootMismatch {
+                    got: b256(block.header.state_root),
+                    expected: b256(state_root),
+                });
+            }
+
+            Ok((receipts, tx_details, account_updates))
+        })?;
 
         Ok(ExecutedBlock { block, parent_header, receipts, account_updates, tx_details })
     }
@@ -311,6 +373,7 @@ impl BlockValidator {
     fn execute_transactions(
         vm: &mut Evm,
         block: &Block,
+        mut stream: Option<&mut UpdateStream>,
     ) -> Result<(Vec<Receipt>, Vec<TxDetail>, u64), ValidationError> {
         let execution = |e: EvmError| ValidationError::Execution(e.to_string());
         let header = &block.header;
@@ -354,6 +417,9 @@ impl BlockValidator {
                 builder_payment: au256(after.saturating_sub(balance)),
             });
             balance = after;
+            if let Some(stream) = stream.as_deref_mut() {
+                stream.after_tx(vm)?;
+            }
         }
         metrics::sim_lap("txs", t);
         Ok((receipts, tx_details, gas_used))

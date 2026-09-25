@@ -79,6 +79,7 @@ fn main() -> eyre::Result<()> {
             node.head.clone(),
             simulation_config.validation_window,
             disallow.clone(),
+            simulation_config.max_concurrent_validations,
         );
         runtime.spawn(validation_server::refresh_blacklist(
             simulation_config.blacklist_endpoint.clone(),
