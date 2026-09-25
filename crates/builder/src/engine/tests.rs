@@ -1070,6 +1070,50 @@ async fn a_base_block_paying_through_a_contract_is_merged() {
     assert!(merged.proposer_value > fixture.block_value);
 }
 
+/// The relay signer prepays its payment tx's whole gas limit, so that limit must be the
+/// reserved distribution gas, not the block's leftover.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_relay_signer_funded_for_the_distribution_gas_can_emit() {
+    let mut signer_balance = 0u128;
+    let mut leftover_prepay = 0u128;
+    let fixture = Fixture::with_genesis(|genesis| {
+        let relay_signer = funded_signers(genesis, 8)[6].address();
+        let base_fee = u128::from(genesis.base_fee_per_gas.unwrap_or(1_000_000_000));
+        signer_balance = 2 * 140_000 * base_fee;
+        leftover_prepay = u128::from(genesis.gas_limit / 2) * base_fee;
+        genesis.alloc.get_mut(&eaddr(relay_signer)).unwrap().balance =
+            ethrex_common::U256::from(signer_balance);
+    })
+    .await;
+    assert!(signer_balance < leftover_prepay, "the balance must not cover the leftover gas");
+
+    let (base_msg, base_block_hash) = fixture.build_base(U256::from(ETH));
+    let mergeable_msg = fixture.mergeable_tx(&base_msg, 3, U256::from(ETH / 5), 0xdd);
+
+    let (event_tx, event_rx) = crossbeam_channel::bounded(1024);
+    let (output_tx, output_rx) = crossbeam_channel::bounded(64);
+    let _engine = MergeEngine::spawn(
+        fixture.engine_config(Duration::ZERO),
+        fixture.store.clone(),
+        fixture.blockchain.clone(),
+        fixture.head(),
+        event_tx.clone(),
+        event_rx,
+        output_tx,
+    );
+
+    event_tx.send(EngineEvent::RelayConfig(fixture.relay_config.clone())).unwrap();
+    event_tx.send(EngineEvent::SlotStart(fixture.slot_start())).unwrap();
+    event_tx.send(mergeable_event(&base_msg, 1)).unwrap();
+    event_tx.send(mergeable_event(&mergeable_msg, 2)).unwrap();
+    event_tx.send(activate_event(base_block_hash)).unwrap();
+
+    let output = output_rx
+        .recv_timeout(Duration::from_secs(60))
+        .expect("a signer funded for the distribution gas must still emit");
+    assert_eq!(expect_merged(output).base_block_hash, base_block_hash);
+}
+
 fn submission_stream(samples: &[(u64, u64)]) -> crate::engine::types::SharedInner {
     let mut inner = crate::engine::types::SharedInner::default();
     for (value, ms) in samples {
