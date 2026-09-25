@@ -904,15 +904,12 @@ mod tests {
 
     #[test]
     fn dehydrated_bid_submission_decodes_under_gloas_fork() {
-        let (dehydrated, _) =
-            DehydratedBidSubmissionFuluWithMergingData::random_for_test(&mut rand::rng()).split();
-        let inner_bytes = match &dehydrated {
-            DehydratedBidSubmission::Fulu(inner) => inner.as_ssz_bytes(),
-        };
+        let v1 = DehydratedBidSubmissionFuluV1::random_for_test(&mut rand::rng());
+        let bytes = v1.as_ssz_bytes();
+        let dehydrated = DehydratedBidSubmission::Fulu(v1.into());
 
-        let decoded =
-            DehydratedBidSubmission::from_ssz_bytes_by_fork(&inner_bytes, ForkName::Gloas)
-                .expect("Gloas should decode via the same shape as Fulu");
+        let decoded = DehydratedBidSubmission::from_ssz_bytes_by_fork(&bytes, ForkName::Gloas)
+            .expect("Gloas should decode via the same shape as Fulu");
 
         assert!(matches!(decoded, DehydratedBidSubmission::Fulu(_)));
         assert_eq!(decoded.bid_trace(), dehydrated.bid_trace());
