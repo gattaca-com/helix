@@ -3,7 +3,8 @@
 Copy of `crates/common/crypto` from
 [lambdaclass/ethrex](https://github.com/lambdaclass/ethrex) at rev
 `ee98e879880aee80440bcd59936c384c26629814` (MIT OR Apache-2.0), applied to the
-workspace via `[patch]` in the root `Cargo.toml`.
+workspace via `[patch]` in the root `Cargo.toml`. The workspace pulls ethrex from
+the gattaca-com fork, whose commits on top of that rev leave this crate untouched.
 
 ## Why
 

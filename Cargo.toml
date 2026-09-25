@@ -50,23 +50,23 @@ ethereum_serde_utils = "0.8"
 ethereum_ssz = "0.10"
 ethereum_ssz_derive = "0.10"
 
-# ethrex embedded node (helix-builder), pinned by rev.
+# ethrex embedded node (helix-builder), pinned by rev: upstream ee98e879 plus gattaca-com/ethrex's helix hooks.
 # NOTE: the `ethrex` cmd-lib is deliberately NOT a dependency: it force-enables
 # ethrex-crypto's `aws-lc-rs` feature, whose cc >=1.2.26 requirement conflicts with
 # reth-mdbx-sys's exact `cc = 1.2.15` pin (via helix-simulator). The node is
 # assembled from the library crates instead.
-ethrex-blockchain = { git = "https://github.com/lambdaclass/ethrex", rev = "ee98e879880aee80440bcd59936c384c26629814", default-features = false, features = ["secp256k1", "c-kzg", "metrics"] }
-ethrex-common = { git = "https://github.com/lambdaclass/ethrex", rev = "ee98e879880aee80440bcd59936c384c26629814", default-features = false, features = ["secp256k1", "c-kzg"] }
-ethrex-config = { git = "https://github.com/lambdaclass/ethrex", rev = "ee98e879880aee80440bcd59936c384c26629814" }
+ethrex-blockchain = { git = "https://github.com/gattaca-com/ethrex", rev = "923cae9ec6156e485d9d768882bcb510f545d49a", default-features = false, features = ["secp256k1", "c-kzg", "metrics"] }
+ethrex-common = { git = "https://github.com/gattaca-com/ethrex", rev = "923cae9ec6156e485d9d768882bcb510f545d49a", default-features = false, features = ["secp256k1", "c-kzg"] }
+ethrex-config = { git = "https://github.com/gattaca-com/ethrex", rev = "923cae9ec6156e485d9d768882bcb510f545d49a" }
 # default features minus `aws-lc-rs` (see note above); P-256 verify uses the portable fallback
-ethrex-crypto = { git = "https://github.com/lambdaclass/ethrex", rev = "ee98e879880aee80440bcd59936c384c26629814", default-features = false, features = ["std", "kzg-rs", "secp256k1", "blst", "c-kzg"] }
-ethrex-levm = { git = "https://github.com/lambdaclass/ethrex", rev = "ee98e879880aee80440bcd59936c384c26629814", default-features = false }
-ethrex-metrics = { git = "https://github.com/lambdaclass/ethrex", rev = "ee98e879880aee80440bcd59936c384c26629814" }
-ethrex-p2p = { git = "https://github.com/lambdaclass/ethrex", rev = "ee98e879880aee80440bcd59936c384c26629814", features = ["c-kzg", "rocksdb", "metrics"] }
-ethrex-rlp = { git = "https://github.com/lambdaclass/ethrex", rev = "ee98e879880aee80440bcd59936c384c26629814" }
-ethrex-rpc = { git = "https://github.com/lambdaclass/ethrex", rev = "ee98e879880aee80440bcd59936c384c26629814" }
-ethrex-storage = { git = "https://github.com/lambdaclass/ethrex", rev = "ee98e879880aee80440bcd59936c384c26629814", features = ["rocksdb"] }
-ethrex-vm = { git = "https://github.com/lambdaclass/ethrex", rev = "ee98e879880aee80440bcd59936c384c26629814", default-features = false, features = ["secp256k1", "c-kzg"] }
+ethrex-crypto = { git = "https://github.com/gattaca-com/ethrex", rev = "923cae9ec6156e485d9d768882bcb510f545d49a", default-features = false, features = ["std", "kzg-rs", "secp256k1", "blst", "c-kzg"] }
+ethrex-levm = { git = "https://github.com/gattaca-com/ethrex", rev = "923cae9ec6156e485d9d768882bcb510f545d49a", default-features = false }
+ethrex-metrics = { git = "https://github.com/gattaca-com/ethrex", rev = "923cae9ec6156e485d9d768882bcb510f545d49a" }
+ethrex-p2p = { git = "https://github.com/gattaca-com/ethrex", rev = "923cae9ec6156e485d9d768882bcb510f545d49a", features = ["c-kzg", "rocksdb", "metrics"] }
+ethrex-rlp = { git = "https://github.com/gattaca-com/ethrex", rev = "923cae9ec6156e485d9d768882bcb510f545d49a" }
+ethrex-rpc = { git = "https://github.com/gattaca-com/ethrex", rev = "923cae9ec6156e485d9d768882bcb510f545d49a" }
+ethrex-storage = { git = "https://github.com/gattaca-com/ethrex", rev = "923cae9ec6156e485d9d768882bcb510f545d49a", features = ["rocksdb"] }
+ethrex-vm = { git = "https://github.com/gattaca-com/ethrex", rev = "923cae9ec6156e485d9d768882bcb510f545d49a", default-features = false, features = ["secp256k1", "c-kzg"] }
 
 eyre = "0.6.12"
 clickhouse = "0.14.2"
@@ -178,7 +178,7 @@ zstd = "0.13.3"
 # Vendored with namespaced keccak asm symbols; upstream's collide with the
 # vendored OpenSSL that lighthouse's eth2 forces into every build. See
 # crates/vendored/ethrex-crypto/VENDORED.md.
-[patch."https://github.com/lambdaclass/ethrex"]
+[patch."https://github.com/gattaca-com/ethrex"]
 ethrex-crypto = { path = "crates/vendored/ethrex-crypto" }
 
 # Lighthouse's own Cargo.toml patches these crates.io deps to forked git revs (see its

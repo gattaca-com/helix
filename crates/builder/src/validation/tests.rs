@@ -127,6 +127,7 @@ impl Fixture {
             self.head.subscribe(),
             WINDOW,
             self.disallow.clone(),
+            1,
         )
     }
 
