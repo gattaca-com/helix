@@ -844,7 +844,6 @@ impl MergeSession {
             safe_nonce,
             signer_nonce,
             chain_id: self.chain_id,
-            // The signer prepays the whole limit, so it must be the reserved gas, not the leftover.
             gas_limit: self.distribution_gas_limit,
             base_fee_per_gas: base_fee as u128,
             multisend_contract: relay_config.multisend_contract,
