@@ -1,3 +1,4 @@
+mod blob_cache;
 pub mod error;
 pub mod server;
 #[cfg(test)]
@@ -17,8 +18,8 @@ use ethrex_blockchain::{BlockchainType, new_evm, vm::StoreVmDatabase};
 use ethrex_common::{
     Address as EAddress, U256 as EU256,
     types::{
-        AccountUpdate, BlobsBundle, Block, BlockHeader, CELLS_PER_EXT_BLOB, ELASTICITY_MULTIPLIER,
-        Receipt, Transaction, TxKind,
+        AccountUpdate, BlobsBundle, Block, BlockHeader, ELASTICITY_MULTIPLIER, Receipt,
+        Transaction, TxKind,
     },
     validation::{
         validate_block_pre_execution, validate_gas_used, validate_receipts_root_and_logs_bloom,
@@ -41,7 +42,7 @@ use crate::{
     },
     metrics,
     node::HeadInfo,
-    validation::error::ValidationError,
+    validation::{blob_cache::BlobCache, error::ValidationError},
 };
 
 #[derive(Debug)]
@@ -65,6 +66,7 @@ pub struct BlockValidator {
     head: watch::Receiver<HeadInfo>,
     validation_window: u64,
     disallow: Arc<DashSet<alloy_primitives::Address>>,
+    blob_cache: Arc<BlobCache>,
 }
 
 impl BlockValidator {
@@ -74,7 +76,7 @@ impl BlockValidator {
         validation_window: u64,
         disallow: Arc<DashSet<alloy_primitives::Address>>,
     ) -> Self {
-        Self { store, head, validation_window, disallow }
+        Self { store, head, validation_window, disallow, blob_cache: Arc::default() }
     }
 
     pub fn prepare(
@@ -169,22 +171,14 @@ impl BlockValidator {
             return Ok(());
         }
 
-        if blobs.blobs.len() != blobs.commitments.len() ||
-            blobs.blobs.len() * CELLS_PER_EXT_BLOB != blobs.proofs.len()
-        {
-            return Err(ValidationError::InvalidBlobsBundle);
-        }
-
         blobs
             .validate_blob_commitment_hashes(&versioned_hashes)
             .map_err(|_| ValidationError::InvalidBlobsBundle)?;
 
-        let valid = ethrex_crypto::kzg::verify_cell_kzg_proof_batch(
-            &blobs.blobs,
-            &blobs.commitments,
-            &blobs.proofs,
-        )
-        .map_err(|_| ValidationError::InvalidBlobsBundle)?;
+        let valid = self
+            .blob_cache
+            .verify(blobs, self.head.borrow().number)
+            .map_err(|_| ValidationError::InvalidBlobsBundle)?;
         if !valid {
             return Err(ValidationError::InvalidBlobsBundle);
         }

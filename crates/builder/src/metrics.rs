@@ -333,6 +333,14 @@ lazy_static! {
     )
     .unwrap();
 
+    static ref SIM_BLOB_CACHE: IntCounterVec = register_int_counter_vec_with_registry!(
+        "sim_blob_cache_total",
+        "Blobs checked against the verified-blob cache, by result",
+        &["result"],
+        &BUILDER_METRICS_REGISTRY
+    )
+    .unwrap();
+
     static ref SIM_IN_FLIGHT: IntGauge = register_int_gauge_with_registry!(
         "sim_in_flight",
         "Validations running on the blocking pool",
@@ -504,6 +512,11 @@ pub fn sim_request(route: &str, result: &str, since: Instant) {
 pub fn sim_block(txs: usize, gas_used: u64) {
     SIM_BLOCK.with_label_values(&["txs"]).observe(txs as f64);
     SIM_BLOCK.with_label_values(&["mgas"]).observe(gas_used as f64 / 1e6);
+}
+
+pub fn sim_blob_cache(hits: usize, misses: usize) {
+    SIM_BLOB_CACHE.with_label_values(&["hit"]).inc_by(hits as u64);
+    SIM_BLOB_CACHE.with_label_values(&["miss"]).inc_by(misses as u64);
 }
 
 /// Held by the blocking task, so a request its client abandoned still counts.
