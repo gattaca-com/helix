@@ -24,6 +24,7 @@ ethrex-blockchain.workspace = true
 ethrex-common.workspace = true
 ethrex-config.workspace = true
 ethrex-crypto.workspace = true
+ethrex-levm.workspace = true
 ethrex-metrics.workspace = true
 ethrex-p2p.workspace = true
 ethrex-rlp.workspace = true
