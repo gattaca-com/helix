@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use alloy_primitives::B256;
 use axum::{Extension, http::HeaderMap};
+use dashmap::DashMap;
 use helix_common::{chain_info::ChainInfo, decoder::Encoding, utils::extract_request_id};
 use helix_types::{
     BlsKeypair, Domain, EthSpec, ExecutionPayloadEnvelope, ExecutionPayloadGloas,
@@ -22,19 +23,14 @@ pub struct HeldGloasPayload {
     pub execution_requests: ExecutionRequestsGloas,
 }
 
-/// Looks up and consumes the payload held for a bid's committed block hash. Must not return
-/// the same payload twice.
-pub trait GloasPayloadStore: Send + Sync {
-    fn take_held_payload(&self, block_hash: B256) -> Option<HeldGloasPayload>;
-}
+/// Payloads held by a bid's committed block hash. Each payload is taken at most once.
+// TODO(gloas): populate from the auctioneer; see gattaca-com/helix#489 step 3.
+#[derive(Default)]
+pub struct GloasPayloadStore(DashMap<B256, HeldGloasPayload>);
 
-/// Placeholder `GloasPayloadStore`: nothing has held a payload yet.
-// TODO(gloas): implement against the auctioneer; see gattaca-com/helix#489 step 3.
-pub struct NoHeldPayloads;
-
-impl GloasPayloadStore for NoHeldPayloads {
-    fn take_held_payload(&self, _block_hash: B256) -> Option<HeldGloasPayload> {
-        None
+impl GloasPayloadStore {
+    pub fn take_held_payload(&self, block_hash: B256) -> Option<HeldGloasPayload> {
+        self.0.remove(&block_hash).map(|(_, payload)| payload)
     }
 }
 
@@ -69,7 +65,7 @@ impl GloasBuilderIdentity {
 /// Constructs and signs the `SignedExecutionPayloadEnvelope` fulfilling `block`'s committed bid.
 pub(super) fn construct_signed_envelope(
     block: &SignedBeaconBlockGloas,
-    store: &dyn GloasPayloadStore,
+    store: &GloasPayloadStore,
     identity: &GloasBuilderIdentity,
     chain_info: &ChainInfo,
 ) -> Result<SignedExecutionPayloadEnvelope, ProposerApiError> {
@@ -130,7 +126,7 @@ impl<A: Api> ProposerApi<A> {
 
         let signed_envelope = construct_signed_envelope(
             &block,
-            proposer_api.gloas_payload_store.as_ref(),
+            &proposer_api.gloas_payload_store,
             &proposer_api.gloas_builder_identity,
             &proposer_api.chain_info,
         )?;
@@ -146,29 +142,15 @@ impl<A: Api> ProposerApi<A> {
 
 #[cfg(test)]
 mod construct_signed_envelope_tests {
-    use std::sync::Mutex;
-
     use helix_common::utils::install_default_crypto_provider;
     use helix_types::{BeaconBlockGloas, BlsSignature, EmptyBlock, ExecutionBlockHash};
 
     use super::*;
 
-    struct StubStore(Mutex<Option<HeldGloasPayload>>);
-
-    impl StubStore {
-        fn holding(payload: HeldGloasPayload) -> Self {
-            Self(Mutex::new(Some(payload)))
-        }
-
-        fn empty() -> Self {
-            Self(Mutex::new(None))
-        }
-    }
-
-    impl GloasPayloadStore for StubStore {
-        fn take_held_payload(&self, _block_hash: B256) -> Option<HeldGloasPayload> {
-            self.0.lock().unwrap().take()
-        }
+    fn store_holding(block_hash: B256, payload: HeldGloasPayload) -> GloasPayloadStore {
+        let store = GloasPayloadStore::default();
+        store.0.insert(block_hash, payload);
+        store
     }
 
     fn held_payload(block_hash: B256) -> HeldGloasPayload {
@@ -202,7 +184,7 @@ mod construct_signed_envelope_tests {
         let block_hash = B256::repeat_byte(0x11);
         let parent_root = B256::repeat_byte(0x22);
         let block = test_block(block_hash, 7, parent_root);
-        let store = StubStore::holding(held_payload(block_hash));
+        let store = store_holding(block_hash, held_payload(block_hash));
         let identity = identity(7);
 
         let signed_envelope =
@@ -219,7 +201,7 @@ mod construct_signed_envelope_tests {
         let chain_info = ChainInfo::default();
         let block_hash = B256::repeat_byte(0x33);
         let block = test_block(block_hash, 3, B256::ZERO);
-        let store = StubStore::holding(held_payload(block_hash));
+        let store = store_holding(block_hash, held_payload(block_hash));
         let identity = identity(3);
 
         let signed_envelope =
@@ -240,7 +222,7 @@ mod construct_signed_envelope_tests {
         let chain_info = ChainInfo::default();
         let block_hash = B256::repeat_byte(0x44);
         let block = test_block(block_hash, 1, B256::ZERO);
-        let store = StubStore::empty();
+        let store = GloasPayloadStore::default();
         let identity = identity(1);
 
         let result = construct_signed_envelope(&block, &store, &identity, &chain_info);
@@ -256,7 +238,7 @@ mod construct_signed_envelope_tests {
         let bid_block_hash = B256::repeat_byte(0x55);
         let wrong_held_hash = B256::repeat_byte(0x66);
         let block = test_block(bid_block_hash, 1, B256::ZERO);
-        let store = StubStore::holding(held_payload(wrong_held_hash));
+        let store = store_holding(bid_block_hash, held_payload(wrong_held_hash));
         let identity = identity(1);
 
         let result = construct_signed_envelope(&block, &store, &identity, &chain_info);
@@ -273,7 +255,7 @@ mod construct_signed_envelope_tests {
         let chain_info = ChainInfo::default();
         let block_hash = B256::repeat_byte(0x77);
         let block = test_block(block_hash, 9, B256::ZERO);
-        let store = StubStore::holding(held_payload(block_hash));
+        let store = store_holding(block_hash, held_payload(block_hash));
         let identity = identity(1);
 
         let result = construct_signed_envelope(&block, &store, &identity, &chain_info);
