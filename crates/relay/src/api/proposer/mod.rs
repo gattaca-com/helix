@@ -20,6 +20,7 @@ use helix_common::{
 use helix_database::handle::DbHandle;
 use helix_operator::OperatorPubSub;
 use hyper::StatusCode;
+pub use submit_signed_beacon_block::{GloasBuilderIdentity, GloasPayloadStore};
 
 use crate::{
     api::{Api, proposer::ip_tracker::IpTracker, router::Terminating},
@@ -46,6 +47,8 @@ pub struct ProposerApi<A: Api> {
     pub reg_handle: RegWorkerHandle,
     pub operator_api: Option<Arc<OperatorPubSub>>,
     pub ip_tracker: IpTracker,
+    pub gloas_builder_identity: Arc<GloasBuilderIdentity>,
+    pub gloas_payload_store: Arc<GloasPayloadStore>,
 }
 
 impl<A: Api> ProposerApi<A> {
@@ -64,7 +67,12 @@ impl<A: Api> ProposerApi<A> {
         reg_handle: RegWorkerHandle,
         alert_manager: Arc<AlertManager>,
         operator_api: Option<Arc<OperatorPubSub>>,
+        gloas_payload_store: Arc<GloasPayloadStore>,
     ) -> Self {
+        let gloas_builder_identity = Arc::new(GloasBuilderIdentity {
+            builder_index: relay_config.gloas_builder_index,
+            keypair: signing_context.keypair.clone(),
+        });
         Self {
             local_cache,
             db,
@@ -81,6 +89,8 @@ impl<A: Api> ProposerApi<A> {
             reg_handle,
             operator_api,
             ip_tracker: IpTracker::default(),
+            gloas_builder_identity,
+            gloas_payload_store,
         }
     }
 }
