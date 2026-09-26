@@ -7,7 +7,7 @@ use helix_common::{
 use helix_types::{BuilderPreferencesRequest, ForkName};
 use hyper::StatusCode;
 use ssz::Decode;
-use tracing::info;
+use tracing::{info, warn};
 
 use super::{ProposerApi, get_payload::fork_name_from_header};
 use crate::api::{Api, proposer::error::ProposerApiError};
@@ -41,11 +41,25 @@ impl<A: Api> ProposerApi<A> {
             proposer_pubkey = ?params.proposer_pubkey,
             slot = request.auth.message.slot,
             max_execution_payment = request.preferences.max_execution_payment,
-            "validated submitBuilderPreferences request (not yet persisted)"
+            "validated submitBuilderPreferences request"
         );
 
-        // TODO(gloas): reject stale slots, store preferences per proposer per slot, and honor
-        // max_execution_payment when serving bids.
-        Ok(StatusCode::ACCEPTED)
+        let Ok(rx) = proposer_api.auctioneer_handle.submit_builder_preferences(
+            params.proposer_pubkey,
+            request.auth.message.slot,
+            request.preferences.max_execution_payment,
+        ) else {
+            return Err(ProposerApiError::InternalServerError);
+        };
+
+        // TODO(gloas): honor max_execution_payment when getExecutionPayloadBid serves a real
+        // bid; not consumed anywhere yet.
+        match rx.await {
+            Ok(res) => res.map(|()| StatusCode::ACCEPTED),
+            Err(err) => {
+                warn!(%err, "failed to store builder preferences");
+                Err(ProposerApiError::InternalServerError)
+            }
+        }
     }
 }
