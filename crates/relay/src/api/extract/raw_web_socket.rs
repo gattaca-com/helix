@@ -204,7 +204,7 @@ where
         let sec_websocket_protocol = parts.headers.get(header::SEC_WEBSOCKET_PROTOCOL).cloned();
 
         Ok(Self {
-            config: Default::default(),
+            config: WebSocketConfig::default().read_buffer_size(4096),
             protocol: None,
             sec_websocket_key,
             on_upgrade,
