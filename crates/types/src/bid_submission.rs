@@ -822,7 +822,8 @@ impl PartialOrd for SubmissionVersion {
     }
 }
 
-#[derive(Debug, Clone, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error, strum::IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
 pub enum BlockValidationError {
     #[error("submission for wrong slot. expected: {expected}, got: {got}")]
     SubmissionForWrongSlot { expected: Slot, got: Slot },

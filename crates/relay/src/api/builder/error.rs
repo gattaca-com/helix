@@ -112,6 +112,24 @@ impl BuilderApiError {
 }
 
 impl BuilderApiError {
+    /// Coarse, low-cardinality bucket for a rejection; several
+    /// `BuilderApiError` variants carry per-request data unsuited to a metric key.
+    pub fn category(&self) -> &'static str {
+        match self {
+            BuilderApiError::JsonDecodeError(_) => "json_decode",
+            BuilderApiError::SszDecode(_) => "ssz_decode",
+            BuilderApiError::IOError(_) => "io",
+            BuilderApiError::PayloadDecode(_) => "payload_decode",
+            BuilderApiError::BidValidation(e) => e.into(),
+            BuilderApiError::SigError(_) => "sig_error",
+            BuilderApiError::HydrationError(e) => e.into(),
+            BuilderApiError::UntrustedBuilderOnDehydratedPayload => "untrusted_builder",
+            BuilderApiError::InvalidBuilderPubkey(..) => "invalid_pubkey",
+            BuilderApiError::InternalError => "internal_error",
+            _ => "other",
+        }
+    }
+
     // when adding new errors to ignore make sure to be very conservative, ie better to log a bit
     // more than to risk not logging a relevant error
     #[allow(clippy::match_like_matches_macro)]

@@ -14,6 +14,7 @@ use helix_common::{
     chain_info::ChainInfo,
     decoder::{SubmissionDecoder, SubmissionDecoderParams},
     local_cache::LocalCache,
+    metrics::SUBMISSION_REJECTS,
     record_submission_step, record_submission_step_ns,
     utils::utcnow_ns,
 };
@@ -131,7 +132,7 @@ impl DecoderTile {
             |res, producers| match res {
                 DCacheRead::Ok((msg, result)) => {
                     let new_bid: &NewBidSubmission = (*msg).borrow();
-                    self.record_decode_result(&result);
+                    self.record_decode_result(&result, new_bid.expected_pubkey());
                     Self::handle_result(
                         &self.decoded,
                         &self.future_results,
@@ -144,7 +145,10 @@ impl DecoderTile {
                 DCacheRead::NoRef(msg) | DCacheRead::Lost(msg) => {
                     let new_bid: &NewBidSubmission = (*msg).borrow();
                     warn!(id = %new_bid.header.submission_id, "bid submission payload lost");
-                    self.record_decode_result(&Err(BuilderApiError::InternalError));
+                    self.record_decode_result(
+                        &Err(BuilderApiError::InternalError),
+                        new_bid.expected_pubkey(),
+                    );
                     send_submission_result(
                         producers,
                         &self.future_results,
@@ -216,11 +220,21 @@ impl DecoderTile {
     fn record_decode_result(
         &self,
         result: &Result<(SubmissionData, tracing::Span), BuilderApiError>,
+        expected_pubkey: Option<&BlsPublicKeyBytes>,
     ) {
         let mut stats = self.stats.borrow_mut();
         match result {
             Ok(_) => stats.decoded_ok += 1,
-            Err(e) => *stats.decode_errors.entry(error_category(e)).or_insert(0) += 1,
+            Err(e) => {
+                *stats.decode_errors.entry(e.category()).or_insert(0) += 1;
+                SUBMISSION_REJECTS
+                    .with_label_values(&[
+                        expected_pubkey.map_or("unknown".to_string(), |k| k.to_string()).as_str(),
+                        "decode",
+                        e.category(),
+                    ])
+                    .inc();
+            }
         }
     }
 
@@ -439,24 +453,6 @@ impl DecoderTile {
                 );
             }
         }
-    }
-}
-
-/// Coarse, low-cardinality bucket for a decode failure; several
-/// `BuilderApiError` variants carry per-request data unsuited to a metric key.
-fn error_category(err: &BuilderApiError) -> &'static str {
-    match err {
-        BuilderApiError::JsonDecodeError(_) => "json_decode",
-        BuilderApiError::SszDecode(_) => "ssz_decode",
-        BuilderApiError::IOError(_) => "io",
-        BuilderApiError::PayloadDecode(_) => "payload_decode",
-        BuilderApiError::BidValidation(_) => "bid_validation",
-        BuilderApiError::SigError(_) => "sig_error",
-        BuilderApiError::HydrationError(_) => "hydration",
-        BuilderApiError::UntrustedBuilderOnDehydratedPayload => "untrusted_builder",
-        BuilderApiError::InvalidBuilderPubkey(..) => "invalid_pubkey",
-        BuilderApiError::InternalError => "internal_error",
-        _ => "other",
     }
 }
 

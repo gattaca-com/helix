@@ -6,7 +6,7 @@ use flux_profiler::timed;
 use helix_common::{
     self, BuilderInfo,
     bid_submission::OptimisticVersion,
-    metrics::{BID_ADJUSTMENT_LATENCY, HYDRATION_CACHE_HITS},
+    metrics::{BID_ADJUSTMENT_LATENCY, HYDRATION_CACHE_HITS, SUBMISSION_REJECTS},
     record_submission_step,
 };
 use helix_types::{SignedBidSubmission, Submission};
@@ -48,6 +48,13 @@ impl<B: BidAdjustor> Context<B> {
             match self.validate_submission(submission_data, &builder_info, slot_data) {
                 Ok(v) => v,
                 Err(e) => {
+                    SUBMISSION_REJECTS
+                        .with_label_values(&[
+                            submission_data.submission.builder_pubkey().to_string().as_str(),
+                            "validation",
+                            (&e).into(),
+                        ])
+                        .inc();
                     // The auctioneer's hydration cache must still learn this submission's
                     // txs, otherwise subsequent submissions referencing them fail.
                     let _ = self.hydrate(submission_data.submission.clone());
@@ -73,6 +80,13 @@ impl<B: BidAdjustor> Context<B> {
             Ok(v) => v,
             Err(e) => {
                 error!(?e, "hydration failed after pre-check passed");
+                SUBMISSION_REJECTS
+                    .with_label_values(&[
+                        submission_data.submission.builder_pubkey().to_string().as_str(),
+                        "hydration",
+                        e.category(),
+                    ])
+                    .inc();
                 send_submission_result(
                     producers,
                     &self.future_results,

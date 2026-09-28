@@ -240,6 +240,14 @@ lazy_static! {
     )
     .unwrap();
 
+    pub static ref SUBMISSION_REJECTS: IntCounterVec = register_int_counter_vec_with_registry!(
+        "submission_rejects_total",
+        "Submissions rejected before simulation, per builder, stage and reason",
+        &["builder", "stage", "reason"],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
     static ref SIMULATOR_LATENCY: HistogramVec = register_histogram_vec_with_registry!(
         "sim_latency_secs",
         "Latency of simulations",

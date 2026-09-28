@@ -787,7 +787,8 @@ impl Default for HydrationCache {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, strum::IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
 pub enum HydrationError {
     #[error("unknown tx: index {index}, hash {hash}")]
     UnknownTxHash { index: usize, hash: u64 },
