@@ -365,6 +365,7 @@ mod tests {
         assert_eq!(sim_priority(true, false), SimPriority::Top);
         assert!(SimPriority::Top > SimPriority::Sample);
         assert!(SimPriority::Sample > SimPriority::Low);
+        assert!(SimPriority::Low > SimPriority::PreviousSlot);
     }
 
     #[test]
