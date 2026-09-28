@@ -68,6 +68,7 @@ pub type SignedBeaconBlockGloas = lh_types::SignedBeaconBlockGloas<MainnetEthSpe
 
 // Gloas (ePBS) builder-API additions.
 pub type BeaconBlockGloas = lh_types::BeaconBlockGloas<MainnetEthSpec>;
+pub type BeaconBlockRef<'a> = lh_types::BeaconBlockRef<'a, MainnetEthSpec>;
 pub type ExecutionPayloadGloas = lh_types::ExecutionPayloadGloas<MainnetEthSpec>;
 pub type ExecutionRequestsGloas = lh_types::ExecutionRequestsGloas<MainnetEthSpec>;
 pub type ExecutionPayloadEnvelope = lh_types::ExecutionPayloadEnvelope<MainnetEthSpec>;

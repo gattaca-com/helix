@@ -8,7 +8,8 @@ use ssz::DecodeError;
 use ssz_derive::{Decode, Encode};
 
 use crate::{
-    BlobsError, BlockValidationError, ExecutionPayload, SignedBeaconBlock, TestRandom,
+    BlobsError, BlockValidationError, ExecutionPayload, SignedBeaconBlock,
+    SignedExecutionPayloadEnvelope, TestRandom,
     fields::{KzgCommitment, KzgCommitments, KzgProof, KzgProofs},
 };
 
@@ -196,6 +197,13 @@ impl ForkVersionDecode for PayloadAndBlobs {
 #[derive(Debug, Clone, Serialize, Deserialize, Encode)]
 pub struct SignedBlockContents {
     pub signed_block: Arc<SignedBeaconBlock>,
+    pub kzg_proofs: KzgProofs,
+    pub blobs: Blobs,
+}
+
+#[derive(Debug, Clone, Encode)]
+pub struct SignedExecutionPayloadEnvelopeContents {
+    pub signed_execution_payload_envelope: SignedExecutionPayloadEnvelope,
     pub kzg_proofs: KzgProofs,
     pub blobs: Blobs,
 }

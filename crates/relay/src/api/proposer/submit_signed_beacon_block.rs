@@ -5,9 +5,10 @@ use axum::{Extension, http::HeaderMap};
 use dashmap::DashMap;
 use helix_common::{chain_info::ChainInfo, decoder::Encoding, utils::extract_request_id};
 use helix_types::{
-    BlsKeypair, Domain, EthSpec, ExecutionPayloadEnvelope, ExecutionPayloadGloas,
-    ExecutionRequestsGloas, ForkName, MainnetEthSpec, SignedBeaconBlockGloas,
-    SignedExecutionPayloadEnvelope, SignedRoot,
+    BeaconBlockRef, BlobsBundle, BlsKeypair, BlsPublicKey, BlsPublicKeyBytes, Domain, EthSpec,
+    ExecutionPayloadEnvelope, ExecutionPayloadGloas, ExecutionRequestsGloas, ForkName,
+    MainnetEthSpec, SigError, SignedBeaconBlockGloas, SignedExecutionPayloadEnvelope,
+    SignedExecutionPayloadEnvelopeContents, SignedRoot,
 };
 use hyper::StatusCode;
 use ssz::Decode;
@@ -18,19 +19,25 @@ use super::{ProposerApi, get_payload::fork_name_from_header};
 use crate::api::{Api, proposer::error::ProposerApiError};
 
 /// A payload a builder has already handed helix for a proposer's committed bid.
+#[derive(Clone)]
 pub struct HeldGloasPayload {
     pub payload: ExecutionPayloadGloas,
     pub execution_requests: ExecutionRequestsGloas,
+    pub blobs_bundle: Arc<BlobsBundle>,
 }
 
-/// Payloads held by a bid's committed block hash. Each payload is taken at most once.
+/// Payloads held by a bid's committed block hash, removed once the envelope is broadcast.
 // TODO(gloas): populate from the auctioneer; see gattaca-com/helix#489 step 3.
 #[derive(Default)]
 pub struct GloasPayloadStore(DashMap<B256, HeldGloasPayload>);
 
 impl GloasPayloadStore {
-    pub fn take_held_payload(&self, block_hash: B256) -> Option<HeldGloasPayload> {
-        self.0.remove(&block_hash).map(|(_, payload)| payload)
+    pub fn held_payload(&self, block_hash: B256) -> Option<HeldGloasPayload> {
+        self.0.get(&block_hash).map(|payload| payload.clone())
+    }
+
+    pub fn remove(&self, block_hash: B256) {
+        self.0.remove(&block_hash);
     }
 }
 
@@ -68,7 +75,7 @@ pub(super) fn construct_signed_envelope(
     store: &GloasPayloadStore,
     identity: &GloasBuilderIdentity,
     chain_info: &ChainInfo,
-) -> Result<SignedExecutionPayloadEnvelope, ProposerApiError> {
+) -> Result<SignedExecutionPayloadEnvelopeContents, ProposerApiError> {
     let bid = &block.message.body.signed_execution_payload_bid.message;
     let bid_block_hash: B256 = bid.block_hash.0;
 
@@ -80,7 +87,7 @@ pub(super) fn construct_signed_envelope(
     }
 
     let held = store
-        .take_held_payload(bid_block_hash)
+        .held_payload(bid_block_hash)
         .ok_or(ProposerApiError::NoHeldPayloadForBlock(bid_block_hash))?;
 
     let held_block_hash: B256 = held.payload.block_hash.0;
@@ -99,7 +106,33 @@ pub(super) fn construct_signed_envelope(
         parent_beacon_block_root: block.message.parent_root,
     };
 
-    Ok(identity.sign_envelope(envelope, chain_info))
+    Ok(SignedExecutionPayloadEnvelopeContents {
+        signed_execution_payload_envelope: identity.sign_envelope(envelope, chain_info),
+        kzg_proofs: held.blobs_bundle.proofs.clone(),
+        blobs: held.blobs_bundle.blobs.clone(),
+    })
+}
+
+fn verify_proposer_signature(
+    block: &SignedBeaconBlockGloas,
+    proposer_pubkey: &BlsPublicKeyBytes,
+    chain_info: &ChainInfo,
+) -> Result<(), SigError> {
+    let pubkey = BlsPublicKey::deserialize(proposer_pubkey.as_slice())
+        .map_err(|_| SigError::InvalidBlsPubkeyBytes)?;
+    let epoch = block.message.slot.epoch(MainnetEthSpec::slots_per_epoch());
+    let fork = chain_info.spec.fork_at_epoch(epoch);
+    let domain = chain_info.spec.get_domain(
+        epoch,
+        Domain::BeaconProposer,
+        &fork,
+        chain_info.genesis_validators_root,
+    );
+    if !block.signature.verify(&pubkey, BeaconBlockRef::Gloas(&block.message).signing_root(domain))
+    {
+        return Err(SigError::InvalidBlsSignature);
+    }
+    Ok(())
 }
 
 impl<A: Api> ProposerApi<A> {
@@ -124,6 +157,22 @@ impl<A: Api> ProposerApi<A> {
 
         info!(slot = block.message.slot.as_u64(), "accepted submitSignedBeaconBlock request");
 
+        let (_, slot_duty) = proposer_api.curr_slot_info.slot_info();
+        let Some(slot_duty) = slot_duty else {
+            return Err(ProposerApiError::ProposerNotRegistered);
+        };
+        if slot_duty.slot != block.message.slot {
+            return Err(ProposerApiError::InvalidBlindedBlockSlot {
+                internal_slot: slot_duty.slot,
+                blinded_block_slot: block.message.slot,
+            });
+        }
+        verify_proposer_signature(
+            &block,
+            &slot_duty.entry.registration.message.pubkey,
+            &proposer_api.chain_info,
+        )?;
+
         let signed_envelope = construct_signed_envelope(
             &block,
             &proposer_api.gloas_payload_store,
@@ -135,6 +184,9 @@ impl<A: Api> ProposerApi<A> {
             .multi_beacon_client
             .publish_execution_payload_envelope(Arc::new(signed_envelope), ForkName::Gloas)
             .await?;
+        proposer_api
+            .gloas_payload_store
+            .remove(block.message.body.signed_execution_payload_bid.message.block_hash.0);
 
         Ok(StatusCode::ACCEPTED)
     }
@@ -156,7 +208,11 @@ mod construct_signed_envelope_tests {
     fn held_payload(block_hash: B256) -> HeldGloasPayload {
         let mut payload = ExecutionPayloadGloas::default();
         payload.block_hash = ExecutionBlockHash(block_hash);
-        HeldGloasPayload { payload, execution_requests: ExecutionRequestsGloas::default() }
+        HeldGloasPayload {
+            payload,
+            execution_requests: ExecutionRequestsGloas::default(),
+            blobs_bundle: Default::default(),
+        }
     }
 
     fn test_block(
@@ -190,10 +246,19 @@ mod construct_signed_envelope_tests {
         let signed_envelope =
             construct_signed_envelope(&block, &store, &identity, &chain_info).unwrap();
 
-        assert_eq!(signed_envelope.message.builder_index, 7);
-        assert_eq!(signed_envelope.message.beacon_block_root, block.message.tree_hash_root());
-        assert_eq!(signed_envelope.message.parent_beacon_block_root, parent_root);
-        assert_eq!(signed_envelope.message.payload.block_hash.0, block_hash);
+        assert_eq!(signed_envelope.signed_execution_payload_envelope.message.builder_index, 7);
+        assert_eq!(
+            signed_envelope.signed_execution_payload_envelope.message.beacon_block_root,
+            block.message.tree_hash_root()
+        );
+        assert_eq!(
+            signed_envelope.signed_execution_payload_envelope.message.parent_beacon_block_root,
+            parent_root
+        );
+        assert_eq!(
+            signed_envelope.signed_execution_payload_envelope.message.payload.block_hash.0,
+            block_hash
+        );
     }
 
     #[test]
@@ -207,9 +272,13 @@ mod construct_signed_envelope_tests {
         let signed_envelope =
             construct_signed_envelope(&block, &store, &identity, &chain_info).unwrap();
 
-        let epoch = signed_envelope.message.slot().epoch(MainnetEthSpec::slots_per_epoch());
+        let epoch = signed_envelope
+            .signed_execution_payload_envelope
+            .message
+            .slot()
+            .epoch(MainnetEthSpec::slots_per_epoch());
         let fork = chain_info.spec.fork_at_epoch(epoch);
-        assert!(signed_envelope.verify_signature(
+        assert!(signed_envelope.signed_execution_payload_envelope.verify_signature(
             &identity.keypair.pk,
             &fork,
             chain_info.genesis_validators_root,
