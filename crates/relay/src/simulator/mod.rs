@@ -41,7 +41,9 @@ pub mod client;
 /// Dispatch class for a validation request, highest first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SimPriority {
-    /// Below every other class: a bid that cannot win and carries no relay exposure.
+    /// Below every other class: an optimistic bid still queued from an earlier slot.
+    PreviousSlot,
+    /// A bid that cannot win: non-optimistic, or optimistic but outside the validity sample.
     Low,
     /// A live optimistic bid drawn into the validity sample for its builder.
     Sample,
@@ -52,6 +54,7 @@ pub enum SimPriority {
 impl SimPriority {
     pub fn label(self) -> &'static str {
         match self {
+            SimPriority::PreviousSlot => "previous_slot",
             SimPriority::Low => "low",
             SimPriority::Sample => "sample",
             SimPriority::Top => "top",
@@ -215,7 +218,7 @@ impl Simulators {
             .map(|config| SimEntry::new(SimulatorClient::new(client.clone(), config)))
             .collect();
 
-        let requests = PendingRequests::with_capacity(200);
+        let requests = PendingRequests::with_capacity(2_000);
         let priority_requests = PendingRequests::with_capacity(30);
         let merge_requests = PendingMergeRequests::with_capacity(30);
 
@@ -292,10 +295,19 @@ impl Simulators {
         }
 
         self.last_bid_slot = bid_slot;
-        let left = [self.requests.drain(), self.priority_requests.drain()].concat();
-        for req in left {
-            self.answer_dropped(&req);
-        }
+        // `priority_requests` is always served first, so leftovers there would outrank the
+        // new slot's bids.
+        self.requests.reqs.append(&mut self.priority_requests.reqs);
+        let answered = &mut self.answered;
+        self.requests.reqs.retain_mut(|(req, _, _)| {
+            // Non-optimistic builders are still waiting on a reply.
+            if !req.is_optimistic {
+                answered.extend(SimDone::dropped(req));
+                return false;
+            }
+            req.priority = SimPriority::PreviousSlot;
+            true
+        });
         self.merge_requests.clear();
         self.sample_state.clear();
     }
@@ -346,7 +358,7 @@ impl Simulators {
     #[timed]
     pub fn dispatch(
         &mut self,
-        req: crate::simulator::ValidationRequest,
+        mut req: crate::simulator::ValidationRequest,
         fast_track: bool,
     ) -> Option<SimStarted> {
         let builder_pubkey = req.submission.message.builder_pubkey;
@@ -366,8 +378,7 @@ impl Simulators {
 
         if req.priority == SimPriority::Sample && !self.take_sample(builder_pubkey) {
             self.local_telemetry.sample_skipped += 1;
-            self.answer_dropped(&req);
-            return None;
+            req.priority = SimPriority::Low;
         }
 
         let sim_id = self.select_simulator();
@@ -1021,7 +1032,7 @@ struct LocalTelemetry {
     // waiting for result
     max_in_flight: usize,
     /// Optimistic bids that could not win and were not drawn into their builder's
-    /// validity sample, so no simulator ran them.
+    /// validity sample, so they are simulated at `Low`.
     sample_skipped: usize,
     /// Requests with no simulator free at intake, queued for later dispatch.
     /// `sims_reqs == sims_sent_immediately + queued`.
@@ -1152,13 +1163,6 @@ impl PendingRequests {
             .max_by_key(|(_, (r, _, _))| r.sort_key())
             .map(|(i, _)| i)?;
         Some(self.reqs.swap_remove(i).0)
-    }
-
-    /// Takes the backlog of simulations from the previous bid slot. They are never
-    /// simulated, so the caller must answer them.
-    /// All pending requests are always for `last_bid_slot` (checked on intake).
-    fn drain(&mut self) -> Vec<crate::simulator::ValidationRequest> {
-        self.reqs.drain(..).map(|(req, _, _)| req).collect()
     }
 }
 
