@@ -174,6 +174,35 @@ pub struct SimDone {
     pub elapsed: Duration,
 }
 
+impl SimDone {
+    /// Answers a request no simulator will ever run, so the builder never waits on a
+    /// result that is not coming. A dropped simulation never demotes. An optimistic
+    /// submission was answered when it was sorted, so only the other ones need this.
+    fn dropped(req: &ValidationRequest) -> Option<Self> {
+        if req.is_optimistic {
+            return None;
+        }
+
+        Some(SimDone {
+            result: SimResult::Validate((
+                0,
+                Some(SimulationResultInner {
+                    submission_ref: req.submission_ref,
+                    optimistic_version: req.optimistic_version(),
+                    bid: None,
+                    result: Err(BlockSimError::SimulationDropped),
+                    submission_id: req.submission_id,
+                    // Never dispatched: zero skips sim telemetry in `emit_sim_outcome`.
+                    block_hash: B256::ZERO,
+                    txs: Vec::new(),
+                    retried: false,
+                }),
+            )),
+            elapsed: Duration::ZERO,
+        })
+    }
+}
+
 impl Simulators {
     pub fn new(configs: Vec<SimulatorConfig>) -> Self {
         let (task_tx, rx) = crossbeam_channel::unbounded();
@@ -310,31 +339,8 @@ impl Simulators {
         false
     }
 
-    /// Answers a request no simulator will ever run, so the builder never waits on a
-    /// result that is not coming. A dropped simulation never demotes. An optimistic
-    /// submission was answered when it was sorted, so only the other ones need this.
     fn answer_dropped(&mut self, req: &crate::simulator::ValidationRequest) {
-        if req.is_optimistic {
-            return;
-        }
-
-        self.answered.push(SimDone {
-            result: SimResult::Validate((
-                0,
-                Some(SimulationResultInner {
-                    submission_ref: req.submission_ref,
-                    optimistic_version: req.optimistic_version(),
-                    bid: None,
-                    result: Err(BlockSimError::SimulationDropped),
-                    submission_id: req.submission_id,
-                    // Never dispatched: zero skips sim telemetry in `emit_sim_outcome`.
-                    block_hash: B256::ZERO,
-                    txs: Vec::new(),
-                    retried: false,
-                }),
-            )),
-            elapsed: Duration::ZERO,
-        });
+        self.answered.extend(SimDone::dropped(req));
     }
 
     #[timed]
