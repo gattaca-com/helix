@@ -165,6 +165,8 @@ pub struct Simulators {
     rx: crossbeam_channel::Receiver<SimulatorsEvent>,
     /// Sampled-so-far and seen-so-far counts per builder for the current slot.
     sample_state: FxHashMap<BlsPublicKeyBytes, SampleState>,
+    /// Blocks sent to a simulator this slot; resubmissions of the same block share the result.
+    seen_blocks: FxHashMap<B256, SeenBlock>,
     /// If we have any synced simulator
     accept_optimistic: bool,
     /// Results produced synchronously (dropped/sampled-out/drained requests,
@@ -264,6 +266,7 @@ impl Simulators {
             task_tx,
             rx,
             sample_state: FxHashMap::default(),
+            seen_blocks: FxHashMap::default(),
             accept_optimistic: true,
             answered: Vec::new(),
         }
@@ -276,6 +279,9 @@ impl Simulators {
             match event {
                 SimulatorsEvent::TaskDone { id, error, result, elapsed } => {
                     self.on_task_response(id, error, elapsed, started);
+                    if let SimResult::Validate((_, Some(inner))) = result.as_ref() {
+                        self.on_block_simulated(inner.block_hash, &inner.result);
+                    }
                     return Some(SimDone {
                         result: *result,
                         elapsed: elapsed.unwrap_or(Duration::ZERO),
@@ -311,6 +317,63 @@ impl Simulators {
         });
         self.merge_requests.clear();
         self.sample_state.clear();
+        // The in-flight originals will be answered after the clear, so their waiters would hang.
+        // Taken and put back so the map keeps its capacity across slots.
+        let mut seen_blocks = std::mem::take(&mut self.seen_blocks);
+        for (_, seen) in seen_blocks.drain() {
+            if let SeenBlock::InFlight(waiting) = seen {
+                for req in waiting {
+                    self.answer_dropped(&req);
+                }
+            }
+        }
+        self.seen_blocks = seen_blocks;
+    }
+
+    fn on_block_simulated(
+        &mut self,
+        block_hash: B256,
+        result: &Result<SubmissionTrace, BlockSimError>,
+    ) {
+        let outcome = || result.as_ref().map(|_| ()).map_err(Clone::clone);
+        // A non-demotable failure says nothing about the block, so a resubmission simulates again.
+        let prev = if result.as_ref().is_err_and(|err| !err.is_demotable()) {
+            self.seen_blocks.remove(&block_hash)
+        } else {
+            self.seen_blocks.insert(block_hash, SeenBlock::Done(outcome()))
+        };
+        let Some(SeenBlock::InFlight(waiting)) = prev else {
+            return;
+        };
+        for req in waiting {
+            self.answer_cached(req, outcome());
+        }
+    }
+
+    /// Answers a resubmission of an already simulated block with that block's result. It is
+    /// sorted under its own version, as if it had been simulated itself.
+    fn answer_cached(&mut self, req: ValidationRequest, result: Result<(), BlockSimError>) {
+        if req.is_optimistic {
+            return;
+        }
+
+        self.answered.push(SimDone {
+            result: SimResult::Validate((
+                0,
+                Some(SimulationResultInner {
+                    submission_ref: req.submission_ref,
+                    optimistic_version: req.optimistic_version(),
+                    bid: Some(Bid::new(req.version, &req.submission)),
+                    result: result.map(|()| req.trace),
+                    submission_id: req.submission_id,
+                    // Never dispatched: zero skips sim telemetry in `emit_sim_outcome`.
+                    block_hash: B256::ZERO,
+                    txs: Vec::new(),
+                    retried: false,
+                }),
+            )),
+            elapsed: Duration::ZERO,
+        });
     }
 
     pub fn accept_optimistic(&self) -> bool {
@@ -376,6 +439,23 @@ impl Simulators {
         }
 
         self.local_telemetry.sims_reqs += 1;
+
+        match self.seen_blocks.get_mut(req.submission.block_hash()) {
+            Some(SeenBlock::InFlight(waiting)) => {
+                self.local_telemetry.duplicate_skipped += 1;
+                if !req.is_optimistic {
+                    waiting.push(req);
+                }
+                return None;
+            }
+            Some(SeenBlock::Done(result)) => {
+                self.local_telemetry.duplicate_skipped += 1;
+                let result = result.clone();
+                self.answer_cached(req, result);
+                return None;
+            }
+            None => {}
+        }
 
         if req.priority == SimPriority::Sample && !self.take_sample(builder_pubkey) {
             self.local_telemetry.sample_skipped += 1;
@@ -467,6 +547,9 @@ impl Simulators {
         let version = req.version;
         let trace = req.trace;
         let submission_ref = req.submission_ref;
+        self.seen_blocks
+            .entry(*submission.block_hash())
+            .or_insert_with(|| SeenBlock::InFlight(Vec::new()));
 
         let sim = &mut self.simulators[id];
         let dispatch = if let Some(url) = &sim.client.ssz_url {
@@ -777,6 +860,7 @@ impl Simulators {
         SimulatorMetrics::sim_mananger_count("sims_sent_immediately", tel.sims_sent_immediately);
         SimulatorMetrics::sim_mananger_count("sims_reqs_dropped", tel.sims_reqs_dropped);
         SimulatorMetrics::sim_mananger_count("sample_skipped", tel.sample_skipped);
+        SimulatorMetrics::sim_mananger_count("duplicate_skipped", tel.duplicate_skipped);
         SimulatorMetrics::sim_mananger_count("stale_sim_reqs", tel.stale_sim_reqs);
         SimulatorMetrics::sim_manager_gauge("max_pending", tel.max_pending);
         SimulatorMetrics::sim_manager_gauge("max_in_flight", tel.max_in_flight);
@@ -811,6 +895,7 @@ impl Simulators {
             sims_sent_from_queue = tel.sims_sent_from_queue,
             sims_reqs_dropped = tel.sims_reqs_dropped,
             sample_skipped = tel.sample_skipped,
+            duplicate_skipped = tel.duplicate_skipped,
             queue_left,
             stale_sim_reqs = tel.stale_sim_reqs,
             max_pending = tel.max_pending,
@@ -1035,6 +1120,8 @@ struct LocalTelemetry {
     /// Optimistic bids that could not win and were not drawn into their builder's
     /// validity sample, so they are simulated at `Low`.
     sample_skipped: usize,
+    /// Requests for a block already sent to a simulator this slot, answered from its result.
+    duplicate_skipped: usize,
     /// Requests with no simulator free at intake, queued for later dispatch.
     /// `sims_reqs == sims_sent_immediately + queued`.
     queued: usize,
@@ -1100,6 +1187,12 @@ enum SimulatorsEvent {
         id: usize,
         reported: Option<bool>,
     },
+}
+
+enum SeenBlock {
+    /// Non-optimistic resubmissions waiting on the first simulation of the block.
+    InFlight(Vec<ValidationRequest>),
+    Done(Result<(), BlockSimError>),
 }
 
 /// Per-builder sampling counters for the current slot.

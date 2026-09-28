@@ -68,6 +68,13 @@ const PARENT_BLOCK_NOT_FOUND: &str = "could not find parent block: parent block 
 const NO_STATE_FOR_BLOCK: &str = "no state found for block";
 const MISSING_PARENT_STATE: &str = "parent state is not available";
 
+/// `prefix` must be ASCII.
+fn starts_with_ignore_ascii_case(s: &str, prefix: &str) -> bool {
+    s.as_bytes()
+        .get(..prefix.len())
+        .is_some_and(|head| head.eq_ignore_ascii_case(prefix.as_bytes()))
+}
+
 #[derive(Debug, Clone, Error)]
 pub enum BlockSimError {
     #[error("block validation failed. Reason: {0}")]
@@ -131,16 +138,19 @@ impl From<&BlockSimError> for SimError {
 impl BlockSimError {
     pub fn is_temporary(&self) -> bool {
         match self {
-            BlockSimError::BlockValidationFailed(reason) => match reason.to_lowercase().as_str() {
-                UNKNOWN_ANCESTOR => true,
-                PARENT_NOT_FOUND => true,
-                PARENT_BLOCK_NOT_FOUND => true,
-                BLOCK_REQ_REORG => true,
-                MISSING_PARENT_STATE => true,
-                r if r.starts_with(MISSING_TRIE_NODE) => true,
-                r if r.starts_with(NO_STATE_FOR_BLOCK) => true,
-                _ => false,
-            },
+            BlockSimError::BlockValidationFailed(reason) => {
+                [
+                    UNKNOWN_ANCESTOR,
+                    PARENT_NOT_FOUND,
+                    PARENT_BLOCK_NOT_FOUND,
+                    BLOCK_REQ_REORG,
+                    MISSING_PARENT_STATE,
+                ]
+                .iter()
+                .any(|known| reason.eq_ignore_ascii_case(known)) ||
+                    starts_with_ignore_ascii_case(reason, MISSING_TRIE_NODE) ||
+                    starts_with_ignore_ascii_case(reason, NO_STATE_FOR_BLOCK)
+            }
             BlockSimError::Timeout => true,
             BlockSimError::RpcError => true,
             BlockSimError::SimulationDropped => true,
@@ -159,7 +169,7 @@ impl BlockSimError {
     pub fn is_sim_fault(&self) -> bool {
         match self {
             BlockSimError::BlockValidationFailed(reason) => {
-                reason.to_lowercase().starts_with(MISSING_TRIE_NODE)
+                starts_with_ignore_ascii_case(reason, MISSING_TRIE_NODE)
             }
             BlockSimError::Timeout | BlockSimError::RpcError => true,
             _ => false,
@@ -169,7 +179,7 @@ impl BlockSimError {
     pub fn is_already_known(&self) -> bool {
         match self {
             BlockSimError::BlockValidationFailed(reason) => {
-                matches!(reason.to_lowercase().as_str(), BLOCK_ALREADY_KNOWN)
+                reason.eq_ignore_ascii_case(BLOCK_ALREADY_KNOWN)
             }
             _ => false,
         }
@@ -178,7 +188,7 @@ impl BlockSimError {
     pub fn is_too_old(&self) -> bool {
         match self {
             BlockSimError::BlockValidationFailed(reason) => {
-                matches!(reason.to_lowercase().as_str(), BLOCK_TOO_OLD)
+                reason.eq_ignore_ascii_case(BLOCK_TOO_OLD)
             }
             _ => false,
         }
