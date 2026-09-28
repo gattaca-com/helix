@@ -41,7 +41,9 @@ pub mod client;
 /// Dispatch class for a validation request, highest first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SimPriority {
-    /// Below every other class: a bid that cannot win and carries no relay exposure.
+    /// Below every other class: an optimistic bid still queued from an earlier slot.
+    PreviousSlot,
+    /// A bid that cannot win: non-optimistic, or optimistic but outside the validity sample.
     Low,
     /// A live optimistic bid drawn into the validity sample for its builder.
     Sample,
@@ -52,6 +54,7 @@ pub enum SimPriority {
 impl SimPriority {
     pub fn label(self) -> &'static str {
         match self {
+            SimPriority::PreviousSlot => "previous_slot",
             SimPriority::Low => "low",
             SimPriority::Sample => "sample",
             SimPriority::Top => "top",
@@ -174,6 +177,35 @@ pub struct SimDone {
     pub elapsed: Duration,
 }
 
+impl SimDone {
+    /// Answers a request no simulator will ever run, so the builder never waits on a
+    /// result that is not coming. A dropped simulation never demotes. An optimistic
+    /// submission was answered when it was sorted, so only the other ones need this.
+    fn dropped(req: &ValidationRequest) -> Option<Self> {
+        if req.is_optimistic {
+            return None;
+        }
+
+        Some(SimDone {
+            result: SimResult::Validate((
+                0,
+                Some(SimulationResultInner {
+                    submission_ref: req.submission_ref,
+                    optimistic_version: req.optimistic_version(),
+                    bid: None,
+                    result: Err(BlockSimError::SimulationDropped),
+                    submission_id: req.submission_id,
+                    // Never dispatched: zero skips sim telemetry in `emit_sim_outcome`.
+                    block_hash: B256::ZERO,
+                    txs: Vec::new(),
+                    retried: false,
+                }),
+            )),
+            elapsed: Duration::ZERO,
+        })
+    }
+}
+
 impl Simulators {
     pub fn new(configs: Vec<SimulatorConfig>) -> Self {
         let (task_tx, rx) = crossbeam_channel::unbounded();
@@ -186,7 +218,7 @@ impl Simulators {
             .map(|config| SimEntry::new(SimulatorClient::new(client.clone(), config)))
             .collect();
 
-        let requests = PendingRequests::with_capacity(200);
+        let requests = PendingRequests::with_capacity(2_000);
         let priority_requests = PendingRequests::with_capacity(30);
         let merge_requests = PendingMergeRequests::with_capacity(30);
 
@@ -263,10 +295,20 @@ impl Simulators {
         }
 
         self.last_bid_slot = bid_slot;
-        let left = [self.requests.drain(), self.priority_requests.drain()].concat();
-        for req in left {
-            self.answer_dropped(&req);
+        for (req, _, _) in self.priority_requests.reqs.drain(..) {
+            self.answered.extend(SimDone::dropped(&req));
         }
+        let answered = &mut self.answered;
+        self.requests.reqs.retain_mut(|(req, _, _)| {
+            // Non-optimistic builders are still waiting on a reply, and a bid two slots old
+            // is stale.
+            if !req.is_optimistic || req.priority == SimPriority::PreviousSlot {
+                answered.extend(SimDone::dropped(req));
+                return false;
+            }
+            req.priority = SimPriority::PreviousSlot;
+            true
+        });
         self.merge_requests.clear();
         self.sample_state.clear();
     }
@@ -310,37 +352,14 @@ impl Simulators {
         false
     }
 
-    /// Answers a request no simulator will ever run, so the builder never waits on a
-    /// result that is not coming. A dropped simulation never demotes. An optimistic
-    /// submission was answered when it was sorted, so only the other ones need this.
     fn answer_dropped(&mut self, req: &crate::simulator::ValidationRequest) {
-        if req.is_optimistic {
-            return;
-        }
-
-        self.answered.push(SimDone {
-            result: SimResult::Validate((
-                0,
-                Some(SimulationResultInner {
-                    submission_ref: req.submission_ref,
-                    optimistic_version: req.optimistic_version(),
-                    bid: None,
-                    result: Err(BlockSimError::SimulationDropped),
-                    submission_id: req.submission_id,
-                    // Never dispatched: zero skips sim telemetry in `emit_sim_outcome`.
-                    block_hash: B256::ZERO,
-                    txs: Vec::new(),
-                    retried: false,
-                }),
-            )),
-            elapsed: Duration::ZERO,
-        });
+        self.answered.extend(SimDone::dropped(req));
     }
 
     #[timed]
     pub fn dispatch(
         &mut self,
-        req: crate::simulator::ValidationRequest,
+        mut req: crate::simulator::ValidationRequest,
         fast_track: bool,
     ) -> Option<SimStarted> {
         let builder_pubkey = req.submission.message.builder_pubkey;
@@ -360,8 +379,7 @@ impl Simulators {
 
         if req.priority == SimPriority::Sample && !self.take_sample(builder_pubkey) {
             self.local_telemetry.sample_skipped += 1;
-            self.answer_dropped(&req);
-            return None;
+            req.priority = SimPriority::Low;
         }
 
         let sim_id = self.select_simulator();
@@ -1015,7 +1033,7 @@ struct LocalTelemetry {
     // waiting for result
     max_in_flight: usize,
     /// Optimistic bids that could not win and were not drawn into their builder's
-    /// validity sample, so no simulator ran them.
+    /// validity sample, so they are simulated at `Low`.
     sample_skipped: usize,
     /// Requests with no simulator free at intake, queued for later dispatch.
     /// `sims_reqs == sims_sent_immediately + queued`.
@@ -1146,13 +1164,6 @@ impl PendingRequests {
             .max_by_key(|(_, (r, _, _))| r.sort_key())
             .map(|(i, _)| i)?;
         Some(self.reqs.swap_remove(i).0)
-    }
-
-    /// Takes the backlog of simulations from the previous bid slot. They are never
-    /// simulated, so the caller must answer them.
-    /// All pending requests are always for `last_bid_slot` (checked on intake).
-    fn drain(&mut self) -> Vec<crate::simulator::ValidationRequest> {
-        self.reqs.drain(..).map(|(req, _, _)| req).collect()
     }
 }
 
