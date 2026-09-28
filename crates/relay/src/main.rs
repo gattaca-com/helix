@@ -270,12 +270,12 @@ async fn run(
                     reg_worker_rx.clone(),
                     slot_events.clone(),
                 );
-                attach_tile(tile, spine, TileConfig::new(core, None));
+                attach_tile(tile, spine, config.cores.tile(core));
             }
         }
 
         attach_tile(housekeeper_tile, spine, match config.cores.housekeeper {
-            Some(core) => TileConfig::new(core, None),
+            Some(core) => config.cores.tile(core),
             None => TileConfig::background(None, Some(flux::timing::Duration::from_millis(20))),
         });
 
@@ -293,7 +293,7 @@ async fn run(
                     core,
                     lane,
                 );
-                attach_tile(decoder_tile, spine, TileConfig::new(core, None));
+                attach_tile(decoder_tile, spine, config.cores.tile(core));
             }
 
             let sock_addr =
@@ -308,13 +308,13 @@ async fn run(
             attach_tile(
                 block_submission_tcp_listener,
                 spine,
-                TileConfig::new(config.cores.tcp_bid_submissions_tile, None),
+                config.cores.tile(config.cores.tcp_bid_submissions_tile),
             );
 
             attach_tile(
                 TopBidTile::new(web_socket_recv),
                 spine,
-                TileConfig::new(config.cores.top_bid, None),
+                config.cores.tile(config.cores.top_bid),
             );
 
             if config.udp_top_bid_enabled {
@@ -325,12 +325,11 @@ async fn run(
                         config.udp_top_bid_max_connections_per_key,
                     ),
                     spine,
-                    TileConfig::new(
+                    config.cores.tile(
                         config
                             .cores
                             .udp_top_bid
                             .expect("cores.udp_top_bid must be set when udp_top_bid_enabled"),
-                        None,
                     ),
                 );
             }
@@ -351,10 +350,11 @@ async fn run(
                     chain_info.as_ref().clone(),
                     block_merging_enabled.clone(),
                 );
-                attach_tile(merging_tile, spine, TileConfig::new(config.cores.block_merging, None));
+                attach_tile(merging_tile, spine, config.cores.tile(config.cores.block_merging));
             }
 
             let auctioneer_core = config.cores.auctioneer;
+            let auctioneer_tile = config.cores.tile(auctioneer_core);
             let auctioneer = Auctioneer::new(
                 chain_info.as_ref().clone(),
                 config,
@@ -375,7 +375,7 @@ async fn run(
                 alert_manager.clone(),
                 operator_api.clone(),
             );
-            attach_tile(auctioneer, spine, TileConfig::new(auctioneer_core, None));
+            attach_tile(auctioneer, spine, auctioneer_tile);
         }
     });
 
