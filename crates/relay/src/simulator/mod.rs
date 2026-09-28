@@ -295,9 +295,9 @@ impl Simulators {
         }
 
         self.last_bid_slot = bid_slot;
-        // `priority_requests` is always served first, so leftovers there would outrank the
-        // new slot's bids.
-        self.requests.reqs.append(&mut self.priority_requests.reqs);
+        for (req, _, _) in self.priority_requests.reqs.drain(..) {
+            self.answered.extend(SimDone::dropped(&req));
+        }
         let answered = &mut self.answered;
         self.requests.reqs.retain_mut(|(req, _, _)| {
             // Non-optimistic builders are still waiting on a reply, and a bid two slots old
