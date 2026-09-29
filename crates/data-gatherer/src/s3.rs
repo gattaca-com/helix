@@ -4,7 +4,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use flux_network::tcp::{TcpEvent, TcpNetworkCore};
+use flux_network::{NetworkCore, NetworkEvent};
 use flux_s3::{Error, RequestId, S3};
 use helix_common::{S3Config, api::builder_api::MAX_PAYLOAD_LENGTH, expect_env_var};
 use helix_relay::InternalBidSubmissionHeader;
@@ -58,7 +58,7 @@ pub struct S3Data {
 }
 
 impl S3Data {
-    pub fn new(config: &S3Config, net: &mut TcpNetworkCore) -> Self {
+    pub fn new(config: &S3Config, net: &mut NetworkCore) -> Self {
         let addr = Self::resolve(&config.endpoint).unwrap_or_else(|| {
             panic!("s3 endpoint `{}` is not a host:port with an IPv4 address", config.endpoint)
         });
@@ -98,7 +98,7 @@ impl S3Data {
     /// Moves to the endpoint's current address after connection failures.
     /// Closing the old client drops its in-flight requests without outcomes,
     /// so their retained bodies are queued for another attempt.
-    fn follow_endpoint(&mut self, net: &mut TcpNetworkCore) {
+    fn follow_endpoint(&mut self, net: &mut NetworkCore) {
         if self.resolved_at.elapsed() < RERESOLVE_INTERVAL {
             return;
         }
@@ -203,12 +203,12 @@ impl S3Data {
     }
 
     /// Returns whether the event belonged to this client.
-    pub fn on_event(&mut self, event: &TcpEvent<'_>) -> bool {
+    pub fn on_event(&mut self, event: &NetworkEvent<'_>) -> bool {
         self.s3.on_event(event)
     }
 
     /// Sends due retries, then what is queued, and retires finished uploads.
-    pub fn drive(&mut self, net: &mut TcpNetworkCore) -> bool {
+    pub fn drive(&mut self, net: &mut NetworkCore) -> bool {
         self.pump();
         // Staged out of the callback: `put_object` cannot run while `drive`
         // holds the client.

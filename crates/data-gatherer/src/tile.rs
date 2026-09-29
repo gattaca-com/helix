@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use flux::{spine::SpineAdapter, tile::Tile, timing::InternalMessage};
 use flux_gather::{BlobCache, BlobIo, BlobShipper};
-use flux_network::tcp::TcpNetwork;
+use flux_network::Network;
 use flux_utils::ArrayStr;
 use helix_common::{api::builder_api::TopBidUpdate, config::DataGatherConfig, gather::GatherMeta};
 use helix_relay::{HelixSpine, NewBidSubmission, NewTcpBidSubmission, read_spine_epoch};
@@ -32,7 +32,7 @@ pub struct DataGatherer {
     s3: Option<S3Data>,
     current_slot: u64,
     /// One poll behind the S3 and ClickHouse clients.
-    net: TcpNetwork,
+    net: Network,
     stats: SlotStats,
     cache: BlobCache,
     shipper: BlobShipper,
@@ -45,7 +45,7 @@ pub struct DataGatherer {
 
 impl DataGatherer {
     pub fn new(instance_id: String, config: DataGatherConfig) -> Self {
-        let mut net = TcpNetwork::default();
+        let mut net = Network::default();
         Self {
             ch: config
                 .clickhouse
@@ -59,9 +59,10 @@ impl DataGatherer {
             // Bounded forwarding: a slow peer disconnects after holding the
             // backlog too long, and a dead peer sheds past the cap. The disk
             // copy (when configured) keeps what shipping drops.
-            shipper: BlobShipper::new(config.addresses.clone())
+            shipper: BlobShipper::builder(config.addresses.clone())
                 .with_max_backlog(4096, Duration::from_secs(30).into())
-                .with_drop_outbound_backlog_on_disconnect(true),
+                .with_drop_outbound_backlog_on_disconnect(true)
+                .connect(),
             writer: BlobIo::new(),
             config,
             instance: ArrayStr::from_str_truncate(&instance_id),
