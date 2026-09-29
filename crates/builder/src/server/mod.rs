@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use codec::{append_frame, append_frame_maybe_zstd, decompress};
 use crossbeam_channel::{Receiver, Sender, TrySendError};
 use flux::{tile::Tile, timing::Repeater};
-use flux_network::{NetworkDriver, PollEvent, SendBehavior, Token, tcp::TcpTelemetry};
+use flux_network::{Network, NetworkEvent, TcpGroupConfig, Token};
 use helix_tcp_types::{
     Status,
     merging::{
@@ -48,7 +48,7 @@ enum Reply {
 }
 
 pub struct MergingServerTile {
-    listener: NetworkDriver,
+    listener: Network,
 
     api_keys: Vec<[u8; 16]>,
     max_orders_per_slot: u32,
@@ -73,6 +73,8 @@ pub struct MergingServerTile {
     replies: Vec<(Token, Reply)>,
     to_disconnect: Vec<Token>,
     encode_scratch: Vec<u8>,
+    /// SSZ encoders append to a `Vec`, which a frame payload does not expose.
+    frame_scratch: Vec<u8>,
 }
 
 impl MergingServerTile {
@@ -83,11 +85,15 @@ impl MergingServerTile {
     ) -> Self {
         // Telemetry disabled: per-connection shm queue leak, see the note in
         // the relay's tcp_bid_recv.
-        let mut listener = NetworkDriver::default()
-            .with_telemetry(TcpTelemetry::Disabled)
-            .with_socket_buf_size(config.socket_buf_size);
+        let mut listener = Network::default();
+        let group = listener.add_group(TcpGroupConfig {
+            name: "merging-server",
+            socket_buf_size: Some(config.socket_buf_size),
+            max_frame_size: u32::MAX as usize,
+            ..Default::default()
+        });
         listener
-            .listen_at(config.listen_addr)
+            .listen(group, config.listen_addr)
             .expect("failed to initialise the merging TCP listener");
         info!(listen_addr = %config.listen_addr, "merging server listening");
 
@@ -109,6 +115,7 @@ impl MergingServerTile {
             replies: Vec::new(),
             to_disconnect: Vec::new(),
             encode_scratch: Vec::new(),
+            frame_scratch: Vec::new(),
         }
     }
 
@@ -139,15 +146,14 @@ impl MergingServerTile {
                         zstd,
                         &mut self.encode_scratch,
                     );
-                    self.listener.write_or_enqueue_with(SendBehavior::Single(token), |buf| {
-                        buf.extend_from_slice(&frame);
-                    });
+                    self.listener.send_with(token, |buf| buf.extend_from_slice(&frame));
                 }
                 EngineOutput::Reject { msg, .. } => {
                     debug!(slot = msg.slot, code = ?msg.code, subject = ?msg.subject, "sending reject");
-                    self.listener.write_or_enqueue_with(SendBehavior::Single(token), |buf| {
-                        append_frame(buf, MergingMsgId::RejectV1, &msg);
-                    });
+                    self.frame_scratch.clear();
+                    append_frame(&mut self.frame_scratch, MergingMsgId::RejectV1, &msg);
+                    let frame = self.frame_scratch.as_slice();
+                    self.listener.send_with(token, |buf| buf.extend_from_slice(frame));
                 }
             }
         }
@@ -171,16 +177,16 @@ impl MergingServerTile {
         } = self;
 
         listener.poll_with(|event| match event {
-            PollEvent::Accept { listener: _, stream, peer_addr } => {
-                info!(?peer_addr, token = ?stream, "relay connected, awaiting registration");
-                sessions.insert(stream, Session::awaiting(Instant::now(), *handshake_timeout));
+            NetworkEvent::Accepted { token, peer_addr, .. } => {
+                info!(?peer_addr, ?token, "relay connected, awaiting registration");
+                sessions.insert(token, Session::awaiting(Instant::now(), *handshake_timeout));
             }
-            PollEvent::Reconnect { token } => {
+            NetworkEvent::Connected { token, .. } => {
                 // Reconnects are an outbound-connection feature; a listener
                 // should only ever see fresh accepts.
                 warn!(?token, "unexpected reconnect event on merging listener");
             }
-            PollEvent::Disconnect { token } => {
+            NetworkEvent::Disconnected { token, .. } => {
                 info!(?token, "relay disconnected");
                 sessions.remove(&token);
                 if *active == Some(token) {
@@ -191,7 +197,7 @@ impl MergingServerTile {
                     });
                 }
             }
-            PollEvent::Message { token, payload, send_ts: _ } => {
+            NetworkEvent::Message { token, payload, .. } => {
                 let Some(session) = sessions.get_mut(&token) else {
                     warn!(?token, "message from unknown session");
                     to_disconnect.push(token);
@@ -241,12 +247,16 @@ impl MergingServerTile {
                 Reply::Fatal(msg) => metrics::reject_sent(reject_label(msg.code), true),
                 Reply::Ack(_) | Reply::Pong(_) => {}
             }
-            self.listener.write_or_enqueue_with(SendBehavior::Single(token), |buf| match &reply {
+            let buf = &mut self.frame_scratch;
+            buf.clear();
+            match &reply {
                 Reply::Ack(msg) => append_frame(buf, MergingMsgId::MergerAckV1, msg),
                 Reply::Pong(msg) => append_frame(buf, MergingMsgId::PongV1, msg),
                 Reply::Reject(msg) => append_frame(buf, MergingMsgId::RejectV1, msg),
                 Reply::Fatal(msg) => append_frame(buf, MergingMsgId::FatalV1, msg),
-            });
+            }
+            let frame = self.frame_scratch.as_slice();
+            self.listener.send_with(token, |buf| buf.extend_from_slice(frame));
         }
         metrics::relay_connected(self.active.is_some());
         for token in std::mem::take(&mut self.to_disconnect) {
@@ -273,9 +283,10 @@ impl MergingServerTile {
         {
             self.ping_nonce += 1;
             let msg = PingV1 { nonce: self.ping_nonce };
-            self.listener.write_or_enqueue_with(SendBehavior::Single(token), |buf| {
-                append_frame(buf, MergingMsgId::PingV1, &msg);
-            });
+            self.frame_scratch.clear();
+            append_frame(&mut self.frame_scratch, MergingMsgId::PingV1, &msg);
+            let frame = self.frame_scratch.as_slice();
+            self.listener.send_with(token, |buf| buf.extend_from_slice(frame));
         }
 
         let now = Instant::now();

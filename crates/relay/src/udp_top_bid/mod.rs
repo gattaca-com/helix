@@ -5,9 +5,7 @@ use flux::{
     tile::Tile,
     timing::{Duration, Instant},
 };
-use flux_network::{
-    NetworkDriver, PollEvent, SendBehavior, Token, Transport, UdpConfig, tcp::TcpTelemetry,
-};
+use flux_network::{Network, NetworkEvent, Token, UdpConfig, UdpGroupConfig};
 use helix_common::{api::builder_api::TopBidUpdate, is_local_dev};
 use helix_tcp_types::RegistrationMsg;
 use helix_types::BlsPublicKeyBytes;
@@ -43,7 +41,7 @@ struct Stats {
 }
 
 pub struct UdpTopBidTile {
-    driver: NetworkDriver,
+    driver: Network,
     api_key_cache: Arc<DashMap<String, Vec<BlsPublicKeyBytes>>>,
     max_per_key: usize,
 
@@ -72,12 +70,18 @@ impl UdpTopBidTile {
             reliable: false,
             ..UdpConfig::wan()
         };
-        let mut driver = NetworkDriver::default()
-            .with_transport(Transport::Udp(udp))
-            .with_telemetry(TcpTelemetry::Disabled)
-            .with_socket_buf_size(8 * 1024 * 1024)
-            .with_max_backlog(MAX_BACKLOG, Duration::from_millis(MAX_BACKLOG_TIMEOUT_MS));
-        driver.listen_at(listener_addr).expect("failed to initialise the UDP top bid listener");
+        let mut driver = Network::default();
+        let group = driver.add_group(UdpGroupConfig {
+            name: "udp-top-bid",
+            udp,
+            socket_buf_size: Some(8 * 1024 * 1024),
+            max_backlog_datagrams: Some((
+                MAX_BACKLOG,
+                Duration::from_millis(MAX_BACKLOG_TIMEOUT_MS),
+            )),
+            ..Default::default()
+        });
+        driver.listen(group, listener_addr).expect("failed to initialise the UDP top bid listener");
 
         Self {
             driver,
@@ -147,13 +151,13 @@ impl Tile<HelixSpine> for UdpTopBidTile {
         } = self;
 
         driver.poll_with(|event| match event {
-            PollEvent::Accept { listener: _, stream, peer_addr } => {
-                tracing::trace!(?stream, %peer_addr, "udp top bid peer accepted");
+            NetworkEvent::Accepted { token, peer_addr, .. } => {
+                tracing::trace!(?token, %peer_addr, "udp top bid peer accepted");
                 stats.accepted += 1;
-                pending.push((stream, Instant::now()));
+                pending.push((token, Instant::now()));
             }
-            PollEvent::Reconnect { .. } => {}
-            PollEvent::Disconnect { token } => {
+            NetworkEvent::Connected { .. } => {}
+            NetworkEvent::Disconnected { token, .. } => {
                 tracing::trace!(?token, "udp top bid peer disconnected");
                 stats.disconnected += 1;
                 if let Some(i) = registered.iter().position(|(t, _)| *t == token) {
@@ -162,7 +166,7 @@ impl Tile<HelixSpine> for UdpTopBidTile {
                     pending.swap_remove(i);
                 }
             }
-            PollEvent::Message { token, payload, send_ts: _ } => {
+            NetworkEvent::Message { token, payload, .. } => {
                 let Some(pending_bid_id) = pending.iter().position(|(t, _)| *t == token) else {
                     // Registered peers have nothing to say on this feed.
                     return;
@@ -217,9 +221,7 @@ impl Tile<HelixSpine> for UdpTopBidTile {
             top_bid.ssz_append(send_buf);
             let payload: &[u8] = send_buf;
             for &(token, _) in registered.iter() {
-                driver.write_or_enqueue_with(SendBehavior::Single(token), |buffer| {
-                    buffer.extend_from_slice(payload);
-                });
+                driver.send_with(token, |buffer| buffer.extend_from_slice(payload));
                 stats.sends += 1;
             }
         });

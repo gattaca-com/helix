@@ -10,7 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use flux_network::{NetworkDriver, PollEvent, SendBehavior, tcp::TcpTelemetry};
+use flux_network::{Network, NetworkEvent, TcpGroupConfig};
 use helix_tcp_types::merging::{
     MERGING_HEADER_SIZE, MERGING_PROTOCOL_VERSION, MergingFrameHeader, MergingMsgId,
     builder_to_relay::{RejectCode, RejectV1},
@@ -66,36 +66,29 @@ impl Drop for TestServer {
 }
 
 struct Client {
-    connector: NetworkDriver,
+    connector: Network,
     token: flux_network::Token,
 }
 
 impl Client {
     fn connect(addr: SocketAddr) -> Self {
-        let mut connector = NetworkDriver::default().with_telemetry(TcpTelemetry::Disabled);
-        let deadline = Instant::now() + Duration::from_secs(5);
-        let token = loop {
-            if let Some(token) = connector.connect(addr) {
-                break token;
-            }
-            assert!(Instant::now() < deadline, "failed to dial test server");
-            std::thread::sleep(Duration::from_millis(10));
-        };
+        let mut connector = Network::default();
+        let group = connector
+            .add_group(TcpGroupConfig { max_frame_size: u32::MAX as usize, ..Default::default() });
+        let token = connector.connect(group, addr);
         Self { connector, token }
     }
 
     fn send(&mut self, msg_id: MergingMsgId, msg: &impl ssz::Encode) {
         let token = self.token;
-        self.connector.write_or_enqueue_with(SendBehavior::Single(token), |buf| {
-            append_frame(buf, msg_id, msg);
-        });
+        let mut frame = Vec::new();
+        append_frame(&mut frame, msg_id, msg);
+        self.connector.send_with(token, |buf| buf.extend_from_slice(&frame));
     }
 
     fn send_raw(&mut self, frame: &[u8]) {
         let token = self.token;
-        self.connector.write_or_enqueue_with(SendBehavior::Single(token), |buf| {
-            buf.extend_from_slice(frame);
-        });
+        self.connector.send_with(token, |buf| buf.extend_from_slice(frame));
     }
 
     /// Polls until a full frame arrives or the timeout expires.
@@ -105,11 +98,11 @@ impl Client {
         let mut disconnected = false;
         while Instant::now() < deadline && received.is_none() && !disconnected {
             self.connector.poll_with(|event| match event {
-                PollEvent::Message { payload, .. } => {
+                NetworkEvent::Message { payload, .. } => {
                     let header = MergingFrameHeader::decode(payload).expect("bad header");
                     received = Some((header.msg_id, payload[MERGING_HEADER_SIZE..].to_vec()));
                 }
-                PollEvent::Disconnect { .. } => disconnected = true,
+                NetworkEvent::Disconnected { .. } => disconnected = true,
                 _ => {}
             });
             if received.is_none() {
@@ -125,7 +118,7 @@ impl Client {
         let mut disconnected = false;
         while Instant::now() < deadline && !disconnected {
             self.connector.poll_with(|event| {
-                if matches!(event, PollEvent::Disconnect { .. } | PollEvent::Reconnect { .. }) {
+                if matches!(event, NetworkEvent::Disconnected { .. }) {
                     disconnected = true;
                 }
             });

@@ -14,7 +14,7 @@ use std::{
 
 use alloy_primitives::{Address, B256, FixedBytes, U256};
 use clap::Parser;
-use flux_network::{NetworkDriver, PollEvent, SendBehavior};
+use flux_network::{Network, NetworkEvent, TcpGroupConfig};
 use helix_common::{beacon::types::PayloadAttributesEvent, http::client::HttpClient};
 use helix_tcp_types::{
     BidSubmissionFlags, BidSubmissionHeader, BidSubmissionResponse, MergeType, RegistrationMsg,
@@ -60,7 +60,7 @@ struct Args {
 }
 
 struct Builder {
-    conn: NetworkDriver,
+    conn: Network,
     token: flux_network::Token,
     pubkey: BlsPublicKeyBytes,
     key: BlsSecretKey,
@@ -213,14 +213,15 @@ fn main() {
             let pubkey = BlsPublicKeyBytes::from(key.public_key().serialize());
             let reg =
                 RegistrationMsg { api_key: args.api_key.into_bytes(), builder_pubkey: pubkey };
-            let mut conn = NetworkDriver::default()
-                .with_socket_buf_size(8 * 1024 * 1024)
-                .with_on_connect_msg(reg.as_ssz_bytes());
-            let token = if args.http {
-                flux_network::Token(0)
-            } else {
-                conn.connect(args.relay).expect("connect to relay")
-            };
+            let mut conn = Network::default();
+            let group = conn.add_group(TcpGroupConfig {
+                on_connect_msg: Some(reg.as_ssz_bytes()),
+                socket_buf_size: Some(8 * 1024 * 1024),
+                max_frame_size: u32::MAX as usize,
+                ..Default::default()
+            });
+            let token =
+                if args.http { flux_network::Token(0) } else { conn.connect(group, args.relay) };
             let http = reqwest::blocking::Client::builder()
                 .timeout(Duration::from_secs(5))
                 .build()
@@ -269,9 +270,7 @@ fn main() {
                             }
                         }
                     } else {
-                        b.conn.write_or_enqueue_with(SendBehavior::Single(b.token), |buf| {
-                            buf.extend_from_slice(frame)
-                        });
+                        b.conn.send_with(b.token, |buf| buf.extend_from_slice(frame));
                     }
                     b.sent += 1;
                 }
@@ -279,7 +278,7 @@ fn main() {
                 let deadline = Instant::now() + Duration::from_millis(args.interval_ms);
                 while Instant::now() < deadline {
                     b.conn.poll_with(|event| {
-                        if let PollEvent::Message { payload, .. } = event &&
+                        if let NetworkEvent::Message { payload, .. } = event &&
                             let Ok(resp) = BidSubmissionResponse::from_ssz_bytes(payload)
                         {
                             if resp.error_msg.is_empty() {
