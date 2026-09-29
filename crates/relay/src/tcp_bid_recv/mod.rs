@@ -2,7 +2,7 @@ use std::{net::SocketAddr, sync::Arc};
 
 use dashmap::DashMap;
 use flux::{tile::Tile, timing::Nanos};
-use flux_network::{NetworkDriver, PollEvent, SendBehavior, Token, tcp::TcpTelemetry};
+use flux_network::{Event, Network, TcpGroupConfig, Token};
 use flux_utils::{DCachePtr, SharedVector};
 use helix_common::{
     SubmissionTrace, is_local_dev, metrics::SUB_CLIENT_TO_SERVER_LATENCY, utils::utcnow_ns,
@@ -48,13 +48,14 @@ struct Stats {
 }
 
 pub struct BidSubmissionTcpListener {
-    listener: NetworkDriver,
+    listener: Network,
 
     api_key_cache: Arc<DashMap<String, Vec<BlsPublicKeyBytes>>>,
 
     to_disconnect: Vec<Token>,
     registered: FxHashMap<Token, BlsPublicKeyBytes>,
     submission_errors: Vec<SubmissionError>,
+    send_buf: Vec<u8>,
 
     slot_events: Arc<SharedVector<SlotUpdate>>,
     bid_slot: u64,
@@ -73,11 +74,13 @@ impl BidSubmissionTcpListener {
         // Telemetry creates 4 shm queues per accepted connection keyed by peer
         // addr incl. ephemeral port; never freed, so reconnect churn leaks
         // /dev/shm until the fix lands in flux.
-        let mut listener = NetworkDriver::default()
-            .with_telemetry(TcpTelemetry::Disabled)
-            .with_socket_buf_size(64 * 1024 * 1024) // 64MB
-            .with_dcache(dcache_ptr);
-        listener.listen_at(listener_addr).expect("failed to initialise the TCP listener");
+        let mut listener = Network::default().with_dcache(dcache_ptr);
+        let group = listener.add_group(TcpGroupConfig {
+            socket_buf_size: Some(64 * 1024 * 1024), // 64MB
+            max_frame_size: u32::MAX as usize,
+            ..Default::default()
+        });
+        listener.listen(group, listener_addr).expect("failed to initialise the TCP listener");
 
         Self {
             listener,
@@ -85,6 +88,7 @@ impl BidSubmissionTcpListener {
             to_disconnect: Vec::with_capacity(max_connections),
             registered: FxHashMap::with_capacity_and_hasher(max_connections, Default::default()),
             submission_errors: Vec::with_capacity(max_connections),
+            send_buf: Vec::new(),
             slot_events,
             bid_slot: 0,
             stats: Stats::default(),
@@ -128,23 +132,23 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
         adapter.consume(|msg: SlotMsg, _| self.on_slot_msg(msg));
 
         self.listener.poll_with_produce(&mut adapter.producers, |event| match event {
-            PollEvent::Accept { listener: _, stream, peer_addr } => {
+            Event::Accepted { token: stream, peer_addr, .. } => {
                 tracing::trace!("connected to new peer {:?} with token {:?}", peer_addr, stream);
                 self.stats.accepted += 1;
                 None
             }
-            PollEvent::Reconnect { token } => {
+            Event::Connected { token, .. } => {
                 tracing::trace!("reconnected to peer with token {:?}", token);
                 self.stats.reconnected += 1;
                 None
             }
-            PollEvent::Disconnect { token } => {
+            Event::Disconnected { token, .. } => {
                 tracing::trace!("disconnected from peer with token {:?}", token);
                 self.registered.remove(&token);
                 self.stats.disconnected += 1;
                 None
             }
-            PollEvent::Message { token, payload, send_ts } => {
+            Event::Message { token, payload, send_ts, .. } => {
                 if let Some(expected_pubkey) = self.registered.get(&token) {
                     let header = match BidSubmissionHeader::try_from(payload) {
                         Ok(header) => header,
@@ -236,9 +240,10 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
         }
 
         for (token, seq_num, request_id, err) in self.submission_errors.drain(..) {
-            self.listener.write_or_enqueue_with(SendBehavior::Single(token), |buffer| {
-                response_from_bid_submission_error(seq_num, request_id, &err).ssz_append(buffer);
-            });
+            self.send_buf.clear();
+            response_from_bid_submission_error(seq_num, request_id, &err)
+                .ssz_append(&mut self.send_buf);
+            self.listener.send_with(token, |buffer| buffer.extend_from_slice(&self.send_buf));
         }
 
         adapter.consume(|r: SubmissionResultWithRef, _producers| {
@@ -250,9 +255,10 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                 response_from_submission_result(seq_num, id, r.tcp_status, r.error_msg.as_str());
             tracing::debug!("submission result: {}", response);
             self.stats.results_sent += 1;
-            self.listener.write_or_enqueue_with(SendBehavior::Single(Token(token)), |buffer| {
-                response.ssz_append(buffer);
-            });
+            self.send_buf.clear();
+            response.ssz_append(&mut self.send_buf);
+            self.listener
+                .send_with(Token(token), |buffer| buffer.extend_from_slice(&self.send_buf));
         });
     }
 }

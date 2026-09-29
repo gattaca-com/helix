@@ -9,7 +9,7 @@ use flux::{
     tile::Tile,
     timing::{Duration, Nanos, Repeater},
 };
-use flux_network::{NetworkDriver, PollEvent, SendBehavior, Token, tcp::TcpTelemetry};
+use flux_network::{Event, Group, Network, ReplayPolicy, TcpGroupConfig, Token};
 use flux_utils::SharedVector;
 use helix_common::{
     BlockMergingTcpConfig,
@@ -49,7 +49,6 @@ use crate::{
     spine::messages::{DecodedSubmission, MergedBlockMsg, SlotMsg},
 };
 
-const REDIAL_INTERVAL_S: u64 = 2;
 const PING_INTERVAL_S: u64 = 5;
 
 struct Endpoint {
@@ -168,7 +167,8 @@ struct SlotStats {
 }
 
 pub struct BlockMergingTile {
-    connector: NetworkDriver,
+    connector: Network,
+    group: Group,
     relay_id: Vec<u8>,
     relay_config_msg: RelayConfigV1,
 
@@ -189,7 +189,6 @@ pub struct BlockMergingTile {
     /// hashing and the incoming merged-block check. Cleared on slot transition.
     tx_hash_cache: FxHashMap<Bytes, B256>,
 
-    redial: Repeater,
     ping: Repeater,
     ping_nonce: u64,
 
@@ -225,9 +224,6 @@ impl Tile<HelixSpine> for BlockMergingTile {
             adapter.producers.produce(MergedBlockMsg { merged_block_response_id });
         }
 
-        if self.redial.fired() {
-            self.dial_endpoint();
-        }
         if self.ping.fired() {
             self.send_pings();
             MERGE_ENABLED.set(self.block_merging_enabled.load(Ordering::Relaxed) as i64);
@@ -242,7 +238,10 @@ impl Tile<HelixSpine> for BlockMergingTile {
     }
 
     fn try_init(&mut self, _adapter: &mut flux::spine::SpineAdapter<HelixSpine>) -> bool {
-        self.dial_endpoint();
+        let addr = self.endpoint.addr;
+        let token = self.connector.connect(self.group, addr);
+        info!(%addr, ?token, "dialing merging builder");
+        self.token = Some(token);
         info!("starting");
         true
     }
@@ -421,17 +420,22 @@ impl BlockMergingTile {
 
         // TODO: enable telemetry once the per-connection shm queue leak is fixed
         // Disabled: per-connection shm queue leak, see tcp_bid_recv/mod.rs.
-        let connector = NetworkDriver::default()
-            .with_telemetry(TcpTelemetry::Disabled)
-            .with_socket_buf_size(64 * 1024 * 1024)
+        let mut connector = Network::default();
+        let group = connector.add_group(TcpGroupConfig {
+            socket_buf_size: Some(64 * 1024 * 1024),
+            max_frame_size: u32::MAX as usize,
             // Otherwise a stale message queued for the dead socket (e.g. an
             // activation or ping) gets replayed on the new one ahead of the
             // fresh MergerRegistrationV1, and the builder rejects it with
-            // "expected registration" — killing the connection again.
-            .with_drop_outbound_backlog_on_disconnect(true);
+            // "expected registration" — killing the connection again. Sends
+            // before `Connected` are dropped too, so registration waits for it.
+            replay: ReplayPolicy::Drop,
+            ..Default::default()
+        });
 
         Self {
             connector,
+            group,
             relay_id: relay_id.into_bytes(),
             relay_config_msg,
             endpoint,
@@ -443,7 +447,6 @@ impl BlockMergingTile {
             hydration_cache: HydrationCache::new(),
             blob_sidecars: FxHashMap::default(),
             tx_hash_cache: FxHashMap::default(),
-            redial: Repeater::every(Duration::from_secs(REDIAL_INTERVAL_S)),
             ping: Repeater::every(Duration::from_secs(PING_INTERVAL_S)),
             ping_nonce: 0,
             decoded,
@@ -462,24 +465,6 @@ impl BlockMergingTile {
         }
     }
 
-    /// Dials the builder if not already connected. A failed initial `connect`
-    /// is not retried by the connector (unlike an established conn, which
-    /// auto-reconnects), so this runs on a repeater.
-    fn dial_endpoint(&mut self) {
-        if self.token.is_some() {
-            return;
-        }
-        let addr = self.endpoint.addr;
-        let Some(token) = self.connector.connect(addr) else {
-            warn!(%addr, "failed to dial merging builder");
-            return;
-        };
-        info!(%addr, ?token, "dialing merging builder");
-        self.token = Some(token);
-        self.conn = Conn::default();
-        self.send_registration(token);
-    }
-
     fn send_registration(&mut self, token: Token) {
         let msg = MergerRegistrationV1 {
             api_key: self.endpoint.api_key,
@@ -488,22 +473,21 @@ impl BlockMergingTile {
             max_version: MERGING_PROTOCOL_VERSION,
             supports_zstd: false,
         };
-        self.connector.write_or_enqueue_with(SendBehavior::Single(token), |buf| {
-            append_frame(buf, MergingMsgId::MergerRegistrationV1, &msg);
-        });
+        self.encode_buf.clear();
+        append_frame(&mut self.encode_buf, MergingMsgId::MergerRegistrationV1, &msg);
+        self.connector.send_with(token, |buf| buf.extend_from_slice(&self.encode_buf));
     }
 
     /// Ack received: send the relay config, the current slot start and replay
     /// this slot's mergeable blocks.
     fn complete_handshake(&mut self, token: Token) {
-        let msg = &self.relay_config_msg;
-        self.connector.write_or_enqueue_with(SendBehavior::Single(token), |buf| {
-            append_frame(buf, MergingMsgId::RelayConfigV1, msg);
-        });
+        self.encode_buf.clear();
+        append_frame(&mut self.encode_buf, MergingMsgId::RelayConfigV1, &self.relay_config_msg);
+        self.connector.send_with(token, |buf| buf.extend_from_slice(&self.encode_buf));
         if let Some(msg) = &self.slot.slot_start {
-            self.connector.write_or_enqueue_with(SendBehavior::Single(token), |buf| {
-                append_frame(buf, MergingMsgId::SlotStartV1, msg);
-            });
+            self.encode_buf.clear();
+            append_frame(&mut self.encode_buf, MergingMsgId::SlotStartV1, msg);
+            self.connector.send_with(token, |buf| buf.extend_from_slice(&self.encode_buf));
             for event in self.slot.replay_log.clone() {
                 match event {
                     ReplayEvent::Forward(decoded_submission_id) => {
@@ -541,21 +525,21 @@ impl BlockMergingTile {
         } = self;
 
         connector.poll_with(|event| match event {
-            PollEvent::Accept { .. } => error!("unexpected inbound connection on merging tile"),
-            PollEvent::Reconnect { token } => {
-                info!(?token, "reconnected to merging builder");
+            Event::Accepted { .. } => error!("unexpected inbound connection on merging tile"),
+            Event::Connected { token, .. } => {
+                info!(?token, "connected to merging builder");
                 if *my_token == Some(token) {
                     conn.reset();
                     to_register.push(token);
                 }
             }
-            PollEvent::Disconnect { token } => {
+            Event::Disconnected { token, .. } => {
                 warn!(?token, "merging builder disconnected");
                 if *my_token == Some(token) {
                     conn.reset();
                 }
             }
-            PollEvent::Message { token, payload, send_ts: _ } => {
+            Event::Message { token, payload, .. } => {
                 if *my_token != Some(token) {
                     return;
                 }
@@ -674,9 +658,9 @@ impl BlockMergingTile {
             self.complete_handshake(token);
         }
         for (token, nonce) in std::mem::take(&mut self.pongs) {
-            self.connector.write_or_enqueue_with(SendBehavior::Single(token), |buf| {
-                append_frame(buf, MergingMsgId::PongV1, &PongV1 { nonce });
-            });
+            self.encode_buf.clear();
+            append_frame(&mut self.encode_buf, MergingMsgId::PongV1, &PongV1 { nonce });
+            self.connector.send_with(token, |buf| buf.extend_from_slice(&self.encode_buf));
         }
         for (token, reject) in std::mem::take(&mut self.rejects) {
             self.on_reject(token, reject);
@@ -748,9 +732,9 @@ impl BlockMergingTile {
         if self.conn.active &&
             let Some(token) = self.token
         {
-            self.connector.write_or_enqueue_with(SendBehavior::Single(token), |buf| {
-                append_frame(buf, MergingMsgId::SlotStartV1, &msg);
-            });
+            self.encode_buf.clear();
+            append_frame(&mut self.encode_buf, MergingMsgId::SlotStartV1, &msg);
+            self.connector.send_with(token, |buf| buf.extend_from_slice(&self.encode_buf));
         }
         self.slot.slot_start = Some(msg);
     }
@@ -1018,9 +1002,7 @@ impl BlockMergingTile {
             self.conn.forwarded.insert(block_hash);
             self.slot.forwarded_ns.entry(block_hash).or_insert_with(|| Nanos::now().0);
         }
-        self.connector.write_or_enqueue_with(SendBehavior::Single(token), |buf| {
-            buf.extend_from_slice(frame);
-        });
+        self.connector.send_with(token, |buf| buf.extend_from_slice(frame));
     }
 
     fn on_top_bid(&mut self, top_bid: TopBidUpdate) {
@@ -1070,9 +1052,9 @@ impl BlockMergingTile {
         self.stats.activations_sent += 1;
         MERGE_ACTIVATION.with_label_values(&["sent"]).inc();
         let msg = ActivateBaseBlockV1 { slot: top_bid.slot, block_hash: top_bid.block_hash };
-        self.connector.write_or_enqueue_with(SendBehavior::Single(token), |buf| {
-            append_frame(buf, MergingMsgId::ActivateBaseBlockV1, &msg);
-        });
+        self.encode_buf.clear();
+        append_frame(&mut self.encode_buf, MergingMsgId::ActivateBaseBlockV1, &msg);
+        self.connector.send_with(token, |buf| buf.extend_from_slice(&self.encode_buf));
     }
 
     /// Median of unsorted samples; 0 if empty.
@@ -1096,9 +1078,9 @@ impl BlockMergingTile {
             return;
         }
         let msg = PingV1 { nonce: self.ping_nonce };
-        self.connector.write_or_enqueue_with(SendBehavior::Single(token), |buf| {
-            append_frame(buf, MergingMsgId::PingV1, &msg);
-        });
+        self.encode_buf.clear();
+        append_frame(&mut self.encode_buf, MergingMsgId::PingV1, &msg);
+        self.connector.send_with(token, |buf| buf.extend_from_slice(&self.encode_buf));
     }
 }
 
