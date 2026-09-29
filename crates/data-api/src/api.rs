@@ -11,8 +11,8 @@ use helix_common::{
     api::data_api::{
         BuilderBlocksReceivedParams, DataAdjustmentsParams, DeliveredPayloadsResponse,
         DeliveredPayloadsResponseV2, MergedBlockParams, MergedBlockResponse, MergedTxParams,
-        MergedTxResponse, ProposerHeaderDeliveredParams, ProposerPayloadDeliveredParams, ReceivedBlocksResponse,
-        ReceivedBlocksResponseV2, ValidatorRegistrationParams,
+        MergedTxResponse, ProposerHeaderDeliveredParams, ProposerPayloadDeliveredParams,
+        ReceivedBlocksResponse, ReceivedBlocksResponseV2, ValidatorRegistrationParams,
     },
     api_provider::{ApiProvider, DefaultApiProvider},
     metrics,
