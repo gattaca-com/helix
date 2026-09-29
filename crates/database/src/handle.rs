@@ -156,10 +156,12 @@ impl DbHandle {
         }
     }
 
-    pub fn update_block_submission_live_ts(&self, block_hash: B256, live_ts: u64) {
-        if let Err(err) =
-            self.sender.try_send(DbRequest::UpdateBlockSubmissionLiveTs { block_hash, live_ts })
-        {
+    pub fn update_block_submission_live_ts(&self, slot: u64, block_hash: B256, live_ts: u64) {
+        if let Err(err) = self.sender.try_send(DbRequest::UpdateBlockSubmissionLiveTs {
+            slot,
+            block_hash,
+            live_ts,
+        }) {
             error!(%err, %block_hash, "failed to send UpdateBlockSubmissionLiveTs request");
         }
     }
