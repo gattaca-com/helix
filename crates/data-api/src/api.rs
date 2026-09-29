@@ -10,9 +10,9 @@ use helix_common::{
     Filtering, ValidatorPreferences,
     api::data_api::{
         BuilderBlocksReceivedParams, DataAdjustmentsParams, DeliveredPayloadsResponse,
-        DeliveredPayloadsResponseV2, MergedBlockParams, ProposerHeaderDeliveredParams,
-        ProposerPayloadDeliveredParams, ReceivedBlocksResponse, ReceivedBlocksResponseV2,
-        ValidatorRegistrationParams,
+        DeliveredPayloadsResponseV2, MergedBlockParams, MergedBlockResponse, MergedTxParams,
+        MergedTxResponse, ProposerHeaderDeliveredParams, ProposerPayloadDeliveredParams, ReceivedBlocksResponse,
+        ReceivedBlocksResponseV2, ValidatorRegistrationParams,
     },
     api_provider::{ApiProvider, DefaultApiProvider},
     metrics,
@@ -35,6 +35,8 @@ pub type DeliveredPayloadsCache =
     Cache<(Filtering, ProposerPayloadDeliveredParams), Vec<DeliveredPayloadsResponse>>;
 pub type DeliveredPayloadsCacheV2 =
     Cache<(Filtering, ProposerPayloadDeliveredParams), Vec<DeliveredPayloadsResponseV2>>;
+pub type MergedBlocksCache = Cache<MergedBlockParams, Vec<MergedBlockResponse>>;
+pub type MergedTxsCache = Cache<MergedTxParams, Option<MergedTxResponse>>;
 
 #[derive(Clone)]
 pub struct DataApi<P: ApiProvider = DefaultApiProvider> {
@@ -45,6 +47,8 @@ pub struct DataApi<P: ApiProvider = DefaultApiProvider> {
     payload_delivered_stats_v2: ProposerPayloadDeliveredStats,
     builder_blocks_received_stats: BuilderBlocksReceivedStats,
     builder_blocks_received_stats_v2: BuilderBlocksReceivedStats,
+    merged_blocks_cache: MergedBlocksCache,
+    merged_txs_cache: MergedTxsCache,
 }
 
 impl<P: ApiProvider> DataApi<P> {
@@ -80,6 +84,14 @@ impl<P: ApiProvider> DataApi<P> {
             payload_delivered_stats_v2,
             builder_blocks_received_stats,
             builder_blocks_received_stats_v2,
+            merged_blocks_cache: Cache::builder()
+                .time_to_live(Duration::from_secs(12))
+                .max_capacity(10_000)
+                .build(),
+            merged_txs_cache: Cache::builder()
+                .time_to_live(Duration::from_secs(12))
+                .max_capacity(10_000)
+                .build(),
         }
     }
 
@@ -368,10 +380,35 @@ impl<P: ApiProvider> DataApi<P> {
         Extension(data_api): Extension<Arc<DataApi<P>>>,
         Query(params): Query<MergedBlockParams>,
     ) -> Result<impl IntoResponse, DataApiError> {
+        if let Some(cached) = data_api.merged_blocks_cache.get(&params) {
+            return Ok(Json(cached));
+        }
         match data_api.db.get_merged_blocks_for_slot(params.slot).await {
-            Ok(result) => Ok(Json(result)),
+            Ok(result) => {
+                data_api.merged_blocks_cache.insert(params, result.clone());
+                Ok(Json(result))
+            }
             Err(err) => {
                 warn!(%err, "Failed to get merged blocks info");
+                Err(DataApiError::InternalServerError)
+            }
+        }
+    }
+
+    pub async fn merged_txs(
+        Extension(data_api): Extension<Arc<DataApi<P>>>,
+        Query(params): Query<MergedTxParams>,
+    ) -> Result<impl IntoResponse, DataApiError> {
+        if let Some(cached) = data_api.merged_txs_cache.get(&params) {
+            return Ok(Json(cached));
+        }
+        match data_api.db.get_merged_tx(params.slot, params.tx_hash).await {
+            Ok(result) => {
+                data_api.merged_txs_cache.insert(params, result.clone());
+                Ok(Json(result))
+            }
+            Err(err) => {
+                warn!(%err, "Failed to get merged tx info");
                 Err(DataApiError::InternalServerError)
             }
         }

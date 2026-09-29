@@ -1,5 +1,8 @@
+use std::sync::Arc;
+
 use alloy_primitives::{Address, B256, U256};
 use bitflags::bitflags;
+use helix_tcp_types::merging::builder_to_relay::UnmergedTx;
 use rand::Rng;
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
@@ -376,6 +379,7 @@ pub struct MergedBlock {
     pub merged_gas_used: u64,
     pub builder_inclusions: FxHashMap<Address, BuilderInclusionResult>,
     pub trace: MergedBlockTrace,
+    pub unmerged_txs: Arc<Vec<UnmergedTx>>,
 }
 
 impl MergedBlock {

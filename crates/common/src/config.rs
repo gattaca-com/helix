@@ -604,6 +604,7 @@ impl RouterConfig {
             Route::ValidatorRegistration,
             Route::DataAdjustments,
             Route::MergedBlocks,
+            Route::MergedTxs,
         ]);
     }
 
@@ -718,6 +719,7 @@ pub enum Route {
     RelayNetwork,
     DataAdjustments,
     MergedBlocks,
+    MergedTxs,
     PromoteBuilder,
     Blacklist,
     /// Gloas (ePBS): not yet wired to the auctioneer, see docs/gloas-support-plan.md.
@@ -768,6 +770,7 @@ impl Route {
             Route::ValidatorRegistration => format!("{PATH_DATA_API}{PATH_VALIDATOR_REGISTRATION}"),
             Route::DataAdjustments => format!("{PATH_DATA_API}{PATH_DATA_ADJUSTMENTS}"),
             Route::MergedBlocks => format!("{PATH_DATA_API}{PATH_MERGED_BLOCKS}"),
+            Route::MergedTxs => format!("{PATH_DATA_API}{PATH_MERGED_TXS}"),
             Route::All => panic!("All is not a real route"),
             Route::BuilderApi => panic!("BuilderApi is not a real route"),
             Route::ProposerApi => panic!("ProposerApi is not a real route"),

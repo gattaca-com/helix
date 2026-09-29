@@ -20,6 +20,7 @@ use helix_common::{
     utils::avg_duration,
     validator_preferences::{Filtering, ValidatorPreferences},
 };
+use helix_tcp_types::merging::builder_to_relay::UnmergedTx;
 use helix_types::{
     BidTrace, BlobsBundle, BlsPublicKeyBytes, BlsSignatureBytes, BuilderInclusionResult,
     ExecutionPayload, ExecutionRequests, MergedBlockTrace, SignedBidSubmission, SubmissionVersion,
@@ -124,6 +125,8 @@ pub struct BlockMergeResponse {
     /// validator recognise the base block's payment directly instead of scanning every tx.
     pub base_payment_tx_index: usize,
     pub trace: MergedBlockTrace,
+    #[serde(skip)]
+    pub unmerged_txs: Arc<Vec<UnmergedTx>>,
 }
 
 // Stored inline; boxing would add a heap alloc on the hot path.

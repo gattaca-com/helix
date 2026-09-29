@@ -283,6 +283,12 @@ impl DbHandle {
             error!(%err, "failed to send SaveMergedBlocks request");
         }
     }
+
+    pub fn save_merged_txs(&self, block: MergedBlock) {
+        if let Err(err) = self.sender.try_send(DbRequest::SaveMergedTxs { block }) {
+            error!(%err, "failed to send SaveMergedTxs request");
+        }
+    }
 }
 
 #[cfg(test)]

@@ -11,6 +11,7 @@ pub const PATH_GET_TOP_BID: &str = "/top_bid";
 pub const PATH_GET_INCLUSION_LIST: &str = "/inclusion_list/{slot}/{parent_hash}/{pub_key}";
 pub const PATH_DATA_ADJUSTMENTS: &str = "/adjustments";
 pub const PATH_MERGED_BLOCKS: &str = "/merged_blocks";
+pub const PATH_MERGED_TXS: &str = "/merged_txs";
 
 /// Auth token, a uuid. Registered by the proposer, then required to open a
 /// header stream for it.

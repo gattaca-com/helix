@@ -442,6 +442,7 @@ impl<A: Api> ProposerApi<A> {
 
         if let Some(merged_block) = self.local_cache.get_merged_block(&block_hash) {
             self.alert_manager.send_merged_block(&merged_block.to_alert_message());
+            self.db.save_merged_txs(merged_block);
         }
 
         if matches!(api_version, ProposerApiVersion::V1) {
