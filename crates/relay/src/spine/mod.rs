@@ -52,6 +52,9 @@ pub struct HelixSpine {
     /// HousekeeperTile → all consumers.
     #[queue(size(2usize.pow(6)), gather)]
     pub housekeeper_slot: SpineQueue<messages::SlotMsg>,
+
+    #[queue(size(2usize.pow(10)), gather)]
+    pub sim_previous_slot_drops: SpineQueue<messages::SimPreviousSlotDrops>,
 }
 
 #[derive(Deserialize)]

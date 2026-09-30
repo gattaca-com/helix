@@ -103,6 +103,19 @@ versioned_telemetry!(SimFinished, persist = "Helix.Sim.Finished" =>
     }
 );
 
+versioned_telemetry!(SimPreviousSlotDrops, persist = "Helix.Sim.PreviousSlotDrops" =>
+    /// Requests discarded when their `PreviousSlot` retention expires.
+    #[derive(Default)]
+    #[type_hash_lock(hash = 5726037604136785908)]
+    SimPreviousSlotDropsV1 {
+        /// Target slot of the expired requests; emitted after two observed slot rolls.
+        pub slot: u64,
+        pub current_slot: u64,
+        pub queued_requests: u64,
+        pub superseded_requests: u64,
+    }
+);
+
 /// How a simulation ended: `BlockSimError`'s variants without their payloads,
 /// `None` for a valid block. `as_str` gives the text form.
 #[repr(u8)]

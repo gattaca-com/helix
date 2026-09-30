@@ -6,7 +6,9 @@ use flux_network::Network;
 use flux_utils::ArrayStr;
 use helix_common::{api::builder_api::TopBidUpdate, config::DataGatherConfig, gather::GatherMeta};
 use helix_relay::{HelixSpine, NewBidSubmission, NewTcpBidSubmission, read_spine_epoch};
-use helix_telemetry::{BidUpdate, DecodedSubmission, MergedBlockMsg, SimUpdate, SlotMsg};
+use helix_telemetry::{
+    BidUpdate, DecodedSubmission, MergedBlockMsg, SimPreviousSlotDrops, SimUpdate, SlotMsg,
+};
 use tracing::info;
 
 use crate::{
@@ -213,6 +215,9 @@ impl Tile<HelixSpine> for DataGatherer {
         // Former `gather_into` traffic, now explicit: control and sim
         // lifecycle messages land in the cache unchanged.
         adapter.consume_internal_message(|msg: &mut InternalMessage<SimUpdate>, _| {
+            self.cache.push(msg);
+        });
+        adapter.consume_internal_message(|msg: &mut InternalMessage<SimPreviousSlotDrops>, _| {
             self.cache.push(msg);
         });
         adapter.consume_internal_message(|msg: &mut InternalMessage<MergedBlockMsg>, _| {

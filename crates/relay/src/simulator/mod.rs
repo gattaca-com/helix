@@ -33,7 +33,7 @@ use crate::{
     SubmissionRef,
     auctioneer::Bid,
     simulator::client::SimulatorClient,
-    spine::messages::{SimFinished, SimStarted, SimTxIncluded},
+    spine::messages::{SimFinished, SimPreviousSlotDrops, SimStarted, SimTxIncluded},
 };
 
 pub mod client;
@@ -161,6 +161,7 @@ pub struct Simulators {
     /// whenever a simulator has nothing else to do.
     superseded: Vec<ValidationRequest>,
     last_bid_slot: u64,
+    previous_bid_slot: u64,
     local_telemetry: LocalTelemetry,
     /// Per-simulator counters for the current slot, indexed like `simulators`.
     sim_slot_stats: Vec<SimSlotStats>,
@@ -266,6 +267,7 @@ impl Simulators {
             merge_requests,
             superseded: Vec::with_capacity(SUPERSEDED_CAPACITY),
             last_bid_slot: 0,
+            previous_bid_slot: 0,
             local_telemetry: LocalTelemetry::default(),
             sim_slot_stats,
             task_tx,
@@ -300,11 +302,18 @@ impl Simulators {
         self.answered.pop()
     }
 
-    pub fn on_new_slot(&mut self, bid_slot: u64) {
+    pub fn on_new_slot(&mut self, bid_slot: u64) -> Option<SimPreviousSlotDrops> {
+        let previous_slot_known = self.previous_bid_slot != 0;
+        let mut drops = SimPreviousSlotDrops {
+            slot: self.previous_bid_slot,
+            current_slot: bid_slot,
+            ..Default::default()
+        };
         if self.last_bid_slot > 0 {
             self.report();
         }
 
+        self.previous_bid_slot = self.last_bid_slot;
         self.last_bid_slot = bid_slot;
         for (req, _, _) in self.priority_requests.reqs.drain(..) {
             self.answered.extend(SimDone::dropped(&req));
@@ -313,6 +322,9 @@ impl Simulators {
         self.requests.reqs.retain_mut(|(req, _, _)| {
             // Non-optimistic builders are still waiting on a reply, and a bid two slots old
             // is stale.
+            if req.priority == SimPriority::PreviousSlot {
+                drops.queued_requests += 1;
+            }
             if !req.is_optimistic || req.priority == SimPriority::PreviousSlot {
                 answered.extend(SimDone::dropped(req));
                 return false;
@@ -322,6 +334,7 @@ impl Simulators {
         });
         self.superseded.retain_mut(|req| {
             if req.priority == SimPriority::PreviousSlot {
+                drops.superseded_requests += 1;
                 return false;
             }
             req.priority = SimPriority::PreviousSlot;
@@ -340,6 +353,7 @@ impl Simulators {
             }
         }
         self.seen_blocks = seen_blocks;
+        previous_slot_known.then_some(drops)
     }
 
     fn on_block_simulated(
@@ -1138,7 +1152,7 @@ const SAMPLE_FLOOR: u32 = 3;
 /// After the floor, one bid in this many joins the sample.
 const SAMPLE_EVERY: u32 = 64;
 /// Most superseded requests held at once, this slot's and last slot's together.
-const SUPERSEDED_CAPACITY: usize = 2_000;
+const SUPERSEDED_CAPACITY: usize = 5_000;
 const BREAKER_BACKOFF_START: Duration = Duration::from_secs(12);
 const BREAKER_BACKOFF_MAX: Duration = Duration::from_secs(60);
 const SYNC_FAILURES_TO_UNSYNC: usize = 3;
