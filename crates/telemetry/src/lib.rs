@@ -116,6 +116,11 @@ versioned_telemetry!(SimPreviousSlotDrops, persist = "Helix.Sim.PreviousSlotDrop
         /// Distinct block hashes across both sets of expired requests.
         pub unique_blocks: u64,
     }
+    #[derive(Default)]
+    #[type_hash_lock(hash = 12812207968419757007)]
+    SimPreviousSlotDropsV2 {
+        remove { unique_blocks }
+    }
 );
 
 /// How a simulation ended: `BlockSimError`'s variants without their payloads,

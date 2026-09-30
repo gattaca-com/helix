@@ -24,7 +24,7 @@ use helix_types::{
     BidTrace, BlobsBundle, BlsPublicKeyBytes, BlsSignatureBytes, BuilderInclusionResult,
     ExecutionPayload, ExecutionRequests, MergedBlockTrace, SignedBidSubmission, SubmissionVersion,
 };
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use ssz::Encode as _;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
@@ -160,8 +160,6 @@ pub struct Simulators {
     /// were live in the bid sorter and may have been served, so they run, newest first,
     /// whenever a simulator has nothing else to do.
     superseded: Vec<ValidationRequest>,
-    /// Reused on slot rolls to count hashes without counting repeated requests twice.
-    previous_slot_dropped_blocks: FxHashSet<B256>,
     last_bid_slot: u64,
     previous_bid_slot: u64,
     local_telemetry: LocalTelemetry,
@@ -268,10 +266,6 @@ impl Simulators {
             priority_requests,
             merge_requests,
             superseded: Vec::with_capacity(SUPERSEDED_CAPACITY),
-            previous_slot_dropped_blocks: FxHashSet::with_capacity_and_hasher(
-                SUPERSEDED_CAPACITY,
-                Default::default(),
-            ),
             last_bid_slot: 0,
             previous_bid_slot: 0,
             local_telemetry: LocalTelemetry::default(),
@@ -315,7 +309,6 @@ impl Simulators {
             current_slot: bid_slot,
             ..Default::default()
         };
-        self.previous_slot_dropped_blocks.clear();
         if self.last_bid_slot > 0 {
             self.report();
         }
@@ -326,13 +319,11 @@ impl Simulators {
             self.answered.extend(SimDone::dropped(&req));
         }
         let answered = &mut self.answered;
-        let dropped_blocks = &mut self.previous_slot_dropped_blocks;
         self.requests.reqs.retain_mut(|(req, _, _)| {
             // Non-optimistic builders are still waiting on a reply, and a bid two slots old
             // is stale.
             if req.priority == SimPriority::PreviousSlot {
                 drops.queued_requests += 1;
-                dropped_blocks.insert(*req.submission.block_hash());
             }
             if !req.is_optimistic || req.priority == SimPriority::PreviousSlot {
                 answered.extend(SimDone::dropped(req));
@@ -344,13 +335,11 @@ impl Simulators {
         self.superseded.retain_mut(|req| {
             if req.priority == SimPriority::PreviousSlot {
                 drops.superseded_requests += 1;
-                dropped_blocks.insert(*req.submission.block_hash());
                 return false;
             }
             req.priority = SimPriority::PreviousSlot;
             true
         });
-        drops.unique_blocks = dropped_blocks.len() as u64;
         self.merge_requests.clear();
         self.sample_state.clear();
         // The in-flight originals will be answered after the clear, so their waiters would hang.
