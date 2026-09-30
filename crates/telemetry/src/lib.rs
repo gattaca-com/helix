@@ -106,20 +106,13 @@ versioned_telemetry!(SimFinished, persist = "Helix.Sim.Finished" =>
 versioned_telemetry!(SimPreviousSlotDrops, persist = "Helix.Sim.PreviousSlotDrops" =>
     /// Requests discarded when their `PreviousSlot` retention expires.
     #[derive(Default)]
-    #[type_hash_lock(hash = 10551127871571389185)]
+    #[type_hash_lock(hash = 5726037604136785908)]
     SimPreviousSlotDropsV1 {
         /// Target slot of the expired requests; emitted after two observed slot rolls.
         pub slot: u64,
         pub current_slot: u64,
         pub queued_requests: u64,
         pub superseded_requests: u64,
-        /// Distinct block hashes across both sets of expired requests.
-        pub unique_blocks: u64,
-    }
-    #[derive(Default)]
-    #[type_hash_lock(hash = 12812207968419757007)]
-    SimPreviousSlotDropsV2 {
-        remove { unique_blocks }
     }
 );
 
