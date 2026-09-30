@@ -24,7 +24,7 @@ use helix_types::{
     BidTrace, BlobsBundle, BlsPublicKeyBytes, BlsSignatureBytes, BuilderInclusionResult,
     ExecutionPayload, ExecutionRequests, MergedBlockTrace, SignedBidSubmission, SubmissionVersion,
 };
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use ssz::Encode as _;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
@@ -33,7 +33,7 @@ use crate::{
     SubmissionRef,
     auctioneer::Bid,
     simulator::client::SimulatorClient,
-    spine::messages::{SimFinished, SimStarted, SimTxIncluded},
+    spine::messages::{SimFinished, SimPreviousSlotDrops, SimStarted, SimTxIncluded},
 };
 
 pub mod client;
@@ -160,7 +160,10 @@ pub struct Simulators {
     /// were live in the bid sorter and may have been served, so they run, newest first,
     /// whenever a simulator has nothing else to do.
     superseded: Vec<ValidationRequest>,
+    /// Reused on slot rolls to count hashes without counting repeated requests twice.
+    previous_slot_dropped_blocks: FxHashSet<B256>,
     last_bid_slot: u64,
+    previous_bid_slot: u64,
     local_telemetry: LocalTelemetry,
     /// Per-simulator counters for the current slot, indexed like `simulators`.
     sim_slot_stats: Vec<SimSlotStats>,
@@ -265,7 +268,12 @@ impl Simulators {
             priority_requests,
             merge_requests,
             superseded: Vec::with_capacity(SUPERSEDED_CAPACITY),
+            previous_slot_dropped_blocks: FxHashSet::with_capacity_and_hasher(
+                SUPERSEDED_CAPACITY,
+                Default::default(),
+            ),
             last_bid_slot: 0,
+            previous_bid_slot: 0,
             local_telemetry: LocalTelemetry::default(),
             sim_slot_stats,
             task_tx,
@@ -300,19 +308,32 @@ impl Simulators {
         self.answered.pop()
     }
 
-    pub fn on_new_slot(&mut self, bid_slot: u64) {
+    pub fn on_new_slot(&mut self, bid_slot: u64) -> Option<SimPreviousSlotDrops> {
+        let previous_slot_known = self.previous_bid_slot != 0;
+        let mut drops = SimPreviousSlotDrops {
+            slot: self.previous_bid_slot,
+            current_slot: bid_slot,
+            ..Default::default()
+        };
+        self.previous_slot_dropped_blocks.clear();
         if self.last_bid_slot > 0 {
             self.report();
         }
 
+        self.previous_bid_slot = self.last_bid_slot;
         self.last_bid_slot = bid_slot;
         for (req, _, _) in self.priority_requests.reqs.drain(..) {
             self.answered.extend(SimDone::dropped(&req));
         }
         let answered = &mut self.answered;
+        let dropped_blocks = &mut self.previous_slot_dropped_blocks;
         self.requests.reqs.retain_mut(|(req, _, _)| {
             // Non-optimistic builders are still waiting on a reply, and a bid two slots old
             // is stale.
+            if req.priority == SimPriority::PreviousSlot {
+                drops.queued_requests += 1;
+                dropped_blocks.insert(*req.submission.block_hash());
+            }
             if !req.is_optimistic || req.priority == SimPriority::PreviousSlot {
                 answered.extend(SimDone::dropped(req));
                 return false;
@@ -322,11 +343,14 @@ impl Simulators {
         });
         self.superseded.retain_mut(|req| {
             if req.priority == SimPriority::PreviousSlot {
+                drops.superseded_requests += 1;
+                dropped_blocks.insert(*req.submission.block_hash());
                 return false;
             }
             req.priority = SimPriority::PreviousSlot;
             true
         });
+        drops.unique_blocks = dropped_blocks.len() as u64;
         self.merge_requests.clear();
         self.sample_state.clear();
         // The in-flight originals will be answered after the clear, so their waiters would hang.
@@ -340,6 +364,7 @@ impl Simulators {
             }
         }
         self.seen_blocks = seen_blocks;
+        previous_slot_known.then_some(drops)
     }
 
     fn on_block_simulated(
@@ -1138,7 +1163,7 @@ const SAMPLE_FLOOR: u32 = 3;
 /// After the floor, one bid in this many joins the sample.
 const SAMPLE_EVERY: u32 = 64;
 /// Most superseded requests held at once, this slot's and last slot's together.
-const SUPERSEDED_CAPACITY: usize = 2_000;
+const SUPERSEDED_CAPACITY: usize = 5_000;
 const BREAKER_BACKOFF_START: Duration = Duration::from_secs(12);
 const BREAKER_BACKOFF_MAX: Duration = Duration::from_secs(60);
 const SYNC_FAILURES_TO_UNSYNC: usize = 3;
@@ -1484,5 +1509,111 @@ fn ssz_merged_request(
         decoder_params: None,
         signed_bid_submission: submission.as_ssz_bytes(),
         base_payment_tx_index,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use helix_types::TestRandomSeed;
+
+    use super::*;
+
+    fn pool() -> Simulators {
+        let (task_tx, rx) = crossbeam_channel::unbounded();
+        Simulators {
+            simulators: Vec::new(),
+            ssz_sim_indices: Vec::new(),
+            requests: PendingRequests::with_capacity(4),
+            priority_requests: PendingRequests::with_capacity(4),
+            merge_requests: PendingMergeRequests::with_capacity(0),
+            superseded: Vec::new(),
+            previous_slot_dropped_blocks: FxHashSet::default(),
+            last_bid_slot: 100,
+            previous_bid_slot: 99,
+            local_telemetry: LocalTelemetry::default(),
+            sim_slot_stats: Vec::new(),
+            task_tx,
+            rx,
+            sample_state: FxHashMap::default(),
+            seen_blocks: FxHashMap::default(),
+            accept_optimistic: true,
+            answered: Vec::new(),
+        }
+    }
+
+    fn request(slot: u64, hash: u8, optimistic: bool) -> ValidationRequest {
+        let mut submission = SignedBidSubmission::test_random();
+        submission.message.slot = slot;
+        submission.message.block_hash = B256::repeat_byte(hash);
+        Arc::make_mut(&mut submission.execution_payload).block_hash = B256::repeat_byte(hash);
+        ValidationRequest {
+            submission_id: Uuid::new_v4(),
+            priority: SimPriority::Low,
+            is_top_bid: false,
+            is_optimistic: optimistic,
+            apply_blacklist: false,
+            registered_gas_limit: 0,
+            parent_beacon_block_root: B256::ZERO,
+            inclusion_list: Default::default(),
+            submission,
+            tx_root: None,
+            version: SubmissionVersion::new(0, None),
+            trace: Default::default(),
+            receive_ns: 0,
+            submission_ref: SubmissionRef::default(),
+        }
+    }
+
+    #[test]
+    fn previous_slot_drops_count_expiry_and_deduplicate_hashes() {
+        let mut sims = pool();
+        let first = request(100, 1, true);
+        let key = QueueKey {
+            parent_hash: first.submission.message.parent_hash,
+            builder_pubkey: first.submission.message.builder_pubkey,
+        };
+        sims.requests.reqs.push((first.clone(), key, first.version));
+        sims.superseded.push(first);
+        sims.superseded.push(request(100, 2, true));
+
+        let retained = sims.on_new_slot(104).unwrap();
+        assert_eq!(retained.queued_requests, 0);
+        assert_eq!(retained.superseded_requests, 0);
+        assert_eq!(retained.unique_blocks, 0);
+        assert_eq!(sims.requests.reqs[0].0.priority, SimPriority::PreviousSlot);
+        assert_eq!(sims.superseded[0].priority, SimPriority::PreviousSlot);
+
+        let expired = sims.on_new_slot(110).unwrap();
+        assert_eq!(expired.slot, 100);
+        assert_eq!(expired.current_slot, 110);
+        assert_eq!(expired.queued_requests, 1);
+        assert_eq!(expired.superseded_requests, 2);
+        assert_eq!(expired.unique_blocks, 2);
+        assert!(sims.requests.reqs.is_empty());
+        assert!(sims.superseded.is_empty());
+
+        let next = sims.on_new_slot(111).unwrap();
+        assert_eq!(next.unique_blocks, 0);
+        assert_eq!(next.queued_requests, 0);
+        assert_eq!(next.superseded_requests, 0);
+    }
+
+    #[test]
+    fn previous_slot_drops_exclude_other_slot_roll_drops() {
+        let mut sims = pool();
+        let req = request(100, 1, false);
+        let key = QueueKey {
+            parent_hash: req.submission.message.parent_hash,
+            builder_pubkey: req.submission.message.builder_pubkey,
+        };
+        sims.requests.reqs.push((req.clone(), key, req.version));
+        sims.priority_requests.reqs.push((req.clone(), key, req.version));
+        sims.seen_blocks.insert(B256::repeat_byte(2), SeenBlock::InFlight(vec![req]));
+
+        let drops = sims.on_new_slot(101).unwrap();
+        assert_eq!(drops.unique_blocks, 0);
+        assert_eq!(drops.queued_requests, 0);
+        assert_eq!(drops.superseded_requests, 0);
+        assert_eq!(sims.answered.len(), 3);
     }
 }

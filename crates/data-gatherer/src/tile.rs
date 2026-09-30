@@ -6,7 +6,9 @@ use flux_network::Network;
 use flux_utils::ArrayStr;
 use helix_common::{api::builder_api::TopBidUpdate, config::DataGatherConfig, gather::GatherMeta};
 use helix_relay::{HelixSpine, NewBidSubmission, NewTcpBidSubmission, read_spine_epoch};
-use helix_telemetry::{BidUpdate, DecodedSubmission, MergedBlockMsg, SimUpdate, SlotMsg};
+use helix_telemetry::{
+    BidUpdate, DecodedSubmission, MergedBlockMsg, SimPreviousSlotDrops, SimUpdate, SlotMsg,
+};
 use tracing::info;
 
 use crate::{
@@ -215,6 +217,9 @@ impl Tile<HelixSpine> for DataGatherer {
         adapter.consume_internal_message(|msg: &mut InternalMessage<SimUpdate>, _| {
             self.cache.push(msg);
         });
+        adapter.consume_internal_message(|msg: &mut InternalMessage<SimPreviousSlotDrops>, _| {
+            self.cache.push(msg);
+        });
         adapter.consume_internal_message(|msg: &mut InternalMessage<MergedBlockMsg>, _| {
             self.cache.push(msg);
         });
@@ -290,6 +295,7 @@ impl Tile<HelixSpine> for DataGatherer {
 #[cfg(test)]
 mod tests {
     use flux::spine::SpineProducers as _;
+    use flux_gather::{HasVersionedLeaves, Scratch};
 
     use super::*;
 
@@ -309,6 +315,48 @@ mod tests {
 
         assert_eq!(tile.current_slot, 9);
         assert!(!tile.cache.is_empty());
+
+        drop(adapter);
+        drop(spine);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn previous_slot_drops_are_gathered_with_the_expired_slot() {
+        let dir = std::env::temp_dir().join(format!("helix-gather-drops-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut spine = HelixSpine::new_with_base_dir(&dir, Some("gather-drops"));
+        let mut tile = DataGatherer::new("test-instance".into(), Default::default());
+        let mut adapter = SpineAdapter::connect_tile(&tile, &mut spine);
+        adapter.consume_internal_message(|_: &mut InternalMessage<SlotMsg>, _| {});
+        adapter.consume_internal_message(|_: &mut InternalMessage<SimPreviousSlotDrops>, _| {});
+        adapter.producers.produce(SlotMsg { slot_update_id: 0, slot: 102 });
+        adapter.producers.produce(SimPreviousSlotDrops {
+            slot: 100,
+            current_slot: 102,
+            queued_requests: 1,
+            superseded_requests: 2,
+            unique_blocks: 2,
+        });
+        tile.loop_body(&mut adapter);
+
+        let meta = GatherMeta::new(102, tile.cache.n_blobs() as u64, "test-instance", "helix");
+        let mut gathered = false;
+        tile.cache.flush(&meta, 0, |blob| {
+            if let Some(Ok((meta, rows))) =
+                SimPreviousSlotDrops::decode_blob::<GatherMeta>(blob, &mut Scratch::default())
+            {
+                assert_eq!(meta.slot, 102);
+                assert_eq!(rows.len(), 1);
+                assert_eq!(rows[0].slot, 100);
+                assert_eq!(rows[0].current_slot, 102);
+                assert_eq!(rows[0].queued_requests, 1);
+                assert_eq!(rows[0].superseded_requests, 2);
+                assert_eq!(rows[0].unique_blocks, 2);
+                gathered = true;
+            }
+        });
+        assert!(gathered);
 
         drop(adapter);
         drop(spine);
