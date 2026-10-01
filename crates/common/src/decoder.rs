@@ -526,7 +526,7 @@ impl SubmissionDecoder {
             Encoding::Json => serde_json::from_slice(body)?,
         };
 
-        self.decode_latency = start.elapsed().saturating_sub(self.decompress_latency);
+        self.decode_latency = start.elapsed();
         self.record_metrics();
 
         Ok(payload)
@@ -546,7 +546,7 @@ impl SubmissionDecoder {
             Encoding::Json => serde_json::from_slice(body)?,
         };
 
-        self.decode_latency = start.elapsed().saturating_sub(self.decompress_latency);
+        self.decode_latency = start.elapsed();
         self.record_metrics();
 
         Ok(payload)

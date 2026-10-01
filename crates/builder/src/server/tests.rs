@@ -10,7 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use flux_network::{NetworkDriver, PollEvent, SendBehavior, tcp::TcpTelemetry};
+use flux_network::{Event, Network, TcpGroupConfig, Token};
 use helix_tcp_types::merging::{
     MERGING_HEADER_SIZE, MERGING_PROTOCOL_VERSION, MergingFrameHeader, MergingMsgId,
     builder_to_relay::{RejectCode, RejectV1},
@@ -66,50 +66,42 @@ impl Drop for TestServer {
 }
 
 struct Client {
-    connector: NetworkDriver,
-    token: flux_network::Token,
+    connector: Network,
+    token: Token,
+    /// Sticky: a `recv` that sees the reply and the close in one poll must
+    /// not hide the close from `wait_disconnect`.
+    disconnected: bool,
 }
 
 impl Client {
     fn connect(addr: SocketAddr) -> Self {
-        let mut connector = NetworkDriver::default().with_telemetry(TcpTelemetry::Disabled);
-        let deadline = Instant::now() + Duration::from_secs(5);
-        let token = loop {
-            if let Some(token) = connector.connect(addr) {
-                break token;
-            }
-            assert!(Instant::now() < deadline, "failed to dial test server");
-            std::thread::sleep(Duration::from_millis(10));
-        };
-        Self { connector, token }
+        let mut connector = Network::default();
+        let group = connector.add_group(TcpGroupConfig::default());
+        let token = connector.connect(group, addr);
+        Self { connector, token, disconnected: false }
     }
 
     fn send(&mut self, msg_id: MergingMsgId, msg: &impl ssz::Encode) {
-        let token = self.token;
-        self.connector.write_or_enqueue_with(SendBehavior::Single(token), |buf| {
-            append_frame(buf, msg_id, msg);
-        });
+        let mut frame = Vec::new();
+        append_frame(&mut frame, msg_id, msg);
+        self.send_raw(&frame);
     }
 
     fn send_raw(&mut self, frame: &[u8]) {
-        let token = self.token;
-        self.connector.write_or_enqueue_with(SendBehavior::Single(token), |buf| {
-            buf.extend_from_slice(frame);
-        });
+        self.connector.send_with(self.token, |buf| buf.extend_from_slice(frame));
     }
 
     /// Polls until a full frame arrives or the timeout expires.
     fn recv(&mut self, timeout: Duration) -> Option<(MergingMsgId, Vec<u8>)> {
         let deadline = Instant::now() + timeout;
         let mut received = None;
-        let mut disconnected = false;
-        while Instant::now() < deadline && received.is_none() && !disconnected {
+        while Instant::now() < deadline && received.is_none() && !self.disconnected {
             self.connector.poll_with(|event| match event {
-                PollEvent::Message { payload, .. } => {
+                Event::Message { payload, .. } => {
                     let header = MergingFrameHeader::decode(payload).expect("bad header");
                     received = Some((header.msg_id, payload[MERGING_HEADER_SIZE..].to_vec()));
                 }
-                PollEvent::Disconnect { .. } => disconnected = true,
+                Event::Disconnected { .. } => self.disconnected = true,
                 _ => {}
             });
             if received.is_none() {
@@ -122,16 +114,15 @@ impl Client {
     /// Polls until the server drops the connection.
     fn wait_disconnect(&mut self, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
-        let mut disconnected = false;
-        while Instant::now() < deadline && !disconnected {
+        while Instant::now() < deadline && !self.disconnected {
             self.connector.poll_with(|event| {
-                if matches!(event, PollEvent::Disconnect { .. } | PollEvent::Reconnect { .. }) {
-                    disconnected = true;
+                if matches!(event, Event::Disconnected { .. }) {
+                    self.disconnected = true;
                 }
             });
             std::thread::sleep(Duration::from_millis(2));
         }
-        disconnected
+        self.disconnected
     }
 
     fn register(&mut self, api_key: uuid::Uuid) {

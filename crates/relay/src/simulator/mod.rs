@@ -34,7 +34,7 @@ use crate::{
     SubmissionRef,
     auctioneer::Bid,
     simulator::client::SimulatorClient,
-    spine::messages::{SimFinished, SimStarted, SimTxIncluded},
+    spine::messages::{SimFinished, SimPreviousSlotDrops, SimStarted, SimTxIncluded},
 };
 
 pub mod client;
@@ -159,7 +159,12 @@ pub struct Simulators {
     requests: PendingRequests,
     priority_requests: PendingRequests,
     merge_requests: PendingMergeRequests,
+    /// Optimistic requests replaced in `requests` by a newer bid from the same builder. They
+    /// were live in the bid sorter and may have been served, so they run, newest first,
+    /// whenever a simulator has nothing else to do.
+    superseded: Vec<ValidationRequest>,
     last_bid_slot: u64,
+    previous_bid_slot: u64,
     local_telemetry: LocalTelemetry,
     /// Per-simulator counters for the current slot, indexed like `simulators`.
     sim_slot_stats: Vec<SimSlotStats>,
@@ -263,7 +268,9 @@ impl Simulators {
             requests,
             priority_requests,
             merge_requests,
+            superseded: Vec::with_capacity(SUPERSEDED_CAPACITY),
             last_bid_slot: 0,
+            previous_bid_slot: 0,
             local_telemetry: LocalTelemetry::default(),
             sim_slot_stats,
             task_tx,
@@ -298,11 +305,18 @@ impl Simulators {
         self.answered.pop()
     }
 
-    pub fn on_new_slot(&mut self, bid_slot: u64) {
+    pub fn on_new_slot(&mut self, bid_slot: u64) -> Option<SimPreviousSlotDrops> {
+        let previous_slot_known = self.previous_bid_slot != 0;
+        let mut drops = SimPreviousSlotDrops {
+            slot: self.previous_bid_slot,
+            current_slot: bid_slot,
+            ..Default::default()
+        };
         if self.last_bid_slot > 0 {
             self.report();
         }
 
+        self.previous_bid_slot = self.last_bid_slot;
         self.last_bid_slot = bid_slot;
         for (req, _, _) in self.priority_requests.reqs.drain(..) {
             self.answered.extend(SimDone::dropped(&req));
@@ -311,8 +325,19 @@ impl Simulators {
         self.requests.reqs.retain_mut(|(req, _, _)| {
             // Non-optimistic builders are still waiting on a reply, and a bid two slots old
             // is stale.
+            if req.priority == SimPriority::PreviousSlot {
+                drops.queued_requests += 1;
+            }
             if !req.is_optimistic || req.priority == SimPriority::PreviousSlot {
                 answered.extend(SimDone::dropped(req));
+                return false;
+            }
+            req.priority = SimPriority::PreviousSlot;
+            true
+        });
+        self.superseded.retain_mut(|req| {
+            if req.priority == SimPriority::PreviousSlot {
+                drops.superseded_requests += 1;
                 return false;
             }
             req.priority = SimPriority::PreviousSlot;
@@ -331,6 +356,7 @@ impl Simulators {
             }
         }
         self.seen_blocks = seen_blocks;
+        previous_slot_known.then_some(drops)
     }
 
     fn on_block_simulated(
@@ -477,8 +503,16 @@ impl Simulators {
             } else {
                 self.requests.store(req, queue_key, version, &mut self.local_telemetry)
             };
-            if let Some(dropped) = dropped {
-                self.answer_dropped(&dropped);
+            match dropped {
+                Some(mut dropped)
+                    if dropped.is_optimistic && self.superseded.len() < SUPERSEDED_CAPACITY =>
+                {
+                    self.local_telemetry.superseded += 1;
+                    dropped.priority = SimPriority::Low;
+                    self.superseded.push(dropped);
+                }
+                Some(dropped) => self.answer_dropped(&dropped),
+                None => {}
             }
             None
         }
@@ -531,11 +565,18 @@ impl Simulators {
         self.refresh_accept_optimistic(now);
 
         if let Some(id) = self.next_client(now) {
-            if let Some(req) = self.priority_requests.next_req().or(self.requests.next_req()) {
+            if let Some(req) =
+                self.priority_requests.next_req().or_else(|| self.requests.next_req())
+            {
                 self.local_telemetry.sims_sent_from_queue += 1;
                 started.extend(self.spawn_sim(id, req));
             } else if let Some((req, response)) = self.merge_requests.next_req() {
                 started.extend(self.spawn_merge_sim(id, req, response));
+            } else if let Some(req) = std::iter::from_fn(|| self.superseded.pop())
+                .find(|req| !self.seen_blocks.contains_key(req.submission.block_hash()))
+            {
+                self.local_telemetry.superseded_sent += 1;
+                started.extend(self.spawn_sim(id, req));
             }
         }
     }
@@ -865,6 +906,10 @@ impl Simulators {
         SimulatorMetrics::sim_mananger_count("sample_skipped", tel.sample_skipped);
         SimulatorMetrics::sim_mananger_count("duplicate_skipped", tel.duplicate_skipped);
         SimulatorMetrics::sim_mananger_count("stale_sim_reqs", tel.stale_sim_reqs);
+        SimulatorMetrics::sim_mananger_count("queued", tel.queued);
+        SimulatorMetrics::sim_mananger_count("sims_sent_from_queue", tel.sims_sent_from_queue);
+        SimulatorMetrics::sim_mananger_count("superseded", tel.superseded);
+        SimulatorMetrics::sim_mananger_count("superseded_sent", tel.superseded_sent);
         SimulatorMetrics::sim_manager_gauge("max_pending", tel.max_pending);
         SimulatorMetrics::sim_manager_gauge("max_in_flight", tel.max_in_flight);
 
@@ -900,6 +945,9 @@ impl Simulators {
             sample_skipped = tel.sample_skipped,
             duplicate_skipped = tel.duplicate_skipped,
             queue_left,
+            superseded = tel.superseded,
+            superseded_sent = tel.superseded_sent,
+            superseded_left = self.superseded.len(),
             stale_sim_reqs = tel.stale_sim_reqs,
             max_pending = tel.max_pending,
             max_in_flight = tel.max_in_flight,
@@ -1106,6 +1154,8 @@ const OPTIMISTIC_GRACE: Duration = Duration::from_secs(30);
 const SAMPLE_FLOOR: u32 = 3;
 /// After the floor, one bid in this many joins the sample.
 const SAMPLE_EVERY: u32 = 64;
+/// Most superseded requests held at once, this slot's and last slot's together.
+const SUPERSEDED_CAPACITY: usize = 5_000;
 const BREAKER_BACKOFF_START: Duration = Duration::from_secs(12);
 const BREAKER_BACKOFF_MAX: Duration = Duration::from_secs(60);
 const SYNC_FAILURES_TO_UNSYNC: usize = 3;
@@ -1133,6 +1183,10 @@ struct LocalTelemetry {
     /// builder -> sims_reqs_dropped, or still resident at slot end ->
     /// `queue_left`, read live from the queues rather than stored here).
     sims_sent_from_queue: usize,
+    /// Optimistic requests replaced in the queue and kept for later simulation. A subset of
+    /// `sims_reqs_dropped`.
+    superseded: usize,
+    superseded_sent: usize,
 }
 
 pub type ValidationResult = (usize, Option<SimulationResultInner>);
@@ -1230,8 +1284,8 @@ impl PendingRequests {
     }
 
     /// Returns the request this store dropped: the one it replaced, or `req` itself when
-    /// the queue already holds a fresher one. Either way that request is never simulated,
-    /// so the caller must answer it.
+    /// the queue already holds a fresher one. Either way this queue will not simulate it,
+    /// so the caller must handle it.
     fn store(
         &mut self,
         req: crate::simulator::ValidationRequest,

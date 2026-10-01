@@ -4,8 +4,8 @@ use flux_versioned_types::versioned_struct;
 use helix_common::SubmissionTrace;
 use helix_tcp_types::Status;
 pub use helix_telemetry::{
-    BidUpdate, DecodedSubmission, MergedBlockMsg, SimFinished, SimStarted, SimTxIncluded,
-    SimUpdate, SlotMsg, TopBidUpdate,
+    BidUpdate, DecodedSubmission, MergedBlockMsg, SimFinished, SimPreviousSlotDrops, SimStarted,
+    SimTxIncluded, SimUpdate, SlotMsg, TopBidUpdate,
 };
 use helix_types::BlsPublicKeyBytes;
 use http::StatusCode;

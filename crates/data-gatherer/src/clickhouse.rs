@@ -2,7 +2,7 @@ use std::{collections::VecDeque, time::Duration};
 
 use alloy_primitives::B256;
 use flux_clickhouse::{ClickHouse, Error};
-use flux_network::tcp::{TcpEvent, TcpNetworkCore};
+use flux_network::{NetworkCore, NetworkEvent};
 use flux_utils::ArrayStr;
 use helix_common::{config::ClickhouseConfig, expect_env_var};
 use helix_types::BlsPublicKeyBytes;
@@ -78,7 +78,7 @@ pub struct ClickhouseData {
 }
 
 impl ClickhouseData {
-    pub fn new(config: &ClickhouseConfig, instance_id: String, net: &mut TcpNetworkCore) -> Self {
+    pub fn new(config: &ClickhouseConfig, instance_id: String, net: &mut NetworkCore) -> Self {
         let password = expect_env_var(ENV_CLICKHOUSE_PASSWORD);
         let mut client = ClickHouse::new(config.addr, CONNECTIONS)
             .with_credentials(&config.user, &password)
@@ -152,14 +152,14 @@ impl ClickhouseData {
     }
 
     /// Returns whether the event belonged to this client.
-    pub fn on_event(&mut self, event: &TcpEvent<'_>) -> bool {
+    pub fn on_event(&mut self, event: &NetworkEvent<'_>) -> bool {
         self.client.on_event(event)
     }
 
     /// Sends what is queued and retires finished inserts. A sent insert
     /// that times out is logged, not retried: it may have run, and the
     /// table has no key to dedupe a repeat.
-    pub fn drive(&mut self, net: &mut TcpNetworkCore) -> bool {
+    pub fn drive(&mut self, net: &mut NetworkCore) -> bool {
         self.push_batches();
         let in_flight = &mut self.in_flight;
         let mut worked = false;

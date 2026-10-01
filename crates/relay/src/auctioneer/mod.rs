@@ -323,7 +323,7 @@ impl State {
                             );
                         }
 
-                        ctx.on_new_slot(bid_slot);
+                        ctx.on_new_slot(bid_slot, producers);
                         (registration_data, FxHashMap::default(), il)
                     }
                 };
@@ -370,7 +370,7 @@ impl State {
                         "gap in slot data received (sort)"
                     );
 
-                    ctx.on_new_slot(bid_slot);
+                    ctx.on_new_slot(bid_slot, producers);
                     // another relay delivered the payload
                     *self = Self::process_slot_data(
                         bid_slot,
@@ -405,7 +405,7 @@ impl State {
                             "new slot while broadcasting different block, was the slot missed?");
                     }
 
-                    ctx.on_new_slot(bid_slot);
+                    ctx.on_new_slot(bid_slot, producers);
                     *self = Self::process_slot_data(
                         bid_slot,
                         FxHashMap::default(),

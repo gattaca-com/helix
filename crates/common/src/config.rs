@@ -3,6 +3,7 @@ use std::{env, fs::File, net::SocketAddr, path::PathBuf};
 use alloy_primitives::Address;
 use clap::Parser;
 use eyre::ensure;
+use flux::{tile::TileConfig, timing::Duration};
 use helix_types::{BlsKeypair, BlsPublicKey, BlsPublicKeyBytes, BlsSecretKey, Operator};
 use reqwest::Url;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -151,6 +152,7 @@ impl RelayConfig {
                 data_gatherer: 3,
                 block_merging: 0,
                 housekeeper: None,
+                busy_spin: true,
             },
             gossip_payload_on_header: false,
             ip_frequency_threshold: default_ip_frequency_threshold(),
@@ -221,6 +223,18 @@ pub struct CoresConfig {
     #[serde(default)]
     pub block_merging: usize,
     pub housekeeper: Option<usize>,
+    #[serde(default = "default_bool::<true>")]
+    pub busy_spin: bool,
+}
+
+impl CoresConfig {
+    pub fn tile(&self, core: usize) -> TileConfig {
+        if self.busy_spin {
+            TileConfig::new(core, None)
+        } else {
+            TileConfig::background(None, Some(Duration::from_millis(1)))
+        }
+    }
 }
 
 impl Default for WebsiteConfig {

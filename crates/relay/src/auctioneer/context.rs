@@ -238,7 +238,7 @@ impl<B: BidAdjustor> Context<B> {
     }
 
     #[timed]
-    pub fn on_new_slot(&mut self, bid_slot: Slot) {
+    pub fn on_new_slot(&mut self, bid_slot: Slot, producers: &mut HelixSpineProducers) {
         self.bid_slot = bid_slot;
         if let Some(pending) = self.pending_payload.take() {
             let _ = pending
@@ -264,7 +264,9 @@ impl<B: BidAdjustor> Context<B> {
         self.version.clear();
         self.hydration_cache.clear();
 
-        self.sims.on_new_slot(bid_slot.as_u64());
+        if let Some(drops) = self.sims.on_new_slot(bid_slot.as_u64()) {
+            producers.produce(drops);
+        }
 
         let merged_blocks = self.cache.get_merged_blocks();
         if !merged_blocks.is_empty() {
