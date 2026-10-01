@@ -400,12 +400,12 @@ impl<P: ApiProvider> DataApi<P> {
         Query(params): Query<MergedTxParams>,
     ) -> Result<impl IntoResponse, DataApiError> {
         if let Some(cached) = data_api.merged_txs_cache.get(&params) {
-            return Ok(Json(cached));
+            return cached.map(Json).ok_or(DataApiError::MergedTxNotFound);
         }
         match data_api.db.get_merged_tx(params.slot, params.tx_hash).await {
             Ok(result) => {
                 data_api.merged_txs_cache.insert(params, result.clone());
-                Ok(Json(result))
+                result.map(Json).ok_or(DataApiError::MergedTxNotFound)
             }
             Err(err) => {
                 warn!(%err, "Failed to get merged tx info");
