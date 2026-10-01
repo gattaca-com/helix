@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use flux::tile::{TileConfig, attach_tile};
+use flux::tile::attach_tile;
 use helix_common::{
     load_config,
     task::{block_on, init_runtime},
@@ -66,6 +66,6 @@ fn main() {
     // Grace must cover teardown's bounded drain plus the disk drain, or the
     // fallback kills the process mid-flush.
     spine.start(None, Some(SHUTDOWN_DRAIN + Duration::from_secs(5)), |spine| {
-        attach_tile(gatherer, spine, TileConfig::new(core, None));
+        attach_tile(gatherer, spine, config.cores.tile(core));
     });
 }
