@@ -244,7 +244,7 @@ impl<B: BidAdjustor> Context<B> {
                 if need_send_result {
                     producers
                         .produce(BidUpdate { submission_id: result.submission_id, block_hash });
-                    self.db.update_block_submission_live_ts(block_hash, Nanos::now().0);
+                    self.db.update_block_submission_live_ts(bid.slot, block_hash, Nanos::now().0);
                     send_submission_result(
                         producers,
                         &self.future_results,

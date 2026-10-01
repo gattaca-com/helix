@@ -2,7 +2,7 @@ use std::{
     ops::DerefMut,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, Ordering},
     },
     time::{Duration, SystemTime},
 };
@@ -123,6 +123,7 @@ pub enum DbRequest {
         blocks: Vec<MergedBlock>,
     },
     UpdateBlockSubmissionLiveTs {
+        slot: u64,
         block_hash: B256,
         live_ts: u64,
     },
@@ -140,7 +141,6 @@ pub struct PendingBlockSubmissionValue {
 const BLOCK_SUBMISSION_FIELD_COUNT: usize = 18;
 const MAINNET_VALIDATOR_COUNT: usize = 1_100_000;
 const DB_CHECK_INTERVAL: Duration = Duration::from_secs(1);
-static DELIVERED_PAYLOADS_MIG_SLOT: AtomicU64 = AtomicU64::new(0);
 const POSTGRES_PASSWORD_ENV_VAR: &str = "POSTGRES_PASSWORD";
 /// Covers clock skew between hosts and the delay between `inserted_at` and the commit.
 const REGISTRATION_FETCH_OVERLAP: Duration = Duration::from_secs(120);
@@ -731,8 +731,10 @@ impl PostgresDatabaseService {
                     error!(%err, "failed to save merged blocks");
                 }
             }
-            DbRequest::UpdateBlockSubmissionLiveTs { block_hash, live_ts } => {
-                if let Err(err) = self._update_block_submission_live_ts(block_hash, live_ts).await {
+            DbRequest::UpdateBlockSubmissionLiveTs { slot, block_hash, live_ts } => {
+                if let Err(err) =
+                    self._update_block_submission_live_ts(slot, block_hash, live_ts).await
+                {
                     error!(%err, %block_hash, "failed to update block submission live_ts");
                 }
             }
@@ -1075,6 +1077,7 @@ impl PostgresDatabaseService {
 
     async fn _update_block_submission_live_ts(
         &self,
+        slot: u64,
         block_hash: B256,
         live_ts: u64,
     ) -> Result<(), DatabaseError> {
@@ -1082,11 +1085,8 @@ impl PostgresDatabaseService {
             .get()
             .await?
             .execute(
-                "UPDATE block_submission SET live_ts = $1 WHERE block_hash = $2 AND live_ts IS NULL",
-                &[
-                &(live_ts as i64),
-                    &block_hash.as_slice(),
-                ],
+                "UPDATE block_submission SET live_ts = $1 WHERE slot_number = $2 AND block_hash = $3 AND live_ts IS NULL",
+                &[&(live_ts as i64), &(slot as i32), &block_hash.as_slice()],
             )
             .await?;
         Ok(())
@@ -2210,44 +2210,6 @@ impl PostgresDatabaseService {
         filters: &BidFilters,
         validator_preferences: Arc<ValidatorPreferences>,
     ) -> Result<Vec<DeliveredPayloadDocument>, DatabaseError> {
-        let mut mig_slot = DELIVERED_PAYLOADS_MIG_SLOT.load(Ordering::Relaxed);
-        if mig_slot == 0 {
-            let row = self.pool.get().await?
-                .query_one(
-                    "SELECT COALESCE(MIN(slot_number), 0) as min_slot FROM delivered_payload WHERE slot_number IS NOT NULL", 
-                    &[]
-                )
-                .await?;
-            let slot_num: i32 = row.get("min_slot");
-            mig_slot = slot_num as u64;
-            DELIVERED_PAYLOADS_MIG_SLOT.store(mig_slot, Ordering::Relaxed);
-            info!("Loaded delivered_payload migration slot: {}", mig_slot);
-        }
-
-        let use_legacy = if let Some(requested_slot) = filters.slot {
-            requested_slot < mig_slot
-        } else if let Some(cursor) = filters.cursor {
-            match filters.limit {
-                Some(limit) => cursor.saturating_sub(limit) < mig_slot,
-                None => true,
-            }
-        } else {
-            false
-        };
-
-        if use_legacy {
-            self.get_delivered_payloads_legacy(filters, validator_preferences).await
-        } else {
-            self.get_delivered_payloads_new(filters, validator_preferences).await
-        }
-    }
-
-    #[instrument(skip_all)]
-    pub async fn get_delivered_payloads_new(
-        &self,
-        filters: &BidFilters,
-        validator_preferences: Arc<ValidatorPreferences>,
-    ) -> Result<Vec<DeliveredPayloadDocument>, DatabaseError> {
         let mut record = DbMetricRecord::new("get_delivered_payloads");
 
         let filters = PgBidFilters::from(filters);
@@ -2330,124 +2292,6 @@ impl PostgresDatabaseService {
             query.push_str(if order >= 0 { "ASC" } else { "DESC" });
         } else {
             query.push_str(" ORDER BY delivered_payload.slot_number DESC");
-        }
-
-        if let Some(limit) = filters.limit() {
-            query.push_str(&format!(" LIMIT ${param_index}"));
-            params.push(Box::new(limit));
-        }
-
-        let params_refs: Vec<&(dyn ToSql + Sync)> =
-            params.iter().map(|p| &**p as &(dyn ToSql + Sync)).collect();
-
-        let rows = self.pool.get().await?.query(&query, &params_refs[..]).await?;
-        record.record_success();
-        parse_rows(rows)
-    }
-
-    #[instrument(skip_all)]
-    pub async fn get_delivered_payloads_legacy(
-        &self,
-        filters: &BidFilters,
-        validator_preferences: Arc<ValidatorPreferences>,
-    ) -> Result<Vec<DeliveredPayloadDocument>, DatabaseError> {
-        let mut record = DbMetricRecord::new("get_delivered_payloads_legacy");
-
-        let filters = PgBidFilters::from(filters);
-        let mut query = String::from(
-            "
-            SELECT
-                block_submission.slot_number            slot_number,
-                block_submission.parent_hash            parent_hash,
-                block_submission.block_hash             block_hash,
-                block_submission.builder_pubkey         builder_public_key,
-                block_submission.proposer_pubkey        proposer_public_key,
-                block_submission.proposer_fee_recipient proposer_fee_recipient,
-                block_submission.value                  submission_value,
-                block_submission.gas_limit              gas_limit,
-                block_submission.gas_used               gas_used,
-                block_submission.block_number           block_number,
-                block_submission.num_txs                num_txs,
-                region.name                              region
-            FROM
-                block_submission
-            INNER JOIN
-                delivered_payload ON block_submission.block_number = delivered_payload.block_number and block_submission.block_hash = delivered_payload.block_hash
-            LEFT JOIN
-                region ON block_submission.region_id = region.id
-        ",
-        );
-
-        let filtering = match validator_preferences.filtering {
-            Filtering::Regional => Some(1_i16),
-            Filtering::Global => None,
-        };
-
-        if filtering.is_some() {
-            query.push_str(
-                "
-                INNER JOIN
-                    delivered_payload_preferences
-                ON
-                    delivered_payload.block_hash = delivered_payload_preferences.block_hash
-            ",
-            );
-        }
-
-        query.push_str(" WHERE 1 = 1");
-
-        let mut param_index = 1;
-        let mut params: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
-
-        if let Some(slot) = filters.slot() {
-            query.push_str(&format!(" AND block_submission.slot_number = ${param_index}"));
-            params.push(Box::new(slot));
-            param_index += 1;
-        }
-
-        if let Some(cursor) = filters.cursor() {
-            query.push_str(&format!(" AND block_submission.slot_number <= ${param_index}"));
-            params.push(Box::new(cursor));
-            param_index += 1;
-        }
-
-        if let Some(block_number) = filters.block_number() {
-            query.push_str(&format!(" AND block_submission.block_number = ${param_index}"));
-            params.push(Box::new(block_number));
-            param_index += 1;
-        }
-
-        if let Some(proposer_pubkey) = filters.proposer_pubkey() {
-            query.push_str(&format!(" AND block_submission.proposer_pubkey = ${param_index}"));
-            params.push(Box::new(proposer_pubkey.to_vec()));
-            param_index += 1;
-        }
-
-        if let Some(builder_pubkey) = filters.builder_pubkey() {
-            query.push_str(&format!(" AND block_submission.builder_pubkey = ${param_index}"));
-            params.push(Box::new(builder_pubkey.to_vec()));
-            param_index += 1;
-        }
-
-        if let Some(block_hash) = filters.block_hash() {
-            query.push_str(&format!(" AND block_submission.block_hash = ${param_index}"));
-            params.push(Box::new(block_hash));
-            param_index += 1;
-        }
-
-        if let Some(filtering) = filtering {
-            query.push_str(&format!(
-                " AND delivered_payload_preferences.filtering = ${param_index}"
-            ));
-            params.push(Box::new(filtering));
-            param_index += 1;
-        }
-
-        if let Some(order) = filters.order() {
-            query.push_str(" ORDER BY block_submission.value ");
-            query.push_str(if order >= 0 { "ASC" } else { "DESC" });
-        } else {
-            query.push_str(" ORDER BY block_submission.slot_number DESC");
         }
 
         if let Some(limit) = filters.limit() {
@@ -3054,6 +2898,7 @@ impl PostgresDatabaseService {
             .collect();
 
         sql.push_str(&values_clauses.join(", "));
+        sql.push_str(" ON CONFLICT (block_hash) DO NOTHING");
 
         client.execute(&sql, &params).await?;
 
