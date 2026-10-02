@@ -1618,6 +1618,7 @@ mod tests {
             builder_inclusions: vec![],
             included_order_ids: vec![],
             trace: MergeTraceV1::default(),
+            unmerged_txs: vec![],
         }
     }
 

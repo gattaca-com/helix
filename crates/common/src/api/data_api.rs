@@ -285,6 +285,26 @@ pub struct MergedBlockParams {
     pub slot: Slot,
 }
 
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
+pub struct MergedTxParams {
+    pub slot: Slot,
+    pub tx_hash: B256,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MergedTxResponse {
+    #[serde(with = "serde_utils::quoted_u64")]
+    pub slot: u64,
+    pub tx_hash: B256,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub block_hash: Option<B256>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_block_hash: Option<B256>,
+    pub merged: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProposerHeaderDeliveredResponse {
     pub slot: Option<Slot>,

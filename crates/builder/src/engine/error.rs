@@ -1,5 +1,5 @@
 use alloy_primitives::{Address, B256, U256};
-use helix_tcp_types::merging::builder_to_relay::{RejectCode, RejectSubject};
+use helix_tcp_types::merging::builder_to_relay::{RejectCode, RejectSubject, UnmergedReason};
 
 /// Merge pipeline failures. Most map onto a `RejectV1`; the rest are internal
 /// conditions that silently skip an emission.
@@ -92,4 +92,19 @@ pub enum SimulationError {
     DropNotAllowed(usize),
     #[error("execution error: {_0}")]
     Execution(String),
+}
+
+impl SimulationError {
+    pub fn unmerged_reason(&self) -> UnmergedReason {
+        match self {
+            SimulationError::ZeroBuilderPayment => UnmergedReason::ZeroPayment,
+            SimulationError::OutOfBlockGas | SimulationError::OutOfBlockBlobs => {
+                UnmergedReason::OutOfSpace
+            }
+            SimulationError::DuplicateTransaction => UnmergedReason::Duplicate,
+            SimulationError::RevertNotAllowed(_) |
+            SimulationError::DropNotAllowed(_) |
+            SimulationError::Execution(_) => UnmergedReason::Invalid,
+        }
+    }
 }

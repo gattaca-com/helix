@@ -156,6 +156,7 @@ pub fn build_router<A: Api>(
             Route::GetInclusionList => get(BuilderApi::<A>::get_inclusion_list),
             Route::DataAdjustments => get(DataApi::<A::ApiProvider>::data_adjustments),
             Route::MergedBlocks => get(DataApi::<A::ApiProvider>::merged_blocks),
+            Route::MergedTxs => get(DataApi::<A::ApiProvider>::merged_txs),
             Route::RelayNetwork => any(RelayNetworkApi::connect),
             Route::Blacklist => get(get_blacklist),
             Route::All | Route::BuilderApi | Route::ProposerApi | Route::DataApi => {

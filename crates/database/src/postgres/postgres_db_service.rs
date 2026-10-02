@@ -16,7 +16,7 @@ use helix_common::{
     api::{
         builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
         data_api::{
-            BidFilters, DataAdjustmentsResponse, MergedBlockResponse,
+            BidFilters, DataAdjustmentsResponse, MergedBlockResponse, MergedTxResponse,
             ProposerHeaderDeliveredParams, ProposerHeaderDeliveredResponse,
         },
         proposer_api::GetHeaderParams,
@@ -121,6 +121,9 @@ pub enum DbRequest {
     },
     SaveMergedBlocks {
         blocks: Vec<MergedBlock>,
+    },
+    SaveMergedTxs {
+        block: MergedBlock,
     },
     UpdateBlockSubmissionLiveTs {
         slot: u64,
@@ -729,6 +732,11 @@ impl PostgresDatabaseService {
             DbRequest::SaveMergedBlocks { blocks } => {
                 if let Err(err) = self.save_merged_blocks(&blocks).await {
                     error!(%err, "failed to save merged blocks");
+                }
+            }
+            DbRequest::SaveMergedTxs { block } => {
+                if let Err(err) = self.save_merged_txs(&block).await {
+                    error!(%err, "failed to save merged txs");
                 }
             }
             DbRequest::UpdateBlockSubmissionLiveTs { slot, block_hash, live_ts } => {
@@ -2944,5 +2952,68 @@ impl PostgresDatabaseService {
             .await?;
         record.record_success();
         parse_rows(rows)
+    }
+
+    pub async fn save_merged_txs(&self, block: &MergedBlock) -> Result<(), DatabaseError> {
+        let mut record = DbMetricRecord::new("save_merged_txs");
+
+        let mut tx_hashes: Vec<&[u8]> = Vec::new();
+        let mut reasons: Vec<Option<&str>> = Vec::new();
+        for tx_hash in block.builder_inclusions.values().flat_map(|inclusion| &inclusion.txs) {
+            tx_hashes.push(tx_hash.as_slice());
+            reasons.push(None);
+        }
+        for tx in block.unmerged_txs.iter() {
+            tx_hashes.push(tx.tx_hash.as_slice());
+            reasons.push(Some(tx.reason.as_ref()));
+        }
+
+        self.pool
+            .get()
+            .await?
+            .execute(
+                "
+                INSERT INTO merged_txs (slot, tx_hash, block_hash, base_block_hash, reason)
+                SELECT $1, t.tx_hash, $2, $3, t.reason
+                FROM UNNEST($4::bytea[], $5::text[]) WITH ORDINALITY AS t(tx_hash, reason, ord)
+                ORDER BY t.ord
+                ON CONFLICT (slot, tx_hash) DO NOTHING
+                ",
+                &[
+                    &(block.slot as i64),
+                    &block.block_hash.as_slice(),
+                    &block.original_block_hash.as_slice(),
+                    &tx_hashes,
+                    &reasons,
+                ],
+            )
+            .await?;
+
+        record.record_success();
+        Ok(())
+    }
+
+    pub async fn get_merged_tx(
+        &self,
+        slot: Slot,
+        tx_hash: B256,
+    ) -> Result<Option<MergedTxResponse>, DatabaseError> {
+        let mut record = DbMetricRecord::new("get_merged_tx");
+
+        let row = self
+            .pool
+            .get()
+            .await?
+            .query_opt(
+                "
+                SELECT slot, tx_hash, block_hash, base_block_hash, reason
+                FROM merged_txs
+                WHERE slot = $1 AND tx_hash = $2
+                ",
+                &[&(slot.as_u64() as i64), &tx_hash.as_slice()],
+            )
+            .await?;
+        record.record_success();
+        row.as_ref().map(parse_row).transpose()
     }
 }

@@ -14,6 +14,8 @@ pub enum DataApiError {
     LimitReached { limit: u64 },
     #[error("no registration found for validator {pubkey}")]
     ValidatorRegistrationNotFound { pubkey: BlsPublicKeyBytes },
+    #[error("merged tx not found")]
+    MergedTxNotFound,
     #[error("block_number is not supported")]
     BlockNumberNotSupported,
     #[error("order_by is not supported")]
@@ -34,6 +36,8 @@ impl IntoResponse for DataApiError {
             DataApiError::BlockNumberNotSupported |
             DataApiError::OrderByNotSupported |
             DataApiError::BuilderPubkeyNotSupported => StatusCode::BAD_REQUEST,
+
+            DataApiError::MergedTxNotFound => StatusCode::NOT_FOUND,
 
             DataApiError::InternalServerError => StatusCode::INTERNAL_SERVER_ERROR,
         };

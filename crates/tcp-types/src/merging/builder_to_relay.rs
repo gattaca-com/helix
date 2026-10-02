@@ -4,6 +4,7 @@ use alloy_rpc_types::{
     engine::ExecutionPayloadV3,
 };
 use ssz_derive::{Decode, Encode};
+use strum::{AsRefStr, EnumString};
 
 pub const MAX_APPENDED_BLOBS: usize = 128;
 pub const MAX_BUILDER_INCLUSIONS: usize = 256;
@@ -36,6 +37,25 @@ pub struct MergedBlockV1 {
     /// contributing builder and source block.
     pub included_order_ids: Vec<B256>,
     pub trace: MergeTraceV1,
+    pub unmerged_txs: Vec<UnmergedTx>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Encode, Decode)]
+pub struct UnmergedTx {
+    pub tx_hash: B256,
+    pub reason: UnmergedReason,
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, AsRefStr, EnumString)]
+#[strum(serialize_all = "snake_case")]
+#[ssz(enum_behaviour = "tag")]
+pub enum UnmergedReason {
+    ZeroPayment = 0,
+    OutOfSpace = 1,
+    Replaced = 2,
+    Invalid = 3,
+    Duplicate = 4,
 }
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]

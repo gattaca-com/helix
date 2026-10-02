@@ -40,6 +40,7 @@ pub fn build_data_router<P: ApiProvider>(
             Route::ValidatorRegistration => get(DataApi::<P>::validator_registration),
             Route::DataAdjustments => get(DataApi::<P>::data_adjustments),
             Route::MergedBlocks => get(DataApi::<P>::merged_blocks),
+            Route::MergedTxs => get(DataApi::<P>::merged_txs),
             r => {
                 warn!("route {r:?} not supported by data API, skipping");
                 continue;

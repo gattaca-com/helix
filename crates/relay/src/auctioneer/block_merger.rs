@@ -234,6 +234,7 @@ impl BlockMerger {
             merged_gas_used: response.execution_payload.gas_used,
             builder_inclusions: response.builder_inclusions,
             trace,
+            unmerged_txs: response.unmerged_txs,
         });
 
         trace!(%block_hash, "stored merged block in local cache");

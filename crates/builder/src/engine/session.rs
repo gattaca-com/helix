@@ -5,7 +5,7 @@
 //! `append_greedily_until_gas_limit` (`crates/simulator/src/block_merging/mod.rs`)
 //! onto ethrex's `PayloadBuildContext`.
 
-use std::{sync::Arc, time::Instant};
+use std::{collections::hash_map::Entry, sync::Arc, time::Instant};
 
 use alloy_primitives::{Address, B256, U256};
 use alloy_rpc_types::beacon::BlsPublicKey;
@@ -17,7 +17,7 @@ use ethrex_common::types::{ELASTICITY_MULTIPLIER, calculate_base_fee_per_gas};
 use ethrex_crypto::native::NativeCrypto;
 use ethrex_storage::Store;
 use helix_tcp_types::merging::{
-    builder_to_relay::{BuilderInclusion, MergeTraceV1, MergedBlockV1},
+    builder_to_relay::{BuilderInclusion, MergeTraceV1, MergedBlockV1, UnmergedReason, UnmergedTx},
     control::RelayConfigV1,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -58,6 +58,13 @@ fn sim_error_label(err: &SimulationError) -> &'static str {
         SimulationError::DropNotAllowed(_) => "drop_not_allowed",
         SimulationError::Execution(_) => "execution_error",
     }
+}
+
+struct OrderOutcome {
+    label: &'static str,
+    reason: Option<UnmergedReason>,
+    headroom: U256,
+    txs: Vec<B256>,
 }
 
 /// Result of an emission attempt.
@@ -189,7 +196,7 @@ pub struct MergeSession {
     /// Last screening outcome per order, with its priority-fee headroom. Kept
     /// per order rather than per screening: `try_extend` re-screens the same
     /// order every pass, so counting each screening would multiply-count it.
-    order_outcomes: FxHashMap<B256, (&'static str, U256)>,
+    order_outcomes: FxHashMap<B256, OrderOutcome>,
     trace: MergeTraceV1,
     /// Wall time the base replay in `activate` took, for the activation log.
     pub replay_us: u64,
@@ -500,25 +507,32 @@ impl MergeSession {
         self.stats.orders_excluded_skipped =
             orders.iter().filter(|order| excluded.contains(&order.order_hash)).count() as u64;
         for order in orders.iter().filter(|order| excluded.contains(&order.order_hash)) {
-            self.order_outcomes
-                .insert(order.order_id, ("excluded", order_headroom(order, base_fee)));
+            self.record_outcome(order, "excluded", Some(UnmergedReason::Replaced), base_fee);
         }
 
-        let candidates: Vec<usize> = (0..orders.len())
-            .filter(|&ix| {
-                let order = &orders[ix];
-                !excluded.contains(&order.order_hash) &&
-                    !self.applied_orders.contains(&order.order_id) &&
-                    order.source_block_hash != self.base_block_hash &&
-                    simulate::gate_order(
-                        order,
-                        &self.tx_hashes,
-                        self.available_gas(),
-                        self.available_blobs(),
-                    )
-                    .is_ok()
-            })
-            .collect();
+        let mut candidates = Vec::new();
+        for (ix, order) in orders.iter().enumerate() {
+            if excluded.contains(&order.order_hash) ||
+                self.applied_orders.contains(&order.order_id) ||
+                order.source_block_hash == self.base_block_hash
+            {
+                continue;
+            }
+            match simulate::gate_order(
+                order,
+                &self.tx_hashes,
+                self.available_gas(),
+                self.available_blobs(),
+            ) {
+                Ok(()) => candidates.push(ix),
+                Err(err) => self.record_outcome(
+                    order,
+                    sim_error_label(&err),
+                    Some(err.unmerged_reason()),
+                    base_fee,
+                ),
+            }
+        }
         metrics::stage_latency("extend_screen", screen_start.elapsed().as_micros() as u64);
         metrics::extend_orders("candidates", candidates.len());
         if candidates.is_empty() {
@@ -556,9 +570,12 @@ impl MergeSession {
                 Ok(order) => simulated.push(order),
                 Err(err) => {
                     self.stats.count_sim_error(&err);
-                    let headroom = order_headroom(&orders[ix], base_fee);
-                    self.order_outcomes
-                        .insert(orders[ix].order_id, (sim_error_label(&err), headroom));
+                    self.record_outcome(
+                        &orders[ix],
+                        sim_error_label(&err),
+                        Some(err.unmerged_reason()),
+                        base_fee,
+                    );
                     debug!(order = %orders[ix].order_id, %err, "order presim discarded");
                 }
             }
@@ -574,18 +591,27 @@ impl MergeSession {
         let mut changed = false;
         for candidate in simulated {
             let order = &orders[candidate.order_ix];
-            let headroom = order_headroom(order, base_fee);
             match self.try_apply(order, &header) {
                 Ok(true) => {
                     changed = true;
                     applied += 1;
-                    self.order_outcomes.insert(order.order_id, ("applied", headroom));
+                    self.record_outcome(order, "applied", None, base_fee);
                 }
                 Ok(false) => {
-                    self.order_outcomes.insert(order.order_id, ("apply_rejected", headroom));
+                    self.record_outcome(
+                        order,
+                        "apply_rejected",
+                        Some(UnmergedReason::Invalid),
+                        base_fee,
+                    );
                 }
                 Err(err) => {
-                    self.order_outcomes.insert(order.order_id, ("apply_error", headroom));
+                    self.record_outcome(
+                        order,
+                        "apply_error",
+                        Some(UnmergedReason::Invalid),
+                        base_fee,
+                    );
                     debug!(order = %order.order_id, %err, "order apply skipped");
                 }
             }
@@ -600,6 +626,32 @@ impl MergeSession {
             self.trace.sim_end_ns.saturating_sub(self.trace.sim_start_ns) / 1000,
         );
         changed
+    }
+
+    fn record_outcome(
+        &mut self,
+        order: &PreparedOrder,
+        label: &'static str,
+        reason: Option<UnmergedReason>,
+        base_fee: Option<u64>,
+    ) {
+        let headroom = order_headroom(order, base_fee);
+        match self.order_outcomes.entry(order.order_id) {
+            Entry::Occupied(mut entry) => {
+                let outcome = entry.get_mut();
+                outcome.label = label;
+                outcome.reason = reason;
+                outcome.headroom = headroom;
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(OrderOutcome {
+                    label,
+                    reason,
+                    headroom,
+                    txs: order.txs.iter().map(|tx| tx.hash).collect(),
+                });
+            }
+        }
     }
 
     /// Re-simulates `order` against the live state and, when still profitable,
@@ -942,6 +994,14 @@ impl MergeSession {
             builder_inclusions,
             included_order_ids: self.included_order_ids.clone(),
             trace: self.trace,
+            unmerged_txs: self
+                .order_outcomes
+                .values()
+                .filter_map(|outcome| outcome.reason.map(|reason| (outcome, reason)))
+                .flat_map(|(outcome, reason)| {
+                    outcome.txs.iter().map(move |&tx_hash| UnmergedTx { tx_hash, reason })
+                })
+                .collect(),
         })))
     }
 
@@ -964,15 +1024,16 @@ impl MergeSession {
         let mut applied = U256::ZERO;
         let mut lost_revert = U256::ZERO;
         let mut lost_total = U256::ZERO;
-        for (outcome, headroom) in self.order_outcomes.values() {
-            metrics::order_outcome(outcome, *headroom);
-            match *outcome {
-                "applied" => applied = applied.saturating_add(*headroom),
+        for outcome in self.order_outcomes.values() {
+            let headroom = outcome.headroom;
+            metrics::order_outcome(outcome.label, headroom);
+            match outcome.label {
+                "applied" => applied = applied.saturating_add(headroom),
                 "revert_not_allowed" => {
-                    lost_revert = lost_revert.saturating_add(*headroom);
-                    lost_total = lost_total.saturating_add(*headroom);
+                    lost_revert = lost_revert.saturating_add(headroom);
+                    lost_total = lost_total.saturating_add(headroom);
                 }
-                _ => lost_total = lost_total.saturating_add(*headroom),
+                _ => lost_total = lost_total.saturating_add(headroom),
             }
         }
         info!(

@@ -4,7 +4,7 @@ use helix_common::{
     BuilderInfo, Filtering, ProposerInfo, SignedValidatorRegistrationEntry, ValidatorPreferences,
     api::{
         builder_api::BuilderGetValidatorsResponseEntry,
-        data_api::{DataAdjustmentsResponse, MergedBlockResponse},
+        data_api::{DataAdjustmentsResponse, MergedBlockResponse, MergedTxResponse},
         proposer_api::ValidatorRegistrationInfo,
     },
 };
@@ -271,6 +271,23 @@ impl FromRow for DataAdjustmentsResponse {
             adjusted_value: parse_numeric_to_u256(
                 row.get::<&str, PostgresNumeric>("adjusted_value"),
             ),
+        })
+    }
+}
+
+impl FromRow for MergedTxResponse {
+    fn from_row(row: &tokio_postgres::Row) -> Result<Self, DatabaseError> {
+        let reason = row.get::<&str, Option<String>>("reason");
+        let merged = reason.is_none();
+        let block_hash = parse_bytes_to_hash(row.get::<&str, &[u8]>("block_hash"))?;
+        let base_block_hash = parse_bytes_to_hash(row.get::<&str, &[u8]>("base_block_hash"))?;
+        Ok(MergedTxResponse {
+            slot: parse_i64_to_u64(row.get::<&str, i64>("slot"))?,
+            tx_hash: parse_bytes_to_hash(row.get::<&str, &[u8]>("tx_hash"))?,
+            block_hash: merged.then_some(block_hash),
+            base_block_hash: (!merged).then_some(base_block_hash),
+            merged,
+            reason,
         })
     }
 }

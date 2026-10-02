@@ -166,6 +166,7 @@ fn merged_block_to_response(
             was_top_builder: None,
             top_bid: None,
         },
+        unmerged_txs: Arc::new(m.unmerged_txs),
     })
 }
 
@@ -393,6 +394,7 @@ mod tests {
             builder_inclusions: vec![],
             included_order_ids: vec![],
             trace: MergeTraceV1::default(),
+            unmerged_txs: vec![],
         };
 
         let mut blob_sidecars = FxHashMap::default();
@@ -477,6 +479,7 @@ mod tests {
             builder_inclusions: vec![],
             included_order_ids: vec![],
             trace: MergeTraceV1::default(),
+            unmerged_txs: vec![],
         };
 
         let mut blob_sidecars = FxHashMap::default();
@@ -570,6 +573,7 @@ mod tests {
             builder_inclusions,
             included_order_ids: vec![],
             trace: MergeTraceV1::default(),
+            unmerged_txs: vec![],
         }
     }
 
