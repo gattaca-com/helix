@@ -20,7 +20,9 @@ use crate::{
     PayloadAndBlobs, SszError, TestRandom,
     bid_adjustment_data::{BidAdjData, BidAdjustmentData, BidAdjustmentDataV1},
     error::SigError,
-    fields::ExecutionRequests,
+    fields::{
+        BlockAccessListBytes, BuilderDepositRequests, BuilderExitRequests, ExecutionRequests,
+    },
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, TreeHash)]
@@ -736,6 +738,87 @@ impl SignedBidSubmissionWithAdjustments {
     }
 }
 
+/// What a Gloas submission carries beyond the pre-Gloas core: the EIP-7928
+/// block access list and the EIP-8282 builder deposit and exit requests. Kept
+/// together so every hand-off that already moved the access list moves all
+/// three, rather than silently dropping the builder lists.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct GloasSubmissionData {
+    pub block_access_list: BlockAccessListBytes,
+    pub builder_deposits: BuilderDepositRequests,
+    pub builder_exits: BuilderExitRequests,
+}
+
+/// Gloas carries what the builder produced that no earlier fork has: the block
+/// access list (EIP-7928) and the builder deposit and exit requests (EIP-8282).
+/// Core fields ++ block_access_list ++ builder_deposits ++ builder_exits.
+///
+/// A separate type rather than fork-gated fields, because `Encode` is derived
+/// on [`SignedBidSubmission`] and an extra field would change the bytes for
+/// every fork. `execution_requests` keeps the Electra shape for the three
+/// pre-Gloas lists; [`helix_types::execution_requests_to_gloas`] rejoins all
+/// five for the payload the proposer signs.
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
+pub struct SignedBidSubmissionGloas {
+    pub message: BidTrace,
+    pub execution_payload: Arc<ExecutionPayload>,
+    pub blobs_bundle: Arc<BlobsBundle>,
+    pub execution_requests: Arc<ExecutionRequests>,
+    pub signature: BlsSignatureBytes,
+    pub block_access_list: BlockAccessListBytes,
+    pub builder_deposits: BuilderDepositRequests,
+    pub builder_exits: BuilderExitRequests,
+}
+
+impl TestRandom for SignedBidSubmissionGloas {
+    fn random_for_test(rng: &mut impl rand::RngCore) -> Self {
+        Self {
+            message: BidTrace::random_for_test(rng),
+            execution_payload: ExecutionPayload::random_for_test(rng).into(),
+            blobs_bundle: BlobsBundle::random_for_test(rng).into(),
+            execution_requests: ExecutionRequests::random_for_test(rng).into(),
+            signature: BlsSignatureBytes::random(),
+            block_access_list: BlockAccessListBytes::random_for_test(rng),
+            builder_deposits: Default::default(),
+            builder_exits: Default::default(),
+        }
+    }
+}
+
+impl SignedBidSubmissionGloas {
+    /// Inverse of [`Self::split`], for re-encoding a hydrated submission on the
+    /// way to an SSZ simulator.
+    pub fn join(submission: SignedBidSubmission, gloas_data: GloasSubmissionData) -> Self {
+        Self {
+            message: submission.message,
+            execution_payload: submission.execution_payload,
+            blobs_bundle: submission.blobs_bundle,
+            execution_requests: submission.execution_requests,
+            signature: submission.signature,
+            block_access_list: gloas_data.block_access_list,
+            builder_deposits: gloas_data.builder_deposits,
+            builder_exits: gloas_data.builder_exits,
+        }
+    }
+
+    pub fn split(self) -> (SignedBidSubmission, GloasSubmissionData) {
+        (
+            SignedBidSubmission {
+                message: self.message,
+                execution_payload: self.execution_payload,
+                blobs_bundle: self.blobs_bundle,
+                execution_requests: self.execution_requests,
+                signature: self.signature,
+            },
+            GloasSubmissionData {
+                block_access_list: self.block_access_list,
+                builder_deposits: self.builder_deposits,
+                builder_exits: self.builder_exits,
+            },
+        )
+    }
+}
+
 /// Flat combination of [`SignedBidSubmissionWithAdjustments`] and merging data:
 /// core fields ++ bid_adjustment_data ++ merging_data.
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
@@ -935,5 +1018,116 @@ mod tests {
         let mut tail = combined.bid_adjustment_data.as_ssz_bytes();
         tail.extend(combined.merging_data.as_ssz_bytes());
         assert!(bytes.ends_with(&tail));
+    }
+}
+
+#[cfg(test)]
+mod gloas_submission_tests {
+    use ssz::{Decode, Encode};
+
+    use super::*;
+    use crate::TestRandomSeed;
+
+    /// `BlobsBundle::random_for_test` makes one proof per blob while `Decode`
+    /// demands 128, so a random bundle cannot round-trip. These tests are about
+    /// the block access list, so they use an empty one.
+    fn decodable_gloas_submission() -> SignedBidSubmissionGloas {
+        let mut submission = SignedBidSubmissionGloas::test_random();
+        submission.blobs_bundle = Default::default();
+        submission
+    }
+
+    #[test]
+    fn a_gloas_submission_round_trips_through_ssz() {
+        let submission = decodable_gloas_submission();
+
+        let bytes = submission.as_ssz_bytes();
+        let decoded = SignedBidSubmissionGloas::from_ssz_bytes(&bytes).unwrap();
+
+        assert_eq!(decoded.message, submission.message);
+        assert_eq!(decoded.block_access_list, submission.block_access_list);
+        assert_eq!(bytes, decoded.as_ssz_bytes());
+    }
+
+    fn builder_requests() -> (BuilderDepositRequests, BuilderExitRequests) {
+        (
+            vec![lh_types::BuilderDepositRequest {
+                pubkey: lh_bls::PublicKeyBytes::empty(),
+                withdrawal_credentials: B256::repeat_byte(0x11),
+                amount: 32_000_000_000,
+                signature: lh_bls::SignatureBytes::empty(),
+            }]
+            .into(),
+            vec![lh_types::BuilderExitRequest {
+                source_address: alloy_primitives::Address::repeat_byte(0x22),
+                pubkey: lh_bls::PublicKeyBytes::empty(),
+            }]
+            .into(),
+        )
+    }
+
+    #[test]
+    fn splitting_a_gloas_submission_yields_the_base_and_the_gloas_data() {
+        let submission = decodable_gloas_submission();
+        let expected_bal = submission.block_access_list.clone();
+        let expected_hash = submission.message.block_hash;
+
+        let (base, gloas_data) = submission.split();
+
+        assert_eq!(gloas_data.block_access_list, expected_bal);
+        assert_eq!(base.message.block_hash, expected_hash);
+    }
+
+    /// EIP-8282: the builder lists have to survive the hand-off the relay makes
+    /// between decoding a submission and re-encoding it for the simulator. While
+    /// they did not exist on this type, a block carrying one could not be bid.
+    #[test]
+    fn a_gloas_submission_keeps_its_builder_requests_through_split_and_join() {
+        let (builder_deposits, builder_exits) = builder_requests();
+        let mut submission = decodable_gloas_submission();
+        submission.builder_deposits = builder_deposits.clone();
+        submission.builder_exits = builder_exits.clone();
+
+        let (base, gloas_data) = submission.split();
+        let rejoined = SignedBidSubmissionGloas::join(base, gloas_data);
+
+        assert_eq!(rejoined.builder_deposits, builder_deposits);
+        assert_eq!(rejoined.builder_exits, builder_exits);
+    }
+
+    #[test]
+    fn a_gloas_submission_with_builder_requests_round_trips_through_ssz() {
+        let (builder_deposits, builder_exits) = builder_requests();
+        let mut submission = decodable_gloas_submission();
+        submission.builder_deposits = builder_deposits.clone();
+        submission.builder_exits = builder_exits.clone();
+
+        let bytes = submission.as_ssz_bytes();
+        let decoded = SignedBidSubmissionGloas::from_ssz_bytes(&bytes).unwrap();
+
+        assert_eq!(decoded.builder_deposits, builder_deposits);
+        assert_eq!(decoded.builder_exits, builder_exits);
+    }
+
+    #[test]
+    fn the_gloas_shape_is_distinct_from_fulu() {
+        // Neither decodes as the other, so no existing Fulu path can silently
+        // accept a Gloas submission or vice versa.
+        let mut gloas = decodable_gloas_submission();
+        gloas.block_access_list = BlockAccessListBytes(vec![7u8; 64].into());
+
+        assert!(
+            SignedBidSubmission::from_ssz_bytes(&gloas.as_ssz_bytes()).is_err(),
+            "a Gloas submission must not decode as Fulu",
+        );
+        assert!(
+            SignedBidSubmissionGloas::from_ssz_bytes(&{
+                let mut fulu = SignedBidSubmission::test_random();
+                fulu.blobs_bundle = Default::default();
+                fulu.as_ssz_bytes()
+            })
+            .is_err(),
+            "a Fulu submission must not decode as Gloas",
+        );
     }
 }

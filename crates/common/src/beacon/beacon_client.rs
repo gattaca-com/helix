@@ -3,8 +3,8 @@ use std::{sync::Arc, task::Poll, time::Duration};
 use ::ssz::Encode;
 use alloy_primitives::B256;
 use helix_types::{
-    ForkName, LhConfig, SignedExecutionPayloadEnvelopeContents, VersionedSignedProposal,
-    spec_from_config,
+    ForkName, LhConfig, SignedBeaconBlockGloas, SignedExecutionPayloadEnvelopeContents,
+    VersionedSignedProposal, spec_from_config,
 };
 use http::{Request, header::CONTENT_TYPE};
 use http_body_util::Full;
@@ -117,6 +117,41 @@ impl BeaconClient {
         }
     }
 
+    /// Publishes a Gloas `SignedBeaconBlock` SSZ-encoded. Post-Gloas the block carries no
+    /// blob sidecars, so the body is the bare block rather than `SignedBlockContents`.
+    /// Sending it here gives our own node the block root before the reveal needs it.
+    pub async fn publish_gloas_block(
+        &self,
+        block: Arc<SignedBeaconBlockGloas>,
+    ) -> Result<u16, BeaconClientError> {
+        let target = self.config.url.join("eth/v2/beacon/blocks")?;
+        let body_bytes = Bytes::from(block.as_ssz_bytes());
+        let req = Request::builder()
+            .method("POST")
+            .uri(target.as_str())
+            .header(CONSENSUS_VERSION_HEADER, ForkName::Gloas.to_string())
+            .header(CONTENT_TYPE, "application/octet-stream")
+            .body(Full::new(body_bytes))?;
+        let mut pending = self.http.send(&target, req)?.with_timeout(PUBLISH_BLOCK_TIMEOUT);
+
+        let (status, body) = loop {
+            match pending.poll_bytes() {
+                Poll::Pending => {}
+                Poll::Ready(Ok(r)) => break r,
+                Poll::Ready(Err(e)) => return Err(e.into()),
+            }
+            tokio::task::yield_now().await;
+        };
+
+        match status {
+            200 | 202 => Ok(status),
+            _ => {
+                let api_err: ApiError = serde_json::from_slice(&body)?;
+                Err(BeaconClientError::Api(api_err))
+            }
+        }
+    }
+
     /// Publishes a signed execution payload envelope SSZ-encoded, so a connected beacon node
     /// broadcasts it to the `execution_payload` gossip topic on helix's behalf.
     /// <https://github.com/ethereum/beacon-APIs/blob/master/apis/beacon/execution_payload/envelope_post.yaml>
@@ -125,7 +160,13 @@ impl BeaconClient {
         envelope: Arc<SignedExecutionPayloadEnvelopeContents>,
         fork: ForkName,
     ) -> Result<u16, BeaconClientError> {
-        let target = self.config.url.join("eth/v1/beacon/execution_payload_envelopes")?;
+        let mut target = self.config.url.join("eth/v1/beacon/execution_payload_envelopes")?;
+        // Fail closed on an equivocating proposer: the node refuses to broadcast a
+        // payload for a block it has seen a competing version of.
+        target.query_pairs_mut().append_pair(
+            "broadcast_validation",
+            &BroadcastValidation::ConsensusAndEquivocation.to_string(),
+        );
         let body_bytes = Bytes::from(envelope.as_ssz_bytes());
         let req = Request::builder()
             .method("POST")
@@ -220,6 +261,22 @@ mod tests {
 
         mock.assert();
         assert_eq!(result.unwrap(), 200);
+    }
+
+    #[tokio::test]
+    async fn publish_execution_payload_envelope_asks_for_equivocation_validation() {
+        let server = MockServer::start();
+        let mock = server.mock(|when, then| {
+            when.method(POST)
+                .path("/eth/v1/beacon/execution_payload_envelopes")
+                .query_param("broadcast_validation", "consensus_and_equivocation");
+            then.status(200);
+        });
+
+        let client = test_client(Url::parse(&server.url("/")).unwrap());
+        client.publish_execution_payload_envelope(empty_envelope(), ForkName::Gloas).await.unwrap();
+
+        mock.assert();
     }
 
     #[tokio::test]
