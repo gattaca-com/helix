@@ -8,10 +8,11 @@ use std::{
 };
 
 use flux::{
+    communication::cleanup_shmem,
     spine::FluxSpine,
     tile::{TileConfig, TileName, attach_tile},
 };
-use flux_utils::SharedVector;
+use flux_utils::{SharedVector, directories::shmem_dir};
 use helix_common::{
     RelayConfig,
     alerts::AlertManager,
@@ -167,7 +168,7 @@ async fn run(
 
     spawn_tokio_monitoring();
 
-    HelixSpine::remove_all_files();
+    cleanup_shmem(&shmem_dir(HelixSpine::app_name()));
 
     if config.enable_flux_profiler {
         flux_profiler::enable_profiler("helix");
