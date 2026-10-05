@@ -44,7 +44,7 @@ pub enum ProposerApiError {
     #[error("invalid api key")]
     InvalidApiKey,
 
-    #[error("header stream not admitted")]
+    #[error("stream not admitted")]
     StreamNotAdmitted,
 
     #[error("proposer not registered")]
@@ -140,6 +140,12 @@ pub enum ProposerApiError {
     )]
     RequestAuthSlotMismatch { auth_slot: u64, request_slot: u64 },
 
+    #[error("invalid X-Request-Auth header: {0}")]
+    InvalidRequestAuthHeader(&'static str),
+
+    #[error("bid unchanged")]
+    BidUnchanged,
+
     #[error("invalid request: Date-Milliseconds and X-Timeout-Ms headers are required")]
     MissingTimingHeaders,
 
@@ -161,6 +167,17 @@ impl ProposerApiError {
                 Self::DeliveringPayload
         )
     }
+
+    /// Whether a bid stream should stop polling: the auction has moved past the request, so
+    /// no later poll can produce its bid. An auctioneer still behind the requested slot can
+    /// catch up within the window.
+    pub fn ends_bid_stream(&self) -> bool {
+        match self {
+            Self::RequestWrongSlot { request_slot, bid_slot } => bid_slot > request_slot,
+            Self::UnexpectedProposerPubkey { .. } | Self::DeliveringPayload => true,
+            _ => false,
+        }
+    }
 }
 
 impl From<DecodeError> for ProposerApiError {
@@ -175,6 +192,7 @@ impl IntoResponse for ProposerApiError {
             match self {
                 ProposerApiError::NoBidPrepared |
                 ProposerApiError::GetHeaderRequestTooLate { .. } => StatusCode::NO_CONTENT,
+                ProposerApiError::BidUnchanged => StatusCode::NO_CONTENT,
 
                 ProposerApiError::HyperError(_) |
                 ProposerApiError::AxumError(_) |
@@ -208,6 +226,7 @@ impl IntoResponse for ProposerApiError {
                 ProposerApiError::GetPayloadAlreadyReceived |
                 ProposerApiError::RequestForPastSlot { .. } |
                 ProposerApiError::RequestAuthSlotMismatch { .. } |
+                ProposerApiError::InvalidRequestAuthHeader(_) |
                 ProposerApiError::MissingTimingHeaders |
                 ProposerApiError::InvalidProposerSignature => StatusCode::BAD_REQUEST,
 

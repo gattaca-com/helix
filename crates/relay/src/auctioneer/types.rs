@@ -18,7 +18,8 @@ use helix_types::{
     BidAdjustmentData, BlockMergingDataV2, BlsPublicKeyBytes, BuilderBid, Compression,
     ExecutionPayload, ForkName, GetPayloadResponse, GloasBidSubmission, MergeType, PayloadAndBlobs,
     PayloadBidData, PayloadBidDataRef, SignedBidSubmissionFulu, SignedBlindedBeaconBlock, Slot,
-    Submission, SubmissionVersion, VersionedSignedProposal, gloas::GloasBlock,
+    Submission, SubmissionVersion, VersionedSignedProposal,
+    gloas::{self, GloasBlock},
     mock_public_key_bytes,
 };
 use http::{
@@ -78,6 +79,23 @@ pub type GetHeaderResult = Result<PayloadEntry, ProposerApiError>;
 pub type GetPayloadResult = Result<GetPayloadResultData, ProposerApiError>;
 pub type GetExecutionPayloadBidResult = Result<Vec<u8>, ProposerApiError>;
 pub type SubmitBuilderPreferencesResult = Result<(), ProposerApiError>;
+
+/// What a proposer sees change between two Gloas bids: the block, and what it pays.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BidKey {
+    pub block_hash: B256,
+    pub execution_payment: u64,
+}
+
+impl BidKey {
+    /// Of an `ExecutionPayloadBid`'s ssz.
+    pub fn of(bid: &[u8]) -> Self {
+        Self {
+            block_hash: gloas::bid_block_hash(bid),
+            execution_payment: gloas::bid_execution_payment(bid),
+        }
+    }
+}
 
 versioned_struct!(InternalBidSubmissionHeader =>
     #[derive(Default)]
@@ -547,6 +565,9 @@ pub enum Event {
     /// Gloas (ePBS) analogue of `GetHeader`.
     GetExecutionPayloadBid {
         params: GetExecutionPayloadBidParams,
+        /// The bid a stream last sent. A top bid that still matches it is `BidUnchanged`,
+        /// answered without signing a bid.
+        last_sent: Option<BidKey>,
         res_tx: oneshot::Sender<GetExecutionPayloadBidResult>,
         span: tracing::Span,
     },
