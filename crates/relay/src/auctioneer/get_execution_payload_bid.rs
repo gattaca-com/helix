@@ -1,9 +1,7 @@
-use helix_common::{
-    ForkKey, api::proposer_api::GetExecutionPayloadBidParams, chain_info::ChainInfo,
-};
+use helix_common::{ForkKey, api::proposer_api::GetExecutionPayloadBidParams};
 use helix_types::{
-    ExecutionBlockHash, ExecutionPayloadBid, SignedExecutionPayloadBid, Slot,
-    convert_kzg_commitments_to_progressive, execution_requests_to_gloas,
+    ExecutionBlockHash, ExecutionPayloadBid, Slot, convert_kzg_commitments_to_progressive,
+    execution_requests_to_gloas,
 };
 use tokio::sync::oneshot;
 use tracing::warn;
@@ -16,7 +14,7 @@ use crate::{
     auctioneer::{
         bid_adjustor::BidAdjustor,
         context::Context,
-        types::{GetExecutionPayloadBidResult, PayloadEntry, SlotData},
+        types::{BidKey, GetExecutionPayloadBidResult, PayloadEntry, SlotData},
     },
 };
 
@@ -24,6 +22,7 @@ impl<B: BidAdjustor> Context<B> {
     pub(super) fn handle_get_execution_payload_bid(
         &self,
         params: GetExecutionPayloadBidParams,
+        last_sent: Option<BidKey>,
         slot_data: &SlotData,
         res_tx: oneshot::Sender<GetExecutionPayloadBidResult>,
     ) {
@@ -33,13 +32,7 @@ impl<B: BidAdjustor> Context<B> {
                 self.bid_sorter.get_header(&fork).ok_or(ProposerApiError::NoBidPrepared)?;
             let entry =
                 self.payloads.get(&best_block_hash).ok_or(ProposerApiError::NoBidPrepared)?;
-            build_signed_bid(
-                entry,
-                &params,
-                &self.gloas_builder_identity,
-                &self.chain_info,
-                slot_data,
-            )
+            build_bid(entry, last_sent, &params, &self.gloas_builder_identity, slot_data)
         });
         let _ = res_tx.send(result);
     }
@@ -78,22 +71,27 @@ pub(super) fn check_execution_payload_bid_liveness(
     Ok(())
 }
 
-/// Builds and signs the `SignedExecutionPayloadBid` for the winning submission held in `entry`,
-/// under helix's own configured Gloas builder identity.
-pub(super) fn build_signed_bid(
+/// Builds the `ExecutionPayloadBid` for the winning submission held in `entry`, under helix's
+/// own configured Gloas builder identity, unless it is the bid `last_sent` describes: a stream
+/// asks every few ms, so an unchanged bid costs only this comparison.
+pub(super) fn build_bid(
     entry: &PayloadEntry,
+    last_sent: Option<BidKey>,
     params: &GetExecutionPayloadBidParams,
     identity: &GloasBuilderIdentity,
-    chain_info: &ChainInfo,
     slot_data: &SlotData,
-) -> Result<SignedExecutionPayloadBid, ProposerApiError> {
+) -> Result<ExecutionPayloadBid, ProposerApiError> {
+    let execution_payment =
+        (entry.value() / alloy_primitives::U256::from(WEI_PER_GWEI)).saturating_to::<u64>();
+
+    if last_sent == Some(BidKey { block_hash: *entry.block_hash(), execution_payment }) {
+        return Err(ProposerApiError::BidUnchanged);
+    }
+
     let slot = Slot::new(params.slot);
 
     let gloas_data = entry.gloas_data();
-    let payload = entry.execution_payload().to_lighthouse_gloas_payload(slot, &gloas_data.block_access_list).map_err(|err| {
-        warn!(%err, block_hash =% entry.block_hash(), "failed to convert held payload to Gloas shape for bid");
-        ProposerApiError::InternalServerError
-    })?;
+    let payload = entry.execution_payload();
 
     let execution_requests = execution_requests_to_gloas(
         entry.bid_data_ref().execution_requests,
@@ -102,11 +100,7 @@ pub(super) fn build_signed_bid(
     );
     let execution_requests_root = execution_requests.tree_hash_root();
 
-    // The proposer is paid in-block, so the enshrined `value` stays 0.
-    let execution_payment =
-        (entry.value() / alloy_primitives::U256::from(WEI_PER_GWEI)).saturating_to::<u64>();
-
-    let bid = ExecutionPayloadBid {
+    Ok(ExecutionPayloadBid {
         parent_block_hash: ExecutionBlockHash(params.parent_hash),
         parent_block_root: params.parent_root,
         block_hash: ExecutionBlockHash(*entry.block_hash()),
@@ -118,6 +112,7 @@ pub(super) fn build_signed_bid(
         gas_limit: payload.gas_limit,
         builder_index: identity.builder_index,
         slot,
+        // The proposer is paid in-block, so the enshrined `value` stays 0.
         value: 0,
         execution_payment,
         blob_kzg_commitments: convert_kzg_commitments_to_progressive(
@@ -125,16 +120,14 @@ pub(super) fn build_signed_bid(
         ),
         execution_requests_root,
         _phantom: std::marker::PhantomData,
-    };
-
-    Ok(identity.sign_bid(bid, chain_info))
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use alloy_primitives::B256;
     use helix_common::PayloadAttributesUpdate;
-    use helix_types::{BlsPublicKeyBytes, Domain, EthSpec, ForkName, SignedRoot, TestRandomSeed};
+    use helix_types::{BlsPublicKeyBytes, ForkName, TestRandomSeed};
 
     use super::*;
 
@@ -320,8 +313,7 @@ mod tests {
     }
 
     #[test]
-    fn build_signed_bid_uses_the_entrys_data_and_configured_identity() {
-        let chain_info = ChainInfo::default();
+    fn build_bid_uses_the_entrys_data_and_configured_identity() {
         let block_hash = B256::repeat_byte(0x99);
         let parent_hash = B256::repeat_byte(0x11);
         let parent_root = B256::repeat_byte(0x22);
@@ -330,33 +322,66 @@ mod tests {
         let params = params(parent_hash, parent_root);
         let data = live_slot_data(parent_hash, parent_root);
 
-        let signed_bid = build_signed_bid(&entry, &params, &identity, &chain_info, &data).unwrap();
+        let bid = build_bid(&entry, None, &params, &identity, &data).unwrap();
 
-        assert_eq!(signed_bid.message.block_hash.0, block_hash);
-        assert_eq!(signed_bid.message.parent_block_hash.0, parent_hash);
-        assert_eq!(signed_bid.message.parent_block_root, parent_root);
-        assert_eq!(signed_bid.message.builder_index, 7);
-        assert_eq!(signed_bid.message.value, 0, "the proposer is paid in-block");
-        assert_eq!(signed_bid.message.execution_payment, 42, "wei converts to gwei");
+        assert_eq!(bid.block_hash.0, block_hash);
+        assert_eq!(bid.prev_randao, entry.execution_payload().prev_randao);
+        assert_eq!(bid.gas_limit, entry.execution_payload().gas_limit);
+        assert_eq!(bid.parent_block_hash.0, parent_hash);
+        assert_eq!(bid.parent_block_root, parent_root);
+        assert_eq!(bid.builder_index, 7);
+        assert_eq!(bid.value, 0, "the proposer is paid in-block");
+        assert_eq!(bid.execution_payment, 42, "wei converts to gwei");
         assert_eq!(
-            signed_bid.message.fee_recipient,
-            data.registration_data.entry.registration.message.fee_recipient,
+            bid.fee_recipient, data.registration_data.entry.registration.message.fee_recipient,
             "consensus pays any enshrined amount here, so it must be the proposer's",
         );
+    }
 
-        let epoch = signed_bid.message.slot.epoch(helix_types::MainnetEthSpec::slots_per_epoch());
-        let fork = chain_info.spec.fork_at_epoch(epoch);
-        let domain = chain_info.spec.get_domain(
-            epoch,
-            Domain::BeaconBuilder,
-            &fork,
-            chain_info.genesis_validators_root,
-        );
-        assert!(
-            signed_bid
-                .signature
-                .verify(&identity.keypair.pk, signed_bid.message.signing_root(domain))
-        );
+    fn build(
+        entry: &PayloadEntry,
+        last_sent: Option<BidKey>,
+    ) -> Result<ExecutionPayloadBid, ProposerApiError> {
+        let parent_hash = B256::repeat_byte(0x11);
+        let parent_root = B256::repeat_byte(0x22);
+        build_bid(
+            entry,
+            last_sent,
+            &params(parent_hash, parent_root),
+            &bid_identity(7),
+            &live_slot_data(parent_hash, parent_root),
+        )
+    }
+
+    #[test]
+    fn the_bid_a_stream_last_sent_is_not_built_again() {
+        let entry = payload_entry(B256::repeat_byte(0x99), 42 * WEI_PER_GWEI);
+        let sent = build(&entry, None).unwrap();
+
+        let result = build(&entry, Some(BidKey::of(&sent)));
+
+        assert!(matches!(result, Err(ProposerApiError::BidUnchanged)));
+    }
+
+    #[test]
+    fn a_new_block_paying_the_same_is_built() {
+        let last_sent = BidKey { block_hash: B256::repeat_byte(0x99), execution_payment: 42 };
+        let entry = payload_entry(B256::repeat_byte(0xaa), 42 * WEI_PER_GWEI);
+
+        let bid = build(&entry, Some(last_sent)).unwrap();
+
+        assert_eq!(bid.block_hash.0, B256::repeat_byte(0xaa));
+    }
+
+    #[test]
+    fn the_same_block_paying_more_is_built() {
+        let block_hash = B256::repeat_byte(0x99);
+        let last_sent = BidKey { block_hash, execution_payment: 42 };
+        let entry = payload_entry(block_hash, 43 * WEI_PER_GWEI);
+
+        let bid = build(&entry, Some(last_sent)).unwrap();
+
+        assert_eq!(bid.execution_payment, 43);
     }
 
     #[test]

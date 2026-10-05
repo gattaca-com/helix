@@ -34,7 +34,8 @@ use super::{
 };
 use crate::api::{Api, router::Terminating};
 
-/// Frame layout: `[kind: u8][fork: u8][ssz SignedBuilderBid]`.
+/// Frame layout: `[kind: u8][fork: u8][ssz bid]`. The bid is a `SignedBuilderBid`, or a
+/// `SignedExecutionPayloadBid` on the Gloas bid stream.
 const FRAME_HEADER_LEN: usize = 2;
 const FRAME_KIND_BID: u8 = 1;
 

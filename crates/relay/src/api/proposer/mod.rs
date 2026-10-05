@@ -1,4 +1,5 @@
 mod error;
+mod execution_payload_bid_stream;
 mod get_execution_payload_bid;
 mod get_header;
 pub(crate) mod get_payload;

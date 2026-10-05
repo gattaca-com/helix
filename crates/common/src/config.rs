@@ -47,7 +47,7 @@ pub struct RelayConfig {
     /// Configuration for block merging parameters.
     #[serde(default)]
     pub block_merging_config: BlockMergingConfig,
-    /// Configuration for the websocket header stream.
+    /// Configuration for the websocket header and bid streams.
     #[serde(default)]
     pub header_stream: HeaderStreamConfig,
     pub primev_config: Option<PrimevConfig>,
@@ -593,6 +593,7 @@ impl RouterConfig {
             Route::GetPayload,
             Route::GetPayloadV2,
             Route::GetExecutionPayloadBid,
+            Route::ExecutionPayloadBidStream,
             Route::SubmitBuilderPreferences,
             Route::SubmitSignedBeaconBlock,
         ]);
@@ -645,7 +646,8 @@ impl RouterConfig {
         let is_get_header_instance = routes.contains(&Route::ProposerApi) ||
             routes.contains(&Route::GetHeader) ||
             routes.contains(&Route::HeaderStream) ||
-            routes.contains(&Route::GetExecutionPayloadBid);
+            routes.contains(&Route::GetExecutionPayloadBid) ||
+            routes.contains(&Route::ExecutionPayloadBidStream);
         let is_submission_instance =
             routes.contains(&Route::BuilderApi) || routes.contains(&Route::SubmitBlock);
 
@@ -722,6 +724,8 @@ pub enum Route {
     Blacklist,
     /// Gloas (ePBS): not yet wired to the auctioneer, see docs/gloas-support-plan.md.
     GetExecutionPayloadBid,
+    /// Gloas (ePBS): `GetExecutionPayloadBid` streamed over a websocket, as `HeaderStream`.
+    ExecutionPayloadBidStream,
     /// Gloas (ePBS): not yet wired to the auctioneer, see docs/gloas-support-plan.md.
     SubmitBuilderPreferences,
     /// Gloas (ePBS): not yet wired to the auctioneer, see docs/gloas-support-plan.md.
@@ -745,6 +749,9 @@ impl Route {
             Route::GetPayloadV2 => format!("{PATH_PROPOSER_API_V2}{PATH_GET_PAYLOAD}"),
             Route::GetExecutionPayloadBid => {
                 format!("{PATH_PROPOSER_API}{PATH_GET_EXECUTION_PAYLOAD_BID}")
+            }
+            Route::ExecutionPayloadBidStream => {
+                format!("{PATH_PROPOSER_API}{PATH_EXECUTION_PAYLOAD_BID_STREAM}")
             }
             Route::SubmitBuilderPreferences => {
                 format!("{PATH_PROPOSER_API}{PATH_SUBMIT_BUILDER_PREFERENCES}")
@@ -914,6 +921,29 @@ mod tests {
                 .to_string()
                 .contains("relay is serving headers so should have submissions enabled")
         );
+    }
+
+    #[test]
+    fn test_validate_bid_sorter_bid_stream_without_submission() {
+        let config = create_router_config(vec![Route::ExecutionPayloadBidStream, Route::GetTopBid]);
+
+        let result = config.validate_bid_sorter();
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("relay is serving headers so should have submissions enabled")
+        );
+    }
+
+    #[test]
+    fn test_proposer_api_resolves_to_bid_stream() {
+        let mut config = create_router_config(vec![Route::ProposerApi]);
+
+        config.resolve_condensed_routes();
+
+        assert!(config.contains(Route::ExecutionPayloadBidStream));
     }
 
     #[test]

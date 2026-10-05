@@ -67,17 +67,19 @@ impl<A: Api> ProposerApi<A> {
             "validated getExecutionPayloadBid request"
         );
 
-        let Ok(rx) = proposer_api.auctioneer_handle.get_execution_payload_bid(params) else {
+        let Ok(rx) = proposer_api.auctioneer_handle.get_execution_payload_bid(params, None) else {
             return Err(ProposerApiError::InternalServerError);
         };
 
-        let signed_bid = match rx.await {
+        let bid = match rx.await {
             Ok(res) => res?,
             Err(err) => {
                 warn!(%err, "failed to get execution payload bid from auctioneer");
                 return Err(ProposerApiError::InternalServerError);
             }
         };
+        let signed_bid =
+            proposer_api.gloas_builder_identity.sign_bid(bid, &proposer_api.chain_info);
 
         match Encoding::from_accept(&headers) {
             Encoding::Json => {
@@ -121,9 +123,34 @@ pub(super) fn verify_request_auth(
 
 #[cfg(test)]
 mod tests {
-    use helix_types::{BlsSignature, ExecutionPayloadBid, SignedExecutionPayloadBid};
+    use helix_types::{
+        BlsKeypair, BlsSignature, BuilderRequestAuth, ExecutionPayloadBid, RequestAuthData,
+        SignedExecutionPayloadBid, SignedRoot,
+    };
 
     use super::*;
+
+    #[test]
+    fn request_auth_for_another_slot_is_refused() {
+        let proposer = BlsKeypair::random();
+        let domain = B256::repeat_byte(7);
+        let message = BuilderRequestAuth { data: RequestAuthData(vec![1, 2, 3].into()), slot: 4 };
+        let signature = proposer.sk.sign(message.signing_root(domain)).serialize().into();
+        let params = GetExecutionPayloadBidParams {
+            slot: 5,
+            parent_hash: B256::ZERO,
+            parent_root: B256::ZERO,
+            proposer_pubkey: proposer.pk.serialize().into(),
+        };
+
+        let result =
+            verify_request_auth(&SignedBuilderRequestAuth { message, signature }, &params, domain);
+
+        assert!(matches!(
+            result,
+            Err(ProposerApiError::RequestAuthSlotMismatch { auth_slot: 4, request_slot: 5 })
+        ));
+    }
 
     #[test]
     fn json_bid_carries_the_version_key() {

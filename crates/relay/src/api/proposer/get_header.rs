@@ -20,7 +20,7 @@ use helix_common::{
     spawn_tracked,
     utils::{extract_request_id, utcnow_ms, utcnow_ns},
 };
-use helix_types::{BuilderBid, ForkName, GetHeaderResponse, SignedBuilderBid};
+use helix_types::{BlsPublicKeyBytes, BuilderBid, ForkName, GetHeaderResponse, SignedBuilderBid};
 use http::{HeaderValue, header::CONTENT_TYPE};
 use ssz::Encode;
 use tracing::{Instrument, debug, error, info, trace, warn};
@@ -41,6 +41,8 @@ pub(super) struct ValidatedHeaderRequest {
     pub timeout_ms: Option<u64>,
     pub preferences: ValidatorPreferences,
     pub ip_addr: Option<IpAddr>,
+    /// The slot's registered proposer.
+    pub proposer_pubkey: BlsPublicKeyBytes,
 }
 
 impl<A: Api> ProposerApi<A> {
@@ -90,6 +92,7 @@ impl<A: Api> ProposerApi<A> {
             timeout_ms,
             preferences: duty.entry.preferences,
             ip_addr,
+            proposer_pubkey: duty.entry.registration.message.pubkey,
         })
     }
 

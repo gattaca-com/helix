@@ -403,6 +403,26 @@ mod construct_signed_envelope_tests {
     }
 
     #[test]
+    fn a_bid_is_signed_under_the_beacon_builder_domain() {
+        let chain_info = ChainInfo::default();
+        let identity = identity(3);
+
+        let signed_bid =
+            identity.sign_bid(helix_types::ExecutionPayloadBid::default(), &chain_info);
+
+        let epoch = signed_bid.message.slot.epoch(MainnetEthSpec::slots_per_epoch());
+        let fork = chain_info.spec.fork_at_epoch(epoch);
+        let domain = chain_info.spec.get_domain(
+            epoch,
+            Domain::BeaconBuilder,
+            &fork,
+            chain_info.genesis_validators_root,
+        );
+        let signing_root = signed_bid.message.signing_root(domain);
+        assert!(signed_bid.signature.verify(&identity.keypair.pk, signing_root));
+    }
+
+    #[test]
     fn no_held_payload_is_an_error_not_a_panic() {
         let chain_info = ChainInfo::default();
         let block_hash = B256::repeat_byte(0x44);
