@@ -156,7 +156,7 @@ impl DataGatherer {
     fn on_new_bid(&mut self, bid: &NewBidSubmission, payload: &[u8]) {
         if let Some(s3) = self.s3.as_mut() {
             self.stats.s3_uploads += 1;
-            s3.upload(bid.header, &payload[bid.payload_offset..]);
+            s3.upload(&mut self.net, bid.header, &payload[bid.payload_offset..]);
         }
     }
 

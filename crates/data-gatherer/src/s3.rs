@@ -130,7 +130,12 @@ impl S3Data {
         self.in_flight.len() + self.retry.len()
     }
 
-    pub fn upload(&mut self, header: InternalBidSubmissionHeader, payload: &[u8]) {
+    pub fn upload(
+        &mut self,
+        net: &mut NetworkCore,
+        header: InternalBidSubmissionHeader,
+        payload: &[u8],
+    ) {
         let key = format!("{}.bin", header.submission_id);
         let header = header.to_bytes();
         let header = header.as_slice();
@@ -142,12 +147,12 @@ impl S3Data {
         body.extend_from_slice(header);
         body.extend_from_slice(payload);
 
-        match self.s3.put_object(&self.config.bucket, &key, body.clone()) {
-            Ok(id) => {
+        match self.s3.put_object(net, &self.config.bucket, &key, &body) {
+            Some(id) => {
                 self.in_flight.insert(id, InflightUpload { key, body, attempts: 1 });
             }
             // Never sent: park for retry like any other backpressure.
-            Err(_) => self.requeue(key, body, 0),
+            None => self.requeue(key, body, 0),
         }
     }
 
@@ -181,20 +186,20 @@ impl S3Data {
 
     /// Sends due retries until one is refused. Backoff grows with each
     /// attempt, so the queue is not ordered by `not_before`: any entry may be due.
-    fn pump(&mut self) {
+    fn pump(&mut self, net: &mut NetworkCore) {
         let now = Instant::now();
         while let Some(pos) = self.retry.iter().position(|up| up.not_before <= now) {
             let up = self.retry.remove(pos).expect("position is in bounds");
             self.retry_bytes -= up.body.len();
-            match self.s3.put_object(&self.config.bucket, &up.key, up.body.clone()) {
-                Ok(id) => {
+            match self.s3.put_object(net, &self.config.bucket, &up.key, &up.body) {
+                Some(id) => {
                     self.in_flight.insert(id, InflightUpload {
                         key: up.key,
                         body: up.body,
                         attempts: up.attempts + 1,
                     });
                 }
-                Err(_) => {
+                None => {
                     self.requeue(up.key, up.body, up.attempts);
                     break;
                 }
@@ -209,7 +214,7 @@ impl S3Data {
 
     /// Sends due retries, then what is queued, and retires finished uploads.
     pub fn drive(&mut self, net: &mut NetworkCore) -> bool {
-        self.pump();
+        self.pump(net);
         // Staged out of the callback: `put_object` cannot run while `drive`
         // holds the client.
         let mut requeues = Vec::new();
