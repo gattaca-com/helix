@@ -356,7 +356,7 @@ impl DecoderTile {
         let dehydrated_v2 = header.flags.dehydrated_v2();
         let merging_v2 = header.flags.merging_v2();
 
-        let decoder_params = SubmissionDecoderParams {
+        let mut decoder_params = SubmissionDecoderParams {
             compression: header.compression,
             encoding: header.encoding,
             is_dehydrated,
@@ -371,7 +371,8 @@ impl DecoderTile {
 
         let mut decoder = SubmissionDecoder::new(&decoder_params);
         let (mut submission, merging_data, bid_adjustment_data, gloas_data) =
-            decoder.decode(payload, buffer)?;
+            decoder.decode_at(payload, buffer, chain_info)?;
+        decoder_params.fork_name = decoder.fork_name();
 
         trace.decoded_ns = Nanos::now();
         record_submission_step_ns("recv_decoded", trace.receive_ns.0, trace.decoded_ns.0);

@@ -34,6 +34,7 @@ use zstd::{
 
 use crate::{
     api::builder_api::MAX_PAYLOAD_LENGTH,
+    chain_info::ChainInfo,
     metrics::{
         BID_DECODING_LATENCY, BID_DECOMPRESS_SIZEHINT_REL_ERROR, DECOMPRESSION_LATENCY,
         SUBMISSION_BY_COMPRESSION, SUBMISSION_BY_ENCODING, SUBMISSION_COMPRESSED_BYTES,
@@ -313,7 +314,55 @@ impl SubmissionDecoder {
             Some(Ok(())) => buf,
             Some(Err(e)) => return Err(e),
         };
+        self.decode_body(body)
+    }
 
+    #[timed]
+    pub fn decode_at(
+        &mut self,
+        payload: &[u8],
+        buf: &mut Vec<u8>,
+        chain_info: &ChainInfo,
+    ) -> Result<DecodedParts, DecoderError> {
+        let body: &[u8] = match self.decompress(payload, buf) {
+            None => payload,
+            Some(Ok(())) => buf,
+            Some(Err(e)) => return Err(e),
+        };
+        self.fork_name = chain_info.fork_at_slot(self.submission_slot(body)?.into());
+        self.decode_body(body)
+    }
+
+    pub fn fork_name(&self) -> ForkName {
+        self.fork_name
+    }
+
+    fn submission_slot(&self, body: &[u8]) -> Result<u64, DecoderError> {
+        match self.encoding {
+            Encoding::Ssz => {
+                body.get(..8).and_then(|slot| slot.try_into().ok()).map(u64::from_le_bytes).ok_or(
+                    DecoderError::SszDecode(ssz::DecodeError::InvalidByteLength {
+                        len: body.len(),
+                        expected: 8,
+                    }),
+                )
+            }
+            Encoding::Json => {
+                #[derive(Deserialize)]
+                struct Message {
+                    #[serde(with = "serde_utils::quoted_u64")]
+                    slot: u64,
+                }
+                #[derive(Deserialize)]
+                struct Body {
+                    message: Message,
+                }
+                Ok(serde_json::from_slice::<Body>(body)?.message.slot)
+            }
+        }
+    }
+
+    fn decode_body(&mut self, body: &[u8]) -> Result<DecodedParts, DecoderError> {
         if self.dehydrated_v2 || self.merging_v2 {
             self.decode_v2(body)
         } else if self.is_dehydrated {
