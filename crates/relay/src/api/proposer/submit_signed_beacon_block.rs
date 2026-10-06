@@ -1,4 +1,10 @@
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
 
 use alloy_primitives::B256;
 use axum::{Extension, http::HeaderMap};
@@ -30,14 +36,29 @@ pub struct HeldGloasPayload {
     pub proposer_pubkey: Option<BlsPublicKeyBytes>,
 }
 
+const UNRESOLVED_BUILDER_INDEX: u64 = u64::MAX;
+
 /// Helix's own on-chain Gloas builder identity: `builder_index` plus signing key.
 // TODO(gloas): support external builder-signed bids/envelopes; see gattaca-com/helix#489 step 5.
 pub struct GloasBuilderIdentity {
-    pub builder_index: u64,
+    builder_index: AtomicU64,
     pub keypair: BlsKeypair,
 }
 
 impl GloasBuilderIdentity {
+    pub fn new(keypair: BlsKeypair) -> Self {
+        Self { builder_index: AtomicU64::new(UNRESOLVED_BUILDER_INDEX), keypair }
+    }
+
+    pub fn builder_index(&self) -> Option<u64> {
+        let index = self.builder_index.load(Ordering::Relaxed);
+        (index != UNRESOLVED_BUILDER_INDEX).then_some(index)
+    }
+
+    pub fn set_builder_index(&self, index: Option<u64>) {
+        self.builder_index.store(index.unwrap_or(UNRESOLVED_BUILDER_INDEX), Ordering::Relaxed);
+    }
+
     /// Signs under `DOMAIN_BEACON_BUILDER`, not `ChainInfo::builder_domain`, per
     /// <https://github.com/ethereum/consensus-specs/blob/master/specs/gloas/builder.md#constructing-the-signedexecutionpayloadenvelope>.
     pub fn sign_envelope(
@@ -112,10 +133,10 @@ pub(super) fn construct_signed_envelope(
     let bid = &block.message.body.signed_execution_payload_bid.message;
     let bid_block_hash: B256 = bid.block_hash.0;
 
-    if bid.builder_index != identity.builder_index {
+    if identity.builder_index() != Some(bid.builder_index) {
         return Err(ProposerApiError::BuilderIndexMismatch {
             bid: bid.builder_index,
-            configured: identity.builder_index,
+            ours: identity.builder_index(),
         });
     }
 
@@ -345,7 +366,9 @@ mod construct_signed_envelope_tests {
 
     fn identity(builder_index: u64) -> GloasBuilderIdentity {
         install_default_crypto_provider();
-        GloasBuilderIdentity { builder_index, keypair: BlsKeypair::random() }
+        let identity = GloasBuilderIdentity::new(BlsKeypair::random());
+        identity.set_builder_index(Some(builder_index));
+        identity
     }
 
     #[test]
@@ -498,7 +521,7 @@ mod construct_signed_envelope_tests {
 
         assert!(matches!(
             result,
-            Err(ProposerApiError::BuilderIndexMismatch { bid: 9, configured: 1 })
+            Err(ProposerApiError::BuilderIndexMismatch { bid: 9, ours: Some(1) })
         ));
     }
 }

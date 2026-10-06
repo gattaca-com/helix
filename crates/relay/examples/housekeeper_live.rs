@@ -24,7 +24,8 @@ use helix_common::{
 };
 use helix_database::postgres::postgres_db_service::{DbRequest, PendingBlockSubmissionValue};
 use helix_relay::{
-    DbHandle, HelixSpine, HousekeeperTile, RelayNetworkManager, SlotMsg, SlotUpdate,
+    DbHandle, GloasBuilderIdentity, HelixSpine, HousekeeperTile, RelayNetworkManager, SlotMsg,
+    SlotUpdate,
 };
 use helix_types::{BlsKeypair, BlsSecretKey};
 use url::Url;
@@ -87,6 +88,7 @@ fn main() {
     )
     .expect("valid test secret key");
     let keypair = BlsKeypair::from_components(sk.public_key(), sk);
+    let gloas_builder_identity = Arc::new(GloasBuilderIdentity::new(keypair.clone()));
     let signing_context = Arc::new(RelaySigningContext::new(keypair, chain_info.clone()));
     let relay_network_api = RelayNetworkManager::new(config.relay_network.clone(), signing_context);
 
@@ -109,6 +111,7 @@ fn main() {
         chain_info,
         slot_events.clone(),
         relay_network_api,
+        gloas_builder_identity,
     );
 
     let printer = SlotEventPrinter { slot_events };

@@ -16,8 +16,8 @@ use helix_common::{
     beacon::{
         MultiBeaconClient,
         types::{
-            BeaconResponse, HeadEventData, PayloadAttributesEvent, ProposerPreferencesEvent,
-            SyncStatus,
+            BeaconResponse, BuilderStatus, BuilderSummary, HeadEventData, PayloadAttributesEvent,
+            ProposerPreferencesEvent, SyncStatus,
         },
     },
     chain_info::ChainInfo,
@@ -31,6 +31,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     DbHandle, HelixSpine,
+    api::proposer::GloasBuilderIdentity,
     housekeeper::{
         chain_head::ChainHead,
         duties::{DutiesFetchState, RequestedRegistrations, merge_partial_duties, process_duties},
@@ -54,6 +55,8 @@ const SYNC_STATUS_CHECK_INTERVAL: Duration = Duration::from_secs(4);
 /// Warn once a slot when the duty list is older than this.
 const DUTIES_STALE_AFTER: Duration = Duration::from_secs(60);
 const SYNC_STATUS_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
+const BUILDER_INDEX_RETRY_INTERVAL: Duration = Duration::from_secs(1);
+const BUILDER_INDEX_MISSING_RETRY_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Slot event stored in SharedVector and broadcast via spine.
 #[derive(Clone, Debug)]
@@ -142,6 +145,11 @@ pub struct HousekeeperTile {
     sync_check_next: Instant,
     sync_best: Option<(usize, u64)>,
 
+    gloas_builder_identity: Arc<GloasBuilderIdentity>,
+    builder_index_fetch: Option<PendingResponse>,
+    builder_index_next: Instant,
+    builder_status: Option<BuilderStatus>,
+
     stats: HousekeeperStats,
 }
 
@@ -155,6 +163,7 @@ impl HousekeeperTile {
         chain_info: Arc<ChainInfo>,
         slot_events: Arc<SharedVector<SlotUpdate>>,
         relay_network_api: Arc<RelayNetworkManager>,
+        gloas_builder_identity: Arc<GloasBuilderIdentity>,
     ) -> (Self, CurrentSlotInfo) {
         let curr_slot_info = CurrentSlotInfo::new();
 
@@ -223,6 +232,10 @@ impl HousekeeperTile {
             sync_check_pending: Vec::new(),
             sync_check_next: Instant::now(),
             sync_best: None,
+            gloas_builder_identity,
+            builder_index_fetch: None,
+            builder_index_next: Instant::now(),
+            builder_status: None,
             stats: HousekeeperStats::default(),
         };
         (tile, curr_slot_info)
@@ -624,6 +637,50 @@ impl Tile<HelixSpine> for HousekeeperTile {
                 }
             }
             self.sync_check_next = Instant::now() + SYNC_STATUS_CHECK_INTERVAL;
+        }
+
+        if let Some(req) = &mut self.builder_index_fetch &&
+            let Poll::Ready(result) = req.poll_json::<BeaconResponse<Vec<BuilderSummary>>>()
+        {
+            self.builder_index_fetch = None;
+            match result.map(|resp| resp.data.into_iter().next()) {
+                Ok(Some(builder)) => {
+                    if self.builder_status != Some(builder.status) {
+                        info!(
+                            builder_index = builder.index,
+                            status = ?builder.status,
+                            "found the relay's key in the Gloas builder registry"
+                        );
+                    }
+                    self.builder_status = Some(builder.status);
+                    self.gloas_builder_identity.set_builder_index(
+                        (builder.status == BuilderStatus::Active).then_some(builder.index),
+                    );
+                }
+                Ok(None) => {
+                    warn!("relay key is not in the Gloas builder registry");
+                    self.builder_status = None;
+                    self.gloas_builder_identity.set_builder_index(None);
+                    self.builder_index_next = Instant::now() + BUILDER_INDEX_MISSING_RETRY_INTERVAL;
+                }
+                Err(err) => warn!(%err, "failed to look up the relay's Gloas builder index"),
+            }
+        }
+        if self.builder_index_fetch.is_none() &&
+            self.builder_status != Some(BuilderStatus::Active) &&
+            Instant::now() >= self.builder_index_next &&
+            self.chain_head.chain_info().fork_at_slot(self.chain_head.head()) == ForkName::Gloas &&
+            let Some(c) = self.beacon_client.beacon_clients_by_last_response().next() &&
+            let Ok(url) = c.config.url.join("eth/v1/beacon/states/head/builders") &&
+            let Ok(req) = self.http_client.post(
+                &url,
+                serde_json::json!({ "ids": [self.gloas_builder_identity.keypair.pk.to_string()] })
+                    .to_string()
+                    .into(),
+            )
+        {
+            self.builder_index_fetch = Some(req.with_timeout(SYNC_STATUS_REQUEST_TIMEOUT));
+            self.builder_index_next = Instant::now() + BUILDER_INDEX_RETRY_INTERVAL;
         }
 
         // Poll for consensus IL result from multi-relay service.

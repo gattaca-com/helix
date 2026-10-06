@@ -87,6 +87,7 @@ pub(super) fn build_signed_bid(
     chain_info: &ChainInfo,
     slot_data: &SlotData,
 ) -> Result<SignedExecutionPayloadBid, ProposerApiError> {
+    let builder_index = identity.builder_index().ok_or(ProposerApiError::NoBidPrepared)?;
     let slot = Slot::new(params.slot);
 
     let gloas_data = entry.gloas_data();
@@ -116,7 +117,7 @@ pub(super) fn build_signed_bid(
         // this names. Announcing the coinbase names the builder.
         fee_recipient: slot_data.registration_data.entry.registration.message.fee_recipient,
         gas_limit: payload.gas_limit,
-        builder_index: identity.builder_index,
+        builder_index,
         slot,
         value: 0,
         execution_payment,
@@ -266,7 +267,9 @@ mod tests {
 
     fn bid_identity(builder_index: u64) -> GloasBuilderIdentity {
         helix_common::utils::install_default_crypto_provider();
-        GloasBuilderIdentity { builder_index, keypair: helix_types::BlsKeypair::random() }
+        let identity = GloasBuilderIdentity::new(helix_types::BlsKeypair::random());
+        identity.set_builder_index(Some(builder_index));
+        identity
     }
 
     /// A submission entry carrying a block access list, as Gloas requires.

@@ -140,6 +140,8 @@ async fn run(
     .await?;
     let db_handle = DbHandle::new(db_request_sender, db_batch_request_sender);
     let relay_signing_context = Arc::new(RelaySigningContext::new(keypair, chain_info.clone()));
+    let gloas_builder_identity =
+        Arc::new(GloasBuilderIdentity::new(relay_signing_context.keypair.clone()));
 
     let relay_network_api =
         RelayNetworkManager::new(config.relay_network.clone(), relay_signing_context.clone());
@@ -160,6 +162,7 @@ async fn run(
         chain_info.clone(),
         slot_events.clone(),
         relay_network_api.clone(),
+        gloas_builder_identity.clone(),
     );
 
     let terminating = Arc::new(AtomicBool::default());
@@ -256,6 +259,7 @@ async fn run(
             operator_api.clone(),
             gossip_sender,
             gossip_receiver,
+            gloas_builder_identity.clone(),
         );
 
         if config.website.enabled {
@@ -353,11 +357,6 @@ async fn run(
                 );
                 attach_tile(merging_tile, spine, TileConfig::new(config.cores.block_merging, None));
             }
-
-            let gloas_builder_identity = Arc::new(GloasBuilderIdentity {
-                builder_index: config.gloas_builder_index,
-                keypair: relay_signing_context.keypair.clone(),
-            });
 
             let auctioneer_core = config.cores.auctioneer;
             let auctioneer = Auctioneer::new(

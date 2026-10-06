@@ -73,11 +73,8 @@ impl<A: Api> ProposerApi<A> {
         reg_handle: RegWorkerHandle,
         alert_manager: Arc<AlertManager>,
         operator_api: Option<Arc<OperatorPubSub>>,
+        gloas_builder_identity: Arc<GloasBuilderIdentity>,
     ) -> Self {
-        let gloas_builder_identity = Arc::new(GloasBuilderIdentity {
-            builder_index: relay_config.gloas_builder_index,
-            keypair: signing_context.keypair.clone(),
-        });
         Self {
             local_cache,
             db,

@@ -87,10 +87,6 @@ pub struct RelayConfig {
     #[serde(default)]
     pub operator_config: Option<OperatorConfig>,
     pub blacklist_provider: Option<Url>,
-    /// This relay's on-chain Gloas (ePBS) builder_index. Placeholder until helix has a real
-    /// on-chain builder registration; signs under the relay's own key in the meantime.
-    #[serde(default)]
-    pub gloas_builder_index: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
@@ -164,7 +160,6 @@ impl RelayConfig {
             enable_flux_profiler: false,
             operator_config: None,
             blacklist_provider: None,
-            gloas_builder_index: 0,
         }
     }
 }

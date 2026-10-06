@@ -152,10 +152,8 @@ pub enum ProposerApiError {
     )]
     HeldPayloadBlockHashMismatch { held: B256, bid: B256 },
 
-    #[error(
-        "bid builder_index {bid} does not match this relay's configured builder_index {configured}"
-    )]
-    BuilderIndexMismatch { bid: u64, configured: u64 },
+    #[error("bid builder_index {bid} does not match this relay's builder_index {ours:?}")]
+    BuilderIndexMismatch { bid: u64, ours: Option<u64> },
 
     #[error("proposer equivocated at slot {slot}: already committed to block {first:?}")]
     ProposerEquivocated { slot: u64, first: B256 },

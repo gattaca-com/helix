@@ -25,8 +25,12 @@ use tracing::{error, info};
 use crate::{
     AuctioneerHandle, DbHandle, PostgresDatabaseService, RegWorkerHandle,
     api::{
-        Api, FutureBidSubmissionResult, blacklist::BlacklistCache, builder::api::BuilderApi,
-        extract::raw_web_socket::RawWebSocket, proposer::ProposerApi, router::build_router,
+        Api, FutureBidSubmissionResult,
+        blacklist::BlacklistCache,
+        builder::api::BuilderApi,
+        extract::raw_web_socket::RawWebSocket,
+        proposer::{GloasBuilderIdentity, ProposerApi},
+        router::build_router,
     },
     gossip::{GossipedMessage, GrpcGossiperClientManager, process_gossip_messages},
     network::api::RelayNetworkApi,
@@ -57,6 +61,7 @@ pub fn start_api_service<A: Api>(
     operator_api: Option<Arc<OperatorPubSub>>,
     gossip_sender: MpscSender<GossipedMessage>,
     gossip_receiver: Receiver<GossipedMessage>,
+    gloas_builder_identity: Arc<GloasBuilderIdentity>,
 ) {
     tokio::spawn(run_api_service::<A>(
         config.clone(),
@@ -80,6 +85,7 @@ pub fn start_api_service<A: Api>(
         operator_api,
         gossip_sender,
         gossip_receiver,
+        gloas_builder_identity,
     ));
 }
 
@@ -105,6 +111,7 @@ pub async fn run_api_service<A: Api>(
     operator_api: Option<Arc<OperatorPubSub>>,
     gossip_sender: MpscSender<GossipedMessage>,
     gossip_receiver: Receiver<GossipedMessage>,
+    gloas_builder_identity: Arc<GloasBuilderIdentity>,
 ) {
     let gossiper = Arc::new(
         GrpcGossiperClientManager::new(config.relays.iter().map(|cfg| cfg.url.clone()).collect())
@@ -146,6 +153,7 @@ pub async fn run_api_service<A: Api>(
         registrations_handle,
         alert_manager,
         operator_api,
+        gloas_builder_identity,
     ));
 
     tokio::spawn(process_gossip_messages(
