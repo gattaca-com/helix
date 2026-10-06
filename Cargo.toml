@@ -72,16 +72,16 @@ eyre = "0.6.12"
 clickhouse = "0.14.2"
 flate2 = "1.0"
 
-flux = { git = "https://github.com/gattaca-com/flux", rev = "e7b1593845d85d5ca2cbc9c521e0dce4cd18a07d" }
-flux-clickhouse = { git = "https://github.com/gattaca-com/flux", rev = "e7b1593845d85d5ca2cbc9c521e0dce4cd18a07d" }
-flux-gather = { git = "https://github.com/gattaca-com/flux", rev = "e7b1593845d85d5ca2cbc9c521e0dce4cd18a07d" }
-flux-network = { package = "flux-network", git = "https://github.com/gattaca-com/flux", rev = "e7b1593845d85d5ca2cbc9c521e0dce4cd18a07d" }
-flux-profiler = { package = "flux-profiler", git = "https://github.com/gattaca-com/flux", rev = "e7b1593845d85d5ca2cbc9c521e0dce4cd18a07d" }
-flux-s3 = { git = "https://github.com/gattaca-com/flux", rev = "e7b1593845d85d5ca2cbc9c521e0dce4cd18a07d" }
-flux-utils = { package = "flux-utils", git = "https://github.com/gattaca-com/flux", rev = "e7b1593845d85d5ca2cbc9c521e0dce4cd18a07d" }
-flux-versioned-types = { git = "https://github.com/gattaca-com/flux", rev = "e7b1593845d85d5ca2cbc9c521e0dce4cd18a07d" }
-type-hash = { git = "https://github.com/gattaca-com/flux", rev = "e7b1593845d85d5ca2cbc9c521e0dce4cd18a07d" }
-type-hash-derive = { git = "https://github.com/gattaca-com/flux", rev = "e7b1593845d85d5ca2cbc9c521e0dce4cd18a07d" }
+flux = { git = "https://github.com/gattaca-com/flux", rev = "46d2684a2afb848d254ea13d751a0b10fe92a316" }
+flux-clickhouse = { git = "https://github.com/gattaca-com/flux", rev = "46d2684a2afb848d254ea13d751a0b10fe92a316" }
+flux-gather = { git = "https://github.com/gattaca-com/flux", rev = "46d2684a2afb848d254ea13d751a0b10fe92a316" }
+flux-network = { package = "flux-network", git = "https://github.com/gattaca-com/flux", rev = "46d2684a2afb848d254ea13d751a0b10fe92a316" }
+flux-profiler = { package = "flux-profiler", git = "https://github.com/gattaca-com/flux", rev = "46d2684a2afb848d254ea13d751a0b10fe92a316" }
+flux-s3 = { git = "https://github.com/gattaca-com/flux", rev = "46d2684a2afb848d254ea13d751a0b10fe92a316" }
+flux-utils = { package = "flux-utils", git = "https://github.com/gattaca-com/flux", rev = "46d2684a2afb848d254ea13d751a0b10fe92a316" }
+flux-versioned-types = { git = "https://github.com/gattaca-com/flux", rev = "46d2684a2afb848d254ea13d751a0b10fe92a316" }
+type-hash = { git = "https://github.com/gattaca-com/flux", rev = "46d2684a2afb848d254ea13d751a0b10fe92a316" }
+type-hash-derive = { git = "https://github.com/gattaca-com/flux", rev = "46d2684a2afb848d254ea13d751a0b10fe92a316" }
 
 futures = "0.3"
 futures-util = { version = "0.3", features = ["compat"] }
