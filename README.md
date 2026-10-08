@@ -12,7 +12,7 @@ Audit conducted by Spearbit, with [Alex Stokes](https://github.com/ralexstokes) 
 
 ## Security
 
-See [SECURITY.md](https://github.com/gattaca-com/helix/blob/develop/SECURITY.md)
+See [SECURITY.md](https://github.com/gattaca-com/helix/blob/main/SECURITY.md)
 
 ## Acknowledgements
 

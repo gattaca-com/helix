@@ -2,7 +2,7 @@ name: lint
 
 on:
   push:
-    branches: [main, staging, develop]
+    branches: [main, staging]
   pull_request:
 
 env:
