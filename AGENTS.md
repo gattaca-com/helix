@@ -19,7 +19,7 @@
 
 ## Git and pull requests
 
-- Do not commit directly on `develop` unless explicitly requested.
+- Do not commit directly on `main` unless explicitly requested.
 - When refactoring code, split the work into two commits: first move or
   reorganize code without logic changes, then make any logic changes in a
   separate commit.
