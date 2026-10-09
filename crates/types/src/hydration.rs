@@ -712,16 +712,20 @@ impl HydrationCache {
         max_blobs_per_block: usize,
     ) -> bool {
         match submission {
-            DehydratedBidSubmission::Fulu(s) => {
-                let empty = Cache::default();
-                let c = self.caches.get(&s.message.builder_pubkey).unwrap_or(&empty);
-                s.can_hydrate_inner(
+            DehydratedBidSubmission::Fulu(s) => match self.caches.get(&s.message.builder_pubkey) {
+                Some(c) => s.can_hydrate_inner(
                     &c.transactions,
                     &c.blobs_fulu,
                     &c.withdrawals,
                     max_blobs_per_block,
-                )
-            }
+                ),
+                None => s.can_hydrate_inner(
+                    &FxHashMap::default(),
+                    &FxHashMap::default(),
+                    &FxHashMap::default(),
+                    max_blobs_per_block,
+                ),
+            },
         }
     }
 
