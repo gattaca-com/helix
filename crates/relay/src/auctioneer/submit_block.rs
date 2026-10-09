@@ -74,6 +74,7 @@ impl<B: BidAdjustor> Context<B> {
         let version = submission_data.version;
         let is_pessimistic = submission_data.is_pessimistic;
         let bid_adjustment_data = submission_data.bid_adjustment_data.clone();
+        let gloas_data = submission_data.gloas_data.clone();
         let mut trace = submission_data.trace;
 
         let (submission, maybe_tx_root) = match self.hydrate(submission_data.submission.clone()) {
@@ -106,13 +107,13 @@ impl<B: BidAdjustor> Context<B> {
                 &builder_info,
                 slot_data,
             ) {
-            let bid = Bid::new(version, &submission);
+            let bid = Bid::new(version, &submission, payload_attributes.parent_root());
             let is_top_bid = self.bid_sorter.sort(bid, &mut trace, true, producers);
             (OptimisticVersion::V1, is_top_bid)
         } else {
             let beats_top_bid = self
                 .bid_sorter
-                .top_bid_value(&submission.message.parent_hash)
+                .top_bid_value(&payload_attributes.fork())
                 .is_none_or(|top| submission.message.value > top);
             (OptimisticVersion::NotOptimistic, beats_top_bid)
         };
@@ -135,11 +136,10 @@ impl<B: BidAdjustor> Context<B> {
             is_optimistic,
             apply_blacklist: slot_data.registration_data.entry.preferences.filtering.is_regional(),
             registered_gas_limit: slot_data.registration_data.entry.registration.message.gas_limit,
-            parent_beacon_block_root: payload_attributes
-                .parent_beacon_block_root
-                .unwrap_or_default(),
+            parent_beacon_block_root: payload_attributes.parent_root(),
             inclusion_list: slot_data.il.clone().unwrap_or_default(),
             submission: submission.clone(),
+            gloas_data: gloas_data.clone(),
             tx_root: maybe_tx_root,
             version,
             trace,
@@ -154,6 +154,7 @@ impl<B: BidAdjustor> Context<B> {
             payload_attributes.withdrawals_root,
             maybe_tx_root,
             bid_adjustment_data,
+            gloas_data,
             version,
             trace,
             payload_attributes.parent_beacon_block_root,
