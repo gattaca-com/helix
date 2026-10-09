@@ -39,8 +39,6 @@ impl<B: BidAdjustor> Context<B> {
         let submission_id = submission_data.submission_id;
 
         let builder_info = self.builder_info(submission_data.submission.builder_pubkey());
-        tracing::Span::current()
-            .record("builder_id", tracing::field::display(builder_info.builder_id()));
 
         trace!("validating submission");
         let start_val = Nanos::now();
@@ -102,7 +100,14 @@ impl<B: BidAdjustor> Context<B> {
                 // An optimistic bid is already sorted and stays there without a
                 // payload, so `get_header` serves nothing for its fork while it
                 // is the top bid.
-                error!(?e, is_optimistic, "CRITICAL: hydration failed after pre-check passed");
+                error!(
+                    ?e,
+                    id = %submission_id,
+                    block_hash = %bid.block_hash,
+                    builder_pubkey = %bid.builder_pubkey,
+                    is_optimistic,
+                    "CRITICAL: hydration failed after pre-check passed"
+                );
                 SUBMISSION_REJECTS
                     .with_label_values(&[
                         submission_data.submission.builder_pubkey().to_string().as_str(),
@@ -130,6 +135,15 @@ impl<B: BidAdjustor> Context<B> {
                 Ok(()),
             );
         }
+
+        // The fmt layer formats span fields when they are recorded, so this
+        // waits until the top bid and the builder's response are out.
+        let span = tracing::Span::current();
+        span.record("id", tracing::field::display(submission_id));
+        span.record("slot", submission.message.slot);
+        span.record("block_hash", tracing::field::display(submission.message.block_hash));
+        span.record("builder_pubkey", tracing::field::display(submission.message.builder_pubkey));
+        span.record("builder_id", tracing::field::display(builder_info.builder_id()));
 
         let req = ValidationRequest {
             priority: sim_priority(is_top_bid, is_optimistic),
