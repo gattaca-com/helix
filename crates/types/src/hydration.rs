@@ -1,8 +1,9 @@
 use std::{hash::Hasher, sync::Arc};
 
+use alloy_eips::eip7594::CELLS_PER_EXT_BLOB;
 use alloy_primitives::{Address, B256, U256};
 use flux_profiler::timed;
-use lh_types::{ForkName, ForkVersionDecode, Withdrawal};
+use lh_types::{EthSpec, ForkName, ForkVersionDecode, MainnetEthSpec, Withdrawal};
 use rustc_hash::{FxHashMap, FxHasher};
 use serde::{Deserialize, Serialize};
 use ssz::{Decode, DecodeError};
@@ -505,18 +506,29 @@ impl DehydratedBidSubmissionFulu {
         withdrawals: &FxHashMap<u64, CachedWithdrawals>,
         max_blobs_per_block: usize,
     ) -> bool {
+        let full_txs = &self.execution_payload.transactions;
+        let new_items = &self.blobs_bundle.new_items;
         // v1 conversion keys new blobs by hash rather than `0`, so a ref may
-        // point at an item in `new_items` that is not cached yet.
-        let is_new =
-            |r: u64| self.blobs_bundle.new_items.iter().any(|b| blob_cache_key(&b.commitment) == r);
-        self.blobs_bundle.refs.len() <= max_blobs_per_block &&
+        // point at an item in `new_items` that is not cached yet. Hydrating
+        // caches new items first, so they win over a cached entry's proofs.
+        let is_new = |r: u64| new_items.iter().any(|b| blob_cache_key(&b.commitment) == r);
+        let has_all_cells = |proofs: &[KzgProof]| proofs.len() == CELLS_PER_EXT_BLOB;
+        let next_full_refs = |refs: &[u64]| refs.iter().filter(|&&r| r == NEXT_FULL_ITEM).count();
+
+        self.tx_refs.len() <= <MainnetEthSpec as EthSpec>::max_transactions_per_payload() &&
+            self.blobs_bundle.refs.len() <= max_blobs_per_block &&
+            self.execution_payload.validate_ssz_lengths().is_ok() &&
             (self.withdrawals_ref == 0 || withdrawals.contains_key(&self.withdrawals_ref)) &&
+            full_txs.iter().all(|tx| tx.len() >= TX_KEY_SIZE) &&
+            next_full_refs(&self.tx_refs) <= full_txs.len() &&
             self.tx_refs.iter().all(|&r| r == NEXT_FULL_ITEM || txs.contains_key(&r)) &&
-            self.execution_payload.transactions.iter().all(|tx| tx.len() >= TX_KEY_SIZE) &&
-            self.blobs_bundle
-                .refs
-                .iter()
-                .all(|&r| r == NEXT_FULL_ITEM || blobs.contains_key(&r) || is_new(r))
+            new_items.iter().all(|b| has_all_cells(&b.proof)) &&
+            next_full_refs(&self.blobs_bundle.refs) <= new_items.len() &&
+            self.blobs_bundle.refs.iter().all(|&r| {
+                r == NEXT_FULL_ITEM ||
+                    is_new(r) ||
+                    blobs.get(&r).is_some_and(|(_, proofs, _)| has_all_cells(proofs))
+            })
     }
 
     #[timed]

@@ -75,11 +75,34 @@ impl<B: BidAdjustor> Context<B> {
         let is_pessimistic = submission_data.is_pessimistic;
         let bid_adjustment_data = submission_data.bid_adjustment_data.clone();
         let mut trace = submission_data.trace;
+        let bid = Bid::from_submission_data(submission_data);
+
+        // Sorted before hydrating so the top bid update does not wait on the
+        // payload: `validate_submission` already checked it can be hydrated.
+        let (optimistic_version, is_top_bid) = if self.sims.accept_optimistic() &&
+            !self.failsafe_triggered.load(Ordering::Relaxed) &&
+            self.should_process_optimistically(
+                is_pessimistic,
+                bid.value,
+                &builder_info,
+                slot_data,
+            ) {
+            let is_top_bid = self.bid_sorter.sort(bid, &mut trace, true, producers);
+            (OptimisticVersion::V1, is_top_bid)
+        } else {
+            let beats_top_bid =
+                self.bid_sorter.top_bid_value(&bid.parent_hash).is_none_or(|top| bid.value > top);
+            (OptimisticVersion::NotOptimistic, beats_top_bid)
+        };
+        let is_optimistic = optimistic_version.is_optimistic();
 
         let (submission, maybe_tx_root) = match self.hydrate(submission_data.submission.clone()) {
             Ok(v) => v,
             Err(e) => {
-                error!(?e, "hydration failed after pre-check passed");
+                // An optimistic bid is already sorted and stays there without a
+                // payload, so `get_header` serves nothing for its fork while it
+                // is the top bid.
+                error!(?e, is_optimistic, "CRITICAL: hydration failed after pre-check passed");
                 SUBMISSION_REJECTS
                     .with_label_values(&[
                         submission_data.submission.builder_pubkey().to_string().as_str(),
@@ -98,26 +121,6 @@ impl<B: BidAdjustor> Context<B> {
             }
         };
 
-        let (optimistic_version, is_top_bid) = if self.sims.accept_optimistic() &&
-            !self.failsafe_triggered.load(Ordering::Relaxed) &&
-            self.should_process_optimistically(
-                is_pessimistic,
-                submission.message.value,
-                &builder_info,
-                slot_data,
-            ) {
-            let bid = Bid::new(version, &submission);
-            let is_top_bid = self.bid_sorter.sort(bid, &mut trace, true, producers);
-            (OptimisticVersion::V1, is_top_bid)
-        } else {
-            let beats_top_bid = self
-                .bid_sorter
-                .top_bid_value(&submission.message.parent_hash)
-                .is_none_or(|top| submission.message.value > top);
-            (OptimisticVersion::NotOptimistic, beats_top_bid)
-        };
-
-        let is_optimistic = optimistic_version.is_optimistic();
         if is_optimistic {
             send_submission_result(
                 producers,
