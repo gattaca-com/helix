@@ -6,7 +6,9 @@ use std::{
 
 use flux_network::{NetworkCore, NetworkEvent};
 use flux_s3::{Error, RequestId, S3};
-use helix_common::{S3Config, api::builder_api::MAX_PAYLOAD_LENGTH, expect_env_var};
+use helix_common::{
+    S3Config, api::builder_api::MAX_PAYLOAD_LENGTH, expect_env_var, utils::utcnow_ms,
+};
 use helix_relay::InternalBidSubmissionHeader;
 use rustc_hash::FxHashMap;
 
@@ -15,31 +17,58 @@ const ENV_SECRET_ACCESS_KEY: &str = "S3_SECRET_ACCESS_KEY";
 
 /// Uploads in flight at once; each connection carries one request at a time.
 const CONNECTIONS: usize = 8;
-/// A submission plus its serialised header.
-const MAX_BODY_BYTES: usize = MAX_PAYLOAD_LENGTH + 4096;
+const BATCH_BYTES: usize = 64 * 1024 * 1024;
+/// A full batch overshoots by at most one submission plus its header.
+const MAX_BATCH_BYTES: usize = BATCH_BYTES + MAX_PAYLOAD_LENGTH + 4096;
+/// flux caps a connection's backlog at this plus a fixed 64 KiB, counting TLS
+/// ciphertext; record overhead (~0.14%) exceeds that margin at batch size.
+const MAX_BODY_BYTES: usize = MAX_BATCH_BYTES + MAX_BATCH_BYTES / 100;
 /// What a stalled bucket may hold in memory before further uploads are shed.
 const MAX_QUEUED_BYTES: usize = 512 * 1024 * 1024;
-/// Total sends per object, matching the old adaptive client.
-const MAX_ATTEMPTS: u8 = 3;
-/// First retry delay; doubles per attempt (100/200/400 ms).
-const RETRY_BASE: Duration = Duration::from_millis(100);
+/// Total sends per object.
+const MAX_ATTEMPTS: u8 = 5;
+/// First retry delay; doubles per attempt (0.5/1/2/4 s).
+const RETRY_BASE: Duration = Duration::from_millis(500);
 /// Retained retry bodies past this shed the oldest first.
 const MAX_RETRY_BYTES: usize = 256 * 1024 * 1024;
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 /// Least gap between endpoint lookups triggered by connection failures.
 const RERESOLVE_INTERVAL: Duration = Duration::from_secs(10);
 
-struct InflightUpload {
+/// Records are `[u32 LE len][u16 LE header_len][header][payload]`, `len`
+/// covering what follows it.
+#[derive(Default)]
+struct Batch {
+    slot: u64,
+    records: u32,
+    body: Vec<u8>,
+}
+
+impl Batch {
+    fn push(&mut self, slot: u64, header: &[u8], payload: &[u8]) {
+        if self.records == 0 {
+            self.slot = slot;
+            self.body.reserve(BATCH_BYTES);
+        }
+        let len = 2 + header.len() + payload.len();
+        self.body.extend_from_slice(&(len as u32).to_le_bytes());
+        self.body.extend_from_slice(&(header.len() as u16).to_le_bytes());
+        self.body.extend_from_slice(header);
+        self.body.extend_from_slice(payload);
+        self.records += 1;
+    }
+}
+
+struct Upload {
     key: String,
     body: Vec<u8>,
+    records: u32,
     /// Sends so far.
     attempts: u8,
 }
 
 struct RetryUpload {
-    key: String,
-    body: Vec<u8>,
-    attempts: u8,
+    up: Upload,
     not_before: Instant,
 }
 
@@ -49,16 +78,21 @@ pub struct S3Data {
     /// Address the client is connected to; the endpoint's DNS rotates.
     addr: SocketAddr,
     resolved_at: Instant,
+    batch: Batch,
+    instance: String,
+    /// Keeps keys unique across restarts within one slot.
+    started_ms: u64,
+    seq: u64,
     /// Keyed by request so a failure can name the object it lost. The body
     /// is kept for a retryable failure.
-    in_flight: FxHashMap<RequestId, InflightUpload>,
+    in_flight: FxHashMap<RequestId, Upload>,
     retry: VecDeque<RetryUpload>,
     retry_bytes: usize,
     failures: u32,
 }
 
 impl S3Data {
-    pub fn new(config: &S3Config, net: &mut NetworkCore) -> Self {
+    pub fn new(config: &S3Config, instance: &str, net: &mut NetworkCore) -> Self {
         let addr = Self::resolve(&config.endpoint).unwrap_or_else(|| {
             panic!("s3 endpoint `{}` is not a host:port with an IPv4 address", config.endpoint)
         });
@@ -70,6 +104,10 @@ impl S3Data {
             config: config.clone(),
             addr,
             resolved_at: Instant::now(),
+            batch: Batch::default(),
+            instance: instance.to_owned(),
+            started_ms: utcnow_ms(),
+            seq: 0,
             in_flight: FxHashMap::default(),
             retry: VecDeque::new(),
             retry_bytes: 0,
@@ -116,7 +154,7 @@ impl S3Data {
         s3.connect(net);
         std::mem::replace(&mut self.s3, s3).close(net);
         for (_, up) in std::mem::take(&mut self.in_flight) {
-            self.requeue(up.key, up.body, up.attempts);
+            self.requeue(up);
         }
     }
 
@@ -133,47 +171,58 @@ impl S3Data {
     pub fn upload(
         &mut self,
         net: &mut NetworkCore,
+        slot: u64,
         header: InternalBidSubmissionHeader,
         payload: &[u8],
     ) {
-        let key = format!("{}.bin", header.submission_id);
-        let header = header.to_bytes();
-        let header = header.as_slice();
-        let header_len = header.len() as u16;
+        if self.batch.records > 0 && self.batch.slot != slot {
+            self.flush(net);
+        }
+        self.batch.push(slot, header.to_bytes().as_slice(), payload);
+        if self.batch.body.len() >= BATCH_BYTES {
+            self.flush(net);
+        }
+    }
 
-        // format: [u16 LE header_len][header bytes][payload bytes]
-        let mut body = Vec::with_capacity(2 + header.len() + payload.len());
-        body.extend_from_slice(&header_len.to_le_bytes());
-        body.extend_from_slice(header);
-        body.extend_from_slice(payload);
+    pub fn flush(&mut self, net: &mut NetworkCore) {
+        if self.batch.records == 0 {
+            return;
+        }
+        let Batch { slot, records, body } = std::mem::take(&mut self.batch);
+        let key =
+            format!("batches/{slot}/{}/{}-{:06}.bin", self.instance, self.started_ms, self.seq);
+        self.seq += 1;
+        self.send(net, Upload { key, body, records, attempts: 0 });
+    }
 
-        match self.s3.put_object(net, &self.config.bucket, &key, &body) {
+    /// Returns false when the network refuses the upload unsent.
+    fn send(&mut self, net: &mut NetworkCore, up: Upload) -> bool {
+        match self.s3.put_object(net, &self.config.bucket, &up.key, &up.body) {
             Some(id) => {
-                self.in_flight.insert(id, InflightUpload { key, body, attempts: 1 });
+                self.in_flight.insert(id, Upload { attempts: up.attempts + 1, ..up });
+                true
             }
             // Never sent: park for retry like any other backpressure.
-            None => self.requeue(key, body, 0),
+            None => {
+                self.requeue(up);
+                false
+            }
         }
     }
 
     /// Parks a failed upload for another attempt, or counts it lost. Shared
     /// with the refused-before-send path, which also never reached the wire.
-    fn requeue(&mut self, key: String, body: Vec<u8>, attempts: u8) {
-        if attempts >= MAX_ATTEMPTS || self.retry_bytes + body.len() > MAX_RETRY_BYTES {
+    fn requeue(&mut self, up: Upload) {
+        if up.attempts >= MAX_ATTEMPTS || self.retry_bytes + up.body.len() > MAX_RETRY_BYTES {
             if self.failures == 0 {
-                tracing::error!(%key, "s3 upload lost");
+                tracing::error!(key = %up.key, records = up.records, "s3 upload lost");
             }
-            self.failures += 1;
+            self.failures += up.records;
             return;
         }
-        let backoff = RETRY_BASE * 2u32.pow(attempts as u32);
-        self.retry_bytes += body.len();
-        self.retry.push_back(RetryUpload {
-            key,
-            body,
-            attempts,
-            not_before: Instant::now() + backoff,
-        });
+        let backoff = RETRY_BASE * 2u32.pow(up.attempts as u32);
+        self.retry_bytes += up.body.len();
+        self.retry.push_back(RetryUpload { up, not_before: Instant::now() + backoff });
     }
 
     fn is_retryable(err: &Error) -> bool {
@@ -188,21 +237,11 @@ impl S3Data {
     /// attempt, so the queue is not ordered by `not_before`: any entry may be due.
     fn pump(&mut self, net: &mut NetworkCore) {
         let now = Instant::now();
-        while let Some(pos) = self.retry.iter().position(|up| up.not_before <= now) {
-            let up = self.retry.remove(pos).expect("position is in bounds");
+        while let Some(pos) = self.retry.iter().position(|r| r.not_before <= now) {
+            let RetryUpload { up, .. } = self.retry.remove(pos).expect("position is in bounds");
             self.retry_bytes -= up.body.len();
-            match self.s3.put_object(net, &self.config.bucket, &up.key, &up.body) {
-                Some(id) => {
-                    self.in_flight.insert(id, InflightUpload {
-                        key: up.key,
-                        body: up.body,
-                        attempts: up.attempts + 1,
-                    });
-                }
-                None => {
-                    self.requeue(up.key, up.body, up.attempts);
-                    break;
-                }
+            if !self.send(net, up) {
+                break;
             }
         }
     }
@@ -228,7 +267,7 @@ impl S3Data {
                 let Err(err) = result else { return };
                 unreachable |= matches!(err, Error::Disconnected | Error::TimedOut);
                 if Self::is_retryable(&err) && up.attempts < MAX_ATTEMPTS {
-                    requeues.push((up.key, up.body, up.attempts));
+                    requeues.push(up);
                     return;
                 }
                 if *failures == 0 {
@@ -243,11 +282,11 @@ impl S3Data {
                         other => tracing::error!(?other, key = %up.key, "s3 upload failed"),
                     }
                 }
-                *failures += 1;
+                *failures += up.records;
             });
         }
-        for (key, body, attempts) in requeues {
-            self.requeue(key, body, attempts);
+        for up in requeues {
+            self.requeue(up);
         }
         if unreachable {
             self.follow_endpoint(net);

@@ -53,7 +53,7 @@ impl DataGatherer {
                 .clickhouse
                 .as_ref()
                 .map(|cfg| ClickhouseData::new(cfg, instance_id.clone(), &mut net)),
-            s3: config.s3.as_ref().map(|cfg| S3Data::new(cfg, &mut net)),
+            s3: config.s3.as_ref().map(|cfg| S3Data::new(cfg, &instance_id, &mut net)),
             current_slot: 0,
             net,
             stats: SlotStats::default(),
@@ -75,6 +75,9 @@ impl DataGatherer {
 
     pub fn on_new_slot(&mut self, new_slot: u64) {
         self.flush();
+        if let Some(s3) = self.s3.as_mut() {
+            s3.flush(&mut self.net);
+        }
         self.report_slot_stats();
         self.current_slot = new_slot;
         if let Some(ch) = self.ch.as_mut() {
@@ -156,7 +159,7 @@ impl DataGatherer {
     fn on_new_bid(&mut self, bid: &NewBidSubmission, payload: &[u8]) {
         if let Some(s3) = self.s3.as_mut() {
             self.stats.s3_uploads += 1;
-            s3.upload(&mut self.net, bid.header, &payload[bid.payload_offset..]);
+            s3.upload(&mut self.net, self.current_slot, bid.header, &payload[bid.payload_offset..]);
         }
     }
 
@@ -164,6 +167,9 @@ impl DataGatherer {
     /// deadline. Shared by teardown and the epoch-change exit.
     fn shutdown_drain(&mut self) {
         self.flush();
+        if let Some(s3) = self.s3.as_mut() {
+            s3.flush(&mut self.net);
+        }
         if let Some(ch) = self.ch.as_mut() {
             ch.publish_snapshot(u64::MAX);
         }
