@@ -167,15 +167,6 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                     self.stats.submissions_received += 1;
 
                     let id = Uuid::new_v4();
-                    let _enter = tracing::info_span!(
-                        "submit_block",
-                        id = tracing::field::display(id),
-                        slot = tracing::field::Empty,
-                        builder_pubkey = tracing::field::Empty,
-                        builder_id = tracing::field::Empty,
-                        block_hash = tracing::field::Empty,
-                    )
-                    .entered();
 
                     let submission_ref = SubmissionRef::tcp(token.0, header.sequence_number);
 
