@@ -29,7 +29,6 @@ pub(crate) enum PoolError {
     /// A pubkey may never change pool.
     BindingConflict { pubkey: BlsPublicKeyBytes, existing: CollateralId, proposed: CollateralId },
     /// A newer member set omitted a bound pubkey.
-    MembershipRemoval { collateral_id: CollateralId, missing: BlsPublicKeyBytes },
     /// Bound exceeded; the message is dropped.
     Capacity,
 }
@@ -42,11 +41,6 @@ impl std::fmt::Display for PoolError {
                 "pubkey {pubkey} is bound to pool {} and may not move to {}",
                 String::from_utf8_lossy(existing),
                 String::from_utf8_lossy(proposed),
-            ),
-            Self::MembershipRemoval { collateral_id, missing } => write!(
-                f,
-                "member set for pool {} omits bound pubkey {missing}",
-                String::from_utf8_lossy(collateral_id),
             ),
             Self::Capacity => f.write_str("pool state at capacity"),
         }
@@ -151,16 +145,15 @@ impl PoolState {
         Ok(true)
     }
 
-    /// Member sets are append-only, so this is a union. Rejected whole on conflict: the message is
-    /// a complete set, and two operators accepting different subsets would diverge undetected.
+    /// Member sets are append-only, so this is a union: an omitted pubkey is never a removal.
+    /// Operators are seeded with the same membership out of band, so a set omitting a bound
+    /// pubkey is a sender that has not caught up, not a retirement.
     pub(crate) fn apply_membership(
         &mut self,
         membership: &CollateralMembership,
     ) -> Result<bool, PoolError> {
-        let pool = self.pool_mut(&membership.collateral_id);
-        let newer = membership.ts_ms > pool.seen_ts;
-
-        // Validate the whole set before mutating anything.
+        // Validate the whole set before mutating anything: two operators accepting different
+        // subsets would diverge undetected.
         for pubkey in &membership.builder_pubkeys {
             if let Some(existing) = self.binding.get(pubkey) &&
                 existing != &membership.collateral_id
@@ -172,28 +165,25 @@ impl PoolState {
                 });
             }
         }
-        // A stale set legitimately omits pubkeys added after it was published.
-        if newer &&
-            let Some(missing) = self.pools[&membership.collateral_id]
-                .members
-                .iter()
-                .find(|bound| !membership.builder_pubkeys.contains(bound))
-        {
-            return Err(PoolError::MembershipRemoval {
-                collateral_id: membership.collateral_id.clone(),
-                missing: *missing,
-            });
-        }
 
         let mut changed = false;
         for pubkey in &membership.builder_pubkeys {
             changed |= self.bind(*pubkey, &membership.collateral_id)?;
         }
-        if newer {
-            self.pools.get_mut(&membership.collateral_id).expect("inserted above").seen_ts =
-                membership.ts_ms;
-        }
+        let pool = self.pool_mut(&membership.collateral_id);
+        pool.seen_ts = pool.seen_ts.max(membership.ts_ms);
         Ok(changed)
+    }
+
+    /// The pool's full member set, for publication. Membership reaches the wire from here and
+    /// nowhere else, so a peer never sees a set that omits members it already holds.
+    pub(crate) fn membership(&self, collateral_id: &[u8]) -> Option<CollateralMembership> {
+        let pool = self.pools.get(collateral_id)?;
+        (!pool.members.is_empty()).then(|| CollateralMembership {
+            ts_ms: pool.seen_ts,
+            collateral_id: collateral_id.to_vec(),
+            builder_pubkeys: pool.members.clone(),
+        })
     }
 
     /// `group` is resolved by the caller from the message or the source peer.
@@ -337,14 +327,8 @@ impl PoolState {
     /// promotion, then every retained report. Original fields and timestamps are preserved.
     pub(crate) fn replay(&self) -> Vec<OperatorMessage> {
         let mut out = Vec::new();
-        for (collateral_id, pool) in &self.pools {
-            if !pool.members.is_empty() {
-                out.push(OperatorMessage::Membership(CollateralMembership {
-                    ts_ms: pool.seen_ts,
-                    collateral_id: collateral_id.clone(),
-                    builder_pubkeys: pool.members.clone(),
-                }));
-            }
+        for collateral_id in self.pools.keys() {
+            out.extend(self.membership(collateral_id).map(OperatorMessage::Membership));
         }
         for (collateral_id, pool) in &self.pools {
             if let Some((collateral_wei, ts_ms)) = pool.collateral.get(&self.local_group) {
@@ -588,31 +572,20 @@ mod tests {
         assert!(!state.binding.contains_key(&k2), "k2 must not be bound by a rejected set");
     }
 
+    /// Operators publish disjoint sets until they converge. A set that omits a bound pubkey, of
+    /// any age, adds its own members and drops nothing; publication then carries the union.
     #[test]
-    fn newer_set_may_not_drop_a_bound_pubkey() {
+    fn disjoint_member_sets_merge_into_one_pool() {
         let [k1, k2] = [0; 2].map(|_| BlsPublicKeyBytes::random());
         let mut state = state();
-        apply(&mut state, &members(1, C1, &[k1, k2])).unwrap();
+        apply(&mut state, &members(5, C1, &[k1])).unwrap();
 
-        let removal = state.apply_membership(&CollateralMembership {
-            ts_ms: 2,
-            collateral_id: C1.to_vec(),
-            builder_pubkeys: vec![k1],
-        });
-        assert!(matches!(removal, Err(PoolError::MembershipRemoval { .. })));
-        assert_eq!(state.pools[C1].members.len(), 2);
-    }
-
-    /// A stale set legitimately omits pubkeys added after it was published.
-    #[test]
-    fn stale_set_omitting_a_later_pubkey_is_accepted() {
-        let [k1, k2] = [0; 2].map(|_| BlsPublicKeyBytes::random());
-        let mut state = state();
-        apply(&mut state, &members(5, C1, &[k1, k2])).unwrap();
-
+        assert!(apply(&mut state, &members(9, C1, &[k2])).unwrap());
         assert!(!apply(&mut state, &members(1, C1, &[k1])).unwrap());
-        assert_eq!(state.pools[C1].members.len(), 2);
-        assert_eq!(state.pools[C1].seen_ts, 5);
+
+        let published = state.membership(C1).unwrap();
+        assert_eq!(published.builder_pubkeys, vec![k1, k2]);
+        assert_eq!(published.ts_ms, 9);
     }
 
     /// Retained and inert until the pool is known. Dropping it would make state order-dependent.
