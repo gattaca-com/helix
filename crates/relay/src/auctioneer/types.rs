@@ -493,6 +493,8 @@ pub enum Event {
         slot: Slot,
         builder_pubkey: BlsPublicKeyBytes,
         block_hash: B256,
+        /// Full offending bid value. Reserves against the builder's pool.
+        bid_value_wei: U256,
         reason: String,
     },
 }

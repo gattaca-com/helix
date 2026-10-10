@@ -10,13 +10,12 @@ use axum::{
 };
 use dashmap::{DashMap, DashSet};
 use helix_types::{BlsPublicKeyBytes, CryptoError, MergedBlock, SignedValidatorRegistration};
-use libp2p::identity::PublicKey;
 use parking_lot::RwLock;
 use rustc_hash::{FxHashMap, FxHashSet};
 use uuid::Uuid;
 
 use crate::{
-    BuilderConfig, BuilderInfo, SignedValidatorRegistrationEntry,
+    BuilderConfig, BuilderInfo, PromotionMode, SignedValidatorRegistrationEntry,
     api::{
         builder_api::{
             BuilderGetValidatorsResponseEntry, InclusionListWithKey, InclusionListWithMetadata,
@@ -95,12 +94,42 @@ impl IntoResponse for AuctioneerError {
     }
 }
 
+/// Per-pubkey half of the derived view. The pool index keys [`PoolView`].
+#[derive(Clone, Copy)]
+pub struct PoolBinding {
+    pub pool: u32,
+    /// This key has a retained demotion report.
+    pub reported: bool,
+}
+
+/// Pool half of the derived view. Held once per pool, so members cannot disagree about the
+/// budget they share.
+#[derive(Clone)]
+pub struct PoolView {
+    pub collateral_id: Vec<u8>,
+    /// Gross backing net of reservations.
+    pub available: U256,
+    pub promoted: bool,
+}
+
+/// What the submission path resolves for one pubkey.
+pub struct PoolStatus {
+    pub collateral_id: Vec<u8>,
+    pub available: U256,
+    pub is_optimistic: bool,
+}
+
 #[derive(Clone)]
 pub struct LocalCache {
     // TODO: this should be an ArcSwap
     pub inclusion_list: Arc<RwLock<Option<InclusionListWithKey>>>,
     builder_info_cache: Arc<DashMap<BlsPublicKeyBytes, BuilderInfo>>,
-    operator_builder_collateral: Arc<DashMap<BlsPublicKeyBytes, FxHashMap<Vec<u8>, u128>>>,
+    /// Derived view, written by the operator task and read on the submission path once
+    /// `promotion_mode` applies. Split so the shared budget is stored once per pool rather than
+    /// replicated per member. An absent binding or view means the pool has not been recovered.
+    pool_binding: Arc<DashMap<BlsPublicKeyBytes, PoolBinding>>,
+    pool_view: Arc<DashMap<u32, PoolView>>,
+    promotion_mode: Arc<RwLock<PromotionMode>>,
     /// Api key -> builder pubkey
     pub api_key_cache: Arc<DashMap<String, Vec<BlsPublicKeyBytes>>>,
     primev_proposers: Arc<DashSet<BlsPublicKeyBytes>>,
@@ -123,8 +152,8 @@ impl LocalCache {
     pub fn new() -> Self {
         let builder_info_cache =
             Arc::new(DashMap::with_capacity(ESTIMATED_BUILDER_INFOS_UPPER_BOUND));
-        let operator_builder_collateral =
-            Arc::new(DashMap::with_capacity(ESTIMATED_BUILDER_INFOS_UPPER_BOUND));
+        let pool_binding = Arc::new(DashMap::with_capacity(ESTIMATED_BUILDER_INFOS_UPPER_BOUND));
+        let pool_view = Arc::new(DashMap::default());
         let api_key_cache = Arc::new(DashMap::with_capacity(ESTIMATED_BUILDER_INFOS_UPPER_BOUND));
         let primev_proposers = Arc::new(DashSet::with_capacity(MAX_PRIMEV_PROPOSERS));
         let kill_switch = Arc::new(AtomicBool::new(false));
@@ -143,7 +172,9 @@ impl LocalCache {
         Self {
             inclusion_list: Default::default(),
             builder_info_cache,
-            operator_builder_collateral,
+            pool_binding,
+            pool_view,
+            promotion_mode: Arc::new(RwLock::new(PromotionMode::default())),
             api_key_cache,
             primev_proposers,
             kill_switch,
@@ -172,9 +203,55 @@ impl Default for LocalCache {
 impl LocalCache {
     pub fn get_builder_info(&self, builder_pub_key: &BlsPublicKeyBytes) -> Option<BuilderInfo> {
         let mut info = self.builder_info_cache.get(builder_pub_key)?.clone();
-        let operator_collateral = self.operator_collateral(builder_pub_key);
-        info.collateral += operator_collateral;
+        if !self.promotion_mode().applies() {
+            // Locally configured collateral only. Contributions from other operator groups are
+            // used from `Share`, where membership is validated and reservations are applied.
+            return Some(info);
+        }
+
+        // Pool state is authoritative: collateral is net of reservations and status derives from
+        // the pool promotion and this key's retained reports. A pubkey with no binding, or whose
+        // pool has no view, belongs to a pool that has not been recovered and stays ineligible.
+        match self
+            .pool_binding
+            .get(builder_pub_key)
+            .and_then(|binding| Some((*binding, self.pool_view.get(&binding.pool)?)))
+        {
+            Some((binding, view)) => {
+                info.collateral = view.available;
+                info.is_optimistic = view.promoted && !binding.reported;
+            }
+            None => {
+                info.collateral = U256::ZERO;
+                info.is_optimistic = false;
+            }
+        }
         Some(info)
+    }
+
+    pub fn promotion_mode(&self) -> PromotionMode {
+        *self.promotion_mode.read()
+    }
+
+    pub fn set_promotion_mode(&self, mode: PromotionMode) {
+        *self.promotion_mode.write() = mode;
+    }
+
+    /// Replaces the derived view. Written by the operator task when pool state changes.
+    ///
+    /// Views first: a binding written before its view would read as unrecovered. Nothing is
+    /// removed, because pools are never dropped and membership is append-only.
+    pub fn update_pool_state(
+        &self,
+        views: impl Iterator<Item = (u32, Vec<u8>, U256, bool)>,
+        bindings: impl Iterator<Item = (BlsPublicKeyBytes, u32, bool)>,
+    ) {
+        for (pool, collateral_id, available, promoted) in views {
+            self.pool_view.insert(pool, PoolView { collateral_id, available, promoted });
+        }
+        for (pubkey, pool, reported) in bindings {
+            self.pool_binding.insert(pubkey, PoolBinding { pool, reported });
+        }
     }
 
     pub fn get_builder_info_local_collateral_only(
@@ -184,20 +261,27 @@ impl LocalCache {
         Some(self.builder_info_cache.get(builder_pub_key)?.clone())
     }
 
-    /// Returns a mapping of builder id to pubkeys and collateral amount.
+    /// Pool membership and gross backing, keyed by builder id (the pool id).
+    ///
+    /// A builder id group shares one collateral value, so take the maximum rather than the first
+    /// row: `DashMap` iteration order is unspecified, and this result is published to other
+    /// operators. Zero-collateral pools are included; omission is not removal.
     pub fn all_builder_local_collateral(
         &self,
     ) -> FxHashMap<String, (Vec<BlsPublicKeyBytes>, U256)> {
         let mut builders = FxHashMap::<String, (Vec<BlsPublicKeyBytes>, U256)>::default();
         for mref in self.builder_info_cache.iter() {
-            if let Some(id) = mref.value().builder_id.as_ref() &&
-                mref.value().collateral > U256::ZERO
-            {
-                builders
-                    .entry(id.to_owned())
-                    .and_modify(|(keys, _)| keys.push(*mref.key()))
-                    .or_insert((vec![*mref.key()], mref.value().collateral));
-            }
+            let Some(id) = mref.value().builder_id.as_ref() else {
+                continue;
+            };
+            let collateral = mref.value().collateral;
+            builders
+                .entry(id.to_owned())
+                .and_modify(|(keys, wei)| {
+                    keys.push(*mref.key());
+                    *wei = (*wei).max(collateral);
+                })
+                .or_insert((vec![*mref.key()], collateral));
         }
         builders
     }
@@ -238,6 +322,17 @@ impl LocalCache {
         builder_info.is_optimistic = true;
 
         true
+    }
+
+    /// Resolved derived view for a pubkey. `None` until pool state has been recovered.
+    pub fn pool_status(&self, builder_pub_key: &BlsPublicKeyBytes) -> Option<PoolStatus> {
+        let binding = *self.pool_binding.get(builder_pub_key)?;
+        let view = self.pool_view.get(&binding.pool)?;
+        Some(PoolStatus {
+            collateral_id: view.collateral_id.clone(),
+            available: view.available,
+            is_optimistic: view.promoted && !binding.reported,
+        })
     }
 
     pub fn update_builder_infos(&self, builder_infos: &[BuilderConfig], clear_api_cache: bool) {
@@ -410,37 +505,6 @@ impl LocalCache {
         self.merged_blocks.clear();
         CACHE_SIZE.with_label_values(&["merged_blocks"]).set(0.0);
     }
-
-    pub fn update_operator_collateral(
-        &self,
-        builder_pub_keys: &[BlsPublicKeyBytes],
-        operator: &PublicKey,
-        collateral: u128,
-        operator_group: Option<Vec<u8>>,
-    ) {
-        let operator_key = operator_group.unwrap_or_else(|| operator.encode_protobuf());
-        for key in builder_pub_keys {
-            self.operator_builder_collateral
-                .entry(*key)
-                .and_modify(|operators| {
-                    operators.insert(operator_key.clone(), collateral);
-                })
-                .or_insert_with(|| {
-                    let mut operators = FxHashMap::default();
-                    operators.insert(operator_key.clone(), collateral);
-                    operators
-                });
-        }
-    }
-
-    fn operator_collateral(&self, builder_pub_key: &BlsPublicKeyBytes) -> U256 {
-        let mut operator_collateral = U256::ZERO;
-        if let Some(operators) = self.operator_builder_collateral.get(builder_pub_key) {
-            let collateral: u128 = operators.values().sum();
-            operator_collateral = U256::from(collateral);
-        }
-        operator_collateral
-    }
 }
 
 #[cfg(test)]
@@ -483,6 +547,129 @@ mod tests {
         // Test case 2: Builder doesn't exist
         let result = cache.get_builder_info(&unknown_builder_pub_key);
         assert!(result.is_none(), "Fetched builder info for unknown builder");
+    }
+
+    /// A builder id group is one pool. The published value must not depend on `DashMap`
+    /// iteration order, and a zero-backed pool must still be published: omission is not removal.
+    #[test]
+    fn all_builder_local_collateral_is_per_pool_and_order_independent() {
+        let cache = LocalCache::new();
+        let info = |collateral, builder_id: Option<&str>| BuilderInfo {
+            collateral,
+            is_optimistic: true,
+            is_optimistic_for_regional_filtering: false,
+            builder_id: builder_id.map(str::to_owned),
+            builder_ids: None,
+            api_key: None,
+        };
+
+        let [paired, sibling, zero, unpooled] = [0; 4].map(|_| BlsPublicKeyBytes::random());
+        cache.update_builder_infos(
+            &[
+                BuilderConfig { pub_key: paired, builder_info: info(U256::from(10), Some("A")) },
+                // Written out of step with its group, e.g. by the admin collateral endpoint.
+                BuilderConfig { pub_key: sibling, builder_info: info(U256::ZERO, Some("A")) },
+                BuilderConfig { pub_key: zero, builder_info: info(U256::ZERO, Some("B")) },
+                BuilderConfig { pub_key: unpooled, builder_info: info(U256::from(5), None) },
+            ],
+            false,
+        );
+
+        let pools = cache.all_builder_local_collateral();
+        assert_eq!(pools.len(), 2, "a row with no builder id belongs to no pool");
+
+        let (members, collateral) = &pools["A"];
+        assert_eq!(*collateral, U256::from(10));
+        assert_eq!(members.len(), 2);
+
+        assert_eq!(pools["B"].1, U256::ZERO, "a zero-backed pool is still published");
+    }
+
+    /// The mode decides who owns admission. Below `Follow`, `builder_info` plus summed operator
+    /// collateral. From `Follow`, pool state: collateral net of reservations, derived status, and
+    /// ineligible while a pool has no recovered state.
+    #[test]
+    fn promotion_mode_gates_whether_pool_state_decides_admission() {
+        let cache = LocalCache::new();
+        let pubkey = BlsPublicKeyBytes::random();
+        cache.update_builder_infos(
+            &[BuilderConfig {
+                pub_key: pubkey,
+                builder_info: BuilderInfo {
+                    collateral: U256::from(10),
+                    is_optimistic: true,
+                    is_optimistic_for_regional_filtering: false,
+                    builder_id: Some("A".to_owned()),
+                    builder_ids: None,
+                    api_key: None,
+                },
+            }],
+            false,
+        );
+        let observed = cache.get_builder_info(&pubkey).unwrap();
+        assert_eq!(observed.collateral, U256::from(10), "locally configured collateral only");
+        assert!(observed.is_optimistic);
+
+        // Pool state has not been recovered yet: the pool is ineligible.
+        cache.set_promotion_mode(PromotionMode::Follow);
+        let ungated = cache.get_builder_info(&pubkey).unwrap();
+        assert_eq!(ungated.collateral, U256::ZERO);
+        assert!(!ungated.is_optimistic);
+
+        cache.update_pool_state(
+            [(0, b"A".to_vec(), U256::from(7), true)].into_iter(),
+            [(pubkey, 0, false)].into_iter(),
+        );
+        let followed = cache.get_builder_info(&pubkey).unwrap();
+        assert_eq!(followed.collateral, U256::from(7), "available, net of reservations");
+        assert!(followed.is_optimistic);
+
+        // A retained report demotes the key alone; the pool budget is untouched.
+        cache.update_pool_state(std::iter::empty(), [(pubkey, 0, true)].into_iter());
+        let reported = cache.get_builder_info(&pubkey).unwrap();
+        assert_eq!(reported.collateral, U256::from(7));
+        assert!(!reported.is_optimistic);
+    }
+
+    /// A pool-wide promotion reaches admission through pool state, not through the per-pubkey
+    /// flag. The flag stays false for a member that was never individually promoted.
+    #[test]
+    fn pool_state_outranks_the_per_pubkey_flag() {
+        let [named, sibling] = [0; 2].map(|_| BlsPublicKeyBytes::random());
+        let cache = LocalCache::new();
+        let pessimistic = BuilderInfo {
+            collateral: U256::from(10),
+            is_optimistic: false,
+            is_optimistic_for_regional_filtering: false,
+            builder_id: Some("A".to_owned()),
+            builder_ids: None,
+            api_key: None,
+        };
+        cache.update_builder_infos(
+            &[BuilderConfig { pub_key: named, builder_info: pessimistic.clone() }, BuilderConfig {
+                pub_key: sibling,
+                builder_info: pessimistic,
+            }],
+            false,
+        );
+
+        // Only the named pubkey is flagged, in every mode.
+        assert!(cache.promote_builder(&named));
+        assert!(!cache.get_builder_info_local_collateral_only(&sibling).unwrap().is_optimistic);
+
+        // Pool state promotes the pool, so both are optimistic for admission from `Follow`.
+        // One budget record covers both members.
+        cache.set_promotion_mode(PromotionMode::Follow);
+        cache.update_pool_state(
+            [(0, b"A".to_vec(), U256::from(7), true)].into_iter(),
+            [(named, 0, false), (sibling, 0, false)].into_iter(),
+        );
+        assert!(cache.get_builder_info(&sibling).unwrap().is_optimistic);
+        assert_eq!(cache.get_builder_info(&sibling).unwrap().collateral, U256::from(7));
+        assert!(
+            !cache.get_builder_info_local_collateral_only(&sibling).unwrap().is_optimistic,
+            "the stored flag is untouched"
+        );
     }
 
     #[tokio::test]

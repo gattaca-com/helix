@@ -265,6 +265,17 @@ lazy_static! {
     )
     .unwrap();
 
+    /// Shared collateral pool state, in ETH. `kind` is gross, reserved, available, reports,
+    /// members or optimistic. Phase 1 of the v4 optimistic spec records these without applying
+    /// them to admission.
+    static ref COLLATERAL_POOL: GaugeVec = register_gauge_vec_with_registry!(
+        "collateral_pool",
+        "Shared collateral pool state",
+        &["collateral_id", "kind"],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
     static ref SIM_MANAGER_GAUGE: GaugeVec = register_gauge_vec_with_registry!(
         "sim_manager_gauge",
         "Sim manager gauges",
@@ -1010,6 +1021,14 @@ impl TopBidMetrics {
 impl Drop for TopBidMetrics {
     fn drop(&mut self) {
         TOP_BID_CONNECTIONS.dec();
+    }
+}
+
+pub struct OperatorMetrics;
+
+impl OperatorMetrics {
+    pub fn collateral_pool(collateral_id: &str, kind: &str, value: f64) {
+        COLLATERAL_POOL.with_label_values(&[collateral_id, kind]).set(value);
     }
 }
 
