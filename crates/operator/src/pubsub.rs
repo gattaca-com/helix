@@ -181,11 +181,22 @@ pub(super) async fn run_operator_connection(
                         local_cache.update_pool_state(pool.pool_records(), pool.key_records());
                     }
                     if transmit && !connected_peers.is_empty() {
-                        publish_operator_message(
-                            &mut swarm.behaviour_mut().gossipsub,
-                            &operator_topic,
-                            msg.as_ssz_bytes(),
-                        );
+                        // Membership goes out as the pool's set, not the locally configured one.
+                        // Both are seeded alike out of band, so they agree in steady state; until
+                        // they do, publishing the local set would retract members a peer holds.
+                        let bytes = match &msg {
+                            OperatorMessage::Membership(m) => pool
+                                .membership(&m.collateral_id)
+                                .map(|m| OperatorMessage::Membership(m).as_ssz_bytes()),
+                            _ => Some(msg.as_ssz_bytes()),
+                        };
+                        if let Some(bytes) = bytes {
+                            publish_operator_message(
+                                &mut swarm.behaviour_mut().gossipsub,
+                                &operator_topic,
+                                bytes,
+                            );
+                        }
                     }
                 }
                 Err(_) => break, // channel closed
