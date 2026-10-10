@@ -340,12 +340,13 @@ impl MergeSession {
     ) -> Result<(Self, ReplayCheckpoint, bool), MergeError> {
         static SHADOW: std::sync::LazyLock<bool> =
             std::sync::LazyLock::new(|| std::env::var_os("B_SHADOW").is_some());
-        if *SHADOW {
-            crate::engine::incremental::start_recording();
-        }
         let started = Instant::now();
         let replay_start_ns = utcnow_ns();
         let v1 = &base.payload.payload_inner.payload_inner;
+        // B keeps one slot's bases, all on the slot's parent.
+        if *SHADOW && v1.parent_hash == slot.parent_hash {
+            crate::engine::incremental::start_recording();
+        }
         let beneficiary_alloy = v1.fee_recipient;
         let beneficiary = eaddr(beneficiary_alloy);
 
@@ -531,7 +532,10 @@ impl MergeSession {
             if *SHADOW {
                 let mut db = ctx.vm.db.clone();
                 if let Ok(system) = db.get_state_transitions() {
-                    crate::engine::incremental::set_system(system);
+                    let number = slot.slot;
+                    crate::engine::incremental::defer(move || {
+                        crate::engine::incremental::set_system(system, number)
+                    });
                 }
             }
 
@@ -617,8 +621,20 @@ impl MergeSession {
             tx_hashes.insert(decoded.hash);
         }
         warm_done.store(true, std::sync::atomic::Ordering::Relaxed);
-        let shadow_report = crate::engine::incremental::take().map(|effects| {
-            let replay_us = replay_start.elapsed().as_micros();
+        let shadow = crate::engine::incremental::take().map(|effects| {
+            (
+                effects,
+                replay_start.elapsed().as_micros(),
+                crate::engine::incremental::A_EXECUTED.with(|c| c.get()),
+            )
+        });
+        metrics::stage_latency(
+            "replay_txs",
+            (replay_start.elapsed().as_micros() as u64).saturating_sub(snapshot_us),
+        );
+        metrics::stage_latency("replay_snapshot", snapshot_us);
+        feed.flush(&mut ctx.vm.db).map_err(|e| MergeError::Internal(e.to_string()))?;
+        if let Some((effects, replay_us, a_executed)) = shadow {
             let exec = crate::engine::incremental::Exec {
                 txs: base.txs.iter().map(|tx| (tx.tx.clone(), tx.sender)).collect(),
                 header: ctx.payload.header.clone(),
@@ -631,84 +647,81 @@ impl MergeSession {
                 slot: slot.slot,
             };
             let full = replay_from == 0;
-            if !full {
-                // A base resumed from a checkpoint is not diffed, but what it ran is still known.
-                for effect in effects.into_iter().flatten() {
-                    crate::engine::incremental::learn((*effect).clone());
+            let (store, streamed) = (store.clone(), feed.streamed.clone());
+            crate::engine::incremental::defer(move || {
+                if !full {
+                    // A base resumed from a checkpoint is not diffed, but what it ran is still
+                    // known.
+                    for effect in effects.into_iter().flatten() {
+                        crate::engine::incremental::learn((*effect).clone());
+                    }
+                    return;
                 }
-                return (None, replay_us);
-            }
-            (crate::engine::incremental::shadow(beneficiary_alloy, effects, exec), replay_us)
-        });
-        metrics::stage_latency(
-            "replay_txs",
-            (replay_start.elapsed().as_micros() as u64).saturating_sub(snapshot_us),
-        );
-        metrics::stage_latency("replay_snapshot", snapshot_us);
-        feed.flush(&mut ctx.vm.db).map_err(|e| MergeError::Internal(e.to_string()))?;
-        if let Some((report, replay_us)) = shadow_report {
-            match report {
-                Some(r) => {
-                    let a_root = crate::engine::state_layer::StateLayer::open(
-                        store.clone(),
-                        parent_state_root,
-                    )
-                    .and_then(|mut layer| {
-                        let all: Vec<_> =
-                            feed.streamed.iter().flat_map(|c| c.iter().cloned()).collect();
-                        let mut merged: Vec<ethrex_common::types::AccountUpdate> = Vec::new();
-                        let mut at: FxHashMap<ethrex_common::Address, usize> = FxHashMap::default();
-                        for u in all {
-                            match at.get(&u.address) {
-                                Some(&ix) => merged[ix].merge(u),
-                                None => {
-                                    at.insert(u.address, merged.len());
-                                    merged.push(u);
-                                }
-                            }
-                        }
-                        layer.apply_root(&merged)
-                    })
-                    .ok();
-                    println!(
-                        "BSHADOW arrival_ms={} stream_first={} chain={} best_any={} missed={} a_exec={} same_stream={} first={} rebuilt={} txs={} run={} skipped={} delta={} b_us={} a_us={} wrong={} exec_us={} exec_wrong={} exec_failed={} root_us={} root_ok={} run_novel={} run_leads={} content_lead={} causes={}",
-                        r.arrival_ms.unwrap_or(i64::MIN),
-                        r.stream_first,
-                        r.chain,
-                        r.best_any.map_or(-1, |b| b as i64),
-                        r.missed.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(","),
-                        crate::engine::incremental::A_EXECUTED.with(|c| c.get()),
-                        r.same_stream.map_or(-1, i32::from),
-                        r.first,
-                        r.rebuilt,
-                        r.txs,
-                        r.run,
-                        r.skipped,
-                        r.delta,
-                        r.micros,
-                        replay_us,
-                        r.wrong,
-                        r.exec_micros,
-                        r.exec_wrong,
-                        r.exec_failed,
-                        r.root_micros,
-                        if r.root.is_some() && r.root == a_root {
-                            "true".to_string()
-                        } else {
-                            format!(
-                                "false(b_some={},a_some={})",
-                                r.root.is_some(),
-                                a_root.is_some()
-                            )
-                        },
-                        r.run_novel,
-                        r.run_leads.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(","),
-                        r.content_lead.map_or(-1, |l| l as i64),
-                        r.causes.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(",")
-                    );
+                match crate::engine::incremental::shadow(beneficiary_alloy, effects, exec) {
+                    Some(r) => {
+                        let a_root =
+                            crate::engine::state_layer::StateLayer::open(store, parent_state_root)
+                                .and_then(|mut layer| {
+                                    let all: Vec<_> =
+                                        streamed.iter().flat_map(|c| c.iter().cloned()).collect();
+                                    let mut merged: Vec<ethrex_common::types::AccountUpdate> =
+                                        Vec::new();
+                                    let mut at: FxHashMap<ethrex_common::Address, usize> =
+                                        FxHashMap::default();
+                                    for u in all {
+                                        match at.get(&u.address) {
+                                            Some(&ix) => merged[ix].merge(u),
+                                            None => {
+                                                at.insert(u.address, merged.len());
+                                                merged.push(u);
+                                            }
+                                        }
+                                    }
+                                    layer.apply_root(&merged)
+                                })
+                                .ok();
+                        println!(
+                            "BSHADOW dropped={} arrival_ms={} stream_first={} chain={} best_any={} missed={} a_exec={} same_stream={} first={} rebuilt={} txs={} run={} skipped={} delta={} b_us={} a_us={} wrong={} exec_us={} exec_wrong={} exec_failed={} root_us={} root_ok={} run_novel={} run_leads={} content_lead={} causes={}",
+                            crate::engine::incremental::DROPPED
+                                .load(std::sync::atomic::Ordering::Relaxed),
+                            r.arrival_ms.unwrap_or(i64::MIN),
+                            r.stream_first,
+                            r.chain,
+                            r.best_any.map_or(-1, |b| b as i64),
+                            r.missed.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(","),
+                            a_executed,
+                            r.same_stream.map_or(-1, i32::from),
+                            r.first,
+                            r.rebuilt,
+                            r.txs,
+                            r.run,
+                            r.skipped,
+                            r.delta,
+                            r.micros,
+                            replay_us,
+                            r.wrong,
+                            r.exec_micros,
+                            r.exec_wrong,
+                            r.exec_failed,
+                            r.root_micros,
+                            if r.root.is_some() && r.root == a_root {
+                                "true".to_string()
+                            } else {
+                                format!(
+                                    "false(b_some={},a_some={})",
+                                    r.root.is_some(),
+                                    a_root.is_some()
+                                )
+                            },
+                            r.run_novel,
+                            r.run_leads.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(","),
+                            r.content_lead.map_or(-1, |l| l as i64),
+                            r.causes.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(",")
+                        );
+                    }
+                    None => println!("BSHADOW none"),
                 }
-                None => println!("BSHADOW none"),
-            }
+            });
         }
         let accounts: usize = feed.streamed.iter().map(|chunk| chunk.len()).sum();
         let slots: usize = feed
@@ -1080,7 +1093,7 @@ impl MergeSession {
                     self.appended_blobs.extend(decoded.blob_hashes.iter().copied());
                 }
                 Err(reuse::RunError::Internal(e)) => {
-                    return Err(MergeError::Internal(e.to_string()))
+                    return Err(MergeError::Internal(e.to_string()));
                 }
                 Err(_) if order.can_drop(i) => {}
                 Err(_) => {

@@ -1868,6 +1868,7 @@ async fn replay_recording() {
             }
         }
     }
+    crate::engine::incremental::drain();
     let ms = |from: u64, to: u64| to.saturating_sub(from) as f64 / 1e6;
     let mut stages: [Vec<f64>; 4] = Default::default();
     for t in first.values() {

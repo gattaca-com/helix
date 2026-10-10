@@ -366,7 +366,10 @@ pub fn apply_tx(
         });
         if let Some(effect) = &effect {
             if stage != "base" {
-                crate::engine::incremental::learn(effect.clone());
+                let effect = effect.clone();
+                crate::engine::incremental::defer(move || {
+                    crate::engine::incremental::learn(effect)
+                });
             }
         }
         if crate::engine::incremental::recording() {
@@ -440,7 +443,7 @@ pub fn presim_tx(
                 ),
             )
         }) {
-            crate::engine::incremental::learn(effect);
+            crate::engine::incremental::defer(move || crate::engine::incremental::learn(effect));
         }
     }
     let fresh = TxResult::capture(

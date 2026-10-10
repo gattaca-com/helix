@@ -767,6 +767,7 @@ pub fn diff(prior: &Arc<Prior>, known: &Known, new: &[Arc<Effect>], exec: &Exec)
 }
 
 struct Slot {
+    number: u64,
     /// Earlier bases by builder (coinbase) and the pubkey that submitted them.
     priors: Vec<(alloy_primitives::Address, [u8; 48], Arc<Prior>)>,
     known: Known,
@@ -779,7 +780,7 @@ struct Slot {
 /// Adds an effect seen outside base replay (presim, order apply) to what B may reuse.
 pub fn learn(effect: Effect) {
     if let Ok(mut guard) = SLOT.lock() {
-        let slot = guard.get_or_insert_with(Slot::new);
+        let slot = guard.get_or_insert_with(|| Slot::new(0));
         slot.known.ever.insert(variant_id(&effect));
         let variants = slot.known.effects.entry(effect.hash).or_default();
         if !variants.iter().any(|v| v.reads == effect.reads) {
@@ -790,9 +791,9 @@ pub fn learn(effect: Effect) {
 }
 
 /// Records the slot's system-call writes the first time a base replays them.
-pub fn set_system(updates: Vec<ethrex_common::types::AccountUpdate>) {
+pub fn set_system(updates: Vec<ethrex_common::types::AccountUpdate>, number: u64) {
     if let Ok(mut guard) = SLOT.lock() {
-        let slot = guard.get_or_insert_with(Slot::new);
+        let slot = Slot::at(&mut guard, number);
         if slot.system.is_none() {
             let mut system = FxHashMap::default();
             for update in &updates {
@@ -807,13 +808,22 @@ pub fn set_system(updates: Vec<ethrex_common::types::AccountUpdate>) {
 }
 
 impl Slot {
-    fn new() -> Self {
+    fn new(number: u64) -> Self {
         Slot {
+            number,
             priors: Vec::new(),
             known: Known::default(),
             layers: FxHashMap::default(),
             system: None,
         }
+    }
+
+    /// The state for slot `number`, dropping an earlier slot's.
+    fn at(guard: &mut Option<Slot>, number: u64) -> &mut Slot {
+        if guard.as_ref().is_some_and(|slot| slot.number != number) {
+            *guard = None;
+        }
+        guard.get_or_insert_with(|| Slot::new(number))
     }
 }
 
@@ -885,6 +895,40 @@ fn updates(
 
 static SLOT: Mutex<Option<Slot>> = Mutex::new(None);
 
+type Job = Box<dyn FnOnce() + Send>;
+
+static WORKER: std::sync::LazyLock<crossbeam_channel::Sender<Job>> =
+    std::sync::LazyLock::new(|| {
+        let (sender, receiver) = crossbeam_channel::bounded::<Job>(4096);
+        let _unused = std::thread::Builder::new()
+            .name("b-shadow".into())
+            .spawn(move || receiver.into_iter().for_each(|job| job()));
+        sender
+    });
+
+/// Jobs dropped because the shadow thread fell behind.
+pub static DROPPED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Runs `job` on B's shadow thread, off the merge path.
+pub fn defer(job: impl FnOnce() + Send + 'static) {
+    if WORKER.try_send(Box::new(job)).is_err() {
+        DROPPED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Waits for every job deferred so far.
+pub fn drain() {
+    let (sender, receiver) = crossbeam_channel::bounded(1);
+    if WORKER
+        .send(Box::new(move || {
+            let _unused = sender.send(());
+        }))
+        .is_ok()
+    {
+        let _unused = receiver.recv();
+    }
+}
+
 /// Runs B against the builder's last base and against the earlier base that best aligns with
 /// this one, then keeps this base for later ones.
 pub fn shadow(
@@ -901,7 +945,7 @@ pub fn shadow(
     }
     let effects: Vec<Arc<Effect>> = effects.into_iter().flatten().collect();
     let mut guard = SLOT.lock().ok()?;
-    let slot = guard.get_or_insert_with(Slot::new);
+    let slot = Slot::at(&mut guard, exec.slot);
     for effect in &effects {
         if !effect.codes.is_empty() {
             let codes = Arc::make_mut(&mut slot.known.codes);
