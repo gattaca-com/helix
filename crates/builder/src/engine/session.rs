@@ -407,6 +407,7 @@ impl MergeSession {
 
         let setup_start = Instant::now();
         let warm_done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut b_template = None;
         let (mut ctx, mut tx_hashes, replay_from) = if checkpoint_hit {
             // Reused wholesale: within one slot every header field the
             // checkpoint's state was executed against (parent, timestamp,
@@ -537,6 +538,7 @@ impl MergeSession {
                         crate::engine::incremental::set_system(system, number)
                     });
                 }
+                b_template = Some(ctx.clone());
             }
 
             (ctx, FxHashSet::default(), 0)
@@ -645,9 +647,12 @@ impl MergeSession {
                 base_hash: base.block_hash,
                 pubkey: base.builder_pubkey.0,
                 slot: slot.slot,
+                template: b_template,
             };
             let full = replay_from == 0;
             let (store, streamed) = (store.clone(), feed.streamed.clone());
+            let (receipts_root, gas_used, a_value) =
+                (h256(v1.receipts_root), v1.gas_used, ctx.block_value);
             crate::engine::incremental::defer(move || {
                 if !full {
                     // A base resumed from a checkpoint is not diffed, but what it ran is still
@@ -658,7 +663,26 @@ impl MergeSession {
                     return;
                 }
                 match crate::engine::incremental::shadow(beneficiary_alloy, effects, exec) {
-                    Some(r) => {
+                    Some(mut r) => {
+                        // B's context must give A's root, the header's receipts and gas, and A's
+                        // block value.
+                        let b_ctx = r.ctx.take().map(|mut b_ctx| {
+                            let root =
+                                b_ctx.vm.db.get_state_transitions().ok().and_then(|updates| {
+                                    crate::engine::state_layer::StateLayer::open(
+                                        store.clone(),
+                                        parent_state_root,
+                                    )
+                                    .and_then(|mut layer| layer.apply_root(&updates))
+                                    .ok()
+                                });
+                            let receipts = ethrex_common::types::compute_receipts_root(
+                                &b_ctx.receipts,
+                                &NativeCrypto,
+                            ) == receipts_root &&
+                                b_ctx.gas_used() == gas_used;
+                            (root, receipts, b_ctx.block_value == a_value)
+                        });
                         let a_root =
                             crate::engine::state_layer::StateLayer::open(store, parent_state_root)
                                 .and_then(|mut layer| {
@@ -681,7 +705,7 @@ impl MergeSession {
                                 })
                                 .ok();
                         println!(
-                            "BSHADOW dropped={} arrival_ms={} stream_first={} chain={} best_any={} missed={} a_exec={} same_stream={} first={} rebuilt={} txs={} run={} skipped={} delta={} b_us={} a_us={} wrong={} exec_us={} exec_wrong={} exec_failed={} root_us={} root_ok={} run_novel={} run_leads={} content_lead={} causes={}",
+                            "BSHADOW dropped={} arrival_ms={} stream_first={} chain={} best_any={} missed={} a_exec={} same_stream={} first={} rebuilt={} txs={} run={} skipped={} delta={} b_us={} a_us={} wrong={} exec_us={} exec_wrong={} exec_failed={} root_us={} root_ok={} outcome_wrong={} ctx_us={} ctx_root_ok={} ctx_receipts_ok={} ctx_value_ok={} run_novel={} run_leads={} content_lead={} causes={}",
                             crate::engine::incremental::DROPPED
                                 .load(std::sync::atomic::Ordering::Relaxed),
                             r.arrival_ms.unwrap_or(i64::MIN),
@@ -713,6 +737,13 @@ impl MergeSession {
                                     a_root.is_some()
                                 )
                             },
+                            r.outcome_wrong,
+                            r.ctx_micros,
+                            b_ctx.as_ref().map_or(-1, |(root, ..)| {
+                                i32::from(root.is_some() && *root == a_root)
+                            }),
+                            b_ctx.as_ref().map_or(-1, |(_, ok, _)| i32::from(*ok)),
+                            b_ctx.as_ref().map_or(-1, |(.., ok)| i32::from(*ok)),
                             r.run_novel,
                             r.run_leads.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(","),
                             r.content_lead.map_or(-1, |l| l as i64),

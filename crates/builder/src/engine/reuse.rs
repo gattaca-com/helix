@@ -156,6 +156,12 @@ impl TxResult {
             coinbase,
             coinbase_address: self.reads.coinbase_address,
             codes: self.codes.clone(),
+            outcome: crate::engine::incremental::Outcome {
+                succeeded: self.succeeded,
+                gas_used: self.moved.remaining_gas,
+                gas_spent: self.moved.cumulative_gas,
+                logs: self.logs.clone(),
+            },
         };
         effect.sort();
         effect
@@ -352,7 +358,16 @@ pub fn apply_tx(
     if crate::engine::incremental::shadow_enabled() {
         let coinbase_after =
             coinbase_balance(&mut ctx.vm.db, coinbase).map_err(RunError::Internal)?;
-        let effect = ctx.vm.db.tx_reads.as_ref().and_then(|reads| {
+        let outcome =
+            Totals::of(ctx).since(before).zip(ctx.receipts.last()).map(|(moved, receipt)| {
+                crate::engine::incremental::Outcome {
+                    succeeded: receipt.succeeded,
+                    gas_used: moved.remaining_gas,
+                    gas_spent: moved.cumulative_gas,
+                    logs: receipt.logs.clone(),
+                }
+            });
+        let effect = ctx.vm.db.tx_reads.as_ref().zip(outcome).and_then(|(reads, outcome)| {
             crate::engine::incremental::Effect::from_db(
                 hash,
                 &ctx.vm.db,
@@ -362,6 +377,7 @@ pub fn apply_tx(
                     coinbase_after.saturating_sub(coinbase_before),
                     coinbase_before.saturating_sub(coinbase_after),
                 ),
+                outcome,
             )
         });
         if let Some(effect) = &effect {
@@ -441,6 +457,12 @@ pub fn presim_tx(
                     coinbase_after.saturating_sub(coinbase_before),
                     coinbase_before.saturating_sub(coinbase_after),
                 ),
+                crate::engine::incremental::Outcome {
+                    succeeded: receipt.succeeded,
+                    gas_used: report.gas_used,
+                    gas_spent: report.gas_spent,
+                    logs: receipt.logs.clone(),
+                },
             )
         }) {
             crate::engine::incremental::defer(move || crate::engine::incremental::learn(effect));

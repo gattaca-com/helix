@@ -9,10 +9,13 @@ use std::{
 };
 
 use alloy_primitives::B256;
+use ethrex_blockchain::payload::PayloadBuildContext;
 use ethrex_common::{
     Address, H256, U256,
-    constants::EMPTY_TRIE_HASH,
-    types::{AccountState, BlockHeader, ChainConfig, Code, CodeMetadata, Transaction},
+    constants::{EMPTY_TRIE_HASH, GAS_PER_BLOB},
+    types::{
+        AccountState, BlockHeader, ChainConfig, Code, CodeMetadata, Log, Receipt, Transaction,
+    },
 };
 use ethrex_crypto::native::NativeCrypto;
 use ethrex_levm::{
@@ -20,7 +23,7 @@ use ethrex_levm::{
         Database,
         gen_db::{AccountSnapshot, GeneralizedDatabase, TxReads},
     },
-    errors::DatabaseError,
+    errors::{DatabaseError, InternalError},
     vm::VMType,
 };
 use ethrex_vm::Evm;
@@ -74,6 +77,16 @@ pub struct Effect {
     pub coinbase_address: bool,
     /// Code deployed by the tx, for later txs to call.
     pub codes: Vec<Code>,
+    pub outcome: Outcome,
+}
+
+/// A tx's receipt and the gas it moved: block gas (`gas_used`) and receipt gas (`gas_spent`).
+#[derive(Clone, PartialEq, Debug)]
+pub struct Outcome {
+    pub succeeded: bool,
+    pub gas_used: u64,
+    pub gas_spent: u64,
+    pub logs: Vec<Log>,
 }
 
 impl Effect {
@@ -88,6 +101,7 @@ impl Effect {
         reads: &TxReads,
         coinbase: Address,
         (credit, debit): (U256, U256),
+        outcome: Outcome,
     ) -> Option<Self> {
         let mut out = Effect {
             hash,
@@ -101,6 +115,7 @@ impl Effect {
             coinbase,
             coinbase_address: reads.coinbase_address,
             codes: Vec::new(),
+            outcome,
         };
         if let Some(before) = reads.accounts.get(&coinbase) {
             let after = db.current_accounts_state.get(&coinbase)?.info.nonce;
@@ -226,6 +241,79 @@ impl Prior {
         n.checked_sub(1).map(|n| &writes[n].1)
     }
 
+    /// The payload context after the new run: `template` with every key the old or new run wrote
+    /// set to its final value, the coinbase's totals, and the applied effects' receipts.
+    fn context(
+        &self,
+        mut ctx: PayloadBuildContext,
+        report: &Report,
+        exec: &Exec,
+    ) -> Result<PayloadBuildContext, InternalError> {
+        let finals = self
+            .history
+            .keys()
+            .filter(|key| !report.dirty.contains_key(key))
+            .map(|key| (key, self.before(key, self.effects.len()).cloned()))
+            .chain(report.dirty.iter().map(|(key, val)| (key, val.clone())));
+        let db = &mut ctx.vm.db;
+        for (key, val) in finals {
+            match (key, val) {
+                (_, None) => {}
+                (
+                    Key::Account(address),
+                    Some(Val::Account { balance, nonce, code_hash, exists, has_storage }),
+                ) => {
+                    db.get_account(*address)?;
+                    let account = db.get_account_mut(*address)?;
+                    account.info.balance = balance;
+                    account.info.nonce = nonce;
+                    account.info.code_hash = code_hash;
+                    account.exists = exists;
+                    account.has_storage = has_storage;
+                }
+                (Key::Slot(address, slot), Some(Val::Slot(value))) => {
+                    db.get_account(*address)?;
+                    db.storage_value(*address, *slot)?;
+                    db.get_account_mut(*address)?.storage.insert(*slot, value);
+                }
+                _ => return Err(InternalError::Custom("key and value kinds differ".into())),
+            }
+        }
+        db.get_account(exec.coinbase)?;
+        let coinbase = db.get_account_mut(exec.coinbase)?;
+        coinbase.info.balance =
+            coinbase.info.balance.saturating_add(report.credit).saturating_sub(report.debit);
+        if let Some(nonce) = report.coinbase_nonce {
+            coinbase.info.nonce = nonce;
+        }
+        let base_fee = ctx.payload.header.base_fee_per_gas;
+        for ((tx, _), effect) in exec.txs.iter().zip(&report.applied) {
+            for code in &effect.codes {
+                ctx.vm.db.codes.entry(code.hash).or_insert_with(|| code.clone());
+            }
+            let outcome = &effect.outcome;
+            ctx.remaining_gas = ctx.remaining_gas.saturating_sub(outcome.gas_used);
+            ctx.cumulative_gas_spent += outcome.gas_spent;
+            ctx.block_value +=
+                U256::from(outcome.gas_spent) * tx.effective_gas_tip(base_fee).unwrap_or_default();
+            let blobs = tx.blob_versioned_hashes().len() as u64;
+            if blobs > 0 {
+                ctx.payload.header.blob_gas_used = Some(
+                    ctx.payload.header.blob_gas_used.unwrap_or_default() +
+                        blobs * u64::from(GAS_PER_BLOB),
+                );
+            }
+            ctx.receipts.push(Receipt::new(
+                tx.tx_type(),
+                outcome.succeeded,
+                ctx.cumulative_gas_spent,
+                outcome.logs.clone(),
+            ));
+            ctx.payload.body.transactions.push(tx.clone());
+        }
+        Ok(ctx)
+    }
+
     /// Common txs kept in relative order: per new tx, its position here when on that path.
     fn align(&self, new: &[Arc<Effect>]) -> Vec<Option<usize>> {
         let olds: Vec<Option<usize>> =
@@ -256,7 +344,7 @@ impl Prior {
 }
 
 /// How the new base differed and what B had to do for it.
-#[derive(Default, Debug)]
+#[derive(Default)]
 pub struct Report {
     pub txs: usize,
     pub run: usize,
@@ -295,6 +383,13 @@ pub struct Report {
     pub arrival_ms: Option<i64>,
     /// The longest chain of run txs each reading what an earlier run tx wrote.
     pub chain: usize,
+    /// The effect B applied per tx, in base order.
+    pub applied: Vec<Arc<Effect>>,
+    /// Txs whose applied receipt differs from A's.
+    pub outcome_wrong: usize,
+    pub ctx_micros: u64,
+    /// B's payload context after the base, built over the builder's previous base.
+    pub ctx: Option<PayloadBuildContext>,
 }
 
 /// Slot-wide knowledge B may use: parent values seen in reads, and every effect seen per tx.
@@ -328,6 +423,8 @@ pub struct Exec {
     pub base_hash: B256,
     pub pubkey: [u8; 48],
     pub slot: u64,
+    /// The payload context with the slot's system calls applied and no txs yet.
+    pub template: Option<PayloadBuildContext>,
 }
 
 const MAINNET_GENESIS: i64 = 1_606_824_023;
@@ -446,10 +543,7 @@ fn execute(view: View, exec: &Exec, i: usize, hash: B256) -> Option<Effect> {
     };
     vm.db.tx_reads = Some(Default::default());
     let mut gas = 0;
-    if let Err(e) = vm.execute_tx(tx, &exec.header, &mut gas, *sender) {
-        let _ = e;
-        return None;
-    }
+    let (receipt, ran) = vm.execute_tx(tx, &exec.header, &mut gas, *sender).ok()?;
     vm.db.reads_paused = true;
     let coinbase_after = vm.db.get_account(coinbase).ok()?.info.balance;
     let reads = vm.db.tx_reads.take()?;
@@ -462,6 +556,12 @@ fn execute(view: View, exec: &Exec, i: usize, hash: B256) -> Option<Effect> {
             coinbase_after.saturating_sub(coinbase_before),
             coinbase_before.saturating_sub(coinbase_after),
         ),
+        Outcome {
+            succeeded: receipt.succeeded,
+            gas_used: ran.gas_used,
+            gas_spent: ran.gas_spent,
+            logs: receipt.logs,
+        },
     )
 }
 
@@ -582,7 +682,7 @@ pub fn diff(prior: &Arc<Prior>, known: &Known, new: &[Arc<Effect>], exec: &Exec)
                 .chain(known.effects.get(&effect.hash).into_iter().flatten())
                 .find(|e| holds(e, &dirty))
         };
-        let applied: &Effect = match chosen {
+        let applied: Arc<Effect> = match chosen {
             Some(e) => {
                 report.skipped += 1;
                 if e.writes != effect.writes ||
@@ -592,7 +692,7 @@ pub fn diff(prior: &Arc<Prior>, known: &Known, new: &[Arc<Effect>], exec: &Exec)
                 {
                     report.wrong += 1;
                 }
-                e
+                e.clone()
             }
             None => {
                 report.run += 1;
@@ -657,16 +757,20 @@ pub fn diff(prior: &Arc<Prior>, known: &Known, new: &[Arc<Effect>], exec: &Exec)
                         {
                             report.exec_wrong += 1;
                         }
-                        ran.push(Arc::new(own));
-                        ran.last().map(|e| &**e).unwrap_or(effect)
+                        let own = Arc::new(own);
+                        ran.push(own.clone());
+                        own
                     }
                     None => {
                         report.exec_failed += 1;
-                        effect
+                        effect.clone()
                     }
                 }
             }
         };
+        if applied.outcome != effect.outcome {
+            report.outcome_wrong += 1;
+        }
         new_credit = new_credit.saturating_add(applied.credit);
         new_debit = new_debit.saturating_add(applied.debit);
         if applied.coinbase_nonce.is_some() {
@@ -677,6 +781,7 @@ pub fn diff(prior: &Arc<Prior>, known: &Known, new: &[Arc<Effect>], exec: &Exec)
                 dirty.remove(key);
             }
             optr += 1;
+            report.applied.push(applied);
             continue;
         }
         // Keys either run wrote may now differ between the two runs.
@@ -705,6 +810,7 @@ pub fn diff(prior: &Arc<Prior>, known: &Known, new: &[Arc<Effect>], exec: &Exec)
                 dirty.insert(key, v);
             }
         }
+        report.applied.push(applied);
     }
     for j in optr..old.len() {
         for (key, _) in &old[j].writes {
@@ -934,7 +1040,7 @@ pub fn drain() {
 pub fn shadow(
     builder: alloy_primitives::Address,
     effects: Vec<Option<Arc<Effect>>>,
-    exec: Exec,
+    mut exec: Exec,
 ) -> Option<Report> {
     if effects.iter().any(Option::is_none) {
         // Not diffable, but every effect it does have is still worth knowing.
@@ -981,6 +1087,11 @@ pub fn shadow(
             .unwrap_or(usize::MAX)
     });
     let mut report = report.unwrap_or_else(|| Report { first: true, ..Default::default() });
+    if let (Some((_, _, prior)), Some(template)) = (last, exec.template.take()) {
+        let ctx_start = Instant::now();
+        report.ctx = prior.context(template, &report, &exec).ok();
+        report.ctx_micros = ctx_start.elapsed().as_micros() as u64;
+    }
     report.same_stream = same_stream;
     report.best_any = best_any;
     report.stream_first = !same_stream_prior;
