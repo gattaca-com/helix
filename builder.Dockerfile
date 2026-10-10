@@ -14,18 +14,16 @@ COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
+# Set to a host CPU (e.g. znver4) only for images that run on that CPU family.
+ARG TARGET_CPU=x86-64
+ENV RUSTFLAGS="-C target-cpu=${TARGET_CPU}"
 
 # Copy back the build dependencies including libclang
 COPY --from=planner /app/recipe.json recipe.json
-# crates/vendored/ethrex-crypto is a [patch] path dependency, not a workspace
-# member (see its VENDORED.md) — cargo-chef's recipe only tracks workspace
-# members, so `cook` can't materialize a dummy for it. Its real source must
-# be present on disk before `cook` resolves the dependency graph.
-COPY crates/vendored ./crates/vendored
-RUN cargo chef cook --release --recipe-path recipe.json -p helix-builder
+RUN cargo chef cook --profile release-builder --recipe-path recipe.json -p helix-builder
 
 COPY . .
-RUN cargo build --release -p helix-builder
+RUN cargo build --profile release-builder -p helix-builder
 
 FROM debian:stable-slim AS runtime
 WORKDIR /app
@@ -34,7 +32,7 @@ RUN apt-get update && apt-get install -y \
   ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /app/target/release/helix-builder ./
+COPY --from=builder /app/target/release-builder/helix-builder ./
 
 # 9876  merging TCP (relay connections)
 # 8552  SSZ block validation (simulation role)

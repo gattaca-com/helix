@@ -20,6 +20,11 @@ opt-level = 3
 panic = "abort"
 split-debuginfo = "off"
 
+# The builder turns task and thread panics into errors, so it keeps unwinding.
+[profile.release-builder]
+inherits = "release-prod"
+panic = "unwind"
+
 [workspace.dependencies]
 alloy-consensus = { version = "2.1.1", default-features = false, features = ["k256"] }
 alloy-eips = { version = "2.1.1", default-features = false, features = ["kzg"] }
@@ -55,18 +60,19 @@ ethereum_ssz_derive = "0.10"
 # ethrex-crypto's `aws-lc-rs` feature, whose cc >=1.2.26 requirement conflicts with
 # reth-mdbx-sys's exact `cc = 1.2.15` pin (via helix-simulator). The node is
 # assembled from the library crates instead.
-ethrex-blockchain = { git = "https://github.com/gattaca-com/ethrex", rev = "923cae9ec6156e485d9d768882bcb510f545d49a", default-features = false, features = ["secp256k1", "c-kzg", "metrics"] }
-ethrex-common = { git = "https://github.com/gattaca-com/ethrex", rev = "923cae9ec6156e485d9d768882bcb510f545d49a", default-features = false, features = ["secp256k1", "c-kzg"] }
-ethrex-config = { git = "https://github.com/gattaca-com/ethrex", rev = "923cae9ec6156e485d9d768882bcb510f545d49a" }
+ethrex-blockchain = { git = "https://github.com/gattaca-com/ethrex", rev = "9be615c5d72269bbb97dda3bf6512e50c43695b1", default-features = false, features = ["secp256k1", "c-kzg", "metrics"] }
+ethrex-common = { git = "https://github.com/gattaca-com/ethrex", rev = "9be615c5d72269bbb97dda3bf6512e50c43695b1", default-features = false, features = ["secp256k1", "c-kzg"] }
+ethrex-config = { git = "https://github.com/gattaca-com/ethrex", rev = "9be615c5d72269bbb97dda3bf6512e50c43695b1" }
 # default features minus `aws-lc-rs` (see note above); P-256 verify uses the portable fallback
-ethrex-crypto = { git = "https://github.com/gattaca-com/ethrex", rev = "923cae9ec6156e485d9d768882bcb510f545d49a", default-features = false, features = ["std", "kzg-rs", "secp256k1", "blst", "c-kzg"] }
-ethrex-levm = { git = "https://github.com/gattaca-com/ethrex", rev = "923cae9ec6156e485d9d768882bcb510f545d49a", default-features = false }
-ethrex-metrics = { git = "https://github.com/gattaca-com/ethrex", rev = "923cae9ec6156e485d9d768882bcb510f545d49a" }
-ethrex-p2p = { git = "https://github.com/gattaca-com/ethrex", rev = "923cae9ec6156e485d9d768882bcb510f545d49a", features = ["c-kzg", "rocksdb", "metrics"] }
-ethrex-rlp = { git = "https://github.com/gattaca-com/ethrex", rev = "923cae9ec6156e485d9d768882bcb510f545d49a" }
-ethrex-rpc = { git = "https://github.com/gattaca-com/ethrex", rev = "923cae9ec6156e485d9d768882bcb510f545d49a" }
-ethrex-storage = { git = "https://github.com/gattaca-com/ethrex", rev = "923cae9ec6156e485d9d768882bcb510f545d49a", features = ["rocksdb"] }
-ethrex-vm = { git = "https://github.com/gattaca-com/ethrex", rev = "923cae9ec6156e485d9d768882bcb510f545d49a", default-features = false, features = ["secp256k1", "c-kzg"] }
+ethrex-crypto = { git = "https://github.com/gattaca-com/ethrex", rev = "9be615c5d72269bbb97dda3bf6512e50c43695b1", default-features = false, features = ["std", "kzg-rs", "secp256k1", "blst", "c-kzg"] }
+ethrex-levm = { git = "https://github.com/gattaca-com/ethrex", rev = "9be615c5d72269bbb97dda3bf6512e50c43695b1", default-features = false }
+ethrex-metrics = { git = "https://github.com/gattaca-com/ethrex", rev = "9be615c5d72269bbb97dda3bf6512e50c43695b1" }
+ethrex-p2p = { git = "https://github.com/gattaca-com/ethrex", rev = "9be615c5d72269bbb97dda3bf6512e50c43695b1", features = ["c-kzg", "rocksdb", "metrics"] }
+ethrex-rlp = { git = "https://github.com/gattaca-com/ethrex", rev = "9be615c5d72269bbb97dda3bf6512e50c43695b1" }
+ethrex-rpc = { git = "https://github.com/gattaca-com/ethrex", rev = "9be615c5d72269bbb97dda3bf6512e50c43695b1" }
+ethrex-storage = { git = "https://github.com/gattaca-com/ethrex", rev = "9be615c5d72269bbb97dda3bf6512e50c43695b1", features = ["rocksdb"] }
+ethrex-trie = { git = "https://github.com/gattaca-com/ethrex", rev = "9be615c5d72269bbb97dda3bf6512e50c43695b1" }
+ethrex-vm = { git = "https://github.com/gattaca-com/ethrex", rev = "9be615c5d72269bbb97dda3bf6512e50c43695b1", default-features = false, features = ["secp256k1", "c-kzg", "rayon"] }
 
 eyre = "0.6.12"
 clickhouse = "0.14.2"
@@ -174,12 +180,6 @@ tree_hash_derive = "0.12"
 url = { version = "2.4", features = ["serde"] }
 uuid = { version = "1.5", features = ["fast-rng", "v4"] }
 zstd = "0.13.3"
-
-# Vendored with namespaced keccak asm symbols; upstream's collide with the
-# vendored OpenSSL that lighthouse's eth2 forces into every build. See
-# crates/vendored/ethrex-crypto/VENDORED.md.
-[patch."https://github.com/gattaca-com/ethrex"]
-ethrex-crypto = { path = "crates/vendored/ethrex-crypto" }
 
 # Lighthouse's own Cargo.toml patches these crates.io deps to forked git revs (see its
 # [patch.crates-io] table) -- that patch only applies within lighthouse's own workspace
