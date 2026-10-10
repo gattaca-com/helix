@@ -42,6 +42,9 @@ fn main() -> eyre::Result<()> {
     // Fail fast on a missing/invalid RELAY_KEY, before the node boots.
     let relay_signer = roles.merging().map(|merging_config| {
         info!(listen_addr = %merging_config.listen_addr, "Loaded merging config");
+        if merging_config.enable_flux_profiler {
+            flux_profiler::enable_profiler("helix-builder");
+        }
         EngineConfig::load_relay_signer()
     });
 
@@ -134,9 +137,6 @@ fn main() -> eyre::Result<()> {
             min_value_increase_wei: alloy_primitives::U256::from(
                 merging_config.emission.min_value_increase_wei,
             ),
-            min_emission_interval: std::time::Duration::from_millis(
-                merging_config.emission.min_interval_ms,
-            ),
             core: merging_config.cores.merge_worker,
             max_builder_streams: if merging_config.speculation.enabled {
                 merging_config.speculation.max_streams
@@ -147,8 +147,12 @@ fn main() -> eyre::Result<()> {
             max_base_age: std::time::Duration::from_millis(
                 merging_config.speculation.max_base_age_ms,
             ),
-            rebase_recovery_bps: merging_config.speculation.rebase_recovery_bps,
+            warmup_bases: merging_config.speculation.warmup_bases,
+            warmup_per_pubkey: merging_config.speculation.warmup_per_pubkey,
+            verify_reuse: false,
+            verify_layer: merging_config.speculation.verify_layer,
             replay_worker_cores: merging_config.cores.replay_workers.clone(),
+            record: merging_config.record.clone(),
         };
         let _engine = MergeEngine::spawn(
             engine_config,

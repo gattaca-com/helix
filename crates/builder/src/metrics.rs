@@ -207,6 +207,14 @@ lazy_static! {
     )
     .unwrap();
 
+    static ref EMIT_BASE: IntCounterVec = register_int_counter_vec_with_registry!(
+        "merge_emit_base_total",
+        "Emissions by whether a newer block from the base's builder was already waiting",
+        &["base"],
+        &BUILDER_METRICS_REGISTRY
+    )
+    .unwrap();
+
     /// Size of the state-root walk, by stage and unit.
     static ref STATE_WALK: HistogramVec = register_histogram_vec_with_registry!(
         "merge_state_walk",
@@ -235,6 +243,39 @@ lazy_static! {
         "merge_speculation_total",
         "Speculative replay events by outcome",
         &["outcome"],
+        &BUILDER_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    static ref LAYER_BUILD: IntCounterVec = register_int_counter_vec_with_registry!(
+        "merge_layer_build_total",
+        "State layer builds by whether they started from the builder's previous base",
+        &["outcome"],
+        &BUILDER_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    static ref WAIT_PHASE: HistogramVec = register_histogram_vec_with_registry!(
+        "merge_wait_phase_ms",
+        "Time a waiting base spent behind each phase of its stream's previous base",
+        &["phase"],
+        millis_buckets(),
+        &BUILDER_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    static ref WAIT_DOMINANT: IntCounterVec = register_int_counter_vec_with_registry!(
+        "merge_wait_dominant_total",
+        "Waits of 5ms or more, by the phase that took most of them",
+        &["phase"],
+        &BUILDER_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    static ref TX_REUSE: IntCounterVec = register_int_counter_vec_with_registry!(
+        "merge_tx_reuse_total",
+        "Txs by stage and whether an earlier result was reused",
+        &["stage", "outcome"],
         &BUILDER_METRICS_REGISTRY
     )
     .unwrap();
@@ -440,9 +481,39 @@ pub fn emission_phases(t: &crate::engine::types::Timeline) {
     gap("total", t.recv_ns, emit_ns);
 }
 
+thread_local! {
+    static WARMING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Latency metrics recorded on this thread are dropped while a warm-up base is processed.
+pub fn set_warming(warming: bool) {
+    WARMING.with(|w| w.set(warming));
+}
+
+pub fn warming() -> bool {
+    WARMING.with(|w| w.get())
+}
+
+/// Pickup to first emission is the cycle a base must fit, with its wait,
+/// inside the relay's staleness gate.
+pub fn first_emission(t: &crate::engine::types::Timeline) {
+    if warming() {
+        return;
+    }
+    PHASE
+        .with_label_values(&["cycle"])
+        .observe(t.first_emit_ns.saturating_sub(t.replay_start_ns) as f64 / 1e6);
+    BASE_AGE
+        .with_label_values(&["first_emit"])
+        .observe(t.first_emit_ns.saturating_sub(t.recv_ns) as f64 / 1e6);
+}
+
 /// How long a block waited before its stream started it, split by whether the
 /// stream was mid-merge or idle when it arrived.
 pub fn worker_wait(state: &str, ms: u64) {
+    if warming() {
+        return;
+    }
     PHASE.with_label_values(&[state]).observe(ms as f64);
 }
 
@@ -455,6 +526,9 @@ pub fn account_updates(stage: &str, accounts: usize, slots: usize) {
 }
 
 pub fn stage_latency(stage: &str, micros: u64) {
+    if warming() {
+        return;
+    }
     STAGE_LATENCY.with_label_values(&[stage]).observe(micros as f64);
 }
 
@@ -481,6 +555,32 @@ pub fn delta_on_base(stage: &str, delta: U256) {
 /// this is the objective, not `beats_own_bid` alone.
 pub fn servable_win(servable: bool) {
     SERVABLE_WIN.with_label_values(&[if servable { "yes" } else { "no" }]).inc();
+}
+
+pub fn emit_base(superseded: bool) {
+    EMIT_BASE.with_label_values(&[if superseded { "superseded" } else { "latest" }]).inc();
+}
+
+pub fn layer_build(outcome: &str) {
+    LAYER_BUILD.with_label_values(&[outcome]).inc();
+}
+
+pub fn wait_phase(phase: &str, nanos: u64) {
+    if warming() {
+        return;
+    }
+    WAIT_PHASE.with_label_values(&[phase]).observe(nanos as f64 / 1e6);
+}
+
+pub fn wait_dominant(phase: &str) {
+    if warming() {
+        return;
+    }
+    WAIT_DOMINANT.with_label_values(&[phase]).inc();
+}
+
+pub fn tx_reuse(stage: &str, outcome: &str) {
+    TX_REUSE.with_label_values(&[stage, outcome]).inc();
 }
 
 pub fn speculation(outcome: &str) {

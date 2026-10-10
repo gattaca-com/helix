@@ -21,15 +21,15 @@ pub struct EngineConfig {
     pub max_orders_per_slot: usize,
     /// Emission gate: proposer value must beat the last emission by more than this.
     pub min_value_increase_wei: U256,
-    /// Minimum spacing between emissions for the same base.
-    pub min_emission_interval: Duration,
     /// Stop improving a base once it is this old. Must match the relay's
     /// `max_merged_bid_age_ms`; it is not sent over the wire.
     pub max_base_age: Duration,
-    /// Assumed share of a base's delta that one pass on a new base recovers,
-    /// in basis points. The rebase rule charges the remainder against a
-    /// waiting bid before taking it.
-    pub rebase_recovery_bps: u64,
+    /// Bases per builder per slot that only warm caches and the state layer, never emitted.
+    pub warmup_bases: u32,
+    pub warmup_per_pubkey: bool,
+    /// Run every base tx even when a reused result holds, and check they agree.
+    pub verify_reuse: bool,
+    pub verify_layer: bool,
     /// Optional core pin for the engine worker thread.
     pub core: Option<usize>,
     /// Cap on distinct per-builder merge streams; 0 disables merging.
@@ -38,6 +38,7 @@ pub struct EngineConfig {
     pub speculation_top_k: usize,
     /// One core per merge stream, in creation order; empty leaves them unpinned.
     pub replay_worker_cores: Vec<usize>,
+    pub record: Option<crate::engine::record::RecordConfig>,
 }
 
 impl EngineConfig {
@@ -126,13 +127,28 @@ pub struct OriginRevenue {
     pub pubkey: BlsPublicKey,
 }
 
+pub type TemplateKey = (B256, u64, Address, B256, u64);
+pub type Template =
+    (TemplateKey, Vec<ethrex_common::types::Withdrawal>, ethrex_common::types::Block);
+
 /// Consensus-fixed slot fields, shared with the speculative replay workers.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SlotContext {
     pub slot: u64,
     pub parent_hash: B256,
     pub proposer_fee_recipient: Address,
     pub parent_beacon_block_root: B256,
+    pub recorder: Option<Arc<crate::engine::record::SlotRecorder>>,
+    /// Parent-state reads shared by every base of the slot; each entry is a
+    /// pure function of the parent state, so later bases replay warm.
+    pub reads: std::sync::OnceLock<Arc<ethrex_levm::db::CachingDatabase>>,
+    /// Each builder's replayed base txs, reused by its later bases while their reads hold.
+    pub results: crate::engine::reuse::Cache,
+    /// Payload templates by (parent, timestamp, fee recipient, prev_randao, gas limit) and
+    /// withdrawals: the same for every base a builder sends in the slot.
+    pub templates: Arc<std::sync::Mutex<Vec<Template>>>,
+    pub verify_reuse: bool,
+    pub verify_layer: bool,
 }
 
 /// Slot state shared with the per-builder merge streams. The engine thread
@@ -152,7 +168,7 @@ pub struct SharedSlot {
 
 #[derive(Default)]
 pub struct SharedInner {
-    pub orders: Vec<PreparedOrder>,
+    pub orders: Vec<Arc<PreparedOrder>>,
     /// order_id -> index into `orders` (dedup; attribution goes to the
     /// highest-value source block).
     pub order_ids: FxHashMap<B256, usize>,
@@ -270,6 +286,7 @@ pub struct Timeline {
     pub handled_ns: u64,
     /// Became the live session.
     pub live_ns: u64,
+    pub first_emit_ns: u64,
 }
 
 /// One submission in a builder's stream, kept so the exact win condition can
@@ -359,12 +376,22 @@ impl BuilderSubmissions {
 }
 
 impl SlotState {
-    pub fn new(msg: &helix_tcp_types::merging::relay_to_builder::SlotStartV1) -> Self {
+    pub fn new(
+        msg: &helix_tcp_types::merging::relay_to_builder::SlotStartV1,
+        recorder: Option<Arc<crate::engine::record::SlotRecorder>>,
+        config: &EngineConfig,
+    ) -> Self {
         let ctx = Arc::new(SlotContext {
             slot: msg.slot,
             parent_hash: msg.parent_hash,
             proposer_fee_recipient: msg.proposer_fee_recipient,
             parent_beacon_block_root: msg.parent_beacon_block_root,
+            recorder,
+            reads: std::sync::OnceLock::new(),
+            results: Default::default(),
+            templates: Default::default(),
+            verify_reuse: config.verify_reuse,
+            verify_layer: config.verify_layer,
         });
         Self {
             slot: ctx.slot,

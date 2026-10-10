@@ -3,11 +3,17 @@
 //! session, and streams merged blocks / rejects back. Everything
 //! ethrex-related stays behind this boundary.
 
+pub mod btrie;
 pub mod convert;
 pub mod error;
+pub mod incremental;
+pub mod keccak8;
 pub mod payment;
+pub mod record;
+pub mod reuse;
 pub mod session;
 pub mod simulate;
+pub mod state_layer;
 pub mod streams;
 #[cfg(test)]
 mod tests;
@@ -23,6 +29,7 @@ use crossbeam_channel::{Receiver, Sender};
 use ethrex_blockchain::Blockchain;
 use ethrex_crypto::native::NativeCrypto;
 use ethrex_storage::Store;
+use flux_profiler::timed;
 use helix_tcp_types::merging::{
     builder_to_relay::{MergedBlockV1, RejectCode, RejectSubject, RejectV1},
     control::RelayConfigV1,
@@ -175,11 +182,25 @@ impl MergeEngine {
         }
     }
 
+    #[timed]
     fn teardown_slot(&mut self, reason: &str) {
         if let Some(state) = self.slot.take() {
+            if let Some(recorder) = state.ctx.recorder.clone() {
+                recorder.finish();
+            }
             let (builders, orders, top_rise, top_span) = match &state.shared {
                 Some(shared) => {
                     let inner = shared.inner.read().expect("shared slot poisoned");
+                    for (builder, subs) in &inner.submissions {
+                        info!(
+                            slot = state.slot,
+                            %builder,
+                            blocks = subs.count,
+                            span_ms = subs.span_ms(),
+                            mean_gap_ms = subs.span_ms() / subs.count.saturating_sub(1).max(1),
+                            "merge builder cadence"
+                        );
+                    }
                     let top = inner.top_builders(1).first().and_then(|b| inner.submissions.get(b));
                     (
                         inner.submissions.len(),
@@ -211,6 +232,25 @@ impl MergeEngine {
     /// Applies one event to the engine state; returns whether a merge pass is
     /// warranted afterwards.
     fn handle_event(&mut self, event: EngineEvent) -> bool {
+        let kind = match &event {
+            EngineEvent::ConnectionReset { .. } => "engine_connection_reset",
+            EngineEvent::RelayConfig(_) => "engine_relay_config",
+            EngineEvent::SlotStart(_) => "engine_slot_start",
+            EngineEvent::SlotEnd { .. } => "engine_slot_end",
+            EngineEvent::MergeableBlock { .. } => "engine_mergeable_block",
+            EngineEvent::ActivateBase { .. } => "engine_activate_base",
+        };
+        let start = std::time::Instant::now();
+        let pass = self.apply_event(event);
+        metrics::stage_latency(kind, start.elapsed().as_micros() as u64);
+        pass
+    }
+
+    #[timed]
+    fn apply_event(&mut self, event: EngineEvent) -> bool {
+        if let Some(recorder) = self.slot.as_ref().and_then(|state| state.ctx.recorder.as_ref()) {
+            recorder.event(crate::utils::utcnow_ns(), &event);
+        }
         match event {
             EngineEvent::ConnectionReset { generation } => {
                 debug!(generation, "connection reset, dropping slot state");
@@ -241,7 +281,25 @@ impl MergeEngine {
                 }
                 debug!(slot = msg.slot, parent_hash = %msg.parent_hash, "slot start");
                 self.teardown_slot("slot_start");
-                let mut state = SlotState::new(&msg);
+                let recorder = self
+                    .config
+                    .record
+                    .as_ref()
+                    .filter(|record| msg.slot.is_multiple_of(record.every_n_slots))
+                    .map(|record| {
+                        let recorder = record::SlotRecorder::new(
+                            record,
+                            msg.slot,
+                            convert::eaddr(self.config.relay_signer.address()),
+                        );
+                        let now = crate::utils::utcnow_ns();
+                        if let Some(config) = &self.relay_config {
+                            recorder.event(now, &EngineEvent::RelayConfig((**config).clone()));
+                        }
+                        recorder.event(now, &EngineEvent::SlotStart(msg));
+                        recorder
+                    });
+                let mut state = SlotState::new(&msg, recorder, &self.config);
                 state.shared = self.relay_config.clone().map(|relay_config| {
                     Arc::new(SharedSlot {
                         ctx: state.ctx.clone(),
@@ -271,6 +329,7 @@ impl MergeEngine {
                         metrics::rejection("ingest", err.metric_label());
                         warn!(%err, "mergeable block rejected");
                         if let Some((code, subject)) = err.reject(block_hash) {
+                            let send_start = std::time::Instant::now();
                             let _ = self.out.send(EngineOutput::reject(
                                 self.generation,
                                 slot,
@@ -278,6 +337,10 @@ impl MergeEngine {
                                 subject,
                                 err.to_string(),
                             ));
+                            metrics::stage_latency(
+                                "engine_reject_send",
+                                send_start.elapsed().as_micros() as u64,
+                            );
                         }
                         false
                     }
@@ -317,6 +380,7 @@ impl MergeEngine {
     /// Queues a speculative replay for a newly pooled appendable block.
     /// Offers a newly pooled appendable block to its builder's merge stream.
     /// Never blocks: a refusal just means that builder is not merged this round.
+    #[timed]
     fn offer_to_stream(&mut self, base: &Arc<PreparedBlock>) {
         let Some(streams) = self.streams.as_ref() else { return };
         let Some(state) = self.slot.as_mut() else { return };
@@ -369,11 +433,16 @@ impl MergeEngine {
     /// Decodes and pools a forwarded `MergeableBlockV1`.
     #[allow(clippy::type_complexity)]
     #[allow(clippy::result_large_err)]
+    #[timed]
     fn ingest_mergeable_block(
         &mut self,
         body: &[u8],
         recv_ns: u64,
     ) -> Result<(), (u64, Option<B256>, MergeError)> {
+        metrics::stage_latency(
+            "ingest_queue",
+            crate::utils::utcnow_ns().saturating_sub(recv_ns) / 1000,
+        );
         let current_slot = self.slot.as_ref().map(|s| s.slot).unwrap_or_default();
         let msg = MergeableBlockV1::from_ssz_bytes(body).map_err(|e| {
             (current_slot, None, MergeError::InvalidOrder(format!("undecodable block: {e:?}")))
@@ -398,7 +467,9 @@ impl MergeEngine {
             return Err(fail(MergeError::StaleSlot));
         };
         let (submission_index, ratchet) = {
+            let lock_start = std::time::Instant::now();
             let mut inner = shared.inner.write().expect("shared slot poisoned");
+            metrics::stage_latency("ingest_lock_wait", lock_start.elapsed().as_micros() as u64);
             inner.record_submission(msg.builder_address, msg.block_value, recv_ns)
         };
         if let Some((delta, interval_ms, rising)) = ratchet {
@@ -421,8 +492,10 @@ impl MergeEngine {
         // cache (incremental submissions share most txs); resolves any
         // tx-hash references against txs already seen whole this slot. Runs before the
         // order checks so a block rejected for its orders still fills the tx cache.
+        let decode_start = std::time::Instant::now();
         let decoded = decode_block_txs(&msg, &mut state.recovery_cache, &mut state.tx_cache)
             .map_err(|err| fail(MergeError::InvalidOrder(err)))?;
+        metrics::stage_latency("ingest_decode", decode_start.elapsed().as_micros() as u64);
 
         for order in &msg.merge_orders {
             order
@@ -440,7 +513,9 @@ impl MergeEngine {
         // Budget counts distinct pooled orders, as the relay's `orders_sent` does.
         let mut pool_full = false;
         {
+            let lock_start = std::time::Instant::now();
             let mut inner = shared.inner.write().expect("shared slot poisoned");
+            metrics::stage_latency("ingest_lock_wait", lock_start.elapsed().as_micros() as u64);
             inner.update_latest_only(
                 msg.builder_pubkey,
                 prepared_orders
@@ -456,7 +531,7 @@ impl MergeEngine {
                         // source block.
                         let existing = &inner.orders[existing_ix];
                         if msg.block_value > existing.source_block_value {
-                            inner.orders[existing_ix] = prepared;
+                            inner.orders[existing_ix] = Arc::new(prepared);
                         }
                     }
                     None => {
@@ -466,7 +541,7 @@ impl MergeEngine {
                         }
                         let ix = inner.orders.len();
                         inner.order_ids.insert(prepared.order_id, ix);
-                        inner.orders.push(prepared);
+                        inner.orders.push(Arc::new(prepared));
                     }
                 }
             }
@@ -528,6 +603,16 @@ impl MergeEngine {
 /// tx-hash references rather than raw txs (see `MergeableBlockV1`'s doc
 /// comment): resolved against `tx_cache`, which holds every tx already sent
 /// whole on this connection this slot.
+/// Kept off the global pool so ingest never waits behind presim or warming.
+static RECOVERY_POOL: std::sync::LazyLock<rayon::ThreadPool> = std::sync::LazyLock::new(|| {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(4)
+        .thread_name(|i| format!("recover-{i}"))
+        .build()
+        .expect("recovery pool")
+});
+
+#[timed]
 fn decode_block_txs(
     msg: &MergeableBlockV1,
     recovery_cache: &mut rustc_hash::FxHashMap<B256, ethrex_common::Address>,
@@ -583,31 +668,33 @@ fn decode_block_txs(
         })
         .collect();
 
-    let decoded: Vec<Option<Result<Arc<DecodedTx>, String>>> = entries
-        .into_par_iter()
-        .map(|entry| {
-            let partial = match entry? {
-                Entry::Cached(tx) => return Some(Ok(tx)),
-                Entry::New(partial) => *partial,
-            };
-            let sender = match partial.cached_sender {
-                Some(sender) => sender,
-                None => match partial.tx.sender(&NativeCrypto) {
-                    Ok(sender) => sender,
-                    Err(e) => return Some(Err(format!("sender recovery: {e}"))),
-                },
-            };
-            let blob_hashes =
-                partial.tx.blob_versioned_hashes().into_iter().map(convert::b256).collect();
-            Some(Ok(Arc::new(DecodedTx {
-                gas_limit: partial.tx.gas_limit(),
-                blob_hashes,
-                hash: partial.hash,
-                sender,
-                tx: partial.tx,
-            })))
-        })
-        .collect();
+    let decoded: Vec<Option<Result<Arc<DecodedTx>, String>>> = RECOVERY_POOL.install(|| {
+        entries
+            .into_par_iter()
+            .map(|entry| {
+                let partial = match entry? {
+                    Entry::Cached(tx) => return Some(Ok(tx)),
+                    Entry::New(partial) => *partial,
+                };
+                let sender = match partial.cached_sender {
+                    Some(sender) => sender,
+                    None => match partial.tx.sender(&NativeCrypto) {
+                        Ok(sender) => sender,
+                        Err(e) => return Some(Err(format!("sender recovery: {e}"))),
+                    },
+                };
+                let blob_hashes =
+                    partial.tx.blob_versioned_hashes().into_iter().map(convert::b256).collect();
+                Some(Ok(Arc::new(DecodedTx {
+                    gas_limit: partial.tx.gas_limit(),
+                    blob_hashes,
+                    hash: partial.hash,
+                    sender,
+                    tx: partial.tx,
+                })))
+            })
+            .collect()
+    });
 
     let mut txs = Vec::with_capacity(decoded.len());
     for entry in decoded {
@@ -630,6 +717,7 @@ fn decode_block_txs(
     }
 }
 
+#[timed]
 fn prepare_order(
     msg: &MergeableBlockV1,
     order_ref: &MergeOrderRef,

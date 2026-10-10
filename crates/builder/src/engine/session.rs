@@ -13,9 +13,15 @@ use ethrex_blockchain::{
     Blockchain,
     payload::{BuildPayloadArgs, HeadTransaction, PayloadBuildContext, create_payload},
 };
-use ethrex_common::types::{ELASTICITY_MULTIPLIER, calculate_base_fee_per_gas};
+use ethrex_common::{
+    Bloom,
+    types::{ELASTICITY_MULTIPLIER, bloom_from_logs, calculate_base_fee_per_gas},
+};
 use ethrex_crypto::native::NativeCrypto;
+use ethrex_rlp::encode::RLPEncode;
 use ethrex_storage::Store;
+use ethrex_trie::Trie;
+use flux_profiler::timed;
 use helix_tcp_types::merging::{
     builder_to_relay::{BuilderInclusion, MergeTraceV1, MergedBlockV1, UnmergedReason, UnmergedTx},
     control::RelayConfigV1,
@@ -23,12 +29,35 @@ use helix_tcp_types::merging::{
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::{debug, info};
 
+const LAYER_FLUSH_TXS: usize = 8;
+
+/// Order presims run here: the node's block import warms on the global pool,
+/// and a presim queued behind it stalls for the whole import.
+static PRESIM_POOL: std::sync::LazyLock<rayon::ThreadPool> = std::sync::LazyLock::new(|| {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(16)
+        .thread_name(|i| format!("presim-{i}"))
+        .build()
+        .expect("presim pool")
+});
+
+/// Kept off the global pool so speculative warming never delays order presims.
+static WARM_POOL: std::sync::LazyLock<rayon::ThreadPool> = std::sync::LazyLock::new(|| {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(8)
+        .thread_name(|i| format!("warm-{i}"))
+        .build()
+        .expect("warm pool")
+});
+
 use crate::{
     engine::{
         convert::{au256, block_to_payload_v3, eaddr, ewithdrawal, h256, requests_to_v4},
         error::{MergeError, SimulationError},
         payment::{self, DistributionConfig, PaymentInputs},
+        reuse,
         simulate::{self, balance_of},
+        state_layer::{PendingLayer, StateLayer, UpdateChunk},
         types::{
             EngineConfig, OriginRevenue, PreparedBlock, PreparedOrder, SimulatedOrder, SlotContext,
             Timeline,
@@ -73,9 +102,6 @@ pub enum EmitOutcome {
     /// No merged revenue, no improvement over the last emission, or the
     /// improvement doesn't cover the distribution cost; nothing to retry.
     NotImproved,
-    /// An improvement exists but the emission-spacing gate blocked it; worth
-    /// retrying once the window passes even with no further inbound events.
-    Throttled,
 }
 
 /// Aggregate screening/emission counters for one merge session, logged when
@@ -95,7 +121,6 @@ pub struct MergeStats {
     pub emissions: u64,
     pub emit_not_improved: u64,
     pub emit_no_revenue: u64,
-    pub emit_throttled: u64,
     pub orders_excluded_skipped: u64,
 }
 
@@ -138,6 +163,7 @@ pub(crate) struct ReplayCheckpoint {
     tx_hashes: Vec<B256>,
     included_tx_hashes: FxHashSet<B256>,
     ctx: PayloadBuildContext,
+    streamed: Vec<UpdateChunk>,
 }
 
 impl ReplayCheckpoint {
@@ -161,17 +187,98 @@ impl ReplayCheckpoint {
     }
 }
 
+/// The block's transaction and receipt tries, kept across a session's emissions so each one
+/// re-encodes and re-hashes only the entries since the last. The base's entries are built on
+/// their own thread while the first pass extends.
+struct OrderedRoots {
+    build: Option<std::thread::JoinHandle<Result<OrderedTries, ethrex_trie::TrieError>>>,
+    tries: Option<OrderedTries>,
+}
+
+struct OrderedTries {
+    txs: Trie,
+    receipts: Trie,
+    /// Entries in both tries.
+    len: usize,
+    base_blooms: Vec<Bloom>,
+}
+
+impl OrderedRoots {
+    fn spawn(
+        txs: Vec<ethrex_common::types::Transaction>,
+        receipts: Vec<ethrex_common::types::Receipt>,
+    ) -> Self {
+        let build = std::thread::spawn(move || {
+            let mut tries = OrderedTries {
+                txs: Trie::new_temp(),
+                receipts: Trie::new_temp(),
+                len: 0,
+                base_blooms: receipts
+                    .iter()
+                    .map(|receipt| bloom_from_logs(&receipt.logs, &NativeCrypto))
+                    .collect(),
+            };
+            let blooms = tries.base_blooms.clone();
+            tries.update(0, &txs, &receipts, |ix| blooms[ix])?;
+            Ok(tries)
+        });
+        Self { build: Some(build), tries: None }
+    }
+
+    fn get(&mut self) -> Result<&mut OrderedTries, MergeError> {
+        if let Some(build) = self.build.take() {
+            let built = build
+                .join()
+                .map_err(|_| MergeError::Internal("ordered roots build panicked".into()))?
+                .map_err(|e| MergeError::Internal(e.to_string()))?;
+            self.tries = Some(built);
+        }
+        self.tries.as_mut().ok_or_else(|| MergeError::Internal("ordered roots build failed".into()))
+    }
+}
+
+impl OrderedTries {
+    /// Brings both tries to `txs`/`receipts`, whose first `stable` entries are unchanged since
+    /// the last update, and returns the transactions and receipts roots.
+    fn update(
+        &mut self,
+        stable: usize,
+        txs: &[ethrex_common::types::Transaction],
+        receipts: &[ethrex_common::types::Receipt],
+        bloom: impl Fn(usize) -> Bloom,
+    ) -> Result<(ethrex_common::H256, ethrex_common::H256), ethrex_trie::TrieError> {
+        for (ix, tx) in txs.iter().enumerate().skip(stable.min(self.len)) {
+            self.txs.insert(ix.encode_to_vec(), tx.encode_canonical_to_vec())?;
+        }
+        for (ix, receipt) in receipts.iter().enumerate().skip(stable.min(self.len)) {
+            self.receipts.insert(
+                ix.encode_to_vec(),
+                receipt.encode_inner_with_precomputed_bloom(bloom(ix)),
+            )?;
+        }
+        for ix in txs.len()..self.len {
+            self.txs.remove(&ix.encode_to_vec())?;
+            self.receipts.remove(&ix.encode_to_vec())?;
+        }
+        self.len = txs.len();
+        Ok((self.txs.hash_no_commit(&NativeCrypto), self.receipts.hash_no_commit(&NativeCrypto)))
+    }
+}
+
 pub struct MergeSession {
     pub base_block_hash: B256,
     pub base_builder_pubkey: BlsPublicKey,
     /// Base block coinbase == winning builder; the merged block's beneficiary.
     beneficiary: ethrex_common::Address,
     beneficiary_alloy: Address,
+    results: reuse::Cache,
+    verify_reuse: bool,
     base_value: U256,
     builder_safe: Address,
     /// Live context: base replay + appended orders. Never finalized (emission
     /// finalizes a clone), so the session stays extendable.
     ctx: PayloadBuildContext,
+    state: PendingLayer,
     blockchain: Arc<Blockchain>,
     /// Block gas limit minus the reserved distribution gas.
     gas_soft_limit: u64,
@@ -188,18 +295,25 @@ pub struct MergeSession {
     distribution_gas_limit: u64,
     chain_id: u64,
     best_emitted: U256,
-    last_emit: Option<Instant>,
-    /// A throttled improvement is waiting; the worker retries after the
-    /// spacing window even with no further inbound events.
-    pub pending_emission: bool,
     stats: MergeStats,
     /// Last screening outcome per order, with its priority-fee headroom. Kept
-    /// per order rather than per screening: `try_extend` re-screens the same
+    /// per order rather than per screening: `screen` re-screens the same
     /// order every pass, so counting each screening would multiply-count it.
     order_outcomes: FxHashMap<B256, OrderOutcome>,
     trace: MergeTraceV1,
     /// Wall time the base replay in `activate` took, for the activation log.
     pub replay_us: u64,
+    /// Leading base txs that matched the stream's checkpoint, and the
+    /// checkpoint's prefix length (0 without a checkpoint).
+    pub checkpoint_shared: usize,
+    pub checkpoint_len: usize,
+    pub base_txs: usize,
+    /// Bloom of each live receipt, so emissions hash only the receipts new since.
+    receipt_blooms: Vec<Bloom>,
+    ordered: OrderedRoots,
+    /// Leading entries of the block's txs and receipts unchanged since `ordered` last saw them.
+    stable_entries: usize,
+    verify_roots: bool,
     /// `i` in the win condition: the base's index in its builder's stream.
     pub base_index: u64,
     /// Value of the base bid, `V(b_i)`.
@@ -214,6 +328,7 @@ impl MergeSession {
     /// `checkpoint` if it extends to this base (see `ReplayCheckpoint`).
     /// Returns the session, a fresh checkpoint for the caller to store back,
     /// and whether this activation was itself a checkpoint hit.
+    #[timed]
     pub fn activate(
         slot: &SlotContext,
         base: &PreparedBlock,
@@ -221,7 +336,13 @@ impl MergeSession {
         blockchain: Arc<Blockchain>,
         relay_config: &RelayConfigV1,
         checkpoint: Option<&ReplayCheckpoint>,
+        layer: Option<StateLayer>,
     ) -> Result<(Self, ReplayCheckpoint, bool), MergeError> {
+        static SHADOW: std::sync::LazyLock<bool> =
+            std::sync::LazyLock::new(|| std::env::var_os("B_SHADOW").is_some());
+        if *SHADOW {
+            crate::engine::incremental::start_recording();
+        }
         let started = Instant::now();
         let replay_start_ns = utcnow_ns();
         let v1 = &base.payload.payload_inner.payload_inner;
@@ -284,6 +405,7 @@ impl MergeSession {
         });
 
         let setup_start = Instant::now();
+        let warm_done = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let (mut ctx, mut tx_hashes, replay_from) = if checkpoint_hit {
             // Reused wholesale: within one slot every header field the
             // checkpoint's state was executed against (parent, timestamp,
@@ -300,22 +422,42 @@ impl MergeSession {
                 .get_block_header_by_hash(h256(v1.parent_hash))
                 .map_err(|e| MergeError::Internal(e.to_string()))?
                 .ok_or(MergeError::NotSynced)?;
-            let args = BuildPayloadArgs {
-                parent: h256(v1.parent_hash),
-                timestamp: v1.timestamp,
-                fee_recipient: beneficiary,
-                random: h256(v1.prev_randao),
-                withdrawals: Some(
-                    base.payload.payload_inner.withdrawals.iter().map(ewithdrawal).collect(),
-                ),
-                beacon_root: Some(h256(slot.parent_beacon_block_root)),
-                slot_number: None,
-                version: 3,
-                elasticity_multiplier: ELASTICITY_MULTIPLIER,
-                gas_ceil: v1.gas_limit,
+            let withdrawals: Vec<_> =
+                base.payload.payload_inner.withdrawals.iter().map(ewithdrawal).collect();
+            let key =
+                (v1.parent_hash, v1.timestamp, beneficiary_alloy, v1.prev_randao, v1.gas_limit);
+            let cached = slot.templates.lock().ok().and_then(|templates| {
+                templates
+                    .iter()
+                    .find(|(k, w, _)| *k == key && *w == withdrawals)
+                    .map(|(_, _, template)| template.clone())
+            });
+            let template = match cached {
+                Some(mut template) => {
+                    template.header.extra_data = v1.extra_data.clone().into();
+                    template
+                }
+                None => {
+                    let args = BuildPayloadArgs {
+                        parent: h256(v1.parent_hash),
+                        timestamp: v1.timestamp,
+                        fee_recipient: beneficiary,
+                        random: h256(v1.prev_randao),
+                        withdrawals: Some(withdrawals.clone()),
+                        beacon_root: Some(h256(slot.parent_beacon_block_root)),
+                        slot_number: None,
+                        version: 3,
+                        elasticity_multiplier: ELASTICITY_MULTIPLIER,
+                        gas_ceil: v1.gas_limit,
+                    };
+                    let template = create_payload(&args, store, v1.extra_data.clone().into())
+                        .map_err(|e| MergeError::Internal(format!("create_payload: {e}")))?;
+                    if let Ok(mut templates) = slot.templates.lock() {
+                        templates.push((key, withdrawals, template.clone()));
+                    }
+                    template
+                }
             };
-            let template = create_payload(&args, store, v1.extra_data.clone().into())
-                .map_err(|e| MergeError::Internal(format!("create_payload: {e}")))?;
 
             // The derived header must reproduce the wire header exactly; otherwise
             // the base block does not extend our view of the parent.
@@ -344,6 +486,41 @@ impl MergeSession {
 
             let mut ctx = PayloadBuildContext::new(template, store, &blockchain.options.r#type)
                 .map_err(|e| MergeError::Internal(format!("payload context: {e}")))?;
+            if let Some(recorder) = &slot.recorder {
+                let _unused = recorder.parent_header.set(parent_header.clone());
+                let _unused = recorder.store.set(store.clone());
+                ctx.vm.db.store = recorder.wrap(ctx.vm.db.store.clone());
+            }
+            let inner = ctx.vm.db.store.clone();
+            let fresh = || Arc::new(ethrex_levm::db::CachingDatabase::new(inner.clone(), true));
+            ctx.vm.db.store = if v1.parent_hash == slot.parent_hash {
+                slot.reads.get_or_init(fresh).clone()
+            } else {
+                fresh()
+            };
+            let (warm_store, header, txs, done, results) = (
+                ctx.vm.db.store.clone(),
+                ctx.payload.header.clone(),
+                base.txs.clone(),
+                warm_done.clone(),
+                slot.results.clone(),
+            );
+            WARM_POOL.spawn(move || {
+                // Cached txs are applied, not run, so only the rest need their state loaded.
+                let txs: Vec<_> = txs
+                    .iter()
+                    .filter(|tx| !results.contains_key(&(beneficiary_alloy, tx.hash)))
+                    .map(|tx| (&tx.tx, tx.sender))
+                    .collect();
+                let _unused = ethrex_vm::backends::levm::LEVM::warm_txs(
+                    &txs,
+                    &header,
+                    warm_store,
+                    ethrex_levm::vm::VMType::L1,
+                    &NativeCrypto,
+                    &|| done.load(std::sync::atomic::Ordering::Relaxed),
+                );
+            });
             // Wire payloads carry no blob sidecars; blob gas is derived from the
             // tx's versioned hashes (the EVM only needs the hashes).
             ctx.explicit_build = true;
@@ -351,6 +528,12 @@ impl MergeSession {
             blockchain
                 .apply_system_operations(&mut ctx)
                 .map_err(|e| MergeError::Internal(format!("system operations: {e}")))?;
+            if *SHADOW {
+                let mut db = ctx.vm.db.clone();
+                if let Ok(system) = db.get_state_transitions() {
+                    crate::engine::incremental::set_system(system);
+                }
+            }
 
             (ctx, FxHashSet::default(), 0)
         };
@@ -367,6 +550,17 @@ impl MergeSession {
         // right before the payment tx, for a later resubmission to reuse.
         let proposer = eaddr(slot.proposer_fee_recipient);
         let base_fee = ctx.payload.header.base_fee_per_gas;
+        let parent_state_root = store
+            .get_block_header_by_hash(ctx.payload.header.parent_hash)
+            .map_err(|e| MergeError::Internal(e.to_string()))?
+            .ok_or(MergeError::NotSynced)?
+            .state_root;
+        let streamed = match checkpoint {
+            Some(ck) if checkpoint_hit => ck.streamed.clone(),
+            _ => Vec::new(),
+        };
+        let (mut feed, state) =
+            StateLayer::spawn(store, parent_state_root, streamed, layer, slot.verify_layer);
         let replay_start = Instant::now();
         let mut snapshot_us = 0u64;
         let mut proposer_balance_before_payment = None;
@@ -374,6 +568,9 @@ impl MergeSession {
         for (ix, decoded) in base.txs.iter().enumerate().skip(replay_from) {
             if decoded.tx.gas_limit() > ctx.remaining_gas {
                 return Err(MergeError::InvalidBaseBlock("base block exceeds gas limit".into()));
+            }
+            if ix == last_ix || (ix - replay_from) % LAYER_FLUSH_TXS == LAYER_FLUSH_TXS - 1 {
+                feed.flush(&mut ctx.vm.db).map_err(|e| MergeError::Internal(e.to_string()))?;
             }
             if ix == last_ix {
                 proposer_balance_before_payment = Some(
@@ -389,6 +586,7 @@ impl MergeSession {
                     tx_hashes: base.txs[..last_ix].iter().map(|tx| tx.hash).collect(),
                     included_tx_hashes: tx_hashes.clone(),
                     ctx: ctx.clone(),
+                    streamed: feed.streamed.clone(),
                 });
                 snapshot_us = snapshot_start.elapsed().as_micros() as u64;
             }
@@ -399,25 +597,128 @@ impl MergeSession {
                 ),
                 tip: decoded.tx.effective_gas_tip(base_fee).unwrap_or_default(),
             };
-            blockchain
-                .apply_tx_to_payload(head, &mut ctx)
-                .map_err(|e| MergeError::InvalidBaseBlock(format!("base tx failed: {e}")))?;
+            reuse::apply_tx(
+                "base",
+                &slot.results,
+                slot.verify_reuse,
+                &blockchain,
+                &mut ctx,
+                head,
+                decoded.hash,
+                beneficiary_alloy,
+                beneficiary,
+            )
+            .map_err(|err| match err {
+                reuse::RunError::Tx(e) => {
+                    MergeError::InvalidBaseBlock(format!("base tx failed: {e}"))
+                }
+                reuse::RunError::Internal(e) => MergeError::Internal(e.to_string()),
+            })?;
             tx_hashes.insert(decoded.hash);
         }
+        warm_done.store(true, std::sync::atomic::Ordering::Relaxed);
+        let shadow_report = crate::engine::incremental::take().map(|effects| {
+            let replay_us = replay_start.elapsed().as_micros();
+            let exec = crate::engine::incremental::Exec {
+                txs: base.txs.iter().map(|tx| (tx.tx.clone(), tx.sender)).collect(),
+                header: ctx.payload.header.clone(),
+                store: ctx.vm.db.store.clone(),
+                coinbase: beneficiary,
+                trie_store: store.clone(),
+                parent_root: parent_state_root,
+                base_hash: base.block_hash,
+                pubkey: base.builder_pubkey.0,
+                slot: slot.slot,
+            };
+            let full = replay_from == 0;
+            if !full {
+                // A base resumed from a checkpoint is not diffed, but what it ran is still known.
+                for effect in effects.into_iter().flatten() {
+                    crate::engine::incremental::learn((*effect).clone());
+                }
+                return (None, replay_us);
+            }
+            (crate::engine::incremental::shadow(beneficiary_alloy, effects, exec), replay_us)
+        });
         metrics::stage_latency(
             "replay_txs",
             (replay_start.elapsed().as_micros() as u64).saturating_sub(snapshot_us),
         );
         metrics::stage_latency("replay_snapshot", snapshot_us);
-        let probe_start = Instant::now();
-        {
-            let mut probe = ctx.vm.clone();
-            if let Ok(updates) = probe.get_state_transitions() {
-                let slots: usize = updates.iter().map(|u| u.added_storage.len()).sum();
-                metrics::account_updates("base", updates.len(), slots);
+        feed.flush(&mut ctx.vm.db).map_err(|e| MergeError::Internal(e.to_string()))?;
+        if let Some((report, replay_us)) = shadow_report {
+            match report {
+                Some(r) => {
+                    let a_root = crate::engine::state_layer::StateLayer::open(
+                        store.clone(),
+                        parent_state_root,
+                    )
+                    .and_then(|mut layer| {
+                        let all: Vec<_> =
+                            feed.streamed.iter().flat_map(|c| c.iter().cloned()).collect();
+                        let mut merged: Vec<ethrex_common::types::AccountUpdate> = Vec::new();
+                        let mut at: FxHashMap<ethrex_common::Address, usize> = FxHashMap::default();
+                        for u in all {
+                            match at.get(&u.address) {
+                                Some(&ix) => merged[ix].merge(u),
+                                None => {
+                                    at.insert(u.address, merged.len());
+                                    merged.push(u);
+                                }
+                            }
+                        }
+                        layer.apply_root(&merged)
+                    })
+                    .ok();
+                    println!(
+                        "BSHADOW arrival_ms={} stream_first={} chain={} best_any={} missed={} a_exec={} same_stream={} first={} rebuilt={} txs={} run={} skipped={} delta={} b_us={} a_us={} wrong={} exec_us={} exec_wrong={} exec_failed={} root_us={} root_ok={} run_novel={} run_leads={} content_lead={} causes={}",
+                        r.arrival_ms.unwrap_or(i64::MIN),
+                        r.stream_first,
+                        r.chain,
+                        r.best_any.map_or(-1, |b| b as i64),
+                        r.missed.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(","),
+                        crate::engine::incremental::A_EXECUTED.with(|c| c.get()),
+                        r.same_stream.map_or(-1, i32::from),
+                        r.first,
+                        r.rebuilt,
+                        r.txs,
+                        r.run,
+                        r.skipped,
+                        r.delta,
+                        r.micros,
+                        replay_us,
+                        r.wrong,
+                        r.exec_micros,
+                        r.exec_wrong,
+                        r.exec_failed,
+                        r.root_micros,
+                        if r.root.is_some() && r.root == a_root {
+                            "true".to_string()
+                        } else {
+                            format!(
+                                "false(b_some={},a_some={})",
+                                r.root.is_some(),
+                                a_root.is_some()
+                            )
+                        },
+                        r.run_novel,
+                        r.run_leads.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(","),
+                        r.content_lead.map_or(-1, |l| l as i64),
+                        r.causes.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(",")
+                    );
+                }
+                None => println!("BSHADOW none"),
             }
         }
-        metrics::stage_latency("replay_state_probe", probe_start.elapsed().as_micros() as u64);
+        let accounts: usize = feed.streamed.iter().map(|chunk| chunk.len()).sum();
+        let slots: usize = feed
+            .streamed
+            .iter()
+            .flat_map(|chunk| chunk.iter())
+            .map(|u| u.added_storage.len())
+            .sum();
+        metrics::account_updates("base", accounts, slots);
+        drop(feed);
         let new_checkpoint = new_checkpoint
             .expect("base.txs is non-empty (checked above), so last_ix is always visited");
         debug!(
@@ -428,6 +729,15 @@ impl MergeSession {
             gas_used = ctx.gas_used(),
             "replayed base block"
         );
+        if let Some(recorder) = &slot.recorder {
+            recorder.base_gas(
+                base.block_hash,
+                base.txs
+                    .iter()
+                    .map(|tx| tx.hash)
+                    .zip(ctx.receipts.iter().map(|r| r.cumulative_gas_used)),
+            );
+        }
         if ctx.gas_used() != v1.gas_used {
             return Err(MergeError::InvalidBaseBlock(format!(
                 "base block gas mismatch: declared {}, executed {}",
@@ -450,14 +760,20 @@ impl MergeSession {
         let initial_beneficiary_balance = balance_of(&mut ctx.vm, beneficiary)
             .map_err(|e| MergeError::Internal(e.to_string()))?;
 
+        let ordered =
+            OrderedRoots::spawn(ctx.payload.body.transactions.clone(), ctx.receipts.clone());
+        let stable_entries = ctx.receipts.len();
         let session = Self {
             base_block_hash: base.block_hash,
             base_builder_pubkey: base.builder_pubkey,
             beneficiary,
             beneficiary_alloy,
+            results: slot.results.clone(),
+            verify_reuse: slot.verify_reuse,
             base_value: base.block_value,
             builder_safe,
             ctx,
+            state,
             blockchain,
             gas_soft_limit,
             max_blobs,
@@ -471,12 +787,25 @@ impl MergeSession {
             distribution_gas_limit,
             chain_id,
             best_emitted: U256::ZERO,
-            last_emit: None,
-            pending_emission: false,
             stats: MergeStats::default(),
             order_outcomes: FxHashMap::default(),
             trace: MergeTraceV1 { base_block_recv_ns: base.recv_ns, ..Default::default() },
             replay_us: started.elapsed().as_micros() as u64,
+            checkpoint_shared: checkpoint
+                .map(|ck| {
+                    ck.tx_hashes
+                        .iter()
+                        .zip(base.txs.iter())
+                        .take_while(|(h, tx)| **h == tx.hash)
+                        .count()
+                })
+                .unwrap_or_default(),
+            checkpoint_len: checkpoint.map(|ck| ck.tx_hashes.len()).unwrap_or_default(),
+            base_txs: base.txs.len(),
+            receipt_blooms: Vec::new(),
+            ordered,
+            stable_entries,
+            verify_roots: slot.verify_layer,
             base_index: base.submission_index,
             base_bid_value: base.block_value,
             timeline: Timeline {
@@ -495,15 +824,17 @@ impl MergeSession {
         Ok((session, new_checkpoint, checkpoint_hit))
     }
 
-    /// Presimulates candidate orders in parallel, then greedily applies them
-    /// best-payment-first to the live context. Returns whether the block
-    /// changed. Port of `append_greedily_until_gas_limit`.
-    pub fn try_extend(&mut self, orders: &[PreparedOrder], excluded: &FxHashSet<B256>) -> bool {
+    /// Picks the pool orders worth presimulating. Callers hold the pool's read
+    /// lock only for this, so ingest never waits behind a presim.
+    #[timed]
+    pub fn screen(
+        &mut self,
+        orders: &[Arc<PreparedOrder>],
+        excluded: &FxHashSet<B256>,
+    ) -> Vec<Arc<PreparedOrder>> {
         self.trace.sim_start_ns = utcnow_ns();
         let screen_start = Instant::now();
-        let header = self.ctx.payload.header.clone();
-
-        let base_fee = header.base_fee_per_gas;
+        let base_fee = self.ctx.payload.header.base_fee_per_gas;
         self.stats.orders_excluded_skipped =
             orders.iter().filter(|order| excluded.contains(&order.order_hash)).count() as u64;
         for order in orders.iter().filter(|order| excluded.contains(&order.order_hash)) {
@@ -511,7 +842,7 @@ impl MergeSession {
         }
 
         let mut candidates = Vec::new();
-        for (ix, order) in orders.iter().enumerate() {
+        for order in orders {
             if excluded.contains(&order.order_hash) ||
                 self.applied_orders.contains(&order.order_id) ||
                 order.source_block_hash == self.base_block_hash
@@ -524,7 +855,7 @@ impl MergeSession {
                 self.available_gas(),
                 self.available_blobs(),
             ) {
-                Ok(()) => candidates.push(ix),
+                Ok(()) => candidates.push(order.clone()),
                 Err(err) => self.record_outcome(
                     order,
                     sim_error_label(&err),
@@ -535,48 +866,63 @@ impl MergeSession {
         }
         metrics::stage_latency("extend_screen", screen_start.elapsed().as_micros() as u64);
         metrics::extend_orders("candidates", candidates.len());
+        candidates
+    }
+
+    /// Presimulates `candidates` in parallel, then greedily applies them
+    /// best-payment-first to the live context. Returns whether the block
+    /// changed. Port of `append_greedily_until_gas_limit`.
+    #[timed]
+    pub fn try_extend(&mut self, candidates: Vec<Arc<PreparedOrder>>) -> bool {
         if candidates.is_empty() {
             return false;
         }
+        self.ctx.vm.db.keep_tx_backup = true;
+        let header = self.ctx.payload.header.clone();
+        let base_fee = header.base_fee_per_gas;
 
-        // Parallel presim on Evm clones (clones copy only touched accounts).
         self.stats.candidates_screened += candidates.len() as u64;
         let available_gas = self.available_gas();
         let available_blobs = self.available_blobs();
         let vm = &self.ctx.vm;
         let beneficiary = self.beneficiary;
+        let (results, verify, builder) = (&self.results, self.verify_reuse, self.beneficiary_alloy);
         let presim_start = Instant::now();
-        let results: Vec<Result<SimulatedOrder, SimulationError>> = {
+        let base = Arc::new(simulate::PresimBase::new(&vm.db));
+        metrics::stage_latency("extend_presim_base", presim_start.elapsed().as_micros() as u64);
+        let results: Vec<Result<SimulatedOrder, SimulationError>> = PRESIM_POOL.install(|| {
             use rayon::prelude::*;
             candidates
                 .par_iter()
-                .map(|&ix| {
-                    let mut vm = vm.clone();
+                .enumerate()
+                .map(|(ix, order)| {
+                    let mut vm = base.evm(vm);
                     simulate::simulate_order(
                         &mut vm,
                         &header,
-                        &orders[ix],
+                        order,
                         ix,
                         available_gas,
                         available_blobs,
                         beneficiary,
+                        (results, verify, builder),
                     )
                 })
                 .collect()
-        };
+        });
         let mut simulated: Vec<SimulatedOrder> = Vec::with_capacity(results.len());
-        for (result, &ix) in results.into_iter().zip(&candidates) {
+        for (result, order) in results.into_iter().zip(&candidates) {
             match result {
                 Ok(order) => simulated.push(order),
                 Err(err) => {
                     self.stats.count_sim_error(&err);
                     self.record_outcome(
-                        &orders[ix],
+                        order,
                         sim_error_label(&err),
                         Some(err.unmerged_reason()),
                         base_fee,
                     );
-                    debug!(order = %orders[ix].order_id, %err, "order presim discarded");
+                    debug!(order = %order.order_id, %err, "order presim discarded");
                 }
             }
         }
@@ -590,8 +936,8 @@ impl MergeSession {
         let mut applied = 0;
         let mut changed = false;
         for candidate in simulated {
-            let order = &orders[candidate.order_ix];
-            match self.try_apply(order, &header) {
+            let order = &candidates[candidate.order_ix];
+            match self.try_apply(order, &candidate.include_tx) {
                 Ok(true) => {
                     changed = true;
                     applied += 1;
@@ -654,12 +1000,13 @@ impl MergeSession {
         }
     }
 
-    /// Re-simulates `order` against the live state and, when still profitable,
-    /// applies it for real. Rolls the context back on any violation.
+    /// Applies `order` with the presim's tx selection and keeps it only if it
+    /// still pays the beneficiary. Rolls the context back on any violation.
+    #[timed]
     fn try_apply(
         &mut self,
         order: &PreparedOrder,
-        header: &ethrex_common::types::BlockHeader,
+        include_tx: &[bool],
     ) -> Result<bool, MergeError> {
         if simulate::gate_order(
             order,
@@ -672,26 +1019,10 @@ impl MergeSession {
             return Ok(false);
         }
 
-        // Re-sim on the current state: earlier appends may have invalidated it.
-        let resim_start = Instant::now();
-        let mut sim_vm = self.ctx.vm.clone();
-        let simulated = match simulate::simulate_order(
-            &mut sim_vm,
-            header,
-            order,
-            0,
-            self.available_gas(),
-            self.available_blobs(),
-            self.beneficiary,
-        ) {
-            Ok(simulated) => simulated,
-            Err(_) => return Ok(false),
-        };
-        metrics::stage_latency("apply_resim", resim_start.elapsed().as_micros() as u64);
-
-        // Snapshot for rollback.
         let txs_start = Instant::now();
-        let vm_snapshot = self.ctx.vm.db.clone();
+        let initial_balance = simulate::balance_of(&mut self.ctx.vm, self.beneficiary)
+            .map_err(|e| MergeError::Internal(e.to_string()))?;
+        let mut tx_backups = Vec::with_capacity(order.txs.len());
         let scalar_snapshot = (
             self.ctx.remaining_gas,
             self.ctx.cumulative_gas_spent,
@@ -707,8 +1038,17 @@ impl MergeSession {
         let mut applied_hashes = Vec::new();
         let mut rollback = false;
         for (i, decoded) in order.txs.iter().enumerate() {
-            if !simulated.include_tx[i] {
+            if !include_tx[i] {
                 continue;
+            }
+            if decoded.gas_limit > self.available_gas() ||
+                decoded.blob_hashes.len() as u64 > self.available_blobs()
+            {
+                if order.can_drop(i) {
+                    continue;
+                }
+                rollback = true;
+                break;
             }
             let head = HeadTransaction {
                 tx: ethrex_common::types::MempoolTransaction::new(
@@ -717,8 +1057,19 @@ impl MergeSession {
                 ),
                 tip: decoded.tx.effective_gas_tip(base_fee).unwrap_or_default(),
             };
-            match self.blockchain.apply_tx_to_payload(head, &mut self.ctx) {
+            match reuse::apply_tx(
+                "order",
+                &self.results,
+                self.verify_reuse,
+                &self.blockchain,
+                &mut self.ctx,
+                head,
+                decoded.hash,
+                self.beneficiary_alloy,
+                self.beneficiary,
+            ) {
                 Ok(()) => {
+                    tx_backups.extend(self.ctx.vm.db.tx_backup.take());
                     let succeeded = self.ctx.receipts.last().map(|r| r.succeeded).unwrap_or(false);
                     if !succeeded && !order.can_revert(i) {
                         rollback = true;
@@ -728,6 +1079,10 @@ impl MergeSession {
                     self.blob_count += decoded.blob_hashes.len() as u64;
                     self.appended_blobs.extend(decoded.blob_hashes.iter().copied());
                 }
+                Err(reuse::RunError::Internal(e)) => {
+                    return Err(MergeError::Internal(e.to_string()))
+                }
+                Err(_) if order.can_drop(i) => {}
                 Err(_) => {
                     rollback = true;
                     break;
@@ -739,14 +1094,23 @@ impl MergeSession {
             }
         }
 
+        let builder_payment = au256(
+            simulate::balance_of(&mut self.ctx.vm, self.beneficiary)
+                .map_err(|e| MergeError::Internal(e.to_string()))?
+                .saturating_sub(initial_balance),
+        );
         metrics::stage_latency("apply_txs", txs_start.elapsed().as_micros() as u64);
 
-        if rollback || applied_hashes.is_empty() {
+        if rollback || applied_hashes.is_empty() || builder_payment.is_zero() {
             let rollback_start = Instant::now();
             if rollback {
                 self.stats.apply_rollbacks += 1;
             }
-            self.ctx.vm.db = vm_snapshot;
+            for backup in tx_backups.into_iter().rev() {
+                self.ctx.vm.db.tx_backup = Some(backup);
+                self.ctx.vm.undo_last_tx().map_err(|e| MergeError::Internal(e.to_string()))?;
+            }
+            self.ctx.vm.db.tx_backup = None;
             let (remaining, cumulative, value, size, blob_gas, tx_len, receipts_len) =
                 scalar_snapshot;
             self.ctx.remaining_gas = remaining;
@@ -756,6 +1120,7 @@ impl MergeSession {
             self.ctx.payload.header.blob_gas_used = blob_gas;
             self.ctx.payload.body.transactions.truncate(tx_len);
             self.ctx.receipts.truncate(receipts_len);
+            self.stable_entries = self.stable_entries.min(receipts_len);
             self.blob_count = blob_snapshot.0;
             self.appended_blobs.truncate(blob_snapshot.1);
             metrics::stage_latency("apply_rollback", rollback_start.elapsed().as_micros() as u64);
@@ -772,8 +1137,15 @@ impl MergeSession {
             txs: Vec::new(),
             pubkey: order.builder_pubkey,
         });
-        entry.revenue += simulated.builder_payment;
+        entry.revenue += builder_payment;
         entry.txs.extend(applied_hashes);
+        let updates = self
+            .ctx
+            .vm
+            .db
+            .get_state_transitions_tx()
+            .map_err(|e| MergeError::Internal(e.to_string()))?;
+        self.state.send_orders(Arc::new(updates));
         Ok(true)
     }
 
@@ -781,6 +1153,7 @@ impl MergeSession {
     /// and assembles the `MergedBlockV1`. Distinguishes "nothing to emit" from
     /// "improvement blocked by the spacing gate" so the worker can retry the
     /// latter.
+    #[timed]
     pub fn emit(
         &mut self,
         slot_number: u64,
@@ -789,7 +1162,6 @@ impl MergeSession {
         engine_config: &EngineConfig,
     ) -> Result<EmitOutcome, MergeError> {
         let emit_start_ns = utcnow_ns();
-        self.pending_emission = false;
         let total_revenue: U256 = self.revenues.values().map(|v| v.revenue).sum();
         if total_revenue.is_zero() {
             self.stats.emit_no_revenue += 1;
@@ -835,23 +1207,23 @@ impl MergeSession {
             return Ok(EmitOutcome::NotImproved);
         }
 
-        // Emission gates: strict improvement, then spacing. Order matters:
-        // hitting the spacing gate implies an improvement is waiting.
         if proposer_value <= self.best_emitted + engine_config.min_value_increase_wei {
             self.stats.emit_not_improved += 1;
             return Ok(EmitOutcome::NotImproved);
-        }
-        if let Some(last) = self.last_emit &&
-            last.elapsed() < engine_config.min_emission_interval
-        {
-            self.stats.emit_throttled += 1;
-            self.pending_emission = true;
-            return Ok(EmitOutcome::Throttled);
         }
 
         // Finalization clears the vm caches, so it runs on a clone; the live
         // session stays extendable.
         metrics::stage_latency("emit_prepare", utcnow_ns().saturating_sub(emit_start_ns) / 1000);
+        // Live receipts below the last emission's count are never rolled back,
+        // so their blooms stay valid across emissions.
+        if self.receipt_blooms.is_empty() {
+            self.receipt_blooms = std::mem::take(&mut self.ordered.get()?.base_blooms);
+        }
+        self.receipt_blooms.truncate(self.ctx.receipts.len());
+        for receipt in &self.ctx.receipts[self.receipt_blooms.len()..] {
+            self.receipt_blooms.push(bloom_from_logs(&receipt.logs, &NativeCrypto));
+        }
         let clone_start = Instant::now();
         let mut ctx = self.ctx.clone();
         metrics::stage_latency("emit_clone", clone_start.elapsed().as_micros() as u64);
@@ -870,7 +1242,10 @@ impl MergeSession {
             .map_err(|e| MergeError::Internal(e.to_string()))?
             .storage
             .get(&nonce_slot)
-            .copied();
+            .copied()
+            .or_else(|| {
+                ctx.vm.db.initial_accounts_state.get(&safe)?.storage.get(&nonce_slot).copied()
+            });
         let safe_nonce = match cached_nonce {
             Some(value) => value,
             None => ctx
@@ -930,15 +1305,68 @@ impl MergeSession {
             .map_err(|e| MergeError::Internal(format!("apply withdrawals: {e}")))?;
         metrics::stage_latency("emit_requests", finalize_start.elapsed().as_micros() as u64);
         let state_root_start = Instant::now();
+        let block_access_list = ctx.vm.take_bal();
+        let account_updates =
+            ctx.vm.get_state_transitions().map_err(|e| MergeError::Internal(e.to_string()))?;
+        let state_root = self
+            .state
+            .root(account_updates.clone())
+            .map_err(|e| MergeError::Internal(format!("state root: {e}")))?;
+        let receipts_start = Instant::now();
+        let blooms: Vec<Bloom> = ctx
+            .receipts
+            .iter()
+            .enumerate()
+            .map(|(ix, receipt)| {
+                self.receipt_blooms
+                    .get(ix)
+                    .copied()
+                    .unwrap_or_else(|| bloom_from_logs(&receipt.logs, &NativeCrypto))
+            })
+            .collect();
+        let logs_bloom = blooms.iter().fold(Bloom::zero(), |acc, bloom| acc | *bloom);
+        let stable = self.stable_entries;
+        let (transactions_root, receipts_root) = self
+            .ordered
+            .get()?
+            .update(stable, &ctx.payload.body.transactions, &ctx.receipts, |ix| blooms[ix])
+            .map_err(|e| MergeError::Internal(format!("ordered roots: {e}")))?;
+        if self.verify_roots {
+            let full_txs = ethrex_common::types::compute_transactions_root(
+                &ctx.payload.body.transactions,
+                &NativeCrypto,
+            );
+            let full_receipts = Trie::compute_hash_from_unsorted_iter(
+                ctx.receipts.iter().enumerate().map(|(ix, receipt)| {
+                    (ix.encode_to_vec(), receipt.encode_inner_with_precomputed_bloom(blooms[ix]))
+                }),
+                &NativeCrypto,
+            );
+            metrics::layer_build(
+                if (full_txs, full_receipts) == (transactions_root, receipts_root) {
+                    "ordered_verified"
+                } else {
+                    "ordered_mismatch"
+                },
+            );
+        }
+        self.stable_entries = self.ctx.receipts.len();
+        metrics::stage_latency("emit_receipts_root", receipts_start.elapsed().as_micros() as u64);
         self.blockchain
-            .finalize_payload(&mut ctx)
+            .finalize_payload_with_state_root(
+                &mut ctx,
+                state_root,
+                (transactions_root, receipts_root, logs_bloom),
+                account_updates,
+                block_access_list,
+            )
             .map_err(|e| MergeError::Internal(format!("finalize payload: {e}")))?;
         metrics::stage_latency("emit_state_root", state_root_start.elapsed().as_micros() as u64);
 
         metrics::stage_latency("emit_finalize", finalize_start.elapsed().as_micros() as u64);
         {
             let slots: usize = ctx.account_updates.iter().map(|u| u.added_storage.len()).sum();
-            metrics::account_updates("total", ctx.account_updates.len(), slots);
+            metrics::account_updates("delta", ctx.account_updates.len(), slots);
         }
         let encode_start = Instant::now();
         self.trace.finalize_ns = utcnow_ns();
@@ -969,7 +1397,6 @@ impl MergeSession {
             updated_revenues.get(&relay_config.relay_fee_recipient).cloned().unwrap_or_default();
 
         self.best_emitted = proposer_value;
-        self.last_emit = Some(Instant::now());
         self.stats.emissions += 1;
 
         debug!(
@@ -1013,6 +1440,10 @@ impl MergeSession {
         self.max_blobs.saturating_sub(self.blob_count)
     }
 
+    pub fn take_layer(&mut self) -> Option<StateLayer> {
+        self.state.take()
+    }
+
     #[cfg(test)]
     pub fn stats(&self) -> &MergeStats {
         &self.stats
@@ -1036,9 +1467,18 @@ impl MergeSession {
                 _ => lost_total = lost_total.saturating_add(headroom),
             }
         }
+        let t = &self.timeline;
+        let ms = |from: u64, to: u64| {
+            if from == 0 || to == 0 { 0 } else { to.saturating_sub(from) / 1_000_000 }
+        };
         info!(
             reason,
             base_block_hash = %self.base_block_hash,
+            builder = %self.beneficiary_alloy,
+            base_index = self.base_index,
+            wait_ms = ms(t.recv_ns, t.replay_start_ns),
+            cycle_ms = ms(t.replay_start_ns, t.first_emit_ns),
+            first_emit_age_ms = ms(t.recv_ns, t.first_emit_ns),
             best_emitted = %self.best_emitted,
             orders_included = self.included_order_ids.len(),
             candidates_screened = self.stats.candidates_screened,
@@ -1054,7 +1494,6 @@ impl MergeSession {
             emissions = self.stats.emissions,
             emit_not_improved = self.stats.emit_not_improved,
             emit_no_revenue = self.stats.emit_no_revenue,
-            emit_throttled = self.stats.emit_throttled,
             orders_seen = self.order_outcomes.len(),
             value_applied_gwei = metrics::gwei(applied),
             value_lost_revert_gwei = metrics::gwei(lost_revert),

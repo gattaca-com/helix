@@ -309,7 +309,7 @@ pub struct BlockMergingConfig {
     #[serde(default = "default_bool::<false>")]
     pub is_enabled: bool,
     /// Maximum age of a merged bid before it is considered stale and discarded.
-    #[serde(default = "default_u64::<250>")]
+    #[serde(default = "default_u64::<50>")]
     pub max_merged_bid_age_ms: u64,
     /// Testing-only: marks every decoded submission as mergeable, without builders having to
     /// submit real merge data themselves.

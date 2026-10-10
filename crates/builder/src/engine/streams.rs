@@ -23,6 +23,8 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+use flux_profiler::timed;
+
 /// Bound on how long a stream sleeps with nothing to do. Only sets how late the
 /// staleness backstop can fire; real work arrives by wake-up.
 const POLL: std::time::Duration = std::time::Duration::from_millis(5);
@@ -38,6 +40,7 @@ use crate::{
     engine::{
         EngineOutput,
         session::{EmitOutcome, MergeSession, ReplayCheckpoint},
+        state_layer::StateLayer,
         types::{PreparedBlock, SharedSlot},
     },
     metrics,
@@ -85,15 +88,12 @@ impl BuilderStream {
         outcome
     }
 
-    /// The bid of the block waiting for this builder, if any. The stream
-    /// weighs that against what another improvement pass is worth before
-    /// giving up the base it holds.
-    pub(crate) fn waiting_bid(&self) -> Option<U256> {
-        let pending = self.pending.lock().ok()?;
-        pending.as_ref().map(|job| job.base.block_value)
+    /// Whether a newer block from this builder is waiting to replace the base
+    /// the stream holds.
+    pub(crate) fn has_waiting(&self) -> bool {
+        self.pending.lock().is_ok_and(|pending| pending.is_some())
     }
 
-    #[cfg(test)]
     pub(crate) fn try_take(&self) -> Option<StreamJob> {
         self.pending.lock().ok()?.take()
     }
@@ -212,6 +212,38 @@ impl MergeStreams {
     }
 }
 
+/// What the stream has been doing since when, so a waiting base's wait can be split by it.
+#[derive(Default)]
+struct Phases(Vec<(&'static str, u64)>);
+
+impl Phases {
+    fn enter(&mut self, phase: &'static str) {
+        self.0.push((phase, utcnow_ns()));
+    }
+
+    /// Splits `[from, to)` over the phases it overlapped, then starts afresh.
+    fn attribute(&mut self, from: u64, to: u64) {
+        let mut total = 0;
+        let mut dominant = ("none", 0);
+        for (i, &(phase, start)) in self.0.iter().enumerate() {
+            let end = self.0.get(i + 1).map_or(to, |next| next.1);
+            let overlap = end.min(to).saturating_sub(start.max(from));
+            if overlap == 0 {
+                continue;
+            }
+            metrics::wait_phase(phase, overlap);
+            total += overlap;
+            if overlap > dominant.1 {
+                dominant = (phase, overlap);
+            }
+        }
+        if total >= 5_000_000 {
+            metrics::wait_dominant(dominant.0);
+        }
+        self.0.clear();
+    }
+}
+
 fn run_stream(
     id: usize,
     beneficiary: Address,
@@ -222,16 +254,18 @@ fn run_stream(
 ) {
     let mut slot = 0u64;
     let mut checkpoint: Option<ReplayCheckpoint> = None;
+    let mut layer: Option<StateLayer> = None;
     // Delta the previous base ended on, so the next one can report how much of
     // it a single pass recovers.
     let mut prior_delta: Option<U256> = None;
     let mut was_busy = false;
+    // One coinbase can submit from several pubkeys, each its own stream of blocks; with
+    // `warmup_per_pubkey` each warms up separately before its bases are merged.
+    let mut bases_in_slot: FxHashMap<alloy_rpc_types::beacon::BlsPublicKey, u32> =
+        Default::default();
+    let mut phases = Phases::default();
+    phases.enter("idle");
     while let Some(job) = stream.take_blocking() {
-        metrics::worker_wait(
-            if was_busy { "stream_busy" } else { "stream_idle" },
-            utcnow_ns().saturating_sub(job.offered_ns) / 1_000_000,
-        );
-        was_busy = true;
         // Checkpoints are only valid within one slot's fixed parent/timestamp.
         if job.shared.ctx.slot != slot {
             if job.shared.ctx.slot < slot {
@@ -239,10 +273,37 @@ fn run_stream(
             }
             slot = job.shared.ctx.slot;
             checkpoint = None;
+            layer = None;
             prior_delta = None;
+            bases_in_slot.clear();
         }
-        match merge_base(id, &job, &stream, prior_delta, &store, &blockchain, &mut checkpoint, &out)
-        {
+        let stream_key = if job.shared.engine_config.warmup_per_pubkey {
+            job.base.builder_pubkey
+        } else {
+            Default::default()
+        };
+        let seen = bases_in_slot.entry(stream_key).or_default();
+        let warming = *seen < job.shared.engine_config.warmup_bases;
+        *seen += 1;
+        metrics::set_warming(warming);
+        phases.attribute(job.offered_ns, utcnow_ns());
+        metrics::worker_wait(
+            if was_busy { "stream_busy" } else { "stream_idle" },
+            utcnow_ns().saturating_sub(job.offered_ns) / 1_000_000,
+        );
+        match merge_base(
+            id,
+            &job,
+            &stream,
+            warming,
+            prior_delta,
+            &store,
+            &blockchain,
+            &mut checkpoint,
+            &mut layer,
+            &mut phases,
+            &out,
+        ) {
             Ok(delta) => prior_delta = Some(delta),
             Err(err) => {
                 debug!(
@@ -254,30 +315,41 @@ fn run_stream(
                 );
             }
         }
-        was_busy = stream.waiting_bid().is_some();
+        // A base that arrived during warm-up waited behind it; the next one starts clean.
+        if warming {
+            stream.try_take();
+        }
+        was_busy = stream.has_waiting();
+        phases.enter("idle");
     }
     info!(worker = id, %beneficiary, "merge stream stopped");
 }
 
-/// One base: replay it, then keep improving it until a waiting block is worth
-/// more than another pass would add.
+/// One base: replay it, then keep improving it until the builder sends a newer
+/// one.
 ///
-/// Emitting once and idling costs more than it saves -- a single pass leaves
-/// real value in the pool -- but so does holding a base the builder has bid
-/// well past. The decision is made on value, not elapsed time: staleness only
-/// ever mattered through the bid drift it stands for.
+/// A newer base can drop txs the builder cancelled or add ones it
+/// preconfirmed, so merging on a superseded base can break the builder's
+/// commitments however much it pays. Each cycle still runs to an emission
+/// before switching: when bases arrive faster than a replay, breaking off
+/// would never emit at all.
 #[allow(clippy::too_many_arguments)]
+#[timed]
 fn merge_base(
     id: usize,
     job: &StreamJob,
     stream: &BuilderStream,
+    warming: bool,
     prior_delta: Option<U256>,
     store: &Store,
     blockchain: &Arc<Blockchain>,
     checkpoint: &mut Option<ReplayCheckpoint>,
+    layer: &mut Option<StateLayer>,
+    phases: &mut Phases,
     out: &Sender<EngineOutput>,
 ) -> Result<U256, crate::engine::error::MergeError> {
     let shared = &job.shared;
+    phases.enter("replay");
 
     let (mut session, fresh_checkpoint, checkpoint_hit) = MergeSession::activate(
         &shared.ctx,
@@ -286,6 +358,7 @@ fn merge_base(
         blockchain.clone(),
         &shared.relay_config,
         checkpoint.as_ref(),
+        layer.take(),
     )
     .inspect_err(|err| metrics::rejection("merge_cycle", err.metric_label()))?;
     *checkpoint = Some(fresh_checkpoint);
@@ -295,15 +368,8 @@ fn merge_base(
     // than overlapping it.
     session.timeline.live_ns = utcnow_ns();
 
-    // Rebase on value, not on age. A newer base is only worth taking when the
-    // bid it carries gains more than another improvement pass on the base we
-    // hold would -- switching forfeits the delta already accumulated and only
-    // recovers part of it on the first pass of the new base.
     let mut passes = 0u64;
     let mut published = session.base_bid_value;
-    // Until a pass has run there is no marginal estimate, so nothing short of a
-    // clearly better base should displace this one.
-    let mut last_gain = U256::MAX;
     let mut emitted_any = false;
     let mut seen_version = u64::MAX;
     loop {
@@ -312,15 +378,31 @@ fn merge_base(
         // ingest needs to write.
         let version = shared.pool_version.load(Ordering::Acquire);
         let pool_moved = version != seen_version;
+        // Once this base has emitted, a waiting newer one takes priority over
+        // more work here: an emission on a superseded base is rarely served.
+        if pool_moved && emitted_any && stream.has_waiting() {
+            metrics::rebase_reason("newer_base_before_extend");
+            break;
+        }
         if pool_moved {
             seen_version = version;
             passes += 1;
-            {
+            phases.enter("extend");
+            let candidates = {
                 let lock_start = std::time::Instant::now();
                 let inner = shared.inner.read().expect("shared slot poisoned");
                 metrics::stage_latency("extend_lock_wait", lock_start.elapsed().as_micros() as u64);
-                session.try_extend(&inner.orders, &inner.excluded);
+                session.screen(&inner.orders, &inner.excluded)
+            };
+            session.try_extend(candidates);
+            if warming {
+                break;
             }
+            if emitted_any && stream.has_waiting() {
+                metrics::rebase_reason("newer_base_before_emit");
+                break;
+            }
+            phases.enter(if emitted_any { "emit_later" } else { "emit_first" });
             match session.emit(
                 shared.ctx.slot,
                 shared.ctx.proposer_fee_recipient,
@@ -328,7 +410,6 @@ fn merge_base(
                 &shared.engine_config,
             ) {
                 Ok(EmitOutcome::Emitted(msg)) => {
-                    last_gain = msg.proposer_value.saturating_sub(published);
                     published = msg.proposer_value;
                     if !emitted_any {
                         if let Some(previous) = prior_delta {
@@ -339,16 +420,16 @@ fn merge_base(
                             metrics::delta_on_base("previous_final", previous);
                         }
                         emitted_any = true;
+                        session.timeline.first_emit_ns = utcnow_ns();
+                        metrics::first_emission(&session.timeline);
                     }
                     report_emission(id, job, &session, &msg, checkpoint_hit, passes);
+                    metrics::emit_base(stream.has_waiting());
                     if out.send(EngineOutput::Merged { generation: job.generation, msg }).is_err() {
                         return Ok(published.saturating_sub(session.base_bid_value));
                     }
                 }
-                // Nothing left to add: any positive base gain is worth taking.
-                Ok(EmitOutcome::NotImproved) => last_gain = U256::ZERO,
-                // An improvement is waiting on emission spacing, not absent.
-                Ok(EmitOutcome::Throttled) => {}
+                Ok(EmitOutcome::NotImproved) => {}
                 Err(err) => {
                     metrics::rejection("emission", err.metric_label());
                     session.log_stats("emit_failed");
@@ -357,20 +438,11 @@ fn merge_base(
             }
         }
 
-        if let Some(next_bid) = stream.waiting_bid() {
-            // Switching forfeits the delta accumulated here and recovers only
-            // part of it on the first pass of the new base, so a waiting bid
-            // has to beat that forfeit as well as the next pass's gain.
-            let delta = published.saturating_sub(session.base_bid_value);
-            let forfeit = delta
-                .saturating_mul(U256::from(10_000u64 - shared.engine_config.rebase_recovery_bps)) /
-                U256::from(10_000u64);
-            let base_gain = next_bid.saturating_sub(session.base_bid_value);
-            if base_gain > last_gain.saturating_add(forfeit) {
-                metrics::rebase_reason("base_gain_wins");
-                break;
-            }
-            metrics::rebase_reason("holding");
+        // Waiting blocks collapse to the newest, so a burst of submissions
+        // skips straight to the latest one.
+        if stream.has_waiting() {
+            metrics::rebase_reason("newer_base");
+            break;
         }
         // Backstop only: past the relay's staleness gate nothing we emit on
         // this base can be served, so further passes are wasted work.
@@ -383,18 +455,23 @@ fn merge_base(
         if !pool_moved {
             // Nothing to do until orders arrive or a fresher base does. The
             // timeout only bounds how late the age backstop can fire.
+            phases.enter("idle_on_base");
             stream.wait_for_change(POLL);
         }
     }
 
+    phases.enter("layer_handoff");
+    *layer = session.take_layer();
+    phases.enter("teardown");
     let final_delta = published.saturating_sub(session.base_bid_value);
     metrics::extend_passes(passes);
-    session.log_stats("base_done");
+    session.log_stats(if warming { "warmup" } else { "base_done" });
     Ok(final_delta)
 }
 
 /// The exact comparison the relay makes at get_header, run here while every
 /// term is still in hand.
+#[timed]
 fn report_emission(
     id: usize,
     job: &StreamJob,
@@ -433,6 +510,8 @@ fn report_emission(
         budget_ms,
         deadline_seen,
     );
+    let t = &session.timeline;
+    let us = |from: u64, to: u64| to.saturating_sub(from) / 1_000;
     info!(
         worker = id,
         base_block_hash = %msg.base_block_hash,
@@ -450,6 +529,13 @@ fn report_emission(
         checkpoint_hit,
         won = beats_latest,
         servable,
+        ingest_us = us(t.recv_ns, t.ingest_done_ns),
+        wait_us = us(t.ingest_done_ns, t.replay_start_ns),
+        replay_us = us(t.replay_start_ns, t.replay_end_ns),
+        live_us = us(t.replay_end_ns, utcnow_ns()),
+        base_txs = session.base_txs,
+        checkpoint_shared = session.checkpoint_shared,
+        checkpoint_len = session.checkpoint_len,
         "merged block emitted"
     );
 }
