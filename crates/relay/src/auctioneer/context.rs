@@ -216,6 +216,7 @@ impl<B: BidAdjustor> Context<B> {
                             bid_slot.into(),
                             builder,
                             block_hash,
+                            bid.value,
                             reason,
                             true,
                         );
@@ -420,11 +421,13 @@ pub(crate) fn merged_validation_request(
 }
 
 impl<B: BidAdjustor> Context<B> {
+    #[allow(clippy::too_many_arguments)]
     pub fn handle_builder_demotion(
         &mut self,
         slot: Slot,
         builder_pubkey: BlsPublicKeyBytes,
         block_hash: B256,
+        bid_value_wei: U256,
         reason: String,
         from_simulation: bool,
     ) {
@@ -444,18 +447,18 @@ impl<B: BidAdjustor> Context<B> {
             let region = self.config.postgres.region_name.clone();
             let builder_id =
                 self.cache.get_builder_info(&builder_pubkey).and_then(|i| i.builder_id);
+            let collateral_id = builder_id.clone().unwrap_or_default();
 
             if let Some(operator_api) = self.operator_api.as_ref() &&
-                let Err(e) = operator_api.try_send(
-                    builder_id.clone(),
-                    OperatorMessage::Demotion(Demotion {
-                        ts_ms: utcnow_ms(),
-                        slot: slot_u64,
-                        builder_pubkey,
-                        block_hash,
-                        reason_msg: reason.as_bytes().to_vec(),
-                    }),
-                )
+                let Err(e) = operator_api.try_send(OperatorMessage::Demotion(Demotion {
+                    ts_ms: utcnow_ms(),
+                    slot: slot_u64,
+                    collateral_id: collateral_id.clone().into_bytes(),
+                    builder_pubkey,
+                    block_hash,
+                    bid_value_wei: bid_value_wei.saturating_to(),
+                    reason_msg: reason.as_bytes().to_vec(),
+                }))
             {
                 tracing::error!(
                     ?e,
@@ -466,7 +469,15 @@ impl<B: BidAdjustor> Context<B> {
 
             let r = reason.clone();
             spawn_tracked!(async move {
-                db.db_demote_builder(slot_u64, builder_pubkey, block_hash, r, failsafe)
+                db.db_demote_builder(
+                    slot_u64,
+                    builder_pubkey,
+                    block_hash,
+                    collateral_id,
+                    bid_value_wei,
+                    r,
+                    failsafe,
+                )
             });
 
             let builder_id = builder_id.unwrap_or_default();

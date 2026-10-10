@@ -27,7 +27,7 @@ use helix_common::{
     metrics::{CACHE_SIZE, DbMetricRecord},
     utils::{alert_discord, utcnow_ms},
 };
-use helix_types::{BlsPublicKeyBytes, Demotion, MergedBlock, SignedBidSubmission, Slot};
+use helix_types::{BlsPublicKeyBytes, Demotion, MergedBlock, Promotion, SignedBidSubmission, Slot};
 use rustc_hash::FxHashSet;
 use tokio_postgres::{NoTls, types::ToSql};
 use tracing::{error, info, instrument, warn};
@@ -40,7 +40,7 @@ use crate::{
         postgres_db_init::run_migrations_async,
         postgres_db_row_parsing::{
             parse_bytes_to_hash, parse_bytes_to_pubkey_bytes, parse_i32_to_u64, parse_i64_to_u64,
-            parse_row, parse_rows, parse_rows_lossy,
+            parse_numeric_to_u256, parse_row, parse_rows, parse_rows_lossy,
         },
         postgres_db_u256_parsing::PostgresNumeric,
     },
@@ -68,11 +68,16 @@ pub enum DbRequest {
         slot: u64,
         builder_pub_key: BlsPublicKeyBytes,
         block_hash: B256,
+        collateral_id: String,
+        bid_value_wei: U256,
         reason: String,
         failsafe_triggered: Arc<AtomicBool>,
     },
     DbPromoteBuilder {
         builder_pub_key: BlsPublicKeyBytes,
+        collateral_id: String,
+        ts_ms: u64,
+        slot: u64,
     },
     SaveGetHeaderCall {
         params: GetHeaderParams,
@@ -605,11 +610,21 @@ impl PostgresDatabaseService {
                 slot,
                 builder_pub_key,
                 block_hash,
+                collateral_id,
+                bid_value_wei,
                 reason,
                 failsafe_triggered,
             } => {
-                if let Err(err) =
-                    self.db_demote_builder(slot, &builder_pub_key, &block_hash, reason).await
+                if let Err(err) = self
+                    .db_demote_builder(
+                        slot,
+                        &builder_pub_key,
+                        &block_hash,
+                        &collateral_id,
+                        bid_value_wei,
+                        reason,
+                    )
+                    .await
                 {
                     error!(%err, "error demoting builder in database triggering failsafe: stopping all optimistic submissions");
                     failsafe_triggered.store(true, Ordering::Relaxed);
@@ -619,8 +634,10 @@ impl PostgresDatabaseService {
                     ));
                 }
             }
-            DbRequest::DbPromoteBuilder { builder_pub_key } => {
-                if let Err(err) = self.db_promote_builder(&builder_pub_key).await {
+            DbRequest::DbPromoteBuilder { builder_pub_key, collateral_id, ts_ms, slot } => {
+                if let Err(err) =
+                    self.db_promote_builder(&builder_pub_key, &collateral_id, ts_ms, slot).await
+                {
                     error!(%err, "error promoting builder in database");
                 }
             }
@@ -1882,8 +1899,42 @@ impl PostgresDatabaseService {
     }
 
     #[instrument(skip_all)]
-    pub async fn load_builder_demotions(&self) -> Result<Vec<Demotion>, DatabaseError> {
-        let mut record = DbMetricRecord::new("load_builder_demotions");
+    pub async fn load_promotions(&self) -> Result<Vec<Promotion>, DatabaseError> {
+        let mut record = DbMetricRecord::new("load_promotions");
+
+        let rows = self
+            .high_priority_pool
+            .get()
+            .await?
+            .query(
+                "SELECT collateral_id, promotion_time, slot_number, public_key FROM promotions",
+                &[],
+            )
+            .await?;
+
+        let promotions = rows
+            .iter()
+            .map(|row| {
+                Ok(Promotion {
+                    ts_ms: parse_i64_to_u64(row.get::<_, i64>("promotion_time"))?,
+                    slot: parse_i32_to_u64(row.get::<_, i32>("slot_number"))?,
+                    collateral_id: row.get::<_, &str>("collateral_id").as_bytes().to_vec(),
+                    builder_pubkey: parse_bytes_to_pubkey_bytes(row.get::<_, &[u8]>("public_key"))?,
+                })
+            })
+            .collect::<Result<Vec<_>, DatabaseError>>()?;
+
+        record.record_success();
+        Ok(promotions)
+    }
+
+    /// Reports that survive the retention rule: a pool with no promotion retains everything,
+    /// otherwise `demotion_time >= promotion_time`. A report wins a timestamp tie.
+    ///
+    /// Status is never inferred from `builder_info.is_optimistic`; it is derived from these rows
+    /// and the stored promotions.
+    pub async fn load_retained_demotions(&self) -> Result<Vec<Demotion>, DatabaseError> {
+        let mut record = DbMetricRecord::new("load_retained_demotions");
 
         let rows = self
             .high_priority_pool
@@ -1891,20 +1942,22 @@ impl PostgresDatabaseService {
             .await?
             .query(
                 "
-                    SELECT DISTINCT ON (demotions.public_key)
+                    SELECT
                         demotions.public_key,
                         demotions.block_hash,
                         demotions.demotion_time,
                         demotions.reason,
-                        demotions.slot_number
+                        demotions.slot_number,
+                        demotions.collateral_id,
+                        demotions.bid_value_wei
                     FROM demotions
-                    INNER JOIN builder_info
-                    ON demotions.public_key = builder_info.public_key
-                    WHERE builder_info.is_optimistic = FALSE
-                    AND builder_info.collateral > 0
-                    ORDER BY
-                        demotions.public_key,
-                        demotions.demotion_time DESC
+                    LEFT JOIN promotions
+                    ON demotions.collateral_id = promotions.collateral_id
+                    WHERE demotions.collateral_id IS NOT NULL
+                    AND (
+                        promotions.promotion_time IS NULL
+                        OR demotions.demotion_time >= promotions.promotion_time
+                    )
                 ",
                 &[],
             )
@@ -1916,8 +1969,13 @@ impl PostgresDatabaseService {
                 Ok(Demotion {
                     ts_ms: parse_i64_to_u64(row.get::<_, i64>("demotion_time"))?,
                     slot: parse_i32_to_u64(row.get::<_, i32>("slot_number"))?,
+                    collateral_id: row.get::<_, &str>("collateral_id").as_bytes().to_vec(),
                     builder_pubkey: parse_bytes_to_pubkey_bytes(row.get::<_, &[u8]>("public_key"))?,
                     block_hash: parse_bytes_to_hash(row.get::<_, &[u8]>("block_hash"))?,
+                    bid_value_wei: parse_numeric_to_u256(
+                        row.get::<_, PostgresNumeric>("bid_value_wei"),
+                    )
+                    .saturating_to(),
                     reason_msg: row.get::<_, &str>("reason").as_bytes().to_vec(),
                 })
             })
@@ -1928,11 +1986,14 @@ impl PostgresDatabaseService {
     }
 
     #[instrument(skip_all)]
+    #[allow(clippy::too_many_arguments)]
     pub async fn db_demote_builder(
         &self,
         slot: u64,
         builder_pub_key: &BlsPublicKeyBytes,
         block_hash: &B256,
+        collateral_id: &str,
+        bid_value_wei: U256,
         reason: String,
     ) -> Result<(), DatabaseError> {
         let mut record = DbMetricRecord::new("db_demote_builder");
@@ -1955,15 +2016,20 @@ impl PostgresDatabaseService {
         transaction
             .execute(
                 "
-                    INSERT INTO demotions (public_key, block_hash, demotion_time, reason, slot_number)
-                    VALUES ($1, $2, $3, $4, $5)
+                    INSERT INTO demotions (
+                        public_key, block_hash, demotion_time, reason, slot_number,
+                        collateral_id, bid_value_wei
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
                 ",
                 &[
                     &(builder_pub_key.as_slice()),
                     &(block_hash.as_slice()),
                     &(timestamp as i64),
                     &(reason),
-                    &(slot  as i32),
+                    &(slot as i32),
+                    &collateral_id,
+                    &PostgresNumeric::from(bid_value_wei),
                 ],
             )
             .await?;
@@ -1978,15 +2044,39 @@ impl PostgresDatabaseService {
     pub async fn db_promote_builder(
         &self,
         builder_pub_key: &BlsPublicKeyBytes,
+        collateral_id: &str,
+        ts_ms: u64,
+        slot: u64,
     ) -> Result<(), DatabaseError> {
-        let client = self.high_priority_pool.get().await?;
+        let mut client = self.high_priority_pool.get().await?;
+        let transaction = client.transaction().await?;
 
-        client
+        // The flag is per pubkey in every mode. From `Follow` it is advisory: pool state decides
+        // status, and the promotions row below is what carries the pool-wide effect.
+        transaction
             .execute("UPDATE builder_info SET is_optimistic = TRUE WHERE public_key = $1", &[
                 &(builder_pub_key.as_slice()),
             ])
             .await?;
 
+        // Retention compares report timestamps against this. A promotion that loses a race must
+        // not move the watermark backwards.
+        transaction
+            .execute(
+                "
+                    INSERT INTO promotions (collateral_id, promotion_time, slot_number, public_key)
+                    VALUES ($1, $2, $3, $4)
+                    ON CONFLICT (collateral_id) DO UPDATE SET
+                        promotion_time = EXCLUDED.promotion_time,
+                        slot_number = EXCLUDED.slot_number,
+                        public_key = EXCLUDED.public_key
+                    WHERE promotions.promotion_time < EXCLUDED.promotion_time
+                ",
+                &[&collateral_id, &(ts_ms as i64), &(slot as i32), &(builder_pub_key.as_slice())],
+            )
+            .await?;
+
+        transaction.commit().await?;
         Ok(())
     }
 
@@ -2045,11 +2135,21 @@ impl PostgresDatabaseService {
     ) -> Result<(), DatabaseError> {
         let client = self.high_priority_pool.get().await?;
 
+        // Collateral is per builder_id (the pool), replicated across that group's rows. Writing
+        // one row leaves the group inconsistent, and `all_builder_local_collateral` then reads
+        // whichever row it sees first. The public_key arm covers a row with no builder_id.
         let rows_affected = client
-            .execute("UPDATE builder_info SET collateral = $1 WHERE public_key = $2", &[
-                &PostgresNumeric::from(collateral),
-                &(pubkey.as_slice()),
-            ])
+            .execute(
+                "
+                    UPDATE builder_info SET collateral = $1
+                    WHERE public_key = $2
+                       OR (builder_id IS NOT NULL
+                           AND builder_id = (
+                               SELECT builder_id FROM builder_info WHERE public_key = $2
+                           ))
+                ",
+                &[&PostgresNumeric::from(collateral), &(pubkey.as_slice())],
+            )
             .await?;
 
         if rows_affected == 0 {

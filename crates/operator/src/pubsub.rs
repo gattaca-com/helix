@@ -1,8 +1,10 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use async_channel::{Receiver, Sender};
-use helix_common::OperatorP2pMode;
-use helix_types::{BuilderCollateral, OperatorMessage};
+use helix_common::{
+    OperatorP2pMode, PromotionMode, local_cache::LocalCache, metrics::OperatorMetrics,
+};
+use helix_types::OperatorMessage;
 use libp2p::{
     PeerId, SwarmBuilder,
     allow_block_list::{self, AllowedPeers},
@@ -23,7 +25,7 @@ use tokio::time::Instant;
 use super::{Operator, OperatorError};
 use crate::{
     PayloadCache,
-    utils::{PromotionState, PromotionStates},
+    pool::{PoolError, PoolState},
 };
 
 const MAX_OPERATOR_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
@@ -40,6 +42,7 @@ const QUIC_CONN_RECV_WINDOW: u32 = 192 * 1024 * 1024;
 const QUIC_IDLE_TIMEOUT: u32 = 6_000;
 const QUIC_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(2);
 const QUIC_REDIAL_INTERVAL: Duration = Duration::from_secs(10);
+const POOL_OBSERVE_INTERVAL: Duration = Duration::from_secs(60);
 /// A queued publish is dropped, silently, once this elapses. The libp2p default of 5s is shorter
 /// than the time a burst of payloads needs on a congested link.
 const PUBLISH_QUEUE_DURATION: Duration = Duration::from_secs(12);
@@ -50,6 +53,11 @@ struct NetBehaviour {
     gossipsub: gossipsub::Behaviour,
     ping: ping::Behaviour,
     limit: connection_limits::Behaviour,
+}
+
+/// Gauges carry ETH, not wei: f64 is exact only to ~2^53, far below a wei-denominated bid.
+fn wei_to_eth(wei: alloy_primitives::U256) -> f64 {
+    wei.saturating_to::<u128>() as f64 / 1e18
 }
 
 fn publish_operator_message(
@@ -76,30 +84,19 @@ fn operator_gossipsub_config() -> Result<gossipsub::Config, gossipsub::ConfigBui
         .build()
 }
 
-fn record_builder_collateral(
-    builder_collateral: &mut FxHashMap<String, BuilderCollateral>,
-    builder_id: String,
-    collateral: BuilderCollateral,
-) -> bool {
-    let changed = builder_collateral.get(&builder_id).is_none_or(|existing| {
-        collateral.collateral_wei != existing.collateral_wei ||
-            existing.builder_pubkeys != collateral.builder_pubkeys
-    });
-    if changed {
-        builder_collateral.insert(builder_id, collateral);
-    }
-    changed
-}
-
-#[allow(clippy::result_large_err)]
+#[allow(clippy::result_large_err, clippy::too_many_arguments)]
 pub(super) async fn run_operator_connection(
     quic_port: u16,
     keypair: Keypair,
     operators: Vec<Operator>,
-    outgoing: Receiver<(Option<String>, OperatorMessage)>,
+    outgoing: Receiver<OperatorMessage>,
     incoming: Sender<(Operator, OperatorMessage)>,
     mode: OperatorP2pMode,
+    operator_group: Option<Vec<u8>>,
+    promotion_mode: PromotionMode,
+    local_cache: Arc<LocalCache>,
 ) -> Result<(), OperatorError> {
+    let local_group = operator_group.unwrap_or_default();
     let operator_topic = IdentTopic::new("operator");
     let gossipsub_config = operator_gossipsub_config()?;
     let gossipsub =
@@ -149,13 +146,13 @@ pub(super) async fn run_operator_connection(
         }
     }
 
-    // Demotions keyed by builder pubkey. Sent when a new operator subscribes.
-    let mut demotions = PromotionStates::default();
-    // Local collateral keyed by builder pubkey. Sent when a new operator subscribes.
-    let mut builder_collateral = FxHashMap::<String, BuilderCollateral>::default();
+    // Pool state: membership, collateral, promotions and retained reports. Replayed when a new
+    // operator subscribes.
+    let mut pool = PoolState::new(local_group.clone(), promotion_mode);
     // Number of connected peers
     let mut connected_peers = FxHashSet::default();
     let mut redial_deadline = Instant::now() + QUIC_REDIAL_INTERVAL;
+    let mut observe_deadline = Instant::now() + POOL_OBSERVE_INTERVAL;
 
     // Payload deduplication
     let mut payload_cache = PayloadCache::default();
@@ -163,29 +160,43 @@ pub(super) async fn run_operator_connection(
     loop {
         tokio::select! {
             to_send = outgoing.recv() => match to_send {
-                Ok((builder_id, msg)) => {
+                Ok(msg) => {
+                    // An error here is a local bug: we published a message that contradicts our
+                    // own state.
                     let transmit = match &msg {
-                        OperatorMessage::Demotion(demotion) => {
-                            demotions.demoted(demotion.clone())
-                        }
-                        OperatorMessage::Promotion(promotion) => {
-                            demotions.promoted(promotion.clone())
-                        }
-                        OperatorMessage::Collateral(collateral) => {
-                            let Some(id) = builder_id else {
-                                continue;
-                            };
-
-                            record_builder_collateral(&mut builder_collateral, id, collateral.clone())
-                        }
-                        OperatorMessage::Payload(payload) => payload_cache.insert(payload),
+                        OperatorMessage::Payload(payload) => Ok(payload_cache.insert(payload)),
+                        OperatorMessage::Demotion(d) => pool.apply_demotion(d),
+                        OperatorMessage::Promotion(p) => pool.apply_promotion(p),
+                        OperatorMessage::Collateral(c) => pool.apply_collateral(local_group.clone(), c),
+                        OperatorMessage::Membership(m) => pool.apply_membership(m),
                     };
+                    let transmit = match transmit {
+                        Ok(changed) => changed,
+                        Err(e) => {
+                            tracing::error!(%e, "local operator message rejected by pool state");
+                            false
+                        }
+                    };
+                    if transmit && promotion_mode.applies() {
+                        local_cache.update_pool_state(pool.pool_records(), pool.key_records());
+                    }
                     if transmit && !connected_peers.is_empty() {
-                        publish_operator_message(
-                            &mut swarm.behaviour_mut().gossipsub,
-                            &operator_topic,
-                            msg.as_ssz_bytes(),
-                        );
+                        // Membership goes out as the pool's set, not the locally configured one.
+                        // Both are seeded alike out of band, so they agree in steady state; until
+                        // they do, publishing the local set would retract members a peer holds.
+                        let bytes = match &msg {
+                            OperatorMessage::Membership(m) => pool
+                                .membership(&m.collateral_id)
+                                .map(|m| OperatorMessage::Membership(m).as_ssz_bytes()),
+                            _ => Some(msg.as_ssz_bytes()),
+                        };
+                        if let Some(bytes) = bytes {
+                            publish_operator_message(
+                                &mut swarm.behaviour_mut().gossipsub,
+                                &operator_topic,
+                                bytes,
+                            );
+                        }
                     }
                 }
                 Err(_) => break, // channel closed
@@ -219,14 +230,45 @@ pub(super) async fn run_operator_connection(
                                         }
                                     };
 
-                                    let forward = match &operator_msg {
-                                        OperatorMessage::Demotion(demotion) => {
-                                            demotions.demoted(demotion.clone())
+                                    // Resolve the collateral group from the message, else from the
+                                    // configured source peer. A missing or conflicting group is
+                                    // rejected.
+                                    let group = match &operator_msg {
+                                        OperatorMessage::Collateral(c) => {
+                                            let configured = operator.operator_group.as_ref().map(|g| g.as_bytes());
+                                            match (c.operator_group.as_deref(), configured) {
+                                                (Some(msg_group), Some(cfg)) if msg_group != cfg => {
+                                                    tracing::error!(?cfg, ?msg_group, operator = operator.name, "operator group mismatch");
+                                                    continue;
+                                                }
+                                                (Some(msg_group), _) => msg_group.to_vec(),
+                                                (None, Some(cfg)) => cfg.to_vec(),
+                                                (None, None) => {
+                                                    tracing::error!(operator = operator.name, "collateral message with no resolvable operator group");
+                                                    continue;
+                                                }
+                                            }
                                         }
-                                        OperatorMessage::Promotion(promotion) => {
-                                            demotions.promoted(promotion.clone())
-                                        },
-                                        _ => true,
+                                        _ => Vec::new(),
+                                    };
+
+                                    let forward = match &operator_msg {
+                                        OperatorMessage::Payload(_) => Ok(true),
+                                        OperatorMessage::Demotion(d) => pool.apply_demotion(d),
+                                        OperatorMessage::Promotion(p) => pool.apply_promotion(p),
+                                        OperatorMessage::Collateral(c) => pool.apply_collateral(group, c),
+                                        OperatorMessage::Membership(m) => pool.apply_membership(m),
+                                    };
+                                    let forward = match forward {
+                                        Ok(changed) => changed,
+                                        Err(PoolError::Capacity) => {
+                                            tracing::warn!(operator = operator.name, "pool state at capacity, message dropped");
+                                            false
+                                        }
+                                        Err(e) => {
+                                            tracing::error!(%e, operator = operator.name, "operator message rejected by pool state");
+                                            false
+                                        }
                                     };
 
                                     match &operator_msg {
@@ -237,6 +279,11 @@ pub(super) async fn run_operator_connection(
                                             "new operator payload"
                                         ),
                                         _ => tracing::info!(?operator_msg, operator = operator.name, "new operator message"),
+                                    }
+
+                                    if forward && promotion_mode.applies() {
+                                        local_cache
+                                            .update_pool_state(pool.pool_records(), pool.key_records());
                                     }
 
                                     // Always handle payload messages
@@ -254,27 +301,12 @@ pub(super) async fn run_operator_connection(
                         }
                         Event::Subscribed { peer_id, topic } => {
                             if peers.contains_key(&peer_id) && topic == operator_topic.hash() {
-                                // Send current demotion and collateral state.
-                                for state in demotions.iter() {
-                                    let msg = match state {
-                                        PromotionState::Demoted(demotion) => {
-                                            OperatorMessage::Demotion(demotion.clone()).as_ssz_bytes()
-                                        }
-                                        PromotionState::Promoted(promotion) => {
-                                            OperatorMessage::Promotion(promotion.clone()).as_ssz_bytes()
-                                        }
-                                    };
+                                // Membership, local collateral, promotions, then retained reports.
+                                for msg in pool.replay() {
                                     publish_operator_message(
                                         &mut swarm.behaviour_mut().gossipsub,
                                         &operator_topic,
-                                        msg,
-                                    );
-                                }
-                                for collateral in builder_collateral.values() {
-                                    publish_operator_message(
-                                        &mut swarm.behaviour_mut().gossipsub,
-                                        &operator_topic,
-                                        OperatorMessage::Collateral(collateral.clone()).as_ssz_bytes(),
+                                        msg.as_ssz_bytes(),
                                     );
                                 }
                             } else {
@@ -304,6 +336,18 @@ pub(super) async fn run_operator_connection(
                 }
                 _ => {},
             },
+            _ = tokio::time::sleep_until(observe_deadline) => {
+                observe_deadline += POOL_OBSERVE_INTERVAL;
+                for pool in pool.observe() {
+                    let id = String::from_utf8_lossy(pool.collateral_id);
+                    OperatorMetrics::collateral_pool(&id, "gross", wei_to_eth(pool.gross));
+                    OperatorMetrics::collateral_pool(&id, "reserved", wei_to_eth(pool.reserved));
+                    OperatorMetrics::collateral_pool(&id, "available", wei_to_eth(pool.available));
+                    OperatorMetrics::collateral_pool(&id, "reports", pool.reports as f64);
+                    OperatorMetrics::collateral_pool(&id, "members", pool.members as f64);
+                    OperatorMetrics::collateral_pool(&id, "optimistic", pool.optimistic as f64);
+                }
+            },
             _ = tokio::time::sleep_until(redial_deadline) => {
                 redial_deadline += QUIC_REDIAL_INTERVAL;
                 for (peer, operator) in &peers {
@@ -326,8 +370,6 @@ pub(super) async fn run_operator_connection(
 
 #[cfg(test)]
 mod tests {
-    use helix_types::BlsPublicKeyBytes;
-
     use super::*;
 
     #[test]
@@ -339,23 +381,5 @@ mod tests {
         assert!(config.flood_publish());
         assert!(config.validate_messages());
         assert!(matches!(config.validation_mode(), ValidationMode::Strict));
-    }
-
-    #[test]
-    fn first_builder_collateral_message_is_recorded_for_publish_and_replay() {
-        let mut state = FxHashMap::default();
-        let collateral = BuilderCollateral {
-            ts_ms: 1,
-            slot: 2,
-            builder_pubkeys: vec![BlsPublicKeyBytes::random()],
-            collateral_wei: 3,
-            operator_group: Some(b"operator-a".to_vec()),
-        };
-
-        assert!(
-            record_builder_collateral(&mut state, "builder-a".to_string(), collateral.clone(),)
-        );
-        assert_eq!(state.len(), 1);
-        assert!(!record_builder_collateral(&mut state, "builder-a".to_string(), collateral,));
     }
 }
