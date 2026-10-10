@@ -709,9 +709,16 @@ impl State {
             // Builder demotion event
             (
                 State::Slot { .. } | State::Sorting(_) | State::Broadcasting { .. },
-                Event::BuilderDemotion { slot, builder_pubkey, block_hash, reason },
+                Event::BuilderDemotion { slot, builder_pubkey, block_hash, bid_value_wei, reason },
             ) => {
-                ctx.handle_builder_demotion(slot, builder_pubkey, block_hash, reason, false);
+                ctx.handle_builder_demotion(
+                    slot,
+                    builder_pubkey,
+                    block_hash,
+                    bid_value_wei,
+                    reason,
+                    false,
+                );
             }
 
             // submit_builder_preferences (Gloas), valid regardless of state

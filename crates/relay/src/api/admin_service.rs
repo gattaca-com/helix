@@ -6,6 +6,7 @@ use std::{
     },
 };
 
+use alloy_primitives::U256;
 use axum::{
     Extension, Json, Router,
     extract::Path,
@@ -13,7 +14,7 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
-use helix_common::local_cache::LocalCache;
+use helix_common::{local_cache::LocalCache, utils::utcnow_ms};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_types::BlsPublicKeyBytes;
 use serde::Deserialize;
@@ -37,6 +38,7 @@ pub async fn run_admin_service(
             post(enable_merged_headers).delete(disable_merged_headers),
         )
         .route("/admin/v1/block-merging", post(enable_block_merging).delete(disable_block_merging))
+        .route("/admin/v1/builders/{pubkey}/status", get(builder_status))
         .route("/admin/v1/builders/{pubkey}/demote", post(demote_builder))
         .route("/admin/v1/builders/{pubkey}/promote", post(promote_builder))
         .route("/admin/v1/adjustments/disable", post(disable_adjustments))
@@ -59,6 +61,35 @@ async fn status(
     Ok(Json(serde_json::json!({
         "kill_switch_enabled": auctioneer.kill_switch_enabled(),
         "block_merging_enabled": block_merging_enabled.load(Ordering::Relaxed),
+    })))
+}
+
+/// What the submission path actually uses for a builder, and where it came from.
+///
+/// `builder_info.is_optimistic` is per pubkey in every mode and is only authoritative below
+/// `Follow`. From `Follow` the pool view decides, and a pool with no entry has not had its state
+/// recovered yet, so it is ineligible.
+async fn builder_status(
+    Extension(auctioneer): Extension<Arc<LocalCache>>,
+    Path(pubkey): Path<BlsPublicKeyBytes>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let Some(effective) = auctioneer.get_builder_info(&pubkey) else {
+        return Err(StatusCode::NOT_FOUND);
+    };
+    let pool = auctioneer.pool_status(&pubkey);
+
+    Ok(Json(serde_json::json!({
+        "promotion_mode": auctioneer.promotion_mode(),
+        "flag_is_optimistic": auctioneer
+            .get_builder_info_local_collateral_only(&pubkey)
+            .is_some_and(|info| info.is_optimistic),
+        "collateral_id": pool
+            .as_ref()
+            .map(|status| String::from_utf8_lossy(&status.collateral_id).into_owned()),
+        "pool_is_optimistic": pool.as_ref().map(|status| status.is_optimistic),
+        "pool_available_wei": pool.as_ref().map(|status| status.available.to_string()),
+        "effective_is_optimistic": effective.is_optimistic,
+        "effective_collateral_wei": effective.collateral.to_string(),
     })))
 }
 
@@ -132,8 +163,14 @@ async fn demote_builder(
         .and_then(|Json(req)| req.reason)
         .unwrap_or_else(|| "manual demotion via admin API".to_string());
 
-    // slot 0 / zero block hash mark the demotion record as manual
-    if let Err(err) = db.db_demote_builder(0, &pubkey, &Default::default(), reason).await {
+    // slot 0 / zero block hash mark the demotion record as manual. A manual demotion has no
+    // offending bid, so it reserves nothing.
+    let collateral_id =
+        auctioneer.get_builder_info(&pubkey).and_then(|info| info.builder_id).unwrap_or_default();
+    if let Err(err) = db
+        .db_demote_builder(0, &pubkey, &Default::default(), &collateral_id, U256::ZERO, reason)
+        .await
+    {
         error!(%pubkey, %err, "failed to persist builder demotion");
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
@@ -153,7 +190,9 @@ async fn promote_builder(
     auctioneer.promote_builder(&pubkey);
     info!(%pubkey, "builder promoted via admin API");
 
-    if let Err(err) = db.db_promote_builder(&pubkey).await {
+    let collateral_id =
+        auctioneer.get_builder_info(&pubkey).and_then(|info| info.builder_id).unwrap_or_default();
+    if let Err(err) = db.db_promote_builder(&pubkey, &collateral_id, utcnow_ms(), 0).await {
         error!(%pubkey, %err, "failed to persist builder promotion");
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }

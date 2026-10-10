@@ -826,6 +826,26 @@ pub enum OperatorP2pMode {
     Off,
 }
 
+/// Phases of the shared optimistic spec. Each phase is a superset of the one before.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PromotionMode {
+    /// Record pool state and publish it. `builder_info` stays the authority for admission.
+    #[default]
+    Observe,
+    /// Pool state gates admission: derived status, and collateral net of reservations. Gross
+    /// backing is this operator group's contribution only.
+    Follow,
+    /// As `Follow`, and gross backing sums one contribution per operator group.
+    Share,
+}
+
+impl PromotionMode {
+    /// True once pool state, rather than `builder_info`, decides optimistic admission.
+    pub fn applies(&self) -> bool {
+        matches!(self, Self::Follow | Self::Share)
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct OperatorConfig {
     pub quic_port: u16,
@@ -835,6 +855,8 @@ pub struct OperatorConfig {
     /// Operator group or company.
     #[serde(default)]
     pub operator_group: Option<String>,
+    #[serde(default)]
+    pub promotion_mode: PromotionMode,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

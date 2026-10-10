@@ -408,6 +408,7 @@ impl<A: Api> ProposerApi<A> {
                             slot,
                             builder_pubkey,
                             block_hash,
+                            bid_value_wei: bid.value,
                             reason,
                         });
                         warn!(%builder_pubkey, %block_hash, slot = %slot, "builder demoted due to block validation failure");
@@ -572,16 +573,13 @@ impl<A: Api> ProposerApi<A> {
         if let Some(operator_pubsub) = self.operator_api.as_ref() &&
             operator_share &&
             let Err(e) = operator_pubsub
-                .send(
-                    None,
-                    helix_types::OperatorMessage::Payload(Payload {
-                        ts_ms: utcnow_ms(),
-                        slot: bid_slot.as_u64(),
-                        execution_payload: execution_payload.into_owned(),
-                        proposer_pub_key: *proposer_public_key,
-                        bid_data: bid.into_owned(),
-                    }),
-                )
+                .send(helix_types::OperatorMessage::Payload(Payload {
+                    ts_ms: utcnow_ms(),
+                    slot: bid_slot.as_u64(),
+                    execution_payload: execution_payload.into_owned(),
+                    proposer_pub_key: *proposer_public_key,
+                    bid_data: bid.into_owned(),
+                }))
                 .await
         {
             tracing::warn!(?e, "failed to send payload on operator api");

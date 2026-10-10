@@ -105,11 +105,14 @@ impl DbHandle {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn db_demote_builder(
         &self,
         slot: u64,
         builder_pub_key: BlsPublicKeyBytes,
         block_hash: B256,
+        collateral_id: String,
+        bid_value_wei: U256,
         reason: String,
         failsafe_triggered: Arc<AtomicBool>,
     ) {
@@ -117,6 +120,8 @@ impl DbHandle {
             slot,
             builder_pub_key,
             block_hash,
+            collateral_id,
+            bid_value_wei,
             reason: reason.clone(),
             failsafe_triggered: failsafe_triggered.clone(),
         }) {
@@ -129,8 +134,19 @@ impl DbHandle {
         }
     }
 
-    pub fn db_promote_builder(&self, builder_pub_key: BlsPublicKeyBytes) {
-        if let Err(err) = self.sender.try_send(DbRequest::DbPromoteBuilder { builder_pub_key }) {
+    pub fn db_promote_builder(
+        &self,
+        builder_pub_key: BlsPublicKeyBytes,
+        collateral_id: String,
+        ts_ms: u64,
+        slot: u64,
+    ) {
+        if let Err(err) = self.sender.try_send(DbRequest::DbPromoteBuilder {
+            builder_pub_key,
+            collateral_id,
+            ts_ms,
+            slot,
+        }) {
             error!(%err, "failed to send DbPromoteBuilder request");
         }
     }
