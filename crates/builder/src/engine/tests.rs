@@ -20,7 +20,6 @@ use crate::{
     engine::{
         EngineEvent, EngineOutput, MergeEngine,
         convert::{aaddr, b256, block_to_payload_v3, eaddr},
-        session::MergeSession,
         types::EngineConfig,
     },
     node::HeadInfo,
@@ -107,8 +106,6 @@ impl Fixture {
             max_base_age: Duration::from_secs(5),
             warmup_bases: 0,
             warmup_per_pubkey: false,
-            verify_reuse: true,
-            verify_layer: true,
             core: None,
             max_builder_streams: 8,
             speculation_top_k: 0,
@@ -264,30 +261,6 @@ impl Fixture {
         }
     }
 
-    /// Decodes a `MergeableBlockV1` the way ingest does, for tests that drive
-    /// `MergeSession` directly rather than through the engine.
-    fn prepared_block(
-        &self,
-        msg: &MergeableBlockV1,
-        submission_index: u64,
-    ) -> Arc<crate::engine::types::PreparedBlock> {
-        let mut recovery = Default::default();
-        let mut cache = Default::default();
-        let txs = crate::engine::decode_block_txs(msg, &mut recovery, &mut cache)
-            .expect("fixture block must decode");
-        Arc::new(crate::engine::types::PreparedBlock {
-            block_hash: msg.execution_payload.payload_inner.payload_inner.block_hash,
-            builder_pubkey: msg.builder_pubkey,
-            block_value: msg.block_value,
-            allow_appending: msg.allow_appending,
-            payload: msg.execution_payload.clone(),
-            txs: Arc::new(txs),
-            recv_ns: 0,
-            submission_index,
-            ingest_done_ns: 0,
-        })
-    }
-
     fn direct_engine(&self) -> (MergeEngine, crossbeam_channel::Receiver<EngineOutput>) {
         self.engine_with(self.engine_config())
     }
@@ -303,7 +276,6 @@ impl Fixture {
                 config.max_builder_streams,
                 &[],
                 self.store.clone(),
-                self.blockchain.clone(),
                 output_tx.clone(),
             )
         });
@@ -315,6 +287,7 @@ impl Fixture {
             relay_config: None,
             slot: None,
             streams,
+            store: self.store.clone(),
         };
         (engine, output_rx)
     }
@@ -503,7 +476,6 @@ async fn merges_order_into_activated_base_block() {
     let _engine = MergeEngine::spawn(
         fixture.engine_config(),
         fixture.store.clone(),
-        fixture.blockchain.clone(),
         fixture.head(),
         event_tx.clone(),
         event_rx,
@@ -553,52 +525,6 @@ async fn merges_order_into_activated_base_block() {
     assert!(proposer_added <= inclusion.contribution / U256::from(4) + U256::from(1));
 
     let _ = aaddr(eaddr(fixture.proposer)); // keep converters exercised both ways
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn checkpoint_hit_reuses_shared_prefix_on_resubmission() {
-    let fixture = Fixture::new().await;
-    let (base_a, hash_a) = fixture.build_base_with_payment(U256::from(ETH), fixture.block_value);
-    let (base_b, hash_b) = fixture
-        .build_base_with_payment(U256::from(ETH), fixture.block_value + U256::from(ETH / 100));
-    assert_ne!(hash_a, hash_b);
-    assert_eq!(
-        base_a.execution_payload.payload_inner.payload_inner.transactions[0],
-        base_b.execution_payload.payload_inner.payload_inner.transactions[0],
-        "the two bases must share a prefix for the checkpoint to be reusable"
-    );
-
-    let ctx =
-        crate::engine::types::SlotState::new(&fixture.slot_start(), None, &fixture.engine_config())
-            .ctx
-            .clone();
-    let prepared_a = fixture.prepared_block(&base_a, 0);
-    let prepared_b = fixture.prepared_block(&base_b, 1);
-
-    let (_, checkpoint, hit) = MergeSession::activate(
-        &ctx,
-        &prepared_a,
-        &fixture.store,
-        fixture.blockchain.clone(),
-        &fixture.relay_config,
-        None,
-        None,
-    )
-    .expect("base a must activate");
-    assert!(!hit, "the first activation has no checkpoint to hit");
-
-    let (session, _, hit) = MergeSession::activate(
-        &ctx,
-        &prepared_b,
-        &fixture.store,
-        fixture.blockchain.clone(),
-        &fixture.relay_config,
-        Some(&checkpoint),
-        None,
-    )
-    .expect("base b must activate");
-    assert!(hit, "a resubmission sharing the prefix must reuse the checkpoint");
-    assert_eq!(session.base_block_hash, hash_b);
 }
 
 /// Exclusion and pool state now live in the slot shared with the merge
@@ -994,45 +920,6 @@ async fn exclusion_state_is_independent_of_event_interleaving() {
     assert!(!excluded.contains(&a_hashes[0]), "A never dropped its first order");
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn every_pooled_order_is_accounted_for() {
-    let fixture = Fixture::new().await;
-    let (base, _) = fixture.build_base(U256::from(ETH));
-    let a = pubkey(0xaa);
-    let (full, _) = fixture.mergeable_orders(&base, a, &[3, 4, 5], true, 0xd1);
-    let (partial, _) = fixture.mergeable_orders(&base, a, &[3], true, 0xd2);
-
-    let (mut engine, _rx) = fixture.started_engine();
-    engine.handle_event(mergeable_event(&base, 1));
-    engine.handle_event(mergeable_event(&full, 2));
-    engine.handle_event(mergeable_event(&partial, 3));
-
-    let shared = Fixture::shared_of(&engine);
-    let inner = shared.inner.read().unwrap();
-    let excluded_in_pool =
-        inner.orders.iter().filter(|o| inner.is_excluded(&o.order_hash)).count() as u64;
-    assert!(excluded_in_pool > 0, "the fixture must produce at least one exclusion");
-
-    let (mut session, _, _) = MergeSession::activate(
-        &shared.ctx,
-        &fixture.prepared_block(&base, 0),
-        &fixture.store,
-        fixture.blockchain.clone(),
-        &shared.relay_config,
-        None,
-        None,
-    )
-    .expect("base must activate");
-    let candidates = session.screen(&inner.orders, &inner.excluded);
-    session.try_extend(candidates);
-
-    assert_eq!(
-        session.stats().orders_excluded_skipped,
-        excluded_in_pool,
-        "the skip counter must account for exactly the excluded pool entries"
-    );
-}
-
 /// Builders pay the proposer through a forwarder contract, so the trailing tx
 /// carries the contract as `to` and a value that is not the bid. Only the
 /// proposer's balance delta proves the payment, and merging must accept it.
@@ -1056,7 +943,6 @@ async fn a_base_block_paying_through_a_contract_is_merged() {
     let _engine = MergeEngine::spawn(
         fixture.engine_config(),
         fixture.store.clone(),
-        fixture.blockchain.clone(),
         fixture.head(),
         event_tx.clone(),
         event_rx,
@@ -1077,56 +963,6 @@ async fn a_base_block_paying_through_a_contract_is_merged() {
     assert!(merged.proposer_value > fixture.block_value);
 }
 
-fn submission_stream(samples: &[(u64, u64)]) -> crate::engine::types::SharedInner {
-    let mut inner = crate::engine::types::SharedInner::default();
-    for (value, ms) in samples {
-        inner.record_submission(BUILDER, U256::from(*value), ms * 1_000_000);
-    }
-    inner
-}
-
-const BUILDER: Address = Address::repeat_byte(0x11);
-
-/// The budget is the time until the builder's own stream out-bids our merge:
-/// emit any earlier and we win, any later and we lose.
-#[test]
-fn budget_ends_when_the_builder_outbids_the_merge() {
-    // uplift over the base of 100: +0, +5, +30
-    let inner = submission_stream(&[(100, 0), (105, 10), (130, 25)]);
-    let subs = inner.submissions.get(&BUILDER).unwrap();
-
-    // delta 20 survives the +5 step and dies on the +30 step.
-    let (steps, budget_ms, deadline_seen) = subs.budget(0, U256::from(100), U256::from(20));
-    assert!(deadline_seen, "the out-bidding submission is in the history");
-    assert_eq!(steps, 1, "one submission of headroom");
-    assert_eq!(budget_ms, 25, "we had until the out-bidding submission arrived");
-}
-
-/// A delta the builder never out-bids has no deadline yet, so the budget is a
-/// lower bound rather than an exact figure.
-#[test]
-fn budget_is_a_lower_bound_while_the_merge_still_leads() {
-    let inner = submission_stream(&[(100, 0), (105, 10), (130, 25)]);
-    let subs = inner.submissions.get(&BUILDER).unwrap();
-
-    let (steps, budget_ms, deadline_seen) = subs.budget(0, U256::from(100), U256::from(1_000));
-    assert!(!deadline_seen);
-    assert_eq!(steps, 2);
-    assert_eq!(budget_ms, 25);
-}
-
-/// A merge that is already behind when it is emitted gets no budget at all.
-#[test]
-fn budget_is_zero_when_the_next_submission_already_wins() {
-    let inner = submission_stream(&[(100, 0), (200, 8)]);
-    let subs = inner.submissions.get(&BUILDER).unwrap();
-
-    let (steps, budget_ms, deadline_seen) = subs.budget(0, U256::from(100), U256::from(20));
-    assert!(deadline_seen);
-    assert_eq!(steps, 0, "no headroom: the very next submission beat us");
-    assert_eq!(budget_ms, 8);
-}
-
 fn stream_job(
     fixture: &Fixture,
     payload: &alloy_rpc_types::engine::ExecutionPayloadV3,
@@ -1143,23 +979,21 @@ fn stream_job(
             payload: payload.clone(),
             txs: Arc::new(Vec::new()),
             recv_ns: 0,
-            submission_index: 0,
             ingest_done_ns: 0,
         }),
         generation: 0,
-        offered_ns: 0,
     }
 }
 
 fn shared_slot(fixture: &Fixture) -> Arc<crate::engine::types::SharedSlot> {
-    let state =
-        crate::engine::types::SlotState::new(&fixture.slot_start(), None, &fixture.engine_config());
+    let state = crate::engine::types::SlotState::new(&fixture.slot_start(), None);
     Arc::new(crate::engine::types::SharedSlot {
         ctx: state.ctx.clone(),
         relay_config: Arc::new(fixture.relay_config.clone()),
         engine_config: Arc::new(fixture.engine_config()),
         inner: std::sync::RwLock::new(crate::engine::types::SharedInner::default()),
         pool_version: std::sync::atomic::AtomicU64::new(0),
+        state: Default::default(),
     })
 }
 
@@ -1245,113 +1079,6 @@ async fn the_pool_version_moves_only_when_the_pool_does() {
     // The same block again changes nothing, so neither should the version.
     engine.handle_event(mergeable_event(&order, 3));
     assert_eq!(version(), after_order, "a duplicate block must not move the version");
-}
-
-#[tokio::test(flavor = "multi_thread")]
-#[ignore]
-async fn bench_base_to_first_merge() {
-    let env = |key: &str, default| {
-        std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
-    };
-    let (blocks, txs, iters) =
-        (env("BENCH_BLOCKS", 16), env("BENCH_TXS", 16), env("BENCH_ITERS", 20));
-    let base_txs = env("BENCH_BASE_TXS", 1);
-    let senders: Vec<PrivateKeySigner> = (1..=blocks * txs + base_txs)
-        .map(|i| PrivateKeySigner::from_bytes(&B256::from(U256::from(i))).unwrap())
-        .collect();
-    let stages = ["recv_to_sim", "sim", "sim_to_finalize", "recv_to_output"];
-    let mut samples: [Vec<f64>; 4] = Default::default();
-
-    for _ in 0..iters {
-        let mut fixture = Fixture::with_genesis(|genesis| {
-            for signer in &senders {
-                genesis.alloc.insert(
-                    eaddr(signer.address()),
-                    ethrex_common::types::GenesisAccount {
-                        code: Default::default(),
-                        storage: Default::default(),
-                        balance: ethrex_common::U256::from(100 * ETH),
-                        nonce: 0,
-                    },
-                );
-            }
-        })
-        .await;
-        let first_sender = fixture.signers.len();
-        fixture.signers.extend(senders.iter().cloned());
-        let base_senders = &fixture.signers[first_sender + blocks * txs..];
-        let mut base_body: Vec<Vec<u8>> = base_senders
-            .iter()
-            .map(|signer| {
-                let to = Address::repeat_byte(0x55);
-                signed_transfer(signer, fixture.chain_id, 0, to, U256::from(GWEI), 100 * GWEI, GWEI)
-            })
-            .collect();
-        base_body.push(signed_transfer(
-            &fixture.signers[0],
-            fixture.chain_id,
-            0,
-            fixture.proposer,
-            fixture.block_value,
-            100 * GWEI,
-            0,
-        ));
-        let (base, base_hash) = fixture.base_from_txs(base_body, fixture.block_value);
-
-        let (event_tx, event_rx) = crossbeam_channel::bounded(1024);
-        let (output_tx, output_rx) = crossbeam_channel::bounded(256);
-        let mut config = fixture.engine_config();
-        config.max_blocks_per_slot = blocks + 1;
-        config.max_orders_per_slot = blocks * txs;
-        let engine = MergeEngine::spawn(
-            config,
-            fixture.store.clone(),
-            fixture.blockchain.clone(),
-            fixture.head(),
-            event_tx.clone(),
-            event_rx,
-            output_tx,
-        );
-        event_tx.send(EngineEvent::RelayConfig(fixture.relay_config.clone())).unwrap();
-        event_tx.send(EngineEvent::SlotStart(fixture.slot_start())).unwrap();
-        for b in 0..blocks {
-            let range: Vec<usize> =
-                (first_sender + b * txs..first_sender + (b + 1) * txs).collect();
-            let byte = b as u8 + 1;
-            let (msg, _) = fixture.mergeable_orders(&base, pubkey(byte), &range, false, byte);
-            event_tx.send(mergeable_event(&msg, 0)).unwrap();
-        }
-        tokio::time::sleep(Duration::from_millis(200)).await;
-
-        event_tx.send(mergeable_event(&base, 0)).unwrap();
-        event_tx.send(activate_event(base_hash)).unwrap();
-        let merged = expect_merged(output_rx.recv_timeout(Duration::from_secs(60)).unwrap());
-        let output_ns = crate::utils::utcnow_ns();
-        let t = merged.trace;
-        let ms = |from: u64, to: u64| to.saturating_sub(from) as f64 / 1e6;
-        for (sample, value) in samples.iter_mut().zip([
-            ms(t.base_block_recv_ns, t.sim_start_ns),
-            ms(t.sim_start_ns, t.sim_end_ns),
-            ms(t.sim_end_ns, t.finalize_ns),
-            ms(t.base_block_recv_ns, output_ns),
-        ]) {
-            sample.push(value);
-        }
-        drop(event_tx);
-        engine.join().unwrap();
-    }
-
-    println!("blocks={blocks} txs={txs} base_txs={base_txs} iters={iters}");
-    for (stage, sample) in stages.iter().zip(samples.iter_mut()) {
-        sample.sort_unstable_by(f64::total_cmp);
-        let q = |p: f64| sample[((sample.len() - 1) as f64 * p) as usize];
-        println!(
-            "{stage:<20} p50 {:>8.2}ms  p90 {:>8.2}ms  p99 {:>8.2}ms",
-            q(0.5),
-            q(0.9),
-            q(0.99)
-        );
-    }
 }
 
 const SAFE: Address = alloy_primitives::address!("5637a7552003411c8953Feba6E38951a32Ab9c49");
@@ -1599,69 +1326,6 @@ async fn replay_slot(
         at += 13 + len;
     }
 
-    {
-        let mut first_seen: rustc_hash::FxHashMap<B256, u64> = Default::default();
-        let mut arrived: rustc_hash::FxHashMap<B256, u64> = Default::default();
-        for (kind, ns, body) in &frames {
-            if *kind != crate::engine::record::KIND_MERGEABLE {
-                continue;
-            }
-            let Ok(msg) =
-                helix_tcp_types::merging::relay_to_builder::MergeableBlockV1::from_ssz_bytes(body)
-            else {
-                continue
-            };
-            let p = &msg.execution_payload.payload_inner.payload_inner;
-            arrived.entry(p.block_hash).or_insert(*ns);
-            for t in &p.transactions {
-                let h = if t.len() == 32 {
-                    B256::from_slice(t.as_ref())
-                } else {
-                    alloy_primitives::keccak256(t.as_ref())
-                };
-                first_seen.entry(h).or_insert(*ns);
-            }
-        }
-        crate::engine::state::set_timeline(first_seen, arrived);
-        if std::env::var_os("ORDER_DUMP").is_some() {
-            let mut tips: rustc_hash::FxHashMap<B256, ethrex_common::U256> = Default::default();
-            for (kind, ns, body) in &frames {
-                if *kind != crate::engine::record::KIND_MERGEABLE {
-                    continue;
-                }
-                let Ok(msg) =
-                    helix_tcp_types::merging::relay_to_builder::MergeableBlockV1::from_ssz_bytes(
-                        body,
-                    )
-                else {
-                    continue
-                };
-                let p = &msg.execution_payload.payload_inner.payload_inner;
-                let base_fee: u64 = p.base_fee_per_gas.to();
-                let txs: Vec<String> = p
-                    .transactions
-                    .iter()
-                    .map(|t| {
-                        let (h, tip) = if t.len() == 32 {
-                            let h = B256::from_slice(t.as_ref());
-                            (h, tips.get(&h).copied().unwrap_or_default())
-                        } else {
-                            let h = alloy_primitives::keccak256(t.as_ref());
-                            let tip =
-                                ethrex_common::types::Transaction::decode_canonical(t.as_ref())
-                                    .ok()
-                                    .and_then(|tx| tx.effective_gas_tip(Some(base_fee)))
-                                    .unwrap_or_default();
-                            tips.insert(h, tip);
-                            (h, tip)
-                        };
-                        format!("{}:{}", hex::encode(&h[..6]), tip)
-                    })
-                    .collect();
-                println!("ORDERDUMP {} {} {}", p.fee_recipient, ns, txs.join(","));
-            }
-        }
-    }
     let signer = crate::engine::record::replay_signer();
     let word = |address: ethrex_common::Address| {
         ethrex_common::U256::from_big_endian(B256::left_padding_from(address.as_bytes()).as_slice())
@@ -1757,8 +1421,6 @@ async fn replay_slot(
             .and_then(|v| v.parse().ok())
             .unwrap_or(0),
         warmup_per_pubkey: std::env::var_os("REPLAY_WARMUP_PER_PUBKEY").is_some(),
-        verify_reuse: std::env::var_os("REPLAY_VERIFY_REUSE").is_some(),
-        verify_layer: std::env::var_os("REPLAY_VERIFY_LAYER").is_some(),
         core: None,
         max_builder_streams: 16,
         speculation_top_k: 4,
@@ -1770,8 +1432,9 @@ async fn replay_slot(
     };
     let (event_tx, event_rx) = crossbeam_channel::bounded(1 << 16);
     let (output_tx, output_rx) = crossbeam_channel::bounded(1 << 16);
-    let engine =
-        MergeEngine::spawn(config, store, blockchain, head, event_tx.clone(), event_rx, output_tx);
+    let validator = blockchain.clone();
+    let engine = MergeEngine::spawn(config, store, head, event_tx.clone(), event_rx, output_tx);
+    let mut beacon_root = B256::ZERO;
 
     let collector = std::thread::spawn(move || {
         let mut outputs = Vec::new();
@@ -1800,6 +1463,7 @@ async fn replay_slot(
                 }
                 let mut msg = SlotStartV1::from_ssz_bytes(&body).unwrap();
                 replayed_slot = Some(msg.slot);
+                beacon_root = msg.parent_beacon_block_root;
                 msg.parent_hash = b256(parent_hash);
                 EngineEvent::SlotStart(msg)
             }
@@ -1829,7 +1493,33 @@ async fn replay_slot(
     drop(event_tx);
     engine.join().unwrap();
     drop(head_tx);
-    collector.join().unwrap()
+    let outputs = collector.join().unwrap();
+    // Every `REPLAY_VALIDATE`th merged block, executed in full by ethrex.
+    if let Some(every) = std::env::var("REPLAY_VALIDATE").ok().and_then(|v| v.parse::<usize>().ok())
+    {
+        let (mut ok, mut failed) = (0, std::collections::BTreeMap::<String, usize>::new());
+        let merged = outputs.iter().filter_map(|(_, output)| match output {
+            EngineOutput::Merged { msg, .. } => Some(msg),
+            EngineOutput::Reject { .. } => None,
+        });
+        for msg in merged.step_by(every.max(1)) {
+            let block = crate::engine::convert::payload_v3_to_block(
+                &msg.execution_payload,
+                beacon_root,
+                &msg.execution_requests,
+            )
+            .unwrap();
+            match validator.add_block(block) {
+                Ok(()) => ok += 1,
+                Err(err) => {
+                    let err = err.to_string();
+                    *failed.entry(err.chars().take(120).collect()).or_default() += 1;
+                }
+            }
+        }
+        println!("validated ok={ok} failed={failed:?}");
+    }
+    outputs
 }
 
 /// `REPLAY_DIR=<record dir>/<slot> cargo test --release -p helix-builder replay_recording --
@@ -1868,7 +1558,6 @@ async fn replay_recording() {
             }
         }
     }
-    crate::engine::state::drain();
     let ms = |from: u64, to: u64| to.saturating_sub(from) as f64 / 1e6;
     let mut stages: [Vec<f64>; 4] = Default::default();
     for t in first.values() {

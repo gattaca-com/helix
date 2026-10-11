@@ -149,15 +149,12 @@ fn main() -> eyre::Result<()> {
             ),
             warmup_bases: merging_config.speculation.warmup_bases,
             warmup_per_pubkey: merging_config.speculation.warmup_per_pubkey,
-            verify_reuse: false,
-            verify_layer: merging_config.speculation.verify_layer,
             replay_worker_cores: merging_config.cores.replay_workers.clone(),
             record: merging_config.record.clone(),
         };
         let _engine = MergeEngine::spawn(
             engine_config,
             node.store.clone(),
-            node.blockchain.clone(),
             node.head.clone(),
             event_tx.clone(),
             event_rx,

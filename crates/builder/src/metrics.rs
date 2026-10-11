@@ -418,67 +418,10 @@ pub fn gwei(v: U256) -> f64 {
     wei / WEI_PER_GWEI
 }
 
-pub fn order_outcome(outcome: &str, value: U256) {
-    ORDER_OUTCOME.with_label_values(&[outcome]).inc();
-    ORDER_VALUE.with_label_values(&[outcome]).observe(gwei(value));
-}
-
-pub fn emit_value(total_revenue: U256, proposer_delta: U256) {
-    EMIT_VALUE.with_label_values(&["total_revenue"]).observe(gwei(total_revenue));
-    EMIT_VALUE.with_label_values(&["proposer_delta"]).observe(gwei(proposer_delta));
-}
-
-pub fn base_age(stage: &str, age_ms: u64) {
-    BASE_AGE.with_label_values(&[stage]).observe(age_ms as f64);
-}
-
-pub fn beats_own_bid(reference: &str, beats: bool) {
-    BEATS_OWN_BID.with_label_values(&[reference, if beats { "yes" } else { "no" }]).inc();
-}
-
 pub fn ratchet(delta: U256, interval_ms: u64, rising: bool) {
     let direction = if rising { "up" } else { "down" };
     RATCHET_VALUE.with_label_values(&[direction]).observe(gwei(delta));
     RATCHET_INTERVAL.with_label_values(&[direction]).observe(interval_ms as f64);
-}
-
-/// One emission's full verdict: whether it beat the builder's own stream, how
-/// far behind it was, and how much headroom it actually had.
-pub fn emission_verdict(
-    won: bool,
-    steps_behind: u64,
-    base_age_ms: u64,
-    budget_steps: u64,
-    budget_ms: u64,
-    deadline_seen: bool,
-) {
-    let result = if won { "won" } else { "lost" };
-    let deadline = if deadline_seen { "seen" } else { "unseen" };
-    STEPS_BEHIND.with_label_values(&[result]).observe(steps_behind as f64);
-    BUDGET.with_label_values(&[result, deadline]).observe(budget_ms as f64);
-    BUDGET_STEPS.with_label_values(&[result, deadline]).observe(budget_steps as f64);
-    BASE_AGE.with_label_values(&[result]).observe(base_age_ms as f64);
-}
-
-/// Splits one emission's base age into its phases. A zero stamp means the
-/// phase did not happen -- an inline replay never reaches a worker -- so those
-/// gaps are skipped rather than recorded as zero.
-pub fn emission_phases(t: &crate::engine::types::Timeline) {
-    let emit_ns = crate::utils::utcnow_ns();
-    let gap = |phase: &str, from: u64, to: u64| {
-        if from == 0 || to == 0 || to < from {
-            return;
-        }
-        PHASE.with_label_values(&[phase]).observe((to - from) as f64 / 1e6);
-    };
-    gap("ingest", t.recv_ns, t.ingest_done_ns);
-    gap("dispatch_wait", t.ingest_done_ns, t.dispatch_ns);
-    gap("worker_wait", t.dispatch_ns, t.replay_start_ns);
-    gap("replay", t.replay_start_ns, t.replay_end_ns);
-    gap("return_queue", t.replay_end_ns, t.handled_ns);
-    gap("to_live", t.handled_ns, t.live_ns);
-    gap("to_emit", t.live_ns, emit_ns);
-    gap("total", t.recv_ns, emit_ns);
 }
 
 thread_local! {
@@ -494,93 +437,11 @@ pub fn warming() -> bool {
     WARMING.with(|w| w.get())
 }
 
-/// Pickup to first emission is the cycle a base must fit, with its wait,
-/// inside the relay's staleness gate.
-pub fn first_emission(t: &crate::engine::types::Timeline) {
-    if warming() {
-        return;
-    }
-    PHASE
-        .with_label_values(&["cycle"])
-        .observe(t.first_emit_ns.saturating_sub(t.replay_start_ns) as f64 / 1e6);
-    BASE_AGE
-        .with_label_values(&["first_emit"])
-        .observe(t.first_emit_ns.saturating_sub(t.recv_ns) as f64 / 1e6);
-}
-
-/// How long a block waited before its stream started it, split by whether the
-/// stream was mid-merge or idle when it arrived.
-pub fn worker_wait(state: &str, ms: u64) {
-    if warming() {
-        return;
-    }
-    PHASE.with_label_values(&[state]).observe(ms as f64);
-}
-
-/// Accounts and storage slots the state-root walk has to touch, split between
-/// what the base block alone changed and the full set at emission. If the base
-/// dominates, every emission is re-walking work that did not change.
-pub fn account_updates(stage: &str, accounts: usize, slots: usize) {
-    STATE_WALK.with_label_values(&[stage, "accounts"]).observe(accounts as f64);
-    STATE_WALK.with_label_values(&[stage, "slots"]).observe(slots as f64);
-}
-
 pub fn stage_latency(stage: &str, micros: u64) {
     if warming() {
         return;
     }
     STAGE_LATENCY.with_label_values(&[stage]).observe(micros as f64);
-}
-
-/// Extend/emit passes made on one base before moving to a fresher one.
-pub fn extend_passes(passes: u64) {
-    EXTEND_PASSES.observe(passes as f64);
-}
-
-/// Why a stream gave up the base it held.
-pub fn rebase_reason(reason: &str) {
-    REBASE_REASON.with_label_values(&[reason]).inc();
-}
-
-/// The delta one pass on a new base reaches, against the delta the previous
-/// base ended on. Recorded as two distributions rather than a per-event ratio:
-/// the ratio is unbounded when the previous base ended near zero, which made
-/// its mean meaningless.
-pub fn delta_on_base(stage: &str, delta: U256) {
-    DELTA_ON_BASE.with_label_values(&[stage]).observe(gwei(delta));
-}
-
-/// An emission that both beat the builder's own bid and is young enough for the
-/// relay to serve. Beating the bid on a base past the gate is worth nothing, so
-/// this is the objective, not `beats_own_bid` alone.
-pub fn servable_win(servable: bool) {
-    SERVABLE_WIN.with_label_values(&[if servable { "yes" } else { "no" }]).inc();
-}
-
-pub fn emit_base(superseded: bool) {
-    EMIT_BASE.with_label_values(&[if superseded { "superseded" } else { "latest" }]).inc();
-}
-
-pub fn layer_build(outcome: &str) {
-    LAYER_BUILD.with_label_values(&[outcome]).inc();
-}
-
-pub fn wait_phase(phase: &str, nanos: u64) {
-    if warming() {
-        return;
-    }
-    WAIT_PHASE.with_label_values(&[phase]).observe(nanos as f64 / 1e6);
-}
-
-pub fn wait_dominant(phase: &str) {
-    if warming() {
-        return;
-    }
-    WAIT_DOMINANT.with_label_values(&[phase]).inc();
-}
-
-pub fn tx_reuse(stage: &str, outcome: &str) {
-    TX_REUSE.with_label_values(&[stage, outcome]).inc();
 }
 
 pub fn speculation(outcome: &str) {
@@ -593,10 +454,6 @@ pub fn activation_source(source: &str) {
 
 pub fn rejection(stage: &str, reason: &str) {
     REJECTION.with_label_values(&[stage, reason]).inc();
-}
-
-pub fn extend_orders(step: &str, count: usize) {
-    EXTEND_ORDERS.with_label_values(&[step]).observe(count as f64);
 }
 
 pub fn sim_lap(stage: &str, since: Instant) -> Instant {

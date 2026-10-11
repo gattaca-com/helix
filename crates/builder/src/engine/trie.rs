@@ -85,6 +85,8 @@ impl Value {
     }
 }
 
+// Nodes live by value in a flat arena, so every slot is branch-sized either way.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Copy)]
 enum Node {
     Leaf { path: Path, value: Value },
@@ -92,6 +94,7 @@ enum Node {
     Branch { children: [Child; 16] },
 }
 
+#[derive(Clone, Copy)]
 struct Slot {
     node: Node,
     /// The node's reference in its parent; `None` once a write below it changed it.
@@ -120,6 +123,16 @@ pub struct Mpt {
     db: Box<dyn TrieDB>,
     account: Option<H256>,
     shared: Shared,
+    /// Rollback points, innermost last; `level` is how many a write must find open.
+    undo: Vec<Undo>,
+    level: usize,
+}
+
+/// The arena's length and root when a rollback point opened, and every slot overwritten since.
+struct Undo {
+    len: usize,
+    root: Child,
+    saved: Vec<(Id, Slot)>,
 }
 
 fn nibbles(key: &[u8]) -> Path {
@@ -139,7 +152,34 @@ impl Mpt {
     fn open(db: Box<dyn TrieDB>, root: H256, account: Option<H256>, shared: Shared) -> Self {
         let root =
             if root == *EMPTY_TRIE_HASH { Child::Empty } else { Child::Unloaded(Ref::Hash(root)) };
-        Mpt { slots: Vec::with_capacity(256), root, db, account, shared }
+        Mpt {
+            slots: Vec::with_capacity(256),
+            root,
+            db,
+            account,
+            shared,
+            undo: Vec::new(),
+            level: 0,
+        }
+    }
+
+    /// Keeps slot `id` for the innermost rollback point before it is overwritten.
+    fn save(&mut self, id: Id) {
+        if let Some(undo) = self.undo.last_mut() &&
+            (id as usize) < undo.len
+        {
+            undo.saved.push((id, self.slots[id as usize]));
+        }
+    }
+
+    /// Restores the trie to its innermost rollback point.
+    fn rollback(&mut self) {
+        let Some(undo) = self.undo.pop() else { return };
+        for (id, slot) in undo.saved.into_iter().rev() {
+            self.slots[id as usize] = slot;
+        }
+        self.slots.truncate(undo.len);
+        self.root = undo.root;
     }
 
     fn push(&mut self, node: Node, cached: Option<Ref>) -> Id {
@@ -208,6 +248,9 @@ impl Mpt {
 
     /// Sets `key` to `value`, or removes it when `value` is `None`.
     fn set(&mut self, key: &[u8], value: Option<Value>) -> Result<(), TrieError> {
+        while self.undo.len() < self.level {
+            self.undo.push(Undo { len: self.slots.len(), root: self.root, saved: Vec::new() });
+        }
         let rest = nibbles(key);
         let mut path = Path::EMPTY;
         self.root = match value {
@@ -229,6 +272,7 @@ impl Mpt {
         value: Value,
     ) -> Result<Child, TrieError> {
         let Some(id) = self.load(child, path)? else { return Ok(self.leaf(rest, value)) };
+        self.save(id);
         self.slots[id as usize].cached = None;
         let replaced = match self.slots[id as usize].node {
             Node::Leaf { path: p, .. } if p.get() == rest => Node::Leaf { path: p, value },
@@ -320,6 +364,7 @@ impl Mpt {
             // The key is not in this subtree: nothing changes.
             _ => return Ok(Child::Node(id)),
         };
+        self.save(id);
         self.slots[id as usize].cached = None;
         self.slots[id as usize].node = replaced;
         Ok(Child::Node(id))
@@ -451,7 +496,7 @@ fn hash_tries(tries: &mut [&mut Mpt]) {
             })
             .collect();
         let long: Vec<&[u8]> = spans.iter().copied().filter(|s| s.len() >= 32).collect();
-        crate::engine::keccak8::hash_many(&long, &mut hashes);
+        super::keccak8::hash_many(&long, &mut hashes);
         let mut hashed = hashes.iter();
         for (&(trie, id), span) in level.iter().zip(&spans) {
             let r = if span.len() < 32 {
@@ -461,6 +506,7 @@ fn hash_tries(tries: &mut [&mut Mpt]) {
             } else {
                 Ref::Hash(H256(*hashed.next().unwrap_or(&[0; 32])))
             };
+            tries[trie].save(id);
             tries[trie].slots[id as usize].cached = Some(r);
         }
     }
@@ -617,27 +663,95 @@ static TRIE_POOL: std::sync::LazyLock<rayon::ThreadPool> = std::sync::LazyLock::
         .expect("b trie pool")
 });
 
+/// Opens an account's storage-trie node store by hashed address.
+pub type OpenStorage = Box<dyn Fn(H256) -> Result<Box<dyn TrieDB>, TrieError> + Send + Sync>;
+
 /// The state: the account trie plus each touched account's storage trie.
 pub struct State {
     accounts: Mpt,
     storage: FxHashMap<H256, Mpt>,
-    open_storage: Box<dyn Fn(H256) -> Result<Box<dyn TrieDB>, TrieError> + Send + Sync>,
+    open_storage: OpenStorage,
     shared: Shared,
+    /// Open rollback points, innermost last.
+    levels: Vec<Level>,
+}
+
+/// What a rollback point undoes beyond each trie's own slots: the storage tries written, opened
+/// and dropped since it opened.
+#[derive(Default)]
+struct Level {
+    written: Vec<H256>,
+    opened: Vec<H256>,
+    dropped: Vec<(H256, Mpt)>,
 }
 
 impl State {
-    pub fn open(
-        accounts: Box<dyn TrieDB>,
-        root: H256,
-        open_storage: Box<dyn Fn(H256) -> Result<Box<dyn TrieDB>, TrieError> + Send + Sync>,
-    ) -> Self {
+    pub fn open(accounts: Box<dyn TrieDB>, root: H256, open_storage: OpenStorage) -> Self {
         let shared = shared(root);
         State {
             accounts: Mpt::open(accounts, root, None, shared.clone()),
             storage: FxHashMap::default(),
             open_storage,
             shared,
+            levels: Vec::new(),
         }
+    }
+
+    /// Opens a rollback point: [`Self::rollback`] undoes every [`Self::apply`] since.
+    pub fn begin(&mut self) {
+        self.levels.push(Level::default());
+    }
+
+    pub fn rollback(&mut self) {
+        let depth = self.levels.len();
+        let Some(level) = self.levels.pop() else { return };
+        if self.accounts.undo.len() == depth {
+            self.accounts.rollback();
+        }
+        for hashed in level.opened {
+            self.storage.remove(&hashed);
+        }
+        self.storage.extend(level.dropped);
+        for hashed in level.written {
+            if let Some(trie) = self.storage.get_mut(&hashed) &&
+                trie.undo.len() == depth
+            {
+                trie.rollback();
+            }
+        }
+    }
+
+    /// Drops account `hashed`'s storage trie, keeping it for the innermost rollback point.
+    fn drop_storage(&mut self, hashed: H256) {
+        let Some(trie) = self.storage.remove(&hashed) else { return };
+        if let Some(level) = self.levels.last_mut() &&
+            !level.opened.contains(&hashed)
+        {
+            level.dropped.push((hashed, trie));
+        }
+    }
+
+    /// Loads the trie paths to every account in `paths` and to each of its listed storage slots
+    /// (all hashed), so later tries on the same parent find those nodes in memory.
+    pub fn prefetch(&mut self, paths: &[(H256, Vec<H256>)]) -> Result<(), TrieError> {
+        for (hashed, slots) in paths {
+            let Some(encoded) = self.accounts.get(hashed.as_bytes())? else { continue };
+            let account = AccountState::decode(encoded.get())
+                .map_err(|e| TrieError::Verify(e.to_string()))?;
+            if slots.is_empty() || account.storage_root == *EMPTY_TRIE_HASH {
+                continue;
+            }
+            let mut trie = Mpt::open(
+                (self.open_storage)(*hashed)?,
+                account.storage_root,
+                Some(*hashed),
+                self.shared.clone(),
+            );
+            for slot in slots {
+                trie.get(slot.as_bytes())?;
+            }
+        }
+        Ok(())
     }
 
     /// Applies `updates` and returns the new state root. Storage writes go first, then every
@@ -648,7 +762,7 @@ impl State {
         for update in updates {
             let hashed = H256(keccak_hash(update.address.as_bytes()));
             if update.removed {
-                self.storage.remove(&hashed);
+                self.drop_storage(hashed);
                 accounts.push((hashed, update, AccountState::default()));
                 continue;
             }
@@ -659,9 +773,16 @@ impl State {
             };
             if update.removed_storage {
                 account.storage_root = *EMPTY_TRIE_HASH;
-                self.storage.remove(&hashed);
+                self.drop_storage(hashed);
             }
             if !update.added_storage.is_empty() {
+                let depth = self.levels.len();
+                if let Some(level) = self.levels.last_mut() {
+                    level.written.push(hashed);
+                    if !self.storage.contains_key(&hashed) {
+                        level.opened.push(hashed);
+                    }
+                }
                 let trie = match self.storage.entry(hashed) {
                     std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
                     std::collections::hash_map::Entry::Vacant(entry) => entry.insert(Mpt::open(
@@ -671,6 +792,7 @@ impl State {
                         self.shared.clone(),
                     )),
                 };
+                trie.level = depth;
                 for (slot, value) in &update.added_storage {
                     let key = keccak_hash(slot.as_bytes());
                     let value = match *value != U256::zero() {
@@ -707,6 +829,7 @@ impl State {
         }
         let roots: FxHashMap<H256, H256> =
             storage.iter().map(|(h, t)| (*h, t.root_ref())).collect();
+        self.accounts.level = self.levels.len();
         for (hashed, update, mut account) in accounts {
             if update.removed {
                 self.accounts.set(hashed.as_bytes(), None)?;

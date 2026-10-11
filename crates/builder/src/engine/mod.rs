@@ -3,16 +3,13 @@
 //! session, and streams merged blocks / rejects back. Everything
 //! ethrex-related stays behind this boundary.
 
+mod builder;
 pub mod convert;
 pub mod error;
 pub mod keccak8;
 pub mod payment;
 pub mod record;
-pub mod reuse;
-pub mod session;
-pub mod simulate;
 pub mod state;
-pub mod state_layer;
 pub mod streams;
 #[cfg(test)]
 mod tests;
@@ -26,7 +23,6 @@ use std::sync::{
 
 use alloy_primitives::{B256, keccak256};
 use crossbeam_channel::{Receiver, Sender};
-use ethrex_blockchain::Blockchain;
 use ethrex_crypto::native::NativeCrypto;
 use ethrex_storage::Store;
 use flux_profiler::timed;
@@ -126,13 +122,13 @@ pub struct MergeEngine {
     slot: Option<SlotState>,
     /// Per-builder merge streams; `None` when disabled.
     streams: Option<MergeStreams>,
+    store: Store,
 }
 
 impl MergeEngine {
     pub fn spawn(
         config: EngineConfig,
         store: Store,
-        blockchain: Arc<Blockchain>,
         head: watch::Receiver<HeadInfo>,
         event_tx: Sender<EngineEvent>,
         events: Receiver<EngineEvent>,
@@ -152,7 +148,6 @@ impl MergeEngine {
                         config.max_builder_streams,
                         &config.replay_worker_cores,
                         store.clone(),
-                        blockchain.clone(),
                         out.clone(),
                     )
                 });
@@ -165,6 +160,7 @@ impl MergeEngine {
                     relay_config: None,
                     slot: None,
                     streams,
+                    store,
                 };
                 info!("merge engine started");
                 engine.run(events);
@@ -299,7 +295,7 @@ impl MergeEngine {
                         recorder.event(now, &EngineEvent::SlotStart(msg));
                         recorder
                     });
-                let mut state = SlotState::new(&msg, recorder, &self.config);
+                let mut state = SlotState::new(&msg, recorder);
                 state.shared = self.relay_config.clone().map(|relay_config| {
                     Arc::new(SharedSlot {
                         ctx: state.ctx.clone(),
@@ -307,6 +303,7 @@ impl MergeEngine {
                         engine_config: self.config.clone(),
                         inner: RwLock::new(SharedInner::default()),
                         pool_version: AtomicU64::new(0),
+                        state: Default::default(),
                     })
                 });
                 self.slot = Some(state);
@@ -406,12 +403,7 @@ impl MergeEngine {
             return;
         }
 
-        let job = StreamJob {
-            shared,
-            base: base.clone(),
-            generation: self.generation,
-            offered_ns: crate::utils::utcnow_ns(),
-        };
+        let job = StreamJob { shared, base: base.clone(), generation: self.generation };
         match streams.offer(beneficiary, job) {
             Offer::Accepted => {
                 state.stream.offered += 1;
@@ -466,7 +458,7 @@ impl MergeEngine {
         let Some(shared) = state.shared.clone() else {
             return Err(fail(MergeError::StaleSlot));
         };
-        let (submission_index, ratchet) = {
+        let ratchet = {
             let lock_start = std::time::Instant::now();
             let mut inner = shared.inner.write().expect("shared slot poisoned");
             metrics::stage_latency("ingest_lock_wait", lock_start.elapsed().as_micros() as u64);
@@ -512,6 +504,7 @@ impl MergeEngine {
 
         // Budget counts distinct pooled orders, as the relay's `orders_sent` does.
         let mut pool_full = false;
+        let mut pooled = Vec::new();
         {
             let lock_start = std::time::Instant::now();
             let mut inner = shared.inner.write().expect("shared slot poisoned");
@@ -541,7 +534,9 @@ impl MergeEngine {
                         }
                         let ix = inner.orders.len();
                         inner.order_ids.insert(prepared.order_id, ix);
-                        inner.orders.push(Arc::new(prepared));
+                        let prepared = Arc::new(prepared);
+                        pooled.push(prepared.clone());
+                        inner.orders.push(prepared);
                     }
                 }
             }
@@ -571,10 +566,12 @@ impl MergeEngine {
             payload: msg.execution_payload,
             txs,
             recv_ns,
-            submission_index,
             ingest_done_ns: crate::utils::utcnow_ns(),
         });
         state.blocks.insert(block_hash, prepared.clone());
+        if !pooled.is_empty() {
+            builder::learn(shared.clone(), self.store.clone(), prepared.clone(), pooled);
+        }
 
         // Every appendable base goes to its builder's stream.
         if prepared.allow_appending {
@@ -624,6 +621,7 @@ fn decode_block_txs(
 
     struct Partial {
         tx: ethrex_common::types::Transaction,
+        encoded: alloy_primitives::Bytes,
         hash: B256,
         cached_sender: Option<ethrex_common::Address>,
     }
@@ -653,6 +651,7 @@ fn decode_block_txs(
                         let hash = keccak256(bytes);
                         Entry::New(Box::new(Partial {
                             tx,
+                            encoded: bytes.clone(),
                             hash,
                             cached_sender: recovery_cache.get(&hash).copied(),
                         }))
@@ -691,6 +690,7 @@ fn decode_block_txs(
                     hash: partial.hash,
                     sender,
                     tx: partial.tx,
+                    encoded: partial.encoded,
                 })))
             })
             .collect()

@@ -99,9 +99,6 @@ pub struct SpeculationConfig {
     /// Count warm-up bases per submitting pubkey rather than per coinbase.
     #[serde(default)]
     pub warmup_per_pubkey: bool,
-    /// Also build every reused state layer from scratch and use that one if the roots differ.
-    #[serde(default)]
-    pub verify_layer: bool,
 }
 
 impl Default for SpeculationConfig {
@@ -113,7 +110,6 @@ impl Default for SpeculationConfig {
             max_base_age_ms: default_max_base_age_ms(),
             warmup_bases: default_warmup_bases(),
             warmup_per_pubkey: false,
-            verify_layer: false,
         }
     }
 }

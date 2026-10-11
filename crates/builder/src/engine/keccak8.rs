@@ -40,7 +40,7 @@ pub fn hash_many(inputs: &[&[u8]], out: &mut Vec<[u8; 32]>) {
         for chunk in inputs.chunks(8) {
             // Below three inputs the eight-lane permutation costs more than scalar ones.
             if chunk.len() < 3 {
-                out.extend(chunk.iter().map(|input| keccak_hash(input)));
+                out.extend(chunk.iter().map(keccak_hash));
                 continue;
             }
             // SAFETY: AVX-512F was detected above.
@@ -48,7 +48,7 @@ pub fn hash_many(inputs: &[&[u8]], out: &mut Vec<[u8; 32]>) {
         }
         return;
     }
-    out.extend(inputs.iter().map(|input| keccak_hash(input)));
+    out.extend(inputs.iter().map(keccak_hash));
 }
 
 #[cfg(target_arch = "x86_64")]

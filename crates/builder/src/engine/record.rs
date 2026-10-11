@@ -77,9 +77,6 @@ pub struct SlotRecorder {
     storage: DashMap<(Address, H256), U256>,
     codes: DashMap<H256, Code>,
     block_hashes: DashMap<u64, H256>,
-    /// Per replayed base, each tx with the cumulative gas after it, so a replay
-    /// can name the first tx whose execution diverged.
-    base_gas: DashMap<alloy_primitives::B256, Vec<(alloy_primitives::B256, u64)>>,
     pub parent_header: OnceLock<BlockHeader>,
     chain_config: OnceLock<ChainConfig>,
     inner: OnceLock<Arc<dyn Database>>,
@@ -98,7 +95,6 @@ impl SlotRecorder {
             storage: DashMap::default(),
             codes: DashMap::default(),
             block_hashes: DashMap::default(),
-            base_gas: DashMap::default(),
             parent_header: OnceLock::new(),
             chain_config: OnceLock::new(),
             inner: OnceLock::new(),
@@ -124,15 +120,7 @@ impl SlotRecorder {
         events.extend_from_slice(&body);
     }
 
-    pub fn base_gas(
-        &self,
-        base: alloy_primitives::B256,
-        txs: impl Iterator<Item = (alloy_primitives::B256, u64)>,
-    ) {
-        self.base_gas.entry(base).or_insert_with(|| txs.collect());
-    }
-
-    /// Wraps a session's parent-state database so its reads land in this recording.
+    /// Wraps the slot's parent-state database so its reads land in this recording.
     pub fn wrap(self: &Arc<Self>, inner: Arc<dyn Database>) -> Arc<dyn Database> {
         let _unused = self.inner.set(inner.clone());
         if let Ok(config) = inner.get_chain_config() {
@@ -185,9 +173,6 @@ impl SlotRecorder {
         write_json(&self.dir.join("alloc.json"), &alloc)?;
         write_json(&self.dir.join("chain_config.json"), config)?;
         write_json(&self.dir.join("block_hashes.json"), &block_hashes)?;
-        let base_gas: std::collections::BTreeMap<_, _> =
-            self.base_gas.iter().map(|entry| (*entry.key(), entry.value().clone())).collect();
-        write_json(&self.dir.join("base_gas.json"), &base_gas)?;
         write_json(&self.dir.join("meta.json"), &RecordMeta {
             slot: self.slot,
             relay_signer: self.relay_signer,
