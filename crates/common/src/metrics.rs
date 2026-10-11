@@ -616,10 +616,11 @@ lazy_static! {
     )
     .unwrap();
 
-    pub static ref MERGE_FORWARD_DELAY: Histogram = register_histogram_with_registry!(
-        "block_merge_forward_delay_us",
-        "Relay clock time from a submission's first packet to forwarding it to the merge builder",
-        vec![50., 100., 200., 300., 500., 750., 1_000., 1_500., 2_000., 3_000., 5_000., 10_000., 25_000., 50_000.],
+    pub static ref MERGE_PIPE: HistogramVec = register_histogram_vec_with_registry!(
+        "block_merge_pipe_us",
+        "Relay-side merge pipe stages, from a base submission's first packet to its merged block stored for get_header",
+        &["stage"],
+        vec![50., 100., 200., 300., 500., 750., 1_000., 1_500., 2_000., 3_000., 5_000., 7_500., 10_000., 15_000., 20_000., 30_000., 50_000., 75_000., 100_000., 200_000., 500_000., 1_000_000.],
         &RELAY_METRICS_REGISTRY
     )
     .unwrap();

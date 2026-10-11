@@ -17,8 +17,8 @@ use helix_common::{
     chain_info::ChainInfo,
     metrics::{
         MERGE_ACTIVATION, MERGE_BUILDER_LATENCY, MERGE_CONNECTED, MERGE_ENABLED, MERGE_FORWARD,
-        MERGE_FORWARD_DELAY, MERGE_ORDERS_FORWARDED, MERGE_RECEIVED, MERGE_REJECT,
-        MERGE_ROUND_TRIP, MERGE_SLOT_APPENDABLE, MERGE_TOP_BID_GAP, MERGE_TXS_SENT,
+        MERGE_ORDERS_FORWARDED, MERGE_RECEIVED, MERGE_REJECT, MERGE_ROUND_TRIP,
+        MERGE_SLOT_APPENDABLE, MERGE_TOP_BID_GAP, MERGE_TXS_SENT,
     },
 };
 use helix_tcp_types::merging::{
@@ -40,8 +40,8 @@ use uuid::Uuid;
 use crate::{
     HelixSpine, SubmissionDataWithSpan,
     block_merging::{
-        append_frame, appended_tx_hashes, merged_block_to_response, order_ref_hash, order_to_ref,
-        submission_blob_sidecars,
+        append_frame, appended_tx_hashes, merged_block_to_response, observe_pipe, order_ref_hash,
+        order_to_ref, submission_blob_sidecars,
         unbundling::{OrderTxs, find_unbundled_txs},
     },
     housekeeper::SlotUpdate,
@@ -109,7 +109,7 @@ struct SlotState {
     attrs: FxHashMap<B256, B256>,
     /// Appendable block hashes forwarded this slot.
     appendable: FxHashSet<B256>,
-    forwarded_ns: FxHashMap<B256, u64>,
+    forwarded_ns: FxHashMap<B256, (u64, u64)>,
     activated_ns: FxHashMap<B256, u64>,
     merged_seen: FxHashSet<B256>,
     /// Events replayed on re-handshake.
@@ -271,6 +271,7 @@ fn handle_merged_block(
     unbundled_scratch_covered: &mut Vec<bool>,
     max_blobs_per_block: usize,
 ) -> Option<BlockMergeResponse> {
+    let accept_ns = Nanos::now().0;
     if !enabled {
         MERGE_RECEIVED.with_label_values(&["disabled"]).inc();
         return None;
@@ -325,6 +326,17 @@ fn handle_merged_block(
     }
     stats.merged_blocks += 1;
     MERGE_RECEIVED.with_label_values(&["accepted"]).inc();
+    response.accept_ns = accept_ns;
+    if let Some(&(receive_ns, forwarded_ns)) = slot.forwarded_ns.get(&base_block_hash) {
+        if !slot.merged_seen.contains(&base_block_hash) {
+            response.base_receive_ns = receive_ns;
+        }
+        let builder_ns =
+            response.trace.finalize_time_ns.checked_sub(response.trace.request_time_ns);
+        if let Some(builder_ns) = builder_ns.filter(|_| response.trace.request_time_ns > 0) {
+            observe_pipe("network", forwarded_ns + builder_ns, accept_ns);
+        }
+    }
     record_round_trip(slot, base_block_hash);
     response.tx_builders = Arc::new(
         response
@@ -364,7 +376,7 @@ fn record_round_trip(slot: &mut SlotState, base_block_hash: B256) {
     if !slot.merged_seen.insert(base_block_hash) {
         return;
     }
-    if let Some(ms) = elapsed_ms(slot.forwarded_ns.get(&base_block_hash)) {
+    if let Some(ms) = elapsed_ms(slot.forwarded_ns.get(&base_block_hash).map(|(_, f)| f)) {
         MERGE_ROUND_TRIP.with_label_values(&["forward_to_first_merge"]).observe(ms);
     }
     if let Some(ms) = activated {
@@ -839,6 +851,7 @@ impl BlockMergingTile {
         let Some(data) = self.decoded.get(decoded_submission_id) else { return };
         let sub = &data.submission_data;
         let receive_ns = sub.trace.receive_ns.0;
+        let decoded_ns = sub.trace.decoded_ns.0;
 
         if self.slot.slot_start.is_none() {
             self.stats.skipped_no_slot_start += 1;
@@ -1017,9 +1030,10 @@ impl BlockMergingTile {
         if msg.allow_appending {
             self.conn.forwarded.insert(block_hash);
             let now = Nanos::now().0;
-            self.slot.forwarded_ns.entry(block_hash).or_insert(now);
+            self.slot.forwarded_ns.entry(block_hash).or_insert((receive_ns, now));
             if !is_replay {
-                MERGE_FORWARD_DELAY.observe(now.saturating_sub(receive_ns) as f64 / 1e3);
+                observe_pipe("receive_to_forward", receive_ns, now);
+                observe_pipe("decode_to_forward", decoded_ns, now);
             }
         }
         self.connector.send_with(token, |buf| buf.extend_from_slice(frame));
