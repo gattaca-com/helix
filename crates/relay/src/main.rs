@@ -28,8 +28,8 @@ use helix_operator::spawn_operator_connection;
 use helix_relay::{
     Api, Auctioneer, AuctioneerHandle, BidSorter, BidSubmissionTcpListener, BlockMergeResponse,
     BlockMergingTile, BroadcastPayloadParams, DbHandle, DecoderTile, DefaultBidAdjustor,
-    FutureBidSubmissionResult, GossipedMessage, HelixSpine, HelixSpineConfig, HousekeeperTile,
-    Lane, NewTcpBidSubmission, RegWorkerHandle, RegistrationTile, RelayConfigExt,
+    FutureBidSubmissionResult, GloasBuilderIdentity, GossipedMessage, HelixSpine, HelixSpineConfig,
+    HousekeeperTile, Lane, NewTcpBidSubmission, RegWorkerHandle, RegistrationTile, RelayConfigExt,
     RelayNetworkManager, Simulators, SlotUpdate, SubmissionDataWithSpan, TopBidTile, UdpTopBidTile,
     spawn_tokio_monitoring, spine_epoch_path, start_admin_service, start_api_service,
     start_db_service,
@@ -240,7 +240,7 @@ async fn run(
             local_cache.clone(),
             current_slot_info,
             chain_info.clone(),
-            relay_signing_context,
+            relay_signing_context.clone(),
             beacon_client,
             Arc::new(DefaultApiProvider {}),
             known_validators_loaded,
@@ -353,6 +353,11 @@ async fn run(
                 attach_tile(merging_tile, spine, config.cores.tile(config.cores.block_merging));
             }
 
+            let gloas_builder_identity = Arc::new(GloasBuilderIdentity {
+                builder_index: config.gloas_builder_index,
+                keypair: relay_signing_context.keypair.clone(),
+            });
+
             let auctioneer_core = config.cores.auctioneer;
             let auctioneer_tile = config.cores.tile(auctioneer_core);
             let auctioneer = Auctioneer::new(
@@ -374,6 +379,7 @@ async fn run(
                 merged_blocks,
                 alert_manager.clone(),
                 operator_api.clone(),
+                gloas_builder_identity,
             );
             attach_tile(auctioneer, spine, auctioneer_tile);
         }

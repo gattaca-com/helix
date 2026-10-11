@@ -6,6 +6,12 @@
 
 Helix is a MEV-Boost Relay designed with three key foundational principles: fast, simple, contained.
 
+## Documentation
+
+- [Architecture](docs/architecture.md)
+- [Running on a Gloas testnet](docs/gloas-testnet.md)
+- [Local development with Kurtosis](scripts/devnet/README.md)
+
 ## Audits
 
 Audit conducted by Spearbit, with [Alex Stokes](https://github.com/ralexstokes) (EF) and [Matthias Seitz](https://github.com/mattsse) (Reth, Foundry, ethers-rs) leading as security researchers. See the report [here](audits/spearbit-audit.pdf).

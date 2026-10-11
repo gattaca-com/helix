@@ -5,7 +5,7 @@ use axum::{
 };
 use helix_common::{beacon::BeaconClientError, local_cache::AuctioneerError};
 use helix_database::error::DatabaseError;
-use helix_types::{SigError, Slot, SszError};
+use helix_types::{BlsPublicKeyBytes, SigError, Slot, SszError};
 use hyper::StatusCode;
 use ssz::DecodeError;
 use thiserror::Error;
@@ -26,6 +26,12 @@ pub enum ProposerApiError {
 
     #[error("not the expected proposer index. expected {expected}, got {actual}")]
     UnexpectedProposerIndex { expected: u64, actual: u64 },
+
+    #[error("bid requested for slot {actual}, the relay is bidding for {expected}")]
+    BidRequestSlotMismatch { expected: u64, actual: u64 },
+
+    #[error("bid requested by {actual}, the proposer for the slot is {expected}")]
+    UnexpectedProposerPubkey { expected: BlsPublicKeyBytes, actual: BlsPublicKeyBytes },
 
     #[error("no validators could be registered")]
     NoValidatorsCouldBeRegistered,
@@ -150,6 +156,15 @@ pub enum ProposerApiError {
         "bid builder_index {bid} does not match this relay's configured builder_index {configured}"
     )]
     BuilderIndexMismatch { bid: u64, configured: u64 },
+
+    #[error("proposer equivocated at slot {slot}: already committed to block {first:?}")]
+    ProposerEquivocated { slot: u64, first: B256 },
+
+    #[error("the block is not signed by the proposer this bid was served to")]
+    InvalidProposerSignature,
+
+    #[error("the payload held for block {0:?} has no known proposer")]
+    UnknownBidProposer(B256),
 }
 
 impl ProposerApiError {
@@ -185,6 +200,8 @@ impl IntoResponse for ProposerApiError {
                 ProposerApiError::AxumError(_) |
                 ProposerApiError::ToStrError(_) |
                 ProposerApiError::UnexpectedProposerIndex { .. } |
+                ProposerApiError::BidRequestSlotMismatch { .. } |
+                ProposerApiError::UnexpectedProposerPubkey { .. } |
                 ProposerApiError::NoValidatorsCouldBeRegistered |
                 ProposerApiError::InvalidFork |
                 ProposerApiError::SerdeDecodeError(_) |
@@ -214,7 +231,10 @@ impl IntoResponse for ProposerApiError {
                 ProposerApiError::MissingTimingHeaders |
                 ProposerApiError::NoHeldPayloadForBlock(_) |
                 ProposerApiError::HeldPayloadBlockHashMismatch { .. } |
-                ProposerApiError::BuilderIndexMismatch { .. } => StatusCode::BAD_REQUEST,
+                ProposerApiError::BuilderIndexMismatch { .. } |
+                ProposerApiError::ProposerEquivocated { .. } |
+                ProposerApiError::InvalidProposerSignature |
+                ProposerApiError::UnknownBidProposer(_) => StatusCode::BAD_REQUEST,
 
                 // All authentication failures, kept indistinguishable by status
                 ProposerApiError::InvalidApiKey |
@@ -228,6 +248,13 @@ impl IntoResponse for ProposerApiError {
 
                 ProposerApiError::InvalidGetHeader(_) => StatusCode::UNAUTHORIZED,
             };
+
+        // A 204 carries no body, and no content-type either. Attaching the message
+        // leaves the response malformed, and clients then report it as whatever
+        // their stack makes of it.
+        if code == StatusCode::NO_CONTENT {
+            return code.into_response();
+        }
 
         (code, self.to_string()).into_response()
     }
@@ -249,5 +276,39 @@ mod tests {
             .should_report_gossiped()
         );
         assert!(ProposerApiError::InternalServerError.should_report_gossiped());
+    }
+}
+
+#[cfg(test)]
+mod response_shape_tests {
+    use axum::body::to_bytes;
+
+    use super::*;
+
+    /// RFC 9110: a 204 carries no body, and therefore no content-type. Sending one
+    /// leaves the response malformed, and what a client reports it as is then
+    /// anyone's guess.
+    #[tokio::test]
+    async fn no_bid_is_an_empty_204() {
+        let response = ProposerApiError::NoBidPrepared.into_response();
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert_eq!(
+            response.headers().get(http::header::CONTENT_TYPE),
+            None,
+            "a 204 must not declare a content type",
+        );
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert!(body.is_empty(), "a 204 must not carry a body, got: {body:?}");
+    }
+
+    /// Errors that do carry an explanation keep it.
+    #[tokio::test]
+    async fn an_error_status_keeps_its_message() {
+        let response = ProposerApiError::InvalidFork.into_response();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert!(!body.is_empty());
     }
 }

@@ -4,7 +4,10 @@ use std::sync::{
 };
 
 use futures::future::join_all;
-use helix_types::{ForkName, SignedExecutionPayloadEnvelopeContents, VersionedSignedProposal};
+use helix_types::{
+    ForkName, SignedBeaconBlockGloas, SignedExecutionPayloadEnvelopeContents,
+    VersionedSignedProposal,
+};
 
 use crate::{
     beacon::{beacon_client::BeaconClient, error::BeaconClientError, types::BroadcastValidation},
@@ -78,6 +81,27 @@ impl MultiBeaconClient {
                         last_error = Some(err);
                     }
                 }
+            }
+        }
+
+        Err(last_error.unwrap_or(BeaconClientError::BeaconNodeUnavailable))
+    }
+
+    /// Publishes a Gloas beacon block to all beacon clients; returns on first success.
+    /// The proposer already gossips its own block, so a failure here is not fatal: it only
+    /// costs us the head start on the block root that the reveal needs.
+    pub async fn publish_gloas_block(
+        &self,
+        block: Arc<SignedBeaconBlockGloas>,
+    ) -> Result<(), BeaconClientError> {
+        let futures =
+            self.beacon_clients.iter().map(|client| client.publish_gloas_block(block.clone()));
+
+        let mut last_error: Option<BeaconClientError> = None;
+        for res in join_all(futures).await {
+            match res {
+                Ok(_) => return Ok(()),
+                Err(err) => last_error = Some(err),
             }
         }
 

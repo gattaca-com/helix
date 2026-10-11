@@ -6,20 +6,44 @@ use helix_common::{
     signing::RelaySigningContext,
 };
 use helix_types::{
-    BidTrace, BlobsBundle, KzgCommitments, SignedBidSubmission, payload_from_v3, requests_from_v4,
+    BidTrace, BlobsBundle, BlockAccessListBytes, ForkName, GloasSubmissionData, KzgCommitments,
+    SignedBidSubmission, SignedBidSubmissionGloas, Slot, payload_from_v3,
 };
 use ssz::Encode;
 use thiserror::Error;
 
 use crate::{
     building::{assemble::BuiltBlock, slot::SlotContext},
-    engine::convert::{block_to_payload_v3, requests_to_v4},
+    engine::convert::{block_to_payload_v3, decode_execution_requests},
 };
+
+impl SubmitError {
+    /// Whether the relay has moved on to the next bid slot. Nothing further will
+    /// be accepted for this one, so there is no point building again.
+    ///
+    /// The relay answers in plain text, so this matches on the message. Both
+    /// come from `BlockValidationError::SubmissionForWrongSlot` and the
+    /// auctioneer's late-simulation path.
+    pub fn is_slot_closed(&self) -> bool {
+        match self {
+            Self::Rejected { body, .. } => {
+                body.contains("submission for wrong slot") || body.contains("already on next slot")
+            }
+            _ => false,
+        }
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum SubmitError {
     #[error("blobs bundle: {0}")]
     Blobs(String),
+    #[error("a Gloas submission needs a block access list, and the block has none")]
+    MissingBlockAccessList,
+    #[error("the {0} submission shape cannot carry a block access list")]
+    UnsubmittableBlockAccessList(ForkName),
+    #[error("the {0} submission shape cannot carry EIP-8282 builder requests")]
+    UnsubmittableBuilderRequests(ForkName),
     #[error("payload exceeds the consensus limits")]
     OversizedPayload,
     #[error("requests: {0}")]
@@ -28,6 +52,30 @@ pub enum SubmitError {
     Rejected { status: u16, body: String },
     #[error("relay request failed: {0}")]
     Transport(String),
+}
+
+/// The submission in the shape its fork uses. Only Gloas has room for the
+/// block access list, so the choice of shape is the choice of fork.
+#[derive(Debug)]
+pub enum Bid {
+    Fulu(SignedBidSubmission),
+    Gloas(SignedBidSubmissionGloas),
+}
+
+impl Bid {
+    pub fn message(&self) -> &BidTrace {
+        match self {
+            Bid::Fulu(bid) => &bid.message,
+            Bid::Gloas(bid) => &bid.message,
+        }
+    }
+
+    pub fn as_ssz_bytes(&self) -> Vec<u8> {
+        match self {
+            Bid::Fulu(bid) => bid.as_ssz_bytes(),
+            Bid::Gloas(bid) => bid.as_ssz_bytes(),
+        }
+    }
 }
 
 pub struct Submitter {
@@ -51,17 +99,12 @@ impl Submitter {
     }
 
     /// Builds the `BidTrace` and signs it under the builder domain.
-    pub fn sign(
-        &self,
-        built: &BuiltBlock,
-        slot: &SlotContext,
-    ) -> Result<SignedBidSubmission, SubmitError> {
+    pub fn sign(&self, built: &BuiltBlock, slot: &SlotContext) -> Result<Bid, SubmitError> {
         let payload_v3 = block_to_payload_v3(&built.block);
         let payload = payload_from_v3(payload_v3).ok_or(SubmitError::OversizedPayload)?;
 
-        let requests_v4 = requests_to_v4(&built.requests).map_err(SubmitError::Requests)?;
-        let requests = requests_from_v4(requests_v4)
-            .ok_or_else(|| SubmitError::Requests("exceeds the consensus limits".into()))?;
+        let decoded = decode_execution_requests(&built.requests).map_err(SubmitError::Requests)?;
+        let requests = decoded.requests;
 
         let blobs = wire_blobs(&built.blobs_bundle)?;
 
@@ -80,16 +123,43 @@ impl Submitter {
         };
         let signature = self.signing.sign_builder_message(&message);
 
-        Ok(SignedBidSubmission {
+        let submission = SignedBidSubmission {
             message,
             execution_payload: Arc::new(payload),
             blobs_bundle: Arc::new(blobs),
             execution_requests: Arc::new(requests),
             signature: signature.serialize().into(),
-        })
+        };
+
+        // The relay decodes by the fork its own clock reports, so the shape has
+        // to be chosen from the same spec rather than from the block.
+        let fork = self.signing.chain_info.fork_at_slot(Slot::new(slot.slot));
+        match (fork, &built.block_access_list) {
+            (ForkName::Gloas, Some(bal)) => {
+                Ok(Bid::Gloas(SignedBidSubmissionGloas::join(submission, GloasSubmissionData {
+                    block_access_list: BlockAccessListBytes(bal.clone().into()),
+                    builder_deposits: decoded.builder_deposits,
+                    builder_exits: decoded.builder_exits,
+                })))
+            }
+            (ForkName::Gloas, None) => Err(SubmitError::MissingBlockAccessList),
+            // No pre-Gloas submission shape carries EIP-8282 requests, so sending
+            // one would drop them and the simulator would rebuild a different
+            // requests hash.
+            (fork, _)
+                if !decoded.builder_deposits.is_empty() || !decoded.builder_exits.is_empty() =>
+            {
+                Err(SubmitError::UnsubmittableBuilderRequests(fork))
+            }
+            // Sending it anyway drops the list, and the simulator then rebuilds
+            // a header whose hash is not the one signed here. Every bid would
+            // die as a hash mismatch, with nothing to point at.
+            (fork, Some(_)) => Err(SubmitError::UnsubmittableBlockAccessList(fork)),
+            (_, None) => Ok(Bid::Fulu(submission)),
+        }
     }
 
-    pub async fn submit(&self, submission: &SignedBidSubmission) -> Result<(), SubmitError> {
+    pub async fn submit(&self, submission: &Bid) -> Result<(), SubmitError> {
         let response = self
             .http
             .post(&self.url)

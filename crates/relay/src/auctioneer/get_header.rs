@@ -38,7 +38,10 @@ impl<B: BidAdjustor> Context<B> {
         producers: &mut HelixSpineProducers,
         is_mev_boost: bool,
     ) -> GetHeaderResult {
-        let Some(best_block_hash) = self.bid_sorter.get_header(&parent_hash) else {
+        let Some(best_block_hash) = slot_data
+            .fork_for_parent_hash(&parent_hash)
+            .and_then(|fork| self.bid_sorter.get_header(&fork))
+        else {
             warn!(%parent_hash, "no bids for this fork");
             return Err(ProposerApiError::NoBidPrepared);
         };
