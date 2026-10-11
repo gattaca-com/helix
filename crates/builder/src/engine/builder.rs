@@ -274,7 +274,10 @@ pub struct Builder {
     slot: u64,
     streams: FxHashMap<alloy_rpc_types::beacon::BlsPublicKey, Stream>,
     latest: Option<alloy_rpc_types::beacon::BlsPublicKey>,
+    carry: Option<(B256, Vec<Applied>)>,
 }
+
+type Applied = (Arc<PreparedOrder>, Vec<Option<Arc<Effect>>>);
 
 struct Stream {
     prior: Arc<Prior>,
@@ -448,6 +451,9 @@ impl Builder {
                         ext_presim_us = merge.extend_stats.presim_us,
                         ext_apply_us = merge.extend_stats.apply_us,
                         ext_known_us = merge.extend_stats.known_us,
+                        ext_carried = merge.extend_stats.carried,
+                        ext_carry_reran = merge.extend_stats.carry_reran,
+                        ext_carry_us = merge.extend_stats.carry_us,
                         trie_wait_us = merge.trie_wait_us,
                         trie = merge.trie_run.map_or("", |run| run.kind),
                         trie_us = merge.trie_run.map_or(0, |run| run.us),
@@ -512,6 +518,7 @@ impl Builder {
         if let Some(stream) = self.streams.get_mut(&job.base.builder_pubkey) {
             stream.trie = trie.map(|(trie, written)| (job.base.block_hash, trie, written));
         }
+        self.carry = Some((job.base.block_hash, merge.applied));
         Ok(merge.best_emitted.saturating_sub(job.base.block_value))
     }
 
@@ -620,6 +627,10 @@ impl Builder {
             )));
         }
         let coinbase_after = report.coinbase.ok_or(MergeError::InvalidPayment)?;
+        let carried = match self.carry.take() {
+            Some((at, applied)) if at == prior.base => applied,
+            _ => Vec::new(),
+        };
         let (next, codes) = {
             let mut known = job.shared.state.known.write().expect("known poisoned");
             for effect in &report.ran {
@@ -663,6 +674,15 @@ impl Builder {
             txs: base.txs.clone(),
             deposit_contract: chain_config.deposit_contract_address,
         };
+        let dirty = match carried.is_empty() {
+            true => FxHashSet::default(),
+            false => prior
+                .keys()
+                .chain(next.keys())
+                .filter(|key| prior.last(key) != next.last(key))
+                .copied()
+                .collect(),
+        };
         let spent = next.effects.iter().map(|e| e.outcome.gas_spent).sum();
         self.streams.insert(pubkey, Stream { prior: next.clone(), trie: None });
         self.latest = Some(pubkey);
@@ -688,6 +708,9 @@ impl Builder {
             tx_hashes: base.txs.iter().map(|tx| tx.hash).collect(),
             revenues: FxHashMap::default(),
             included_order_ids: Vec::new(),
+            applied: Vec::new(),
+            carried,
+            dirty,
             unmerged: FxHashMap::default(),
             best_emitted: U256::ZERO,
             emissions: 0,
@@ -903,6 +926,7 @@ fn run_order(
     (gas_left, blobs_left): (u64, u64),
     known: &Known,
     hints: Option<&[Option<Arc<Effect>>]>,
+    trusted: bool,
 ) -> Result<Run, SimulationError> {
     let before = view.coinbase.balance;
     let mut run = Run {
@@ -929,7 +953,7 @@ fn run_order(
             }
             continue;
         }
-        let hinted = hints.and_then(|hints| hints[i].clone()).filter(|e| view.holds(e));
+        let hinted = hints.and_then(|hints| hints[i].clone()).filter(|e| trusted || view.holds(e));
         let effect =
             match hinted.or_else(|| known.variants(&tx.hash).find(|e| view.holds(e)).cloned()) {
                 Some(effect) => effect,
@@ -995,6 +1019,9 @@ struct ExtendStats {
     presim_us: u64,
     apply_us: u64,
     known_us: u64,
+    carried: usize,
+    carry_reran: usize,
+    carry_us: u64,
 }
 
 /// One base B built and the orders put on it so far.
@@ -1033,6 +1060,9 @@ struct Merge {
     tx_hashes: FxHashSet<B256>,
     revenues: FxHashMap<Address, OriginRevenue>,
     included_order_ids: Vec<B256>,
+    applied: Vec<Applied>,
+    carried: Vec<Applied>,
+    dirty: FxHashSet<Key>,
     /// Why each order left out was, with its txs.
     unmerged: FxHashMap<B256, (UnmergedReason, Vec<B256>)>,
     best_emitted: U256,
@@ -1067,6 +1097,53 @@ impl Merge {
     ) {
         self.trace.sim_start_ns = utcnow_ns();
         let start = Instant::now();
+        let carried = std::mem::take(&mut self.carried);
+        let (carried_n, mut carry_reran) = (carried.len(), 0);
+        let mut ran: Vec<Arc<Effect>> = Vec::new();
+        for (order, effects) in carried {
+            let writes = |effects: &[Option<Arc<Effect>>], dirty: &mut FxHashSet<Key>| {
+                dirty
+                    .extend(effects.iter().flatten().flat_map(|e| e.writes.iter().map(|(k, _)| *k)))
+            };
+            if excluded.contains(&order.order_hash) ||
+                order.source_block_hash == self.base.block_hash ||
+                order.fits(&self.tx_hashes, self.gas_left(), self.blobs_left()).is_err()
+            {
+                writes(&effects, &mut self.dirty);
+                continue;
+            }
+            let clean = effects.iter().flatten().all(|e| {
+                self.view.coinbase.admits(e) && e.reads.iter().all(|(k, _)| !self.dirty.contains(k))
+            });
+            carry_reran += usize::from(!clean);
+            let mut view = self.view.clone();
+            view.layers.push(Arc::new(FxHashMap::default()));
+            let space = (self.gas_left(), self.blobs_left());
+            let run = {
+                let known = known.read().expect("known poisoned");
+                run_order(&order, view, &self.exec.header, space, &known, Some(&effects), clean)
+            };
+            match run {
+                Ok(run) => {
+                    let same = run.effects.iter().zip(&effects).all(|(a, b)| match (a, b) {
+                        (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                        (None, None) => true,
+                        _ => false,
+                    });
+                    if !same {
+                        writes(&effects, &mut self.dirty);
+                        writes(&run.effects, &mut self.dirty);
+                    }
+                    ran.extend(run.ran.iter().cloned());
+                    self.commit(&order, run);
+                }
+                Err(err) => {
+                    writes(&effects, &mut self.dirty);
+                    self.unmerged(&order, err.unmerged_reason());
+                }
+            }
+        }
+        let carry_us = start.elapsed().as_micros() as u64;
         let applied: FxHashSet<B256> = self.included_order_ids.iter().copied().collect();
         let mut candidates = Vec::new();
         for order in orders {
@@ -1083,9 +1160,6 @@ impl Merge {
                 Err(err) => self.unmerged(order, err.unmerged_reason()),
             }
         }
-        if candidates.is_empty() {
-            return;
-        }
         let space = (self.gas_left(), self.blobs_left());
         let presim_start = Instant::now();
         let filter_us = (presim_start - start).as_micros() as u64;
@@ -1100,7 +1174,7 @@ impl Merge {
                     .map(|(ix, order)| {
                         let mut view = view.clone();
                         view.layers.push(Arc::new(FxHashMap::default()));
-                        (ix, run_order(order, view, header, space, &known, None))
+                        (ix, run_order(order, view, header, space, &known, None, false))
                     })
                     .collect::<Vec<_>>()
             })
@@ -1115,8 +1189,9 @@ impl Merge {
         })
         .collect();
         runs.sort_unstable_by_key(|(_, run)| std::cmp::Reverse(run.payment));
-        let mut ran: Vec<Arc<Effect>> = runs.iter().flat_map(|(_, run)| run.ran.clone()).collect();
-        let presim_ran = ran.len();
+        let carry_ran = ran.len();
+        ran.extend(runs.iter().flat_map(|(_, run)| run.ran.clone()));
+        let presim_ran = ran.len() - carry_ran;
         let presim_us = presim_start.elapsed().as_micros() as u64;
         let apply_start = Instant::now();
 
@@ -1131,7 +1206,7 @@ impl Merge {
             let space = (self.gas_left(), self.blobs_left());
             let run = {
                 let known = known.read().expect("known poisoned");
-                run_order(order, view, &self.exec.header, space, &known, Some(&sim.effects))
+                run_order(order, view, &self.exec.header, space, &known, Some(&sim.effects), false)
             };
             let run = match run {
                 Ok(run) => run,
@@ -1144,7 +1219,7 @@ impl Merge {
             self.commit(order, run);
         }
         let apply_us = apply_start.elapsed().as_micros() as u64;
-        let apply_ran = ran.len() - presim_ran;
+        let apply_ran = ran.len() - presim_ran - carry_ran;
         let known_start = Instant::now();
         if !ran.is_empty() {
             let mut known = known.write().expect("known poisoned");
@@ -1161,13 +1236,18 @@ impl Merge {
             presim_us,
             apply_us,
             known_us: known_start.elapsed().as_micros() as u64,
+            carried: carried_n,
+            carry_reran,
+            carry_us,
         };
         self.trace.sim_end_ns = utcnow_ns();
         metrics::stage_latency("b_extend", start.elapsed().as_micros() as u64);
     }
 
     /// Keeps `order` as `run` applied it: its writes fold into the orders' layer.
-    fn commit(&mut self, order: &PreparedOrder, mut run: Run) {
+    fn commit(&mut self, order: &Arc<PreparedOrder>, mut run: Run) {
+        self.applied.push((order.clone(), run.effects.clone()));
+        self.view.layers.clear();
         let top = run.view.layers.pop().unwrap_or_default();
         if let Some(layer) = run.view.layers.last_mut() {
             Arc::make_mut(layer).extend(top.iter().map(|(k, v)| (*k, v.clone())));
