@@ -345,7 +345,7 @@ impl MergeSession {
         let v1 = &base.payload.payload_inner.payload_inner;
         // B keeps one slot's bases, all on the slot's parent.
         if *SHADOW && v1.parent_hash == slot.parent_hash {
-            crate::engine::incremental::start_recording();
+            crate::engine::state::start_recording();
         }
         let beneficiary_alloy = v1.fee_recipient;
         let beneficiary = eaddr(beneficiary_alloy);
@@ -534,8 +534,8 @@ impl MergeSession {
                 let mut db = ctx.vm.db.clone();
                 if let Ok(system) = db.get_state_transitions() {
                     let number = slot.slot;
-                    crate::engine::incremental::defer(move || {
-                        crate::engine::incremental::set_system(system, number)
+                    crate::engine::state::defer(move || {
+                        crate::engine::state::set_system(system, number)
                     });
                 }
                 b_template = Some(ctx.clone());
@@ -623,11 +623,11 @@ impl MergeSession {
             tx_hashes.insert(decoded.hash);
         }
         warm_done.store(true, std::sync::atomic::Ordering::Relaxed);
-        let shadow = crate::engine::incremental::take().map(|effects| {
+        let shadow = crate::engine::state::take().map(|effects| {
             (
                 effects,
                 replay_start.elapsed().as_micros(),
-                crate::engine::incremental::A_EXECUTED.with(|c| c.get()),
+                crate::engine::state::A_EXECUTED.with(|c| c.get()),
             )
         });
         metrics::stage_latency(
@@ -637,7 +637,7 @@ impl MergeSession {
         metrics::stage_latency("replay_snapshot", snapshot_us);
         feed.flush(&mut ctx.vm.db).map_err(|e| MergeError::Internal(e.to_string()))?;
         if let Some((effects, replay_us, a_executed)) = shadow {
-            let exec = crate::engine::incremental::Exec {
+            let exec = crate::engine::state::Exec {
                 txs: base.txs.iter().map(|tx| (tx.tx.clone(), tx.sender)).collect(),
                 header: ctx.payload.header.clone(),
                 store: ctx.vm.db.store.clone(),
@@ -653,16 +653,16 @@ impl MergeSession {
             let (store, streamed) = (store.clone(), feed.streamed.clone());
             let (receipts_root, gas_used, a_value) =
                 (h256(v1.receipts_root), v1.gas_used, ctx.block_value);
-            crate::engine::incremental::defer(move || {
+            crate::engine::state::defer(move || {
                 if !full {
                     // A base resumed from a checkpoint is not diffed, but what it ran is still
                     // known.
                     for effect in effects.into_iter().flatten() {
-                        crate::engine::incremental::learn((*effect).clone());
+                        crate::engine::state::learn((*effect).clone());
                     }
                     return;
                 }
-                match crate::engine::incremental::shadow(beneficiary_alloy, effects, exec) {
+                match crate::engine::state::shadow(beneficiary_alloy, effects, exec) {
                     Some(mut r) => {
                         // B's context must give A's root, the header's receipts and gas, and A's
                         // block value.
@@ -706,7 +706,7 @@ impl MergeSession {
                                 .ok();
                         println!(
                             "BSHADOW dropped={} arrival_ms={} stream_first={} chain={} best_any={} missed={} a_exec={} same_stream={} first={} rebuilt={} txs={} run={} skipped={} delta={} b_us={} a_us={} wrong={} exec_us={} exec_wrong={} exec_failed={} root_us={} root_ok={} outcome_wrong={} ctx_us={} ctx_root_ok={} ctx_receipts_ok={} ctx_value_ok={} run_novel={} run_leads={} content_lead={} causes={}",
-                            crate::engine::incremental::DROPPED
+                            crate::engine::state::DROPPED
                                 .load(std::sync::atomic::Ordering::Relaxed),
                             r.arrival_ms.unwrap_or(i64::MIN),
                             r.stream_first,

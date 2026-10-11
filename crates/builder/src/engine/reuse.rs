@@ -131,8 +131,8 @@ impl TxResult {
         })
     }
 
-    fn effect(&self, hash: B256, coinbase: Address) -> crate::engine::incremental::Effect {
-        use crate::engine::incremental::{Effect, Key, Val};
+    fn effect(&self, hash: B256, coinbase: Address) -> crate::engine::state::Effect {
+        use crate::engine::state::{Effect, Key, Val};
         let mut effect = Effect {
             hash,
             reads: self
@@ -156,7 +156,7 @@ impl TxResult {
             coinbase,
             coinbase_address: self.reads.coinbase_address,
             codes: self.codes.clone(),
-            outcome: crate::engine::incremental::Outcome {
+            outcome: crate::engine::state::Outcome {
                 succeeded: self.succeeded,
                 gas_used: self.moved.remaining_gas,
                 gas_spent: self.moved.cumulative_gas,
@@ -341,9 +341,9 @@ pub fn apply_tx(
         ));
         ctx.payload.body.transactions.push(head.into());
         metrics::tx_reuse(stage, "applied");
-        if crate::engine::incremental::recording() {
-            crate::engine::incremental::A_REUSED.with(|r| r.borrow_mut().push(true));
-            crate::engine::incremental::push(Some(Arc::new(result.effect(hash, coinbase))));
+        if crate::engine::state::recording() {
+            crate::engine::state::A_REUSED.with(|r| r.borrow_mut().push(true));
+            crate::engine::state::push(Some(Arc::new(result.effect(hash, coinbase))));
         }
         return Ok(());
     }
@@ -355,12 +355,12 @@ pub fn apply_tx(
         ctx.vm.db.tx_reads = None;
         return Err(RunError::Tx(err));
     }
-    if crate::engine::incremental::shadow_enabled() {
+    if crate::engine::state::shadow_enabled() {
         let coinbase_after =
             coinbase_balance(&mut ctx.vm.db, coinbase).map_err(RunError::Internal)?;
         let outcome =
             Totals::of(ctx).since(before).zip(ctx.receipts.last()).map(|(moved, receipt)| {
-                crate::engine::incremental::Outcome {
+                crate::engine::state::Outcome {
                     succeeded: receipt.succeeded,
                     gas_used: moved.remaining_gas,
                     gas_spent: moved.cumulative_gas,
@@ -368,7 +368,7 @@ pub fn apply_tx(
                 }
             });
         let effect = ctx.vm.db.tx_reads.as_ref().zip(outcome).and_then(|(reads, outcome)| {
-            crate::engine::incremental::Effect::from_db(
+            crate::engine::state::Effect::from_db(
                 hash,
                 &ctx.vm.db,
                 reads,
@@ -383,15 +383,13 @@ pub fn apply_tx(
         if let Some(effect) = &effect {
             if stage != "base" {
                 let effect = effect.clone();
-                crate::engine::incremental::defer(move || {
-                    crate::engine::incremental::learn(effect)
-                });
+                crate::engine::state::defer(move || crate::engine::state::learn(effect));
             }
         }
-        if crate::engine::incremental::recording() {
-            crate::engine::incremental::A_EXECUTED.with(|c| c.set(c.get() + 1));
-            crate::engine::incremental::A_REUSED.with(|r| r.borrow_mut().push(false));
-            crate::engine::incremental::push(effect.map(Arc::new));
+        if crate::engine::state::recording() {
+            crate::engine::state::A_EXECUTED.with(|c| c.set(c.get() + 1));
+            crate::engine::state::A_REUSED.with(|r| r.borrow_mut().push(false));
+            crate::engine::state::push(effect.map(Arc::new));
         }
     }
     let fresh = match (Totals::of(ctx).since(before), ctx.receipts.last()) {
@@ -445,10 +443,10 @@ pub fn presim_tx(
         block_value: U256::from(report.gas_spent) * tip,
         blob_gas: tx.blob_hashes.len() as u64 * u64::from(GAS_PER_BLOB),
     };
-    if crate::engine::incremental::shadow_enabled() {
+    if crate::engine::state::shadow_enabled() {
         let coinbase_after = coinbase_balance(&mut vm.db, coinbase).map_err(internal)?;
         if let Some(effect) = vm.db.tx_reads.as_ref().and_then(|reads| {
-            crate::engine::incremental::Effect::from_db(
+            crate::engine::state::Effect::from_db(
                 tx.hash,
                 &vm.db,
                 reads,
@@ -457,7 +455,7 @@ pub fn presim_tx(
                     coinbase_after.saturating_sub(coinbase_before),
                     coinbase_before.saturating_sub(coinbase_after),
                 ),
-                crate::engine::incremental::Outcome {
+                crate::engine::state::Outcome {
                     succeeded: receipt.succeeded,
                     gas_used: report.gas_used,
                     gas_spent: report.gas_spent,
@@ -465,7 +463,7 @@ pub fn presim_tx(
                 },
             )
         }) {
-            crate::engine::incremental::defer(move || crate::engine::incremental::learn(effect));
+            crate::engine::state::defer(move || crate::engine::state::learn(effect));
         }
     }
     let fresh = TxResult::capture(

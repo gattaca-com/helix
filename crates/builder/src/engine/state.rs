@@ -878,7 +878,7 @@ struct Slot {
     priors: Vec<(alloy_primitives::Address, [u8; 48], Arc<Prior>)>,
     known: Known,
     /// Each builder's state trie at its last base.
-    layers: FxHashMap<(alloy_primitives::Address, [u8; 48]), crate::engine::btrie::State>,
+    layers: FxHashMap<(alloy_primitives::Address, [u8; 48]), crate::engine::trie::State>,
     /// The slot's system-call writes (beacon root, block hash history), the same for every base.
     system: Option<Vec<ethrex_common::types::AccountUpdate>>,
 }
@@ -1136,7 +1136,7 @@ pub fn shadow(
                     .map_err(|e| e.to_string())
                     .and_then(|accounts| {
                         let (store, parent) = (exec.trie_store.clone(), exec.parent_root);
-                        let mut layer = crate::engine::btrie::State::open(
+                        let mut layer = crate::engine::trie::State::open(
                             accounts,
                             parent,
                             Box::new(move |hashed| {

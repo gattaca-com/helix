@@ -1622,7 +1622,7 @@ async fn replay_slot(
                 first_seen.entry(h).or_insert(*ns);
             }
         }
-        crate::engine::incremental::set_timeline(first_seen, arrived);
+        crate::engine::state::set_timeline(first_seen, arrived);
         if std::env::var_os("ORDER_DUMP").is_some() {
             let mut tips: rustc_hash::FxHashMap<B256, ethrex_common::U256> = Default::default();
             for (kind, ns, body) in &frames {
@@ -1868,7 +1868,7 @@ async fn replay_recording() {
             }
         }
     }
-    crate::engine::incremental::drain();
+    crate::engine::state::drain();
     let ms = |from: u64, to: u64| to.saturating_sub(from) as f64 / 1e6;
     let mut stages: [Vec<f64>; 4] = Default::default();
     for t in first.values() {

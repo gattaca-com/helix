@@ -3,20 +3,20 @@
 //! session, and streams merged blocks / rejects back. Everything
 //! ethrex-related stays behind this boundary.
 
-pub mod btrie;
 pub mod convert;
 pub mod error;
-pub mod incremental;
 pub mod keccak8;
 pub mod payment;
 pub mod record;
 pub mod reuse;
 pub mod session;
 pub mod simulate;
+pub mod state;
 pub mod state_layer;
 pub mod streams;
 #[cfg(test)]
 mod tests;
+pub mod trie;
 pub mod types;
 
 use std::sync::{
