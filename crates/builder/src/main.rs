@@ -147,8 +147,7 @@ fn main() -> eyre::Result<()> {
             max_base_age: std::time::Duration::from_millis(
                 merging_config.speculation.max_base_age_ms,
             ),
-            warmup_bases: merging_config.speculation.warmup_bases,
-            warmup_per_pubkey: merging_config.speculation.warmup_per_pubkey,
+            warmup: true,
             replay_worker_cores: merging_config.cores.replay_workers.clone(),
             record: merging_config.record.clone(),
         };

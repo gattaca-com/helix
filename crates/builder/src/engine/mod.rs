@@ -575,6 +575,7 @@ impl MergeEngine {
 
         // Every appendable base goes to its builder's stream.
         if prepared.allow_appending {
+            builder::prefetch(shared.clone(), self.store.clone(), prepared.clone());
             self.offer_to_stream(&prepared);
         }
 

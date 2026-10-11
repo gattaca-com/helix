@@ -14,8 +14,8 @@ use ethrex_common::{
     Bloom, H256,
     constants::{DEFAULT_OMMERS_HASH, GAS_PER_BLOB},
     types::{
-        AccountUpdate, BlockHeader, ELASTICITY_MULTIPLIER, Receipt, Transaction, Withdrawal,
-        bloom_from_logs, calc_excess_blob_gas, calculate_base_fee_per_gas,
+        AccountInfo, AccountUpdate, BlockHeader, ELASTICITY_MULTIPLIER, Receipt, Transaction,
+        Withdrawal, bloom_from_logs, calc_excess_blob_gas, calculate_base_fee_per_gas,
         compute_withdrawals_root,
         requests::{EncodedRequests, compute_requests_hash},
     },
@@ -109,6 +109,12 @@ impl Parent {
 }
 
 impl Parent {
+    fn prefetch(&self, store: &Store, paths: &[(H256, Vec<H256>)]) {
+        if let Ok(mut trie) = self.trie(store) {
+            let _unused = trie.prefetch(paths);
+        }
+    }
+
     /// The parent's state trie.
     fn trie(&self, store: &Store) -> Result<State, String> {
         let root = self.header.state_root;
@@ -178,28 +184,54 @@ pub fn learn(
             if ran.is_empty() {
                 return;
             }
-            let mut paths: FxHashMap<H256, Vec<H256>> = FxHashMap::default();
-            for (key, _) in ran.iter().flat_map(|effect| &effect.writes) {
-                match key {
-                    Key::Account(address) => {
-                        paths.entry(H256(keccak_hash(address.as_bytes()))).or_default();
-                    }
-                    Key::Slot(address, slot) => paths
-                        .entry(H256(keccak_hash(address.as_bytes())))
-                        .or_default()
-                        .push(H256(keccak_hash(slot.as_bytes()))),
-                }
-            }
+            let paths = paths(ran.iter().flat_map(|effect| &effect.writes).map(|(key, _)| *key));
             if let Ok(mut known) = shared.state.known.write() {
                 for effect in ran {
                     known.add(effect);
                 }
             }
-            if let Ok(mut trie) = parent.trie(&store) {
-                let _unused = trie.prefetch(&paths.into_iter().collect::<Vec<_>>());
-            }
+            parent.prefetch(&store, &paths);
         });
     }
+}
+
+pub fn prefetch(shared: Arc<SharedSlot>, store: Store, base: Arc<PreparedBlock>) {
+    INGEST.spawn(move || {
+        let header = header(&base, shared.ctx.parent_beacon_block_root);
+        let parent = shared
+            .state
+            .parent
+            .get_or_init(|| Parent::open(&store, &header, shared.ctx.recorder.as_ref()));
+        let Ok(parent) = parent.as_ref() else { return };
+        let mut keys: Vec<Key> = Vec::new();
+        for tx in base.txs.iter() {
+            keys.push(Key::Account(tx.sender));
+            if let ethrex_common::types::TxKind::Call(to) = tx.tx.to() {
+                keys.push(Key::Account(to));
+            }
+        }
+        if let Ok(known) = shared.state.known.read() {
+            let writes = base.txs.iter().flat_map(|tx| known.variants(&tx.hash));
+            keys.extend(writes.flat_map(|effect| effect.writes.iter().map(|(key, _)| *key)));
+        }
+        parent.prefetch(&store, &paths(keys.into_iter()));
+    });
+}
+
+fn paths(keys: impl Iterator<Item = Key>) -> Vec<(H256, Vec<H256>)> {
+    let mut paths: FxHashMap<H256, Vec<H256>> = FxHashMap::default();
+    for key in keys {
+        match key {
+            Key::Account(address) => {
+                paths.entry(H256(keccak_hash(address.as_bytes()))).or_default();
+            }
+            Key::Slot(address, slot) => paths
+                .entry(H256(keccak_hash(address.as_bytes())))
+                .or_default()
+                .push(H256(keccak_hash(slot.as_bytes()))),
+        }
+    }
+    paths.into_iter().collect()
 }
 
 /// The effects `order`'s txs have run in sequence on `view`, for those not already known there.
@@ -240,9 +272,45 @@ fn evm(db: Arc<dyn Database>) -> Evm {
 #[derive(Default)]
 pub struct Builder {
     slot: u64,
-    prior: Option<Arc<Prior>>,
-    /// The builder's state trie at `prior`'s base.
-    trie: Option<(B256, State)>,
+    streams: FxHashMap<alloy_rpc_types::beacon::BlsPublicKey, Stream>,
+    latest: Option<alloy_rpc_types::beacon::BlsPublicKey>,
+}
+
+struct Stream {
+    prior: Arc<Prior>,
+    trie: Option<(B256, State, Written)>,
+}
+
+type Written = FxHashMap<Key, Write>;
+
+type Tree = (State, Written);
+
+#[derive(Clone, PartialEq)]
+enum Write {
+    Removed,
+    Info(AccountInfo),
+    Slot(ethrex_common::U256),
+}
+
+fn writes(updates: &[AccountUpdate]) -> Result<Written, MergeError> {
+    let mut written = Written::default();
+    for update in updates {
+        if update.removed_storage {
+            return Err(MergeError::Internal("storage reset in emission".into()));
+        }
+        let address = update.address;
+        if update.removed {
+            written.insert(Key::Account(address), Write::Removed);
+            continue;
+        }
+        if let Some(info) = &update.info {
+            written.insert(Key::Account(address), Write::Info(info.clone()));
+        }
+        for (slot, value) in &update.added_storage {
+            written.insert(Key::Slot(address, *slot), Write::Slot(*value));
+        }
+    }
+    Ok(written)
 }
 
 impl Builder {
@@ -252,14 +320,36 @@ impl Builder {
         id: usize,
         job: &StreamJob,
         stream: &BuilderStream,
+        store: &Store,
+        out: &Sender<EngineOutput>,
+    ) -> Result<U256, MergeError> {
+        let shared = &job.shared;
+        if shared.ctx.slot < self.slot {
+            return Ok(U256::ZERO);
+        }
+        if shared.ctx.slot != self.slot {
+            *self = Builder { slot: shared.ctx.slot, ..Default::default() };
+        }
+        let warming =
+            shared.engine_config.warmup && !self.streams.contains_key(&job.base.builder_pubkey);
+        metrics::set_warming(warming);
+        let merged = self.merge_base(id, job, stream, warming, store, out);
+        if warming {
+            stream.try_take();
+        }
+        merged
+    }
+
+    fn merge_base(
+        &mut self,
+        id: usize,
+        job: &StreamJob,
+        stream: &BuilderStream,
         warming: bool,
         store: &Store,
         out: &Sender<EngineOutput>,
     ) -> Result<U256, MergeError> {
         let shared = &job.shared;
-        if shared.ctx.slot != self.slot {
-            *self = Builder { slot: shared.ctx.slot, ..Default::default() };
-        }
         let start_ns = utcnow_ns();
         let mut merge = self.base(job, store)?;
         let built_ns = utcnow_ns();
@@ -287,20 +377,24 @@ impl Builder {
                     Some(trie) => {
                         let (tx, rx) = crossbeam_channel::bounded(1);
                         let (store, slot) = (store.clone(), shared.clone());
+                        let spawned = Instant::now();
                         POOL.spawn(move || {
                             let parent = slot.state.parent.get().and_then(|p| p.as_ref().ok());
                             let trie = match parent {
-                                Some(parent) => trie.run(&store, parent),
+                                Some(parent) => trie.run(&store, parent, spawned),
                                 None => Err(MergeError::Internal("no parent".into())),
                             };
                             let _unused = tx.send(trie);
                         });
                         merge.extend(&orders, &excluded, &shared.state.known);
-                        let (trie, leaves) = rx
+                        let wait = Instant::now();
+                        let (trie, leaves, run) = rx
                             .recv()
                             .map_err(|_| MergeError::Internal("trie job lost".into()))??;
                         merge.trie = Ok(trie);
                         merge.leaves = leaves;
+                        merge.trie_run = Some(run);
+                        merge.trie_wait_us = wait.elapsed().as_micros() as u64;
                     }
                     None => merge.extend(&orders, &excluded, &shared.state.known),
                 }
@@ -344,10 +438,32 @@ impl Builder {
                         live_us = (now - built_ns) / 1000,
                         base_txs = job.base.txs.len(),
                         run = merge.run,
+                        same_stream = merge.same_stream,
                         extend_us = merge.extend_us,
+                        ext_orders = merge.extend_stats.orders,
+                        ext_txs = merge.extend_stats.txs,
+                        ext_presim_ran = merge.extend_stats.presim_ran,
+                        ext_apply_ran = merge.extend_stats.apply_ran,
+                        ext_filter_us = merge.extend_stats.filter_us,
+                        ext_presim_us = merge.extend_stats.presim_us,
+                        ext_apply_us = merge.extend_stats.apply_us,
+                        ext_known_us = merge.extend_stats.known_us,
+                        trie_wait_us = merge.trie_wait_us,
+                        trie = merge.trie_run.map_or("", |run| run.kind),
+                        trie_us = merge.trie_run.map_or(0, |run| run.us),
+                        trie_reads = merge.trie_run.map_or(0, |run| run.reads),
+                        trie_read_us = merge.trie_run.map_or(0, |run| run.read_us),
+                        trie_queue_us = merge.trie_run.map_or(0, |run| run.queue_us),
+                        trie_leaves_us = merge.trie_run.map_or(0, |run| run.leaves_us),
+                        trie_updates_us = merge.trie_run.map_or(0, |run| run.updates_us),
+                        trie_apply_us = merge.trie_run.map_or(0, |run| run.apply_us),
+                        trie_keys = merge.trie_run.map_or(0, |run| run.keys),
                         evm_us = merge.evm_us,
                         roots_us = merge.roots_us,
                         state_us = merge.state_us,
+                        state_keys = merge.state_keys,
+                        state_reads = merge.state_reads,
+                        state_read_us = merge.state_read_us,
                         "merged block emitted"
                     );
                     let msg =
@@ -390,10 +506,12 @@ impl Builder {
                 .get()
                 .and_then(|parent| parent.as_ref().ok())
                 .zip(job)
-                .and_then(|(parent, job)| job.run(store, parent).ok())
-                .map(|(trie, _)| trie),
+                .and_then(|(parent, job)| job.run(store, parent, Instant::now()).ok())
+                .map(|(trie, ..)| trie),
         };
-        self.trie = trie.map(|trie| (job.base.block_hash, trie));
+        if let Some(stream) = self.streams.get_mut(&job.base.builder_pubkey) {
+            stream.trie = trie.map(|(trie, written)| (job.base.block_hash, trie, written));
+        }
         Ok(merge.best_emitted.saturating_sub(job.base.block_value))
     }
 
@@ -483,8 +601,10 @@ impl Builder {
             proposer,
             system: parent.writes.clone(),
         };
-        let prior = match &self.prior {
-            Some(prior) => prior.clone(),
+        let pubkey = base.builder_pubkey;
+        let same_stream = self.latest == Some(pubkey);
+        let prior = match self.streams.get(&self.latest.unwrap_or_default()) {
+            Some(stream) => stream.prior.clone(),
             None => Arc::new(Prior::new(B256::ZERO, Vec::new(), &mut Known::default())),
         };
         let report = {
@@ -525,16 +645,27 @@ impl Builder {
             return Err(MergeError::InvalidPayment);
         }
 
+        let (layer, missing) = match self.streams.get_mut(&pubkey) {
+            Some(stream) => match stream.trie.take() {
+                Some((at, trie, written)) if at == stream.prior.base => {
+                    (Some((trie, written, stream.prior.clone())), "")
+                }
+                Some(_) => (None, "other_base"),
+                None => (None, "no_trie"),
+            },
+            None => (None, "new_stream"),
+        };
         let trie = TrieJob {
-            layer: self.trie.take().filter(|(at, _)| *at == prior.base).map(|(_, trie)| trie),
-            dirty: report.dirty,
+            layer,
+            missing,
             prior: next.clone(),
             coinbase: coinbase_after,
             txs: base.txs.clone(),
             deposit_contract: chain_config.deposit_contract_address,
         };
         let spent = next.effects.iter().map(|e| e.outcome.gas_spent).sum();
-        self.prior = Some(next.clone());
+        self.streams.insert(pubkey, Stream { prior: next.clone(), trie: None });
+        self.latest = Some(pubkey);
         let run = report.ran.len();
         Ok(Merge {
             base: base.clone(),
@@ -561,10 +692,17 @@ impl Builder {
             best_emitted: U256::ZERO,
             emissions: 0,
             extend_us: 0,
+            extend_stats: ExtendStats::default(),
+            trie_run: None,
             evm_us: 0,
             roots_us: 0,
             state_us: 0,
+            state_keys: 0,
+            state_reads: 0,
+            state_read_us: 0,
+            trie_wait_us: 0,
             run,
+            same_stream,
             trace: MergeTraceV1 { base_block_recv_ns: base.recv_ns, ..Default::default() },
         })
     }
@@ -609,11 +747,24 @@ impl Leaf {
     }
 }
 
+#[derive(Clone, Copy)]
+struct TrieRun {
+    kind: &'static str,
+    us: u64,
+    reads: u64,
+    read_us: u64,
+    queue_us: u64,
+    leaves_us: u64,
+    updates_us: u64,
+    apply_us: u64,
+    keys: usize,
+}
+
 /// The builder's trie for a new base, its trie at the prior patched with the keys that differ
 /// else built from the parent, and the base's tx and receipt entries.
 struct TrieJob {
-    layer: Option<State>,
-    dirty: FxHashMap<Key, Option<Val>>,
+    layer: Option<(State, Written, Arc<Prior>)>,
+    missing: &'static str,
     prior: Arc<Prior>,
     coinbase: Coinbase,
     txs: Arc<Vec<Arc<crate::engine::types::DecodedTx>>>,
@@ -621,7 +772,15 @@ struct TrieJob {
 }
 
 impl TrieJob {
-    fn run(self, store: &Store, parent: &Parent) -> Result<(State, Vec<Leaf>), MergeError> {
+    fn run(
+        self,
+        store: &Store,
+        parent: &Parent,
+        spawned: Instant,
+    ) -> Result<(Tree, Vec<Leaf>, TrieRun), MergeError> {
+        let start = Instant::now();
+        let queue_us = start.duration_since(spawned).as_micros() as u64;
+        crate::engine::trie::STORE_READS.with(|reads| reads.set((0, 0)));
         let mut cumulative = 0;
         let leaves = self
             .txs
@@ -632,29 +791,57 @@ impl TrieJob {
                 Leaf::of(tx, effect, cumulative, self.deposit_contract)
             })
             .collect();
-        let patched = self
-            .layer
-            .and_then(|layer| patch(layer, self.dirty.into_iter(), &*parent.db, self.coinbase));
-        let trie = match patched {
-            Some(trie) => trie,
-            None => build(store, parent, &self.prior, self.coinbase)
-                .map_err(|e| MergeError::Internal(format!("trie: {e}")))?,
+        let leaves_us = start.elapsed().as_micros() as u64;
+        let had_layer = self.layer.is_some();
+        let mut keys = 0;
+        let (mut updates_us, mut apply_us) = (0, 0);
+        let patched = self.layer.and_then(|(mut trie, written, at_base)| {
+            let at = Instant::now();
+            let mut seen = rustc_hash::FxHashSet::default();
+            let changed: Vec<(Key, Option<Val>)> = at_base
+                .keys()
+                .chain(self.prior.keys())
+                .filter(|key| !written.contains_key(key) && seen.insert(**key))
+                .filter(|key| self.prior.last(key) != at_base.last(key))
+                .map(|key| (*key, self.prior.last(key).cloned()))
+                .collect();
+            keys = changed.len();
+            let mut updates = updates(changed.into_iter(), &*parent.db, self.coinbase).ok()?;
+            if written.contains_key(&Key::Account(self.coinbase.address)) {
+                for update in updates.iter_mut().filter(|u| u.address == self.coinbase.address) {
+                    update.info = None;
+                }
+            }
+            updates_us = at.elapsed().as_micros() as u64;
+            let at = Instant::now();
+            trie.apply(&updates).ok()?;
+            apply_us = at.elapsed().as_micros() as u64;
+            Some((trie, written))
+        });
+        let (trie, kind) = match patched {
+            Some(trie) => (trie, "patched"),
+            None => (
+                (
+                    build(store, parent, &self.prior, self.coinbase)
+                        .map_err(|e| MergeError::Internal(format!("trie: {e}")))?,
+                    Written::default(),
+                ),
+                if had_layer { "patch_failed" } else { self.missing },
+            ),
         };
-        Ok((trie, leaves))
+        let (reads, read_ns) = crate::engine::trie::STORE_READS.with(|reads| reads.get());
+        Ok((trie, leaves, TrieRun {
+            kind,
+            us: start.elapsed().as_micros() as u64,
+            reads,
+            read_us: read_ns / 1000,
+            queue_us,
+            leaves_us,
+            updates_us,
+            apply_us,
+            keys,
+        }))
     }
-}
-
-/// The builder's trie at the previous base patched to this one; `None` when the patch fails,
-/// which leaves the trie half-applied.
-fn patch(
-    mut trie: State,
-    dirty: impl Iterator<Item = (Key, Option<Val>)>,
-    db: &dyn Database,
-    coinbase: Coinbase,
-) -> Option<State> {
-    let updates = updates(dirty, db, coinbase).ok()?;
-    trie.apply(&updates).ok()?;
-    Some(trie)
 }
 
 /// The trie for `prior`'s base, built from the parent with every key the base wrote.
@@ -798,20 +985,37 @@ fn apply(view: &mut View, effect: &Effect) {
     view.coinbase = view.coinbase.after(effect);
 }
 
+#[derive(Default, Clone, Copy)]
+struct ExtendStats {
+    orders: usize,
+    txs: usize,
+    presim_ran: usize,
+    apply_ran: usize,
+    filter_us: u64,
+    presim_us: u64,
+    apply_us: u64,
+    known_us: u64,
+}
+
 /// One base B built and the orders put on it so far.
 struct Merge {
     base: Arc<PreparedBlock>,
     exec: Exec,
     /// The base and every applied order: the orders' writes are the view's one layer.
     view: View,
-    /// The builder's trie at this base, or the patch still to make.
-    trie: Result<State, Option<TrieJob>>,
+    trie: Result<Tree, Option<TrieJob>>,
     builder_safe: Address,
     /// The last extend's and emission's stage timings, in µs.
     extend_us: u64,
+    extend_stats: ExtendStats,
+    trie_run: Option<TrieRun>,
     evm_us: u64,
     roots_us: u64,
     state_us: u64,
+    state_keys: usize,
+    state_reads: u64,
+    state_read_us: u64,
+    trie_wait_us: u64,
     gas_soft_limit: u64,
     distribution_gas_limit: u64,
     chain_id: u64,
@@ -835,6 +1039,7 @@ struct Merge {
     emissions: u64,
     /// Base txs B ran.
     run: usize,
+    same_stream: bool,
     trace: MergeTraceV1,
 }
 
@@ -882,6 +1087,8 @@ impl Merge {
             return;
         }
         let space = (self.gas_left(), self.blobs_left());
+        let presim_start = Instant::now();
+        let filter_us = (presim_start - start).as_micros() as u64;
         let mut runs: Vec<(usize, Run)> = {
             let known = known.read().expect("known poisoned");
             let (view, header) = (&self.view, &self.exec.header);
@@ -909,6 +1116,9 @@ impl Merge {
         .collect();
         runs.sort_unstable_by_key(|(_, run)| std::cmp::Reverse(run.payment));
         let mut ran: Vec<Arc<Effect>> = runs.iter().flat_map(|(_, run)| run.ran.clone()).collect();
+        let presim_ran = ran.len();
+        let presim_us = presim_start.elapsed().as_micros() as u64;
+        let apply_start = Instant::now();
 
         for (ix, sim) in runs {
             let order = &candidates[ix];
@@ -933,12 +1143,25 @@ impl Merge {
             ran.extend(run.ran.iter().cloned());
             self.commit(order, run);
         }
+        let apply_us = apply_start.elapsed().as_micros() as u64;
+        let apply_ran = ran.len() - presim_ran;
+        let known_start = Instant::now();
         if !ran.is_empty() {
             let mut known = known.write().expect("known poisoned");
             for effect in ran {
                 known.add(effect);
             }
         }
+        self.extend_stats = ExtendStats {
+            orders: candidates.len(),
+            txs: candidates.iter().map(|order| order.txs.len()).sum(),
+            presim_ran,
+            apply_ran,
+            filter_us,
+            presim_us,
+            apply_us,
+            known_us: known_start.elapsed().as_micros() as u64,
+        };
         self.trace.sim_end_ns = utcnow_ns();
         metrics::stage_latency("b_extend", start.elapsed().as_micros() as u64);
     }
@@ -1069,17 +1292,52 @@ impl Merge {
             self.view.layers.first().map(|layer| layer.as_ref().clone()).unwrap_or_default();
         let orders = updates(orders.into_iter(), &*self.exec.store, self.view.coinbase)
             .map_err(|e| internal(&e))?;
-        let all = merged(orders.into_iter().chain(emission));
+        let target = writes(&merged(orders.into_iter().chain(emission)))?;
         self.evm_us = evm_start.elapsed().as_micros() as u64;
         let roots_start = Instant::now();
-        let Ok(trie) = &mut self.trie else { return Ok(None) };
+        let Ok((_, written)) = &self.trie else { return Ok(None) };
+        let base = View { layers: Vec::new(), ..self.view.clone() };
+        let mut changed: FxHashMap<ethrex_common::Address, AccountUpdate> = FxHashMap::default();
+        let resets = written.keys().filter(|key| !target.contains_key(key)).map(|key| {
+            let write = match base.value(key) {
+                Some(Val::Account { exists: false, .. }) => Write::Removed,
+                Some(Val::Account { balance, nonce, code_hash, .. }) => {
+                    Write::Info(AccountInfo { code_hash, balance, nonce })
+                }
+                Some(Val::Slot(value)) => Write::Slot(value),
+                None => return Err(internal(&"base value missing")),
+            };
+            Ok((*key, write))
+        });
+        let sets = target
+            .iter()
+            .filter(|(key, write)| written.get(key) != Some(*write))
+            .map(|(key, write)| Ok((*key, write.clone())));
+        for set in sets.chain(resets) {
+            let (key, write) = set?;
+            let address = match key {
+                Key::Account(address) | Key::Slot(address, _) => address,
+            };
+            let update = changed.entry(address).or_insert_with(|| AccountUpdate::new(address));
+            match (key, write) {
+                (_, Write::Removed) => update.removed = true,
+                (_, Write::Info(info)) => update.info = Some(info),
+                (Key::Slot(_, slot), Write::Slot(value)) => {
+                    update.added_storage.insert(slot, value);
+                }
+                (Key::Account(_), Write::Slot(_)) => return Err(internal(&"slot write on account")),
+            }
+        }
+        let changed: Vec<AccountUpdate> = changed.into_values().collect();
+        self.state_keys = changed.iter().map(|u| 1 + u.added_storage.len()).sum();
+        let Ok((trie, _)) = &mut self.trie else { return Ok(None) };
         let (state_root, (transactions_root, (receipts_root, logs_bloom))) = POOL.join(
             || {
                 let start = Instant::now();
-                trie.begin();
-                let root = trie.apply(&all);
-                trie.rollback();
-                (root, start.elapsed().as_micros() as u64)
+                crate::engine::trie::STORE_READS.with(|reads| reads.set((0, 0)));
+                let root = trie.apply(&changed);
+                let reads = crate::engine::trie::STORE_READS.with(|reads| reads.get());
+                (root, start.elapsed().as_micros() as u64, reads)
             },
             || {
                 let bloom = leaves.iter().fold(Bloom::zero(), |bloom, leaf| bloom | leaf.bloom);
@@ -1095,8 +1353,19 @@ impl Merge {
                 POOL.join(|| root(|leaf| &leaf.tx[..]), || (root(|leaf| &leaf.receipt[..]), bloom))
             },
         );
-        let (state_root, state_us) = state_root;
-        let state_root = state_root.map_err(|e| internal(&e))?;
+        let (state_root, state_us, (state_reads, state_read_ns)) = state_root;
+        self.state_reads = state_reads;
+        self.state_read_us = state_read_ns / 1000;
+        let state_root = match state_root {
+            Ok(root) => root,
+            Err(e) => {
+                self.trie = Err(None);
+                return Err(internal(&e));
+            }
+        };
+        if let Ok((_, written)) = &mut self.trie {
+            *written = target;
+        }
         self.state_us = state_us;
         self.roots_us = roots_start.elapsed().as_micros() as u64;
         let mut header = self.exec.header.clone();

@@ -195,35 +195,10 @@ impl MergeStreams {
 
 fn run_stream(id: usize, stream: Arc<BuilderStream>, store: Store, out: Sender<EngineOutput>) {
     let mut builder = Builder::default();
-    // One coinbase can submit from several pubkeys, each its own stream of blocks; with
-    // `warmup_per_pubkey` each warms up separately before its bases are merged.
-    let mut bases_in_slot: FxHashMap<alloy_rpc_types::beacon::BlsPublicKey, u32> =
-        Default::default();
-    let mut slot = 0;
     while let Some(job) = stream.take_blocking() {
-        if job.shared.ctx.slot != slot {
-            if job.shared.ctx.slot < slot {
-                continue;
-            }
-            slot = job.shared.ctx.slot;
-            bases_in_slot.clear();
-        }
-        let stream_key = if job.shared.engine_config.warmup_per_pubkey {
-            job.base.builder_pubkey
-        } else {
-            Default::default()
-        };
-        let seen = bases_in_slot.entry(stream_key).or_default();
-        let warming = *seen < job.shared.engine_config.warmup_bases;
-        *seen += 1;
-        metrics::set_warming(warming);
-        if let Err(err) = builder.merge(id, &job, &stream, warming, &store, &out) {
+        if let Err(err) = builder.merge(id, &job, &stream, &store, &out) {
             metrics::rejection("merge_cycle", err.metric_label());
             debug!(worker = id, base_block_hash = %job.base.block_hash, %err, "merge cycle failed");
-        }
-        // A base that arrived during warm-up waited behind it; the next one starts clean.
-        if warming {
-            stream.try_take();
         }
     }
     info!(worker = id, "merge stream stopped");

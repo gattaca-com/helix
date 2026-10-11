@@ -25,10 +25,7 @@ pub struct EngineConfig {
     /// Stop improving a base once it is this old. Must match the relay's
     /// `max_merged_bid_age_ms`; it is not sent over the wire.
     pub max_base_age: Duration,
-    /// Bases per builder per slot that are built but never emitted: early, cold and stale by
-    /// get_header.
-    pub warmup_bases: u32,
-    pub warmup_per_pubkey: bool,
+    pub warmup: bool,
     /// Optional core pin for the engine worker thread.
     pub core: Option<usize>,
     /// Cap on distinct per-builder merge streams; 0 disables merging.

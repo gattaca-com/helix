@@ -104,8 +104,7 @@ impl Fixture {
             max_orders_per_slot: 1024,
             min_value_increase_wei: U256::ZERO,
             max_base_age: Duration::from_secs(5),
-            warmup_bases: 0,
-            warmup_per_pubkey: false,
+            warmup: false,
             core: None,
             max_builder_streams: 8,
             speculation_top_k: 0,
@@ -1416,11 +1415,7 @@ async fn replay_slot(
         max_base_age: Duration::from_millis(
             std::env::var("REPLAY_MAX_BASE_AGE_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(50),
         ),
-        warmup_bases: std::env::var("REPLAY_WARMUP_BASES")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(0),
-        warmup_per_pubkey: std::env::var_os("REPLAY_WARMUP_PER_PUBKEY").is_some(),
+        warmup: std::env::var_os("REPLAY_NO_WARMUP").is_none(),
         core: None,
         max_builder_streams: 16,
         speculation_top_k: 4,

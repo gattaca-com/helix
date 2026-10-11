@@ -92,13 +92,6 @@ pub struct SpeculationConfig {
     /// here and has to be kept in step by hand.
     #[serde(default = "default_max_base_age_ms")]
     pub max_base_age_ms: u64,
-    /// A builder's first bases in a slot are early, cold and stale by get_header: only warm on
-    /// them.
-    #[serde(default = "default_warmup_bases")]
-    pub warmup_bases: u32,
-    /// Count warm-up bases per submitting pubkey rather than per coinbase.
-    #[serde(default)]
-    pub warmup_per_pubkey: bool,
 }
 
 impl Default for SpeculationConfig {
@@ -108,8 +101,6 @@ impl Default for SpeculationConfig {
             max_streams: default_max_builder_streams(),
             top_k: default_speculation_top_k(),
             max_base_age_ms: default_max_base_age_ms(),
-            warmup_bases: default_warmup_bases(),
-            warmup_per_pubkey: false,
         }
     }
 }
@@ -124,10 +115,6 @@ fn default_speculation_top_k() -> usize {
 
 fn default_max_base_age_ms() -> u64 {
     50
-}
-
-fn default_warmup_bases() -> u32 {
-    2
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
