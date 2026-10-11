@@ -129,7 +129,8 @@ pub struct BlockMergeResponse {
     pub unmerged_txs: Arc<Vec<UnmergedTx>>,
     #[serde(skip)]
     pub tx_builders: Arc<Vec<(B256, BlsPublicKeyBytes)>>,
-    pub base_receive_ns: u64,
+    #[serde(skip)]
+    pub base_read_ns: u64,
     #[serde(skip)]
     pub accept_ns: u64,
 }

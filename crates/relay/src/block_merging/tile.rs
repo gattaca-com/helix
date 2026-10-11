@@ -327,9 +327,9 @@ fn handle_merged_block(
     stats.merged_blocks += 1;
     MERGE_RECEIVED.with_label_values(&["accepted"]).inc();
     response.accept_ns = accept_ns;
-    if let Some(&(receive_ns, forwarded_ns)) = slot.forwarded_ns.get(&base_block_hash) {
+    if let Some(&(read_ns, forwarded_ns)) = slot.forwarded_ns.get(&base_block_hash) {
         if !slot.merged_seen.contains(&base_block_hash) {
-            response.base_receive_ns = receive_ns;
+            response.base_read_ns = read_ns;
         }
         let builder_ns =
             response.trace.finalize_time_ns.checked_sub(response.trace.request_time_ns);
@@ -850,7 +850,7 @@ impl BlockMergingTile {
         }
         let Some(data) = self.decoded.get(decoded_submission_id) else { return };
         let sub = &data.submission_data;
-        let receive_ns = sub.trace.receive_ns.0;
+        let read_ns = sub.trace.read_body_ns.0.max(sub.trace.receive_ns.0);
         let decoded_ns = sub.trace.decoded_ns.0;
 
         if self.slot.slot_start.is_none() {
@@ -1030,9 +1030,9 @@ impl BlockMergingTile {
         if msg.allow_appending {
             self.conn.forwarded.insert(block_hash);
             let now = Nanos::now().0;
-            self.slot.forwarded_ns.entry(block_hash).or_insert((receive_ns, now));
+            self.slot.forwarded_ns.entry(block_hash).or_insert((read_ns, now));
             if !is_replay {
-                observe_pipe("receive_to_forward", receive_ns, now);
+                observe_pipe("read_to_forward", read_ns, now);
                 observe_pipe("decode_to_forward", decoded_ns, now);
             }
         }
