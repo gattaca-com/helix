@@ -17,8 +17,8 @@ use helix_common::{
     chain_info::ChainInfo,
     metrics::{
         MERGE_ACTIVATION, MERGE_BUILDER_LATENCY, MERGE_CONNECTED, MERGE_ENABLED, MERGE_FORWARD,
-        MERGE_ORDERS_FORWARDED, MERGE_RECEIVED, MERGE_REJECT, MERGE_ROUND_TRIP,
-        MERGE_SLOT_APPENDABLE, MERGE_TOP_BID_GAP, MERGE_TXS_SENT,
+        MERGE_FORWARD_DELAY, MERGE_ORDERS_FORWARDED, MERGE_RECEIVED, MERGE_REJECT,
+        MERGE_ROUND_TRIP, MERGE_SLOT_APPENDABLE, MERGE_TOP_BID_GAP, MERGE_TXS_SENT,
     },
 };
 use helix_tcp_types::merging::{
@@ -838,6 +838,7 @@ impl BlockMergingTile {
         }
         let Some(data) = self.decoded.get(decoded_submission_id) else { return };
         let sub = &data.submission_data;
+        let receive_ns = sub.trace.receive_ns.0;
 
         if self.slot.slot_start.is_none() {
             self.stats.skipped_no_slot_start += 1;
@@ -1015,7 +1016,11 @@ impl BlockMergingTile {
             .extend(msg.merge_orders.iter().map(|o| OrderTxs::from_ref(o, &tx_hashes)));
         if msg.allow_appending {
             self.conn.forwarded.insert(block_hash);
-            self.slot.forwarded_ns.entry(block_hash).or_insert_with(|| Nanos::now().0);
+            let now = Nanos::now().0;
+            self.slot.forwarded_ns.entry(block_hash).or_insert(now);
+            if !is_replay {
+                MERGE_FORWARD_DELAY.observe(now.saturating_sub(receive_ns) as f64 / 1e3);
+            }
         }
         self.connector.send_with(token, |buf| buf.extend_from_slice(frame));
     }
