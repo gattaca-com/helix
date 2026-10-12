@@ -953,6 +953,13 @@ fn run_order(
             }
             continue;
         }
+        let trusted = trusted &&
+            hints.is_some_and(|hints| {
+                run.effects[..i].iter().zip(&hints[..i]).all(|(ran, hint)| match (ran, hint) {
+                    (Some(ran), Some(hint)) => Arc::ptr_eq(ran, hint),
+                    (ran, hint) => ran.is_none() && hint.is_none(),
+                })
+            });
         let hinted = hints.and_then(|hints| hints[i].clone()).filter(|e| trusted || view.holds(e));
         let effect =
             match hinted.or_else(|| known.variants(&tx.hash).find(|e| view.holds(e)).cloned()) {
