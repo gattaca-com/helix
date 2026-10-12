@@ -11,7 +11,7 @@ use ssz::{Decode, Encode};
 use ssz_derive::{Decode, Encode};
 
 use crate::{
-    Blob, SignedBidSubmission, TestRandom,
+    Blob, BlsPublicKeyBytes, SignedBidSubmission, TestRandom,
     fields::{KzgCommitment, KzgProof},
 };
 
@@ -380,6 +380,7 @@ pub struct MergedBlock {
     pub builder_inclusions: FxHashMap<Address, BuilderInclusionResult>,
     pub trace: MergedBlockTrace,
     pub unmerged_txs: Arc<Vec<UnmergedTx>>,
+    pub tx_builders: Arc<Vec<(B256, BlsPublicKeyBytes)>>,
 }
 
 impl MergedBlock {

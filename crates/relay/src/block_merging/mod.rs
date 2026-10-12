@@ -167,6 +167,7 @@ fn merged_block_to_response(
             top_bid: None,
         },
         unmerged_txs: Arc::new(m.unmerged_txs),
+        tx_builders: Arc::default(),
     })
 }
 

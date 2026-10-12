@@ -235,6 +235,7 @@ impl BlockMerger {
             builder_inclusions: response.builder_inclusions,
             trace,
             unmerged_txs: response.unmerged_txs,
+            tx_builders: response.tx_builders,
         });
 
         trace!(%block_hash, "stored merged block in local cache");

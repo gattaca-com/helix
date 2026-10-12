@@ -31,7 +31,7 @@ use helix_tcp_types::merging::{
     order::MergeOrderRef,
     relay_to_builder::{ActivateBaseBlockV1, MergeableBlockV1, SlotStartV1},
 };
-use helix_types::{BlobWithMetadata, HydrationCache, Submission, payload_to_v3};
+use helix_types::{BlobWithMetadata, BlsPublicKeyBytes, HydrationCache, Submission, payload_to_v3};
 use rustc_hash::{FxHashMap, FxHashSet};
 use ssz::Decode;
 use tracing::{debug, error, info, trace, warn};
@@ -117,6 +117,7 @@ struct SlotState {
     /// Orders actually sent to the merge builder this slot, for the
     /// unbundling check on incoming merged blocks.
     order_txs: Vec<OrderTxs>,
+    tx_builders: FxHashMap<B256, Vec<BlsPublicKeyBytes>>,
 }
 
 #[derive(Clone, Copy)]
@@ -287,7 +288,7 @@ fn handle_merged_block(
     }
     let base_block_hash = merged.base_block_hash;
     record_builder_latency(&merged.trace);
-    let Some(response) = merged_block_to_response(merged, blob_sidecars, max_blobs_per_block)
+    let Some(mut response) = merged_block_to_response(merged, blob_sidecars, max_blobs_per_block)
     else {
         stats.merged_blob_missing += 1;
         MERGE_RECEIVED.with_label_values(&["blob_missing"]).inc();
@@ -325,6 +326,16 @@ fn handle_merged_block(
     stats.merged_blocks += 1;
     MERGE_RECEIVED.with_label_values(&["accepted"]).inc();
     record_round_trip(slot, base_block_hash);
+    response.tx_builders = Arc::new(
+        response
+            .builder_inclusions
+            .values()
+            .flat_map(|inclusion| &inclusion.txs)
+            .chain(response.unmerged_txs.iter().map(|tx| &tx.tx_hash))
+            .filter_map(|hash| slot.tx_builders.get(hash).map(|builders| (hash, builders)))
+            .flat_map(|(hash, builders)| builders.iter().map(move |pubkey| (*hash, *pubkey)))
+            .collect(),
+    );
     Some(response)
 }
 
@@ -941,6 +952,10 @@ impl BlockMergingTile {
             .iter_mut()
             .zip(&tx_hashes)
         {
+            let builders = self.slot.tx_builders.entry(hash).or_default();
+            if !builders.contains(&msg.builder_pubkey) {
+                builders.push(msg.builder_pubkey);
+            }
             if self.conn.sent_txs.insert(hash) {
                 self.stats.tx_bytes_sent += 1;
             } else {
