@@ -374,7 +374,7 @@ impl DecoderTile {
 
             true
         } else {
-            !header.api_key.is_empty() && cache.validate_api_key(&header.api_key, &builder_pubkey)
+            !header.api_key.is_empty() && cache.can_skip_sigverify(&header.api_key, &builder_pubkey)
         };
 
         match submission {

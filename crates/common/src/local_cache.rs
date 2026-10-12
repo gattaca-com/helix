@@ -201,13 +201,13 @@ impl LocalCache {
         builders
     }
 
-    pub fn contains_api_key(&self, api_key: &str) -> bool {
+    pub fn has_top_bid_feed(&self, api_key: &str) -> bool {
         self.api_key_cache
             .get(api_key)
             .is_some_and(|b| b.iter().any(|b| b.builder_info.top_bid_feed))
     }
 
-    pub fn validate_api_key(&self, api_key: &str, pubkey: &BlsPublicKeyBytes) -> bool {
+    pub fn can_skip_sigverify(&self, api_key: &str, pubkey: &BlsPublicKeyBytes) -> bool {
         self.api_key_cache.get(api_key).is_some_and(|b| {
             b.iter().any(|b| b.pub_key == *pubkey && b.builder_info.skip_sigverify)
         })
