@@ -6,9 +6,8 @@ use flux::{
     timing::{Duration, Instant},
 };
 use flux_network::{Event, Network, Token, UdpConfig, UdpGroupConfig};
-use helix_common::{api::builder_api::TopBidUpdate, is_local_dev};
+use helix_common::{BuilderConfig, api::builder_api::TopBidUpdate, is_local_dev};
 use helix_tcp_types::RegistrationMsg;
-use helix_types::BlsPublicKeyBytes;
 use ssz::{Decode, Encode};
 use tracing::info;
 use uuid::Uuid;
@@ -42,7 +41,7 @@ struct Stats {
 
 pub struct UdpTopBidTile {
     driver: Network,
-    api_key_cache: Arc<DashMap<String, Vec<BlsPublicKeyBytes>>>,
+    api_key_cache: Arc<DashMap<String, Vec<BuilderConfig>>>,
     max_per_key: usize,
 
     /// Authenticated peers, the only tokens an update is written to.
@@ -61,7 +60,7 @@ pub struct UdpTopBidTile {
 impl UdpTopBidTile {
     pub fn new(
         listener_addr: SocketAddr,
-        api_key_cache: Arc<DashMap<String, Vec<BlsPublicKeyBytes>>>,
+        api_key_cache: Arc<DashMap<String, Vec<BuilderConfig>>>,
         max_per_key: usize,
     ) -> Self {
         let udp = UdpConfig {
@@ -118,15 +117,16 @@ impl UdpTopBidTile {
 }
 
 fn can_connect(
-    cache: &DashMap<String, Vec<BlsPublicKeyBytes>>,
+    cache: &DashMap<String, Vec<BuilderConfig>>,
     msg: &RegistrationMsg,
     api_key: &str,
     registered: &[(Token, [u8; 16])],
     max_per_key: usize,
 ) -> bool {
     // api-key is allowed to connect via udp
-    let is_authorised = cache.get(api_key).is_some_and(|p| p.value().contains(&msg.builder_pubkey)) ||
-        (is_local_dev() && cache.contains_key(api_key));
+    let is_authorised = cache.get(api_key).is_some_and(|b| {
+        b.iter().any(|b| b.pub_key == msg.builder_pubkey && b.builder_info.top_bid_feed)
+    }) || (is_local_dev() && cache.contains_key(api_key));
     if !is_authorised {
         return false;
     }

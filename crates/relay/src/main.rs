@@ -300,7 +300,7 @@ async fn run(
                 SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, config.tcp_port));
             let block_submission_tcp_listener = BidSubmissionTcpListener::new(
                 sock_addr,
-                local_cache.tcp_api_keys.clone(),
+                local_cache.api_key_cache.clone(),
                 config.tcp_max_connections,
                 spine.spine.dcache_ptr_for::<NewTcpBidSubmission>(),
                 slot_events.clone(),
@@ -321,7 +321,7 @@ async fn run(
                 attach_tile(
                     UdpTopBidTile::new(
                         sock_addr,
-                        local_cache.top_bid_api_keys.clone(),
+                        local_cache.api_key_cache.clone(),
                         config.udp_top_bid_max_connections_per_key,
                     ),
                     spine,
