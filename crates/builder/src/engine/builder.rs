@@ -110,9 +110,14 @@ impl Parent {
 
 impl Parent {
     fn prefetch(&self, store: &Store, paths: &[(H256, Vec<H256>)]) {
-        if let Ok(mut trie) = self.trie(store) {
-            let _unused = trie.prefetch(paths);
-        }
+        IO.install(|| {
+            use rayon::prelude::*;
+            paths.par_chunks(4).for_each(|chunk| {
+                if let Ok(mut trie) = self.trie(store) {
+                    let _unused = trie.prefetch(chunk);
+                }
+            })
+        });
     }
 
     /// The parent's state trie.
@@ -133,6 +138,14 @@ impl Parent {
 }
 
 /// Learns the effects of orders as they are pooled, off every merge's path.
+static IO: std::sync::LazyLock<rayon::ThreadPool> = std::sync::LazyLock::new(|| {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(16)
+        .thread_name(|i| format!("b-io-{i}"))
+        .build()
+        .expect("b io pool")
+});
+
 static INGEST: std::sync::LazyLock<rayon::ThreadPool> = std::sync::LazyLock::new(|| {
     rayon::ThreadPoolBuilder::new()
         .num_threads(4)
@@ -483,6 +496,7 @@ impl Builder {
                         trie_read_us = merge.trie_run.map_or(0, |run| run.read_us),
                         trie_queue_us = merge.trie_run.map_or(0, |run| run.queue_us),
                         trie_leaves_us = merge.trie_run.map_or(0, |run| run.leaves_us),
+                        trie_fetch_us = merge.trie_run.map_or(0, |run| run.fetch_us),
                         trie_updates_us = merge.trie_run.map_or(0, |run| run.updates_us),
                         trie_apply_us = merge.trie_run.map_or(0, |run| run.apply_us),
                         trie_keys = merge.trie_run.map_or(0, |run| run.keys),
@@ -800,6 +814,7 @@ struct TrieRun {
     read_us: u64,
     queue_us: u64,
     leaves_us: u64,
+    fetch_us: u64,
     updates_us: u64,
     apply_us: u64,
     keys: usize,
@@ -839,7 +854,7 @@ impl TrieJob {
         let leaves_us = start.elapsed().as_micros() as u64;
         let had_layer = self.layer.is_some();
         let mut keys = 0;
-        let (mut updates_us, mut apply_us) = (0, 0);
+        let (mut fetch_us, mut updates_us, mut apply_us) = (0, 0, 0);
         let patched = self.layer.and_then(|(mut trie, written, at_base)| {
             let at = Instant::now();
             let mut seen = rustc_hash::FxHashSet::default();
@@ -858,6 +873,9 @@ impl TrieJob {
                 .map(|key| (*key, self.prior.last(key).cloned()))
                 .collect();
             keys = changed.len();
+            let at_fetch = Instant::now();
+            parent.prefetch(store, &paths(changed.iter().map(|(key, _)| *key)));
+            fetch_us = at_fetch.elapsed().as_micros() as u64;
             let mut updates = updates(changed.into_iter(), &*parent.db, self.coinbase).ok()?;
             if written.contains_key(&Key::Account(self.coinbase.address)) {
                 for update in updates.iter_mut().filter(|u| u.address == self.coinbase.address) {
@@ -889,6 +907,7 @@ impl TrieJob {
             read_us: read_ns / 1000,
             queue_us,
             leaves_us,
+            fetch_us,
             updates_us,
             apply_us,
             keys,
@@ -903,6 +922,7 @@ fn build(
     prior: &Prior,
     coinbase: Coinbase,
 ) -> Result<State, String> {
+    parent.prefetch(store, &paths(prior.keys().copied()));
     let mut trie = parent.trie(store)?;
     trie.apply(&parent.system).map_err(|e| e.to_string())?;
     let finals = prior.keys().map(|key| (*key, prior.last(key).cloned()));
