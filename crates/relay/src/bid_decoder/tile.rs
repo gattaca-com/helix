@@ -259,7 +259,6 @@ impl DecoderTile {
         mut trace: SubmissionTrace,
         expected_pubkey: Option<&BlsPublicKeyBytes>,
     ) -> Result<(SubmissionData, tracing::Span), BuilderApiError> {
-        tracing::Span::current().record("id", tracing::field::display(header.submission_id));
         record_submission_step_ns("recv_worker", trace.receive_ns.0, utcnow_ns());
         trace!("received by worker");
         let (
@@ -279,12 +278,6 @@ impl DecoderTile {
             buffer,
             &mut trace,
         )?;
-
-        tracing::Span::current().record("slot", tracing::field::display(submission.bid_slot()));
-        tracing::Span::current()
-            .record("block_hash", tracing::field::display(submission.block_hash()));
-        tracing::Span::current()
-            .record("builder_pubkey", tracing::field::display(submission.builder_pubkey()));
 
         trace!("sending to auctioneer");
 
