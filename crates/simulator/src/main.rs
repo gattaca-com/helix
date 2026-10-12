@@ -2,14 +2,13 @@ mod common;
 mod inclusion;
 mod ssz_server;
 mod state_recorder;
-mod tx_sink;
 mod validation;
 
 use std::sync::Arc;
 
 use alloy_primitives::Bytes;
 use clap::Parser;
-use helix_common::utils::install_default_crypto_provider;
+use helix_common::{tx_sink::TxSimSink, utils::install_default_crypto_provider};
 use reth_chain_state::CanonStateSubscriptions;
 use reth_ethereum::{
     cli::{chainspec::EthereumChainSpecParser, interface::Cli},
@@ -17,7 +16,6 @@ use reth_ethereum::{
     rpc::api::eth::RpcNodeCore,
 };
 use reth_node_builder::FullNodeComponents;
-use tx_sink::TxSimSink;
 use validation::{ValidationApi, ValidationApiConfig};
 
 use crate::{
@@ -75,7 +73,7 @@ fn main() {
                             &url,
                             &database,
                             &user,
-                            &ctx.node().task_executor,
+                            ctx.node().task_executor.handle(),
                         ));
                         validation_api = validation_api.with_tx_sink(sink);
                     }

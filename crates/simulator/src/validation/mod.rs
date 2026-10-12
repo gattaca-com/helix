@@ -24,6 +24,7 @@ use helix_common::{
     blacklist::{DisallowListPayload, changed_disallow_hash},
     payment::multisend_paid_amount,
     payment_forwarder_recipient,
+    tx_sink::{TxSimRow, TxSimSink},
 };
 use jsonrpsee::{core::RpcResult, proc_macros::rpc, types::ErrorObject};
 use reth_ethereum::{
@@ -64,7 +65,6 @@ use tracing::{error, info, warn};
 
 use crate::{
     common::{RethConsensus, RethEvmConfig, RethPayloadValidator, RethProvider},
-    tx_sink::{TxSimRow, TxSimSink},
     validation::error::{GetParentError, ValidationApiError},
 };
 

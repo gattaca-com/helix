@@ -5812,6 +5812,7 @@ dependencies = [
  "bytes",
  "chrono",
  "clap",
+ "clickhouse",
  "core_affinity",
  "dashmap 5.5.3",
  "ethereum_serde_utils",

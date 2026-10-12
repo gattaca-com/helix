@@ -1,8 +1,7 @@
 use std::time::Duration;
 
 use clickhouse::types::UInt256;
-use reth_tasks::TaskExecutor;
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::{runtime::Handle, sync::mpsc::UnboundedSender};
 use tracing::{error, info, warn};
 
 const TABLE: &str = "bid_submission_payloads";
@@ -36,7 +35,7 @@ pub struct TxSimSink {
 }
 
 impl TxSimSink {
-    pub fn new(url: &str, database: &str, user: &str, task_executor: &TaskExecutor) -> Self {
+    pub fn new(url: &str, database: &str, user: &str, runtime: &Handle) -> Self {
         let password = std::env::var(ENV_CLICKHOUSE_PASSWORD).unwrap_or_default();
         let client = clickhouse::Client::default()
             .with_url(url)
@@ -46,7 +45,7 @@ impl TxSimSink {
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Vec<TxSimRow>>();
 
-        task_executor.spawn_task(Box::pin(async move {
+        runtime.spawn(async move {
             while let Some(rows) = rx.recv().await {
                 match insert_rows(&client, rows).await {
                     Ok(n) => info!(n, "inserted tx sim rows to {TABLE}"),
@@ -54,7 +53,7 @@ impl TxSimSink {
                 }
             }
             warn!("tx sim sink channel closed");
-        }));
+        });
 
         Self { tx }
     }
