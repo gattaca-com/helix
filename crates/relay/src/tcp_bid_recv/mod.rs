@@ -5,7 +5,8 @@ use flux::{tile::Tile, timing::Nanos};
 use flux_network::{Event, Network, TcpGroupConfig, Token};
 use flux_utils::{DCachePtr, SharedVector};
 use helix_common::{
-    SubmissionTrace, is_local_dev, metrics::SUB_CLIENT_TO_SERVER_LATENCY, utils::utcnow_ns,
+    BuilderConfig, SubmissionTrace, is_local_dev, metrics::SUB_CLIENT_TO_SERVER_LATENCY,
+    utils::utcnow_ns,
 };
 use helix_tcp_types::BID_SUB_HEADER_SIZE;
 use helix_types::BlsPublicKeyBytes;
@@ -50,7 +51,7 @@ struct Stats {
 pub struct BidSubmissionTcpListener {
     listener: Network,
 
-    api_key_cache: Arc<DashMap<String, Vec<BlsPublicKeyBytes>>>,
+    api_key_cache: Arc<DashMap<String, Vec<BuilderConfig>>>,
 
     to_disconnect: Vec<Token>,
     registered: FxHashMap<Token, BlsPublicKeyBytes>,
@@ -65,7 +66,7 @@ pub struct BidSubmissionTcpListener {
 impl BidSubmissionTcpListener {
     pub fn new(
         listener_addr: SocketAddr,
-        api_key_cache: Arc<DashMap<String, Vec<BlsPublicKeyBytes>>>,
+        api_key_cache: Arc<DashMap<String, Vec<BuilderConfig>>>,
         max_connections: usize,
         dcache_ptr: DCachePtr,
         slot_events: Arc<SharedVector<SlotUpdate>>,
@@ -196,11 +197,12 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                     match RegistrationMsg::from_ssz_bytes(payload) {
                         Ok(msg) => {
                             let api_key = Uuid::from_bytes(msg.api_key).to_string();
-                            if self
-                                .api_key_cache
-                                .get(&api_key)
-                                .is_some_and(|p| p.value().contains(&msg.builder_pubkey)) ||
-                                (is_local_dev() && self.api_key_cache.contains_key(&api_key))
+                            if self.api_key_cache.get(&api_key).is_some_and(|b| {
+                                b.iter().any(|b| {
+                                    b.pub_key == msg.builder_pubkey &&
+                                        b.builder_info.tcp_submissions
+                                })
+                            }) || (is_local_dev() && self.api_key_cache.contains_key(&api_key))
                             {
                                 self.registered.insert(token, msg.builder_pubkey);
                                 self.stats.registration_ok += 1;

@@ -57,7 +57,7 @@ impl<A: Api> BuilderApi<A> {
             return Err(BuilderApiError::InvalidApiKey);
         };
 
-        if !api.local_cache.contains_api_key(api_key) {
+        if !api.local_cache.has_top_bid_feed(api_key) {
             return Err(BuilderApiError::InvalidApiKey);
         }
 

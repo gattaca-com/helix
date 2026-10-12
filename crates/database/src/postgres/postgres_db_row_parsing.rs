@@ -177,6 +177,9 @@ impl FromRow for BuilderInfo {
                 .get::<&str, Option<Vec<&str>>>("builder_ids")
                 .map(|ids| ids.into_iter().map(|id| id.to_string()).collect()),
             api_key: row.get::<&str, Option<&str>>("api_key").map(|s| s.to_string()),
+            skip_sigverify: row.get::<&str, bool>("skip_sigverify"),
+            tcp_submissions: row.get::<&str, bool>("tcp_submissions"),
+            top_bid_feed: row.get::<&str, bool>("top_bid_feed"),
         })
     }
 }

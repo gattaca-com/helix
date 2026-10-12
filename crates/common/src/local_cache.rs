@@ -101,8 +101,7 @@ pub struct LocalCache {
     pub inclusion_list: Arc<RwLock<Option<InclusionListWithKey>>>,
     builder_info_cache: Arc<DashMap<BlsPublicKeyBytes, BuilderInfo>>,
     operator_builder_collateral: Arc<DashMap<BlsPublicKeyBytes, FxHashMap<Vec<u8>, u128>>>,
-    /// Api key -> builder pubkey
-    pub api_key_cache: Arc<DashMap<String, Vec<BlsPublicKeyBytes>>>,
+    pub api_key_cache: Arc<DashMap<String, Vec<BuilderConfig>>>,
     primev_proposers: Arc<DashSet<BlsPublicKeyBytes>>,
     kill_switch: Arc<AtomicBool>,
     /// Production safety valve: whether `get_header` serves merged blocks to the proposer.
@@ -202,12 +201,16 @@ impl LocalCache {
         builders
     }
 
-    pub fn contains_api_key(&self, api_key: &str) -> bool {
-        self.api_key_cache.contains_key(api_key)
+    pub fn has_top_bid_feed(&self, api_key: &str) -> bool {
+        self.api_key_cache
+            .get(api_key)
+            .is_some_and(|b| b.iter().any(|b| b.builder_info.top_bid_feed))
     }
 
-    pub fn validate_api_key(&self, api_key: &str, pubkey: &BlsPublicKeyBytes) -> bool {
-        self.api_key_cache.get(api_key).is_some_and(|p| p.value().contains(pubkey))
+    pub fn can_skip_sigverify(&self, api_key: &str, pubkey: &BlsPublicKeyBytes) -> bool {
+        self.api_key_cache.get(api_key).is_some_and(|b| {
+            b.iter().any(|b| b.pub_key == *pubkey && b.builder_info.skip_sigverify)
+        })
     }
 
     /// Returns whether builder was optimistic before the demotion
@@ -247,7 +250,7 @@ impl LocalCache {
 
         for builder_info in builder_infos {
             if let Some(api_key) = builder_info.builder_info.api_key.as_ref() {
-                self.api_key_cache.entry(api_key.clone()).or_default().push(builder_info.pub_key);
+                self.api_key_cache.entry(api_key.clone()).or_default().push(builder_info.clone());
             }
 
             self.builder_info_cache.insert(builder_info.pub_key, builder_info.builder_info.clone());
@@ -464,7 +467,7 @@ mod tests {
             is_optimistic_for_regional_filtering: false,
             builder_id: None,
             builder_ids: None,
-            api_key: None,
+            ..Default::default()
         };
 
         // Test case 1: Builder exists

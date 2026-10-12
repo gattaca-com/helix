@@ -120,7 +120,7 @@ impl<B: BidAdjustor> Context<B> {
             is_optimistic_for_regional_filtering: local_dev,
             builder_id: None,
             builder_ids: None,
-            api_key: None,
+            ..Default::default()
         };
 
         let block_merger = BlockMerger::new(0, cache.clone(), config.clone());
