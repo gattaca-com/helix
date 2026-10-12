@@ -1,5 +1,6 @@
 use std::{net::SocketAddr, path::Path};
 
+use helix_common::config::ClickhouseConfig;
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -182,6 +183,7 @@ pub struct SimulationConfig {
     /// Prometheus port; the merging config's port wins when both roles run.
     #[serde(default = "default_metrics_port")]
     pub metrics_port: Option<u16>,
+    pub clickhouse: Option<ClickhouseConfig>,
 }
 
 impl SimulationConfig {

@@ -1,8 +1,11 @@
+use std::sync::Arc;
+
 use clap::Parser;
 use flux::{
     spine::FluxSpine,
     tile::{TileConfig, attach_tile},
 };
+use helix_common::tx_sink::TxSimSink;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -80,6 +83,14 @@ fn main() -> eyre::Result<()> {
             simulation_config.validation_window,
             disallow.clone(),
             simulation_config.max_concurrent_validations,
+            simulation_config.clickhouse.as_ref().map(|clickhouse| {
+                Arc::new(TxSimSink::new(
+                    &format!("http://{}", clickhouse.addr),
+                    &clickhouse.database,
+                    &clickhouse.user,
+                    runtime.handle(),
+                ))
+            }),
         );
         runtime.spawn(validation_server::refresh_blacklist(
             simulation_config.blacklist_endpoint.clone(),

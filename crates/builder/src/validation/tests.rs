@@ -128,6 +128,7 @@ impl Fixture {
             WINDOW,
             self.disallow.clone(),
             1,
+            None,
         )
     }
 

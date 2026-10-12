@@ -35,8 +35,11 @@ use ethrex_crypto::NativeCrypto;
 use ethrex_storage::Store;
 use ethrex_vm::{Evm, EvmError, VmDatabase};
 use helix_common::{
-    PAYMENT_FORWARDER, PAYMENT_FORWARDER_CODE_HASH, payment::multisend_paid_amount,
-    payment_forwarder_recipient, simulator::TxDetail,
+    PAYMENT_FORWARDER, PAYMENT_FORWARDER_CODE_HASH,
+    payment::multisend_paid_amount,
+    payment_forwarder_recipient,
+    simulator::TxDetail,
+    tx_sink::{TxSimRow, TxSimSink},
 };
 use tokio::sync::watch;
 
@@ -79,6 +82,7 @@ pub struct BlockValidator {
     blob_cache: Arc<BlobCache>,
     parent_state: Arc<ParentStateCache>,
     merkle_pools: Arc<MerklePools>,
+    tx_sink: Option<Arc<TxSimSink>>,
 }
 
 impl BlockValidator {
@@ -88,6 +92,7 @@ impl BlockValidator {
         validation_window: u64,
         disallow: Arc<DashSet<alloy_primitives::Address>>,
         merkle_pools: usize,
+        tx_sink: Option<Arc<TxSimSink>>,
     ) -> Self {
         let merkle_pools = Arc::new(MerklePools::new(&store, merkle_pools));
         Self {
@@ -98,6 +103,7 @@ impl BlockValidator {
             blob_cache: Arc::default(),
             parent_state: Arc::default(),
             merkle_pools,
+            tx_sink,
         }
     }
 
@@ -139,6 +145,7 @@ impl BlockValidator {
         }
         self.ensure_payment(&executed, message)?;
         metrics::sim_lap("payment", t);
+        self.sink_txs(&executed, message);
         Ok(executed)
     }
 
@@ -167,7 +174,36 @@ impl BlockValidator {
         }
         self.ensure_merged_payment(&executed, message, base_payment_tx_index as usize)?;
         metrics::sim_lap("payment", t);
+        self.sink_txs(&executed, message);
         Ok(executed)
+    }
+
+    fn sink_txs(&self, executed: &ExecutedBlock, message: &BidTrace) {
+        let Some(sink) = &self.tx_sink else { return };
+        if executed.tx_details.is_empty() {
+            return;
+        }
+        let timestamp = (executed.block.header.timestamp * 1_000_000_000) as i64;
+        sink.send(
+            executed
+                .tx_details
+                .iter()
+                .enumerate()
+                .map(|(index, tx)| TxSimRow {
+                    slot: message.slot,
+                    block_hash: message.block_hash.0,
+                    tx_hash: tx.hash.0,
+                    from_address: tx.sender.0.0,
+                    to_address: tx.to.map(|a| a.0.0).unwrap_or_default(),
+                    index: index as u32,
+                    builder_payment: clickhouse::types::UInt256::from_le_bytes(
+                        tx.builder_payment.to_le_bytes(),
+                    ),
+                    timestamp,
+                    builder_pubkey: message.builder_pubkey.0,
+                })
+                .collect(),
+        );
     }
 
     /// The submission carries one bundle for the whole block, so the block's
