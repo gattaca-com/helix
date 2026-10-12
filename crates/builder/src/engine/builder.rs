@@ -272,6 +272,7 @@ fn evm(db: Arc<dyn Database>) -> Evm {
 #[derive(Default)]
 pub struct Builder {
     slot: u64,
+    parent: B256,
     streams: FxHashMap<alloy_rpc_types::beacon::BlsPublicKey, Stream>,
     latest: Option<alloy_rpc_types::beacon::BlsPublicKey>,
     carry: Option<(B256, Vec<Applied>)>,
@@ -330,8 +331,12 @@ impl Builder {
         if shared.ctx.slot < self.slot {
             return Ok(U256::ZERO);
         }
-        if shared.ctx.slot != self.slot {
-            *self = Builder { slot: shared.ctx.slot, ..Default::default() };
+        if shared.ctx.slot != self.slot || shared.ctx.parent_hash != self.parent {
+            *self = Builder {
+                slot: shared.ctx.slot,
+                parent: shared.ctx.parent_hash,
+                ..Default::default()
+            };
         }
         let warming =
             shared.engine_config.warmup && !self.streams.contains_key(&job.base.builder_pubkey);
