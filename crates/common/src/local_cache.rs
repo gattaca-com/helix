@@ -101,8 +101,10 @@ pub struct LocalCache {
     pub inclusion_list: Arc<RwLock<Option<InclusionListWithKey>>>,
     builder_info_cache: Arc<DashMap<BlsPublicKeyBytes, BuilderInfo>>,
     operator_builder_collateral: Arc<DashMap<BlsPublicKeyBytes, FxHashMap<Vec<u8>, u128>>>,
-    /// Api key -> builder pubkey
-    pub api_key_cache: Arc<DashMap<String, Vec<BlsPublicKeyBytes>>>,
+    /// Api key -> builder pubkeys, one map per api-key-gated feature
+    pub skip_sigverify_api_keys: Arc<DashMap<String, Vec<BlsPublicKeyBytes>>>,
+    pub tcp_api_keys: Arc<DashMap<String, Vec<BlsPublicKeyBytes>>>,
+    pub top_bid_api_keys: Arc<DashMap<String, Vec<BlsPublicKeyBytes>>>,
     primev_proposers: Arc<DashSet<BlsPublicKeyBytes>>,
     kill_switch: Arc<AtomicBool>,
     /// Production safety valve: whether `get_header` serves merged blocks to the proposer.
@@ -125,7 +127,11 @@ impl LocalCache {
             Arc::new(DashMap::with_capacity(ESTIMATED_BUILDER_INFOS_UPPER_BOUND));
         let operator_builder_collateral =
             Arc::new(DashMap::with_capacity(ESTIMATED_BUILDER_INFOS_UPPER_BOUND));
-        let api_key_cache = Arc::new(DashMap::with_capacity(ESTIMATED_BUILDER_INFOS_UPPER_BOUND));
+        let skip_sigverify_api_keys =
+            Arc::new(DashMap::with_capacity(ESTIMATED_BUILDER_INFOS_UPPER_BOUND));
+        let tcp_api_keys = Arc::new(DashMap::with_capacity(ESTIMATED_BUILDER_INFOS_UPPER_BOUND));
+        let top_bid_api_keys =
+            Arc::new(DashMap::with_capacity(ESTIMATED_BUILDER_INFOS_UPPER_BOUND));
         let primev_proposers = Arc::new(DashSet::with_capacity(MAX_PRIMEV_PROPOSERS));
         let kill_switch = Arc::new(AtomicBool::new(false));
         let serve_merged_headers = Arc::new(AtomicBool::new(true));
@@ -144,7 +150,9 @@ impl LocalCache {
             inclusion_list: Default::default(),
             builder_info_cache,
             operator_builder_collateral,
-            api_key_cache,
+            skip_sigverify_api_keys,
+            tcp_api_keys,
+            top_bid_api_keys,
             primev_proposers,
             kill_switch,
             serve_merged_headers,
@@ -203,11 +211,11 @@ impl LocalCache {
     }
 
     pub fn contains_api_key(&self, api_key: &str) -> bool {
-        self.api_key_cache.contains_key(api_key)
+        self.top_bid_api_keys.contains_key(api_key)
     }
 
     pub fn validate_api_key(&self, api_key: &str, pubkey: &BlsPublicKeyBytes) -> bool {
-        self.api_key_cache.get(api_key).is_some_and(|p| p.value().contains(pubkey))
+        self.skip_sigverify_api_keys.get(api_key).is_some_and(|p| p.value().contains(pubkey))
     }
 
     /// Returns whether builder was optimistic before the demotion
@@ -242,19 +250,30 @@ impl LocalCache {
 
     pub fn update_builder_infos(&self, builder_infos: &[BuilderConfig], clear_api_cache: bool) {
         if clear_api_cache {
-            self.api_key_cache.clear();
+            self.skip_sigverify_api_keys.clear();
+            self.tcp_api_keys.clear();
+            self.top_bid_api_keys.clear();
         }
 
         for builder_info in builder_infos {
-            if let Some(api_key) = builder_info.builder_info.api_key.as_ref() {
-                self.api_key_cache.entry(api_key.clone()).or_default().push(builder_info.pub_key);
+            let info = &builder_info.builder_info;
+            if let Some(api_key) = info.api_key.as_ref() {
+                for (enabled, keys) in [
+                    (info.skip_sigverify, &self.skip_sigverify_api_keys),
+                    (info.tcp_submissions, &self.tcp_api_keys),
+                    (info.top_bid_feed, &self.top_bid_api_keys),
+                ] {
+                    if enabled {
+                        keys.entry(api_key.clone()).or_default().push(builder_info.pub_key);
+                    }
+                }
             }
 
             self.builder_info_cache.insert(builder_info.pub_key, builder_info.builder_info.clone());
         }
 
         CACHE_SIZE.with_label_values(&["builder_info"]).set(self.builder_info_cache.len() as f64);
-        CACHE_SIZE.with_label_values(&["api_keys"]).set(self.api_key_cache.len() as f64);
+        CACHE_SIZE.with_label_values(&["api_keys"]).set(self.tcp_api_keys.len() as f64);
     }
 
     pub fn update_primev_proposers(&self, primev_proposers: &[BlsPublicKeyBytes]) {
@@ -464,7 +483,7 @@ mod tests {
             is_optimistic_for_regional_filtering: false,
             builder_id: None,
             builder_ids: None,
-            api_key: None,
+            ..Default::default()
         };
 
         // Test case 1: Builder exists

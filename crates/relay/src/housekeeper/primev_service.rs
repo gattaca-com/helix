@@ -210,7 +210,7 @@ pub fn build_primev_builder_configs(
                             .is_optimistic_for_regional_filtering,
                         builder_id: builder_info.builder_id.clone(),
                         builder_ids,
-                        api_key: None,
+                        ..Default::default()
                     },
                 });
             }
@@ -223,7 +223,7 @@ pub fn build_primev_builder_configs(
                         is_optimistic_for_regional_filtering: false,
                         builder_id: Some(PRIMEV_BUILDER_ID.to_string()),
                         builder_ids: Some(vec![PRIMEV_BUILDER_ID.to_string()]),
-                        api_key: None,
+                        ..Default::default()
                     },
                 });
             }
