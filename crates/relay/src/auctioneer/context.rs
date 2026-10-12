@@ -29,9 +29,7 @@ use helix_common::{
 };
 use helix_database::handle::DbHandle;
 use helix_operator::OperatorPubSub;
-use helix_types::{
-    BlsPublicKeyBytes, Demotion, HydrationCache, OperatorMessage, Slot, SubmissionVersion,
-};
+use helix_types::{BlsPublicKeyBytes, Demotion, HydrationCache, OperatorMessage, Slot};
 use rustc_hash::FxHashMap;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
@@ -59,8 +57,6 @@ pub struct SlotContext {
     pub bid_slot: Slot,
     pub pending_payload: Option<PendingPayload>,
     pub bid_sorter: BidSorter,
-    /// builder -> version
-    pub version: FxHashMap<BlsPublicKeyBytes, SubmissionVersion>,
     pub hydration_cache: HydrationCache,
     pub payloads: FxHashMap<B256, PayloadEntry>,
     pub block_merger: BlockMerger,
@@ -91,7 +87,6 @@ pub struct Context<B: BidAdjustor> {
 }
 
 const EXPECTED_PAYLOADS_PER_SLOT: usize = 5000;
-const EXPECTED_BUILDERS_PER_SLOT: usize = 200;
 
 impl<B: BidAdjustor> Context<B> {
     // TODO: refactor to accept fewer parameters
@@ -129,10 +124,6 @@ impl<B: BidAdjustor> Context<B> {
             bid_slot: Slot::new(0),
             pending_payload: None,
             bid_sorter,
-            version: FxHashMap::with_capacity_and_hasher(
-                EXPECTED_BUILDERS_PER_SLOT,
-                Default::default(),
-            ),
             hydration_cache: HydrationCache::new(),
             payloads: FxHashMap::with_capacity_and_hasher(
                 EXPECTED_PAYLOADS_PER_SLOT,
@@ -250,7 +241,9 @@ impl<B: BidAdjustor> Context<B> {
 
         // record cache sizes before clearing
         CACHE_SIZE.with_label_values(&["payloads"]).set(self.payloads.len() as f64);
-        CACHE_SIZE.with_label_values(&["submission_versions"]).set(self.version.len() as f64);
+        CACHE_SIZE
+            .with_label_values(&["submission_versions"])
+            .set(self.cache.submission_versions.len() as f64);
         CACHE_SIZE
             .with_label_values(&["hydration_builders"])
             .set(self.hydration_cache.builder_count() as f64);
@@ -261,7 +254,7 @@ impl<B: BidAdjustor> Context<B> {
             .with_label_values(&["hydration_blobs"])
             .set(self.hydration_cache.blob_count() as f64);
 
-        self.version.clear();
+        self.cache.submission_versions.clear();
         self.hydration_cache.clear();
 
         if let Some(drops) = self.sims.on_new_slot(bid_slot.as_u64()) {

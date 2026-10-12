@@ -9,7 +9,10 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use dashmap::{DashMap, DashSet};
-use helix_types::{BlsPublicKeyBytes, CryptoError, MergedBlock, SignedValidatorRegistration};
+use helix_types::{
+    BlockValidationError, BlsPublicKeyBytes, CryptoError, MergedBlock, SignedValidatorRegistration,
+    SubmissionVersion,
+};
 use libp2p::identity::PublicKey;
 use parking_lot::RwLock;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -117,6 +120,8 @@ pub struct LocalCache {
     pub known_validators_cache: Arc<RwLock<FxHashSet<BlsPublicKeyBytes>>>,
     pub adjustments_enabled: Arc<AtomicBool>,
     pub adjustments_failsafe_trigger: Arc<AtomicBool>,
+    /// builder -> (slot, version)
+    pub submission_versions: Arc<DashMap<BlsPublicKeyBytes, (u64, SubmissionVersion)>>,
 }
 
 impl LocalCache {
@@ -155,6 +160,7 @@ impl LocalCache {
             known_validators_cache,
             adjustments_enabled,
             adjustments_failsafe_trigger,
+            submission_versions: Arc::new(DashMap::with_capacity(200)),
         }
     }
 
@@ -170,6 +176,20 @@ impl Default for LocalCache {
 }
 
 impl LocalCache {
+    pub fn check_submission_version(
+        &self,
+        builder: &BlsPublicKeyBytes,
+        slot: u64,
+        this: SubmissionVersion,
+    ) -> Result<(), BlockValidationError> {
+        match self.submission_versions.get(builder) {
+            Some(seen) if seen.0 == slot && seen.1 >= this => {
+                Err(BlockValidationError::OutOfSequence { seen: seen.1, this })
+            }
+            _ => Ok(()),
+        }
+    }
+
     pub fn get_builder_info(&self, builder_pub_key: &BlsPublicKeyBytes) -> Option<BuilderInfo> {
         let mut info = self.builder_info_cache.get(builder_pub_key)?.clone();
         let operator_collateral = self.operator_collateral(builder_pub_key);

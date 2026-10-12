@@ -1,7 +1,7 @@
 use alloy_primitives::B256;
 use flux_profiler::timed;
 use helix_common::{BuilderInfo, PayloadAttributesUpdate, is_local_dev};
-use helix_types::{BlockValidationError, BlsPublicKeyBytes, Submission, SubmissionVersion};
+use helix_types::{BlockValidationError, Submission};
 
 use crate::auctioneer::{
     bid_adjustor::BidAdjustor,
@@ -48,7 +48,15 @@ impl<B: BidAdjustor> Context<B> {
             }
         }
 
-        self.staleness_check(submission.builder_pubkey(), submission_data.version)?;
+        let slot = self.bid_slot.as_u64();
+        self.cache.check_submission_version(
+            submission.builder_pubkey(),
+            slot,
+            submission_data.version,
+        )?;
+        self.cache
+            .submission_versions
+            .insert(*submission.builder_pubkey(), (slot, submission_data.version));
         self.validate_submission_data(
             submission,
             &withdrawals_root,
@@ -113,27 +121,6 @@ impl<B: BidAdjustor> Context<B> {
                 got: *withdrawals_root,
                 expected: payload_attributes.withdrawals_root,
             });
-        }
-
-        Ok(())
-    }
-
-    fn staleness_check(
-        &mut self,
-        builder: &BlsPublicKeyBytes,
-        version: SubmissionVersion,
-    ) -> Result<(), BlockValidationError> {
-        if let Some(old_version) = self.version.get_mut(builder) {
-            if *old_version >= version {
-                return Err(BlockValidationError::OutOfSequence {
-                    seen: *old_version,
-                    this: version,
-                });
-            } else {
-                *old_version = version
-            }
-        } else {
-            self.version.insert(*builder, version);
         }
 
         Ok(())
