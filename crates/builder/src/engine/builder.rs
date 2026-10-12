@@ -422,6 +422,23 @@ impl Builder {
                     let now = utcnow_ns();
                     if first_emit_ns == 0 {
                         first_emit_ns = now;
+                        let base = &job.base;
+                        for (stage, us) in [
+                            (
+                                "first_ingest",
+                                base.ingest_done_ns.saturating_sub(base.recv_ns) / 1000,
+                            ),
+                            ("first_wait", start_ns.saturating_sub(base.ingest_done_ns) / 1000),
+                            ("first_base", (built_ns - start_ns) / 1000),
+                            ("first_extend", merge.extend_us),
+                            ("first_trie_wait", merge.trie_wait_us),
+                            ("first_evm", merge.evm_us),
+                            ("first_state_root", merge.state_us),
+                            ("first_roots", merge.roots_us),
+                            ("first_total", now.saturating_sub(base.recv_ns) / 1000),
+                        ] {
+                            metrics::stage_latency(stage, us);
+                        }
                     }
                     let (own_latest, _) = shared
                         .inner
@@ -829,7 +846,14 @@ impl TrieJob {
             let changed: Vec<(Key, Option<Val>)> = at_base
                 .keys()
                 .chain(self.prior.keys())
-                .filter(|key| !written.contains_key(key) && seen.insert(**key))
+                .filter(|key| {
+                    let account = match key {
+                        Key::Account(address) | Key::Slot(address, _) => Key::Account(*address),
+                    };
+                    !written.contains_key(key) &&
+                        written.get(&account) != Some(&Write::Removed) &&
+                        seen.insert(**key)
+                })
                 .filter(|key| self.prior.last(key) != at_base.last(key))
                 .map(|key| (*key, self.prior.last(key).cloned()))
                 .collect();
@@ -1418,6 +1442,27 @@ impl Merge {
                     update.added_storage.insert(slot, value);
                 }
                 (Key::Account(_), Write::Slot(_)) => return Err(internal(&"slot write on account")),
+            }
+        }
+        let revived = written.iter().filter_map(|(key, write)| match (key, write) {
+            (Key::Account(address), Write::Removed) if target.get(key) != Some(&Write::Removed) => {
+                Some(*address)
+            }
+            _ => None,
+        });
+        for address in revived {
+            let slots = self.view.prior.keys().filter(|key| {
+                matches!(key, Key::Slot(a, _) if *a == address) && !target.contains_key(key)
+            });
+            for key in slots {
+                let (Key::Slot(_, slot), Some(Val::Slot(value))) = (key, base.value(key)) else {
+                    continue;
+                };
+                changed
+                    .entry(address)
+                    .or_insert_with(|| AccountUpdate::new(address))
+                    .added_storage
+                    .insert(*slot, value);
             }
         }
         let changed: Vec<AccountUpdate> = changed.into_values().collect();
