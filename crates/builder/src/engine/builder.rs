@@ -264,6 +264,38 @@ pub fn prefetch(shared: Arc<SharedSlot>, store: Store, base: Arc<PreparedBlock>)
                     }
                 });
             }
+            let (system, db, txs) = (parent.writes.clone(), parent.db.clone(), base.txs.clone());
+            let shared = shared.clone();
+            PREWARM.spawn(move || {
+                let mut view = View {
+                    prior: Arc::new(Prior::new(B256::ZERO, Vec::new(), &mut Known::default())),
+                    at: 0,
+                    layers: vec![Arc::new(FxHashMap::default())],
+                    coinbase,
+                    codes,
+                    system,
+                    store: db,
+                };
+                for tx in txs.iter() {
+                    let known: Vec<Arc<Effect>> = match shared.state.known.read() {
+                        Ok(known) => known.variants(&tx.hash).cloned().collect(),
+                        Err(_) => return,
+                    };
+                    let warm = shared.state.prewarmed.get(&tx.hash).map(|e| e.clone());
+                    let effect = match known.iter().chain(warm.as_ref()).find(|e| view.holds(e)) {
+                        Some(effect) => effect.clone(),
+                        None => match execute(view.clone(), tx, &header) {
+                            Some(effect) => {
+                                let effect = Arc::new(effect);
+                                shared.state.prewarmed.insert(tx.hash, effect.clone());
+                                effect
+                            }
+                            None => return,
+                        },
+                    };
+                    apply(&mut view, &effect);
+                }
+            });
         }
         parent.prefetch(&store, &paths(keys.into_iter()));
     });
