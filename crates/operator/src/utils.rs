@@ -1,9 +1,7 @@
-use helix_types::{BlsPublicKeyBytes, Demotion, Promotion};
 use libp2p::identity::{
     DecodingError, Keypair,
     secp256k1::{self, SecretKey},
 };
-use rustc_hash::FxHashMap;
 
 pub fn load_operator_keypair() -> Keypair {
     let operator_key_str = std::env::var("OPERATOR_KEY").expect("could not load OPERATOR_KEY");
@@ -15,64 +13,6 @@ pub fn load_operator_keypair() -> Keypair {
 pub fn keypair_from_bytes(bytes: &mut [u8]) -> Result<Keypair, DecodingError> {
     let secret_key = SecretKey::try_from_bytes(bytes)?;
     Ok(secp256k1::Keypair::from(secret_key).into())
-}
-
-#[derive(Default)]
-pub(crate) struct PromotionStates {
-    states: FxHashMap<BlsPublicKeyBytes, PromotionState>,
-}
-
-impl PromotionStates {
-    pub(crate) fn demoted(&mut self, demotion: Demotion) -> bool {
-        let pubkey = demotion.builder_pubkey;
-        let state = match self.states.remove(&pubkey) {
-            Some(state) => state.try_demote(demotion),
-            None => PromotionState::Demoted(demotion),
-        };
-        let demoted = matches!(state, PromotionState::Demoted(_));
-        self.states.insert(pubkey, state);
-        demoted
-    }
-
-    pub(crate) fn promoted(&mut self, promotion: Promotion) -> bool {
-        let pubkey = promotion.builder_pubkey;
-        let state = match self.states.remove(&pubkey) {
-            Some(state) => state.try_promote(promotion),
-            None => PromotionState::Promoted(promotion),
-        };
-        let promoted = matches!(state, PromotionState::Promoted(_));
-        self.states.insert(pubkey, state);
-        promoted
-    }
-
-    pub(crate) fn iter(&self) -> impl Iterator<Item = &PromotionState> {
-        self.states.values()
-    }
-}
-
-pub(crate) enum PromotionState {
-    Demoted(Demotion),
-    Promoted(Promotion),
-}
-
-impl PromotionState {
-    pub(crate) fn try_demote(self, demotion: Demotion) -> Self {
-        match self {
-            Self::Demoted(demoted) if demotion.ts_ms > demoted.ts_ms => Self::Demoted(demotion),
-            Self::Promoted(promoted) if demotion.ts_ms > promoted.ts_ms => Self::Demoted(demotion),
-            other => other,
-        }
-    }
-
-    pub(crate) fn try_promote(self, promotion: Promotion) -> Self {
-        match self {
-            Self::Demoted(demoted) if promotion.ts_ms > demoted.ts_ms => Self::Promoted(promotion),
-            Self::Promoted(promoted) if promotion.ts_ms > promoted.ts_ms => {
-                Self::Promoted(promotion)
-            }
-            other => other,
-        }
-    }
 }
 
 #[cfg(test)]

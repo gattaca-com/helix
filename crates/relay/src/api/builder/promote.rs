@@ -28,9 +28,12 @@ impl<A: Api> BuilderApi<A> {
 
         tracing::Span::current().record("builder_pubkey", tracing::field::display(builder_pubkey));
 
+        // From `Follow` the flag is advisory: pool state decides status, and a promotion whose
+        // purpose is to clear reservations must proceed even when the flag is already set.
+        let applies = api.local_cache.promotion_mode().applies();
         let promoted = api.local_cache.promote_builder(&builder_pubkey);
 
-        if !promoted {
+        if !promoted && !applies {
             warn!(
                 %builder_pubkey,
                 "builder already optimistic or not found"
@@ -40,9 +43,12 @@ impl<A: Api> BuilderApi<A> {
                 .into_response();
         }
 
-        api.db.db_promote_builder(builder_pubkey);
-
         let builder_info = api.local_cache.get_builder_info(&builder_pubkey).unwrap_or_default();
+        let collateral_id = builder_info.builder_id.clone().unwrap_or_default();
+        let ts_ms = utcnow_ms();
+        let slot = api.curr_slot_info.head_slot().as_u64();
+        api.db.db_promote_builder(builder_pubkey, collateral_id.clone(), ts_ms, slot);
+
         api.alert_manager.send_promotion(
             &format!("✅ *Optimistic promotion successful*\n*Builder:* `{builder_pubkey}`"),
             builder_info.builder_id(),
@@ -50,14 +56,12 @@ impl<A: Api> BuilderApi<A> {
 
         if let Some(operator_api) = api.operator_api.as_ref() &&
             let Err(e) = operator_api
-                .send(
-                    None,
-                    OperatorMessage::Promotion(Promotion {
-                        ts_ms: utcnow_ms(),
-                        slot: api.curr_slot_info.head_slot().as_u64(),
-                        builder_pubkey,
-                    }),
-                )
+                .send(OperatorMessage::Promotion(Promotion {
+                    ts_ms,
+                    slot,
+                    collateral_id: collateral_id.into_bytes(),
+                    builder_pubkey,
+                }))
                 .await
         {
             tracing::error!(?e, "failed to send operator promote message for {:?}", builder_pubkey);

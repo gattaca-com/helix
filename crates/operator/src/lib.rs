@@ -7,20 +7,22 @@ use std::{
     time::Duration,
 };
 
+use alloy_primitives::U256;
 use async_channel::{Receiver, RecvError, SendError, Sender, TryRecvError, TrySendError, bounded};
 use helix_common::{
-    OperatorConfig, OperatorP2pMode,
+    OperatorConfig, OperatorP2pMode, PromotionMode,
     alerts::{AlertManager, format_demotion_alert},
     local_cache::LocalCache,
     utils::utcnow_ms,
 };
 use helix_database::{PostgresDatabaseService, handle::DbHandle};
-use helix_types::{BuilderCollateral, Operator, OperatorMessage, Payload};
+use helix_types::{BuilderCollateral, CollateralMembership, Operator, OperatorMessage, Payload};
 use libp2p::{BehaviourBuilderError, TransportError, gossipsub, identity::Keypair, multiaddr};
 use thiserror::Error;
 use tokio::task::AbortHandle;
 
 mod payload;
+mod pool;
 mod pubsub;
 mod utils;
 
@@ -37,8 +39,8 @@ pub enum OperatorError {
     GossipsubConfigError(#[from] gossipsub::ConfigBuilderError),
     GossipsubBehaviourError(&'static str),
     GossipsubSubscriptionError(#[from] gossipsub::SubscriptionError),
-    MessageSendError(#[from] SendError<(Option<String>, OperatorMessage)>),
-    MessageTrySendError(#[from] TrySendError<(Option<String>, OperatorMessage)>),
+    MessageSendError(#[from] SendError<OperatorMessage>),
+    MessageTrySendError(#[from] TrySendError<OperatorMessage>),
     MessageRecvError(#[from] RecvError),
     MessageTryRecvError(#[from] TryRecvError),
 }
@@ -51,7 +53,7 @@ impl Display for OperatorError {
 
 /// Handle to operator pubsub.
 pub struct OperatorPubSub {
-    outgoing_msgs: Sender<(Option<String>, OperatorMessage)>,
+    outgoing_msgs: Sender<OperatorMessage>,
     incoming_msgs: Receiver<(Operator, OperatorMessage)>,
     task_handle: AbortHandle,
 }
@@ -69,6 +71,9 @@ impl OperatorPubSub {
         local_keypair: Keypair,
         operators: Vec<Operator>,
         mode: OperatorP2pMode,
+        operator_group: Option<Vec<u8>>,
+        promotion_mode: PromotionMode,
+        local_cache: Arc<LocalCache>,
     ) -> Self {
         let (outgoing_msgs, out_recv) = bounded(128);
         let (in_send, incoming_msgs) = bounded(128);
@@ -81,25 +86,20 @@ impl OperatorPubSub {
             out_recv,
             in_send,
             mode,
+            operator_group,
+            promotion_mode,
+            local_cache,
         ));
 
         Self { outgoing_msgs, incoming_msgs, task_handle: handle.abort_handle() }
     }
 
-    pub async fn send(
-        &self,
-        builder_id: Option<String>,
-        msg: OperatorMessage,
-    ) -> Result<(), OperatorError> {
-        Ok(self.outgoing_msgs.send((builder_id, msg)).await?)
+    pub async fn send(&self, msg: OperatorMessage) -> Result<(), OperatorError> {
+        Ok(self.outgoing_msgs.send(msg).await?)
     }
 
-    pub fn try_send(
-        &self,
-        builder_id: Option<String>,
-        msg: OperatorMessage,
-    ) -> Result<(), OperatorError> {
-        Ok(self.outgoing_msgs.try_send((builder_id, msg))?)
+    pub fn try_send(&self, msg: OperatorMessage) -> Result<(), OperatorError> {
+        Ok(self.outgoing_msgs.try_send(msg)?)
     }
 
     pub async fn recv(&self) -> Result<(Operator, OperatorMessage), OperatorError> {
@@ -132,11 +132,16 @@ where
     // if there is `OperatorConfig`, then operator key is expected.
     let operator_keypair = load_operator_keypair();
     let operator_group = config.operator_group.map(|s| s.as_bytes().to_vec());
+    let promotion_mode = config.promotion_mode;
+    local_cache.set_promotion_mode(promotion_mode);
     let operator_pubsub = Arc::new(OperatorPubSub::new(
         config.quic_port,
         operator_keypair,
         config.operators,
         config.mode,
+        operator_group.clone(),
+        promotion_mode,
+        local_cache.clone(),
     ));
 
     // spawn a task to load initial db state
@@ -149,32 +154,52 @@ where
             while !loaded.load(Ordering::Relaxed) {
                 tokio::time::sleep(Duration::from_millis(1)).await;
             }
+            // Spec replay order: membership, local collateral, promotions, retained reports.
             let now = utcnow_ms();
             for (builder_id, (builder_pubkeys, collateral)) in cache.all_builder_local_collateral()
             {
+                let collateral_id = builder_id.into_bytes();
                 let _ = pubsub
-                    .send(
-                        Some(builder_id),
-                        OperatorMessage::Collateral(BuilderCollateral {
-                            ts_ms: now,
-                            slot: 0,
-                            builder_pubkeys,
-                            collateral_wei: collateral.to(),
-                            operator_group: group.clone(),
-                        }),
-                    )
+                    .send(OperatorMessage::Membership(CollateralMembership {
+                        ts_ms: now,
+                        collateral_id: collateral_id.clone(),
+                        builder_pubkeys,
+                    }))
+                    .await;
+                let _ = pubsub
+                    .send(OperatorMessage::Collateral(BuilderCollateral {
+                        ts_ms: now,
+                        slot: 0,
+                        collateral_id,
+                        collateral_wei: collateral.to(),
+                        operator_group: group.clone(),
+                    }))
                     .await;
             }
 
-            // Load existing demotions
-            match db_service.load_builder_demotions().await {
-                Ok(demotions) => {
-                    for demotion in demotions {
-                        let _ = pubsub.send(None, OperatorMessage::Demotion(demotion)).await;
+            // Promotions must precede reports: retention compares against the promotion timestamp.
+            match db_service.load_promotions().await {
+                Ok(promotions) => {
+                    for promotion in promotions {
+                        let _ = pubsub.send(OperatorMessage::Promotion(promotion)).await;
                     }
                 }
                 Err(e) => {
-                    tracing::error!(?e, "failed to laod demotions from DB. Operators not updated.");
+                    tracing::error!(
+                        ?e,
+                        "failed to load promotions from DB. Operators not updated."
+                    );
+                }
+            }
+
+            match db_service.load_retained_demotions().await {
+                Ok(demotions) => {
+                    for demotion in demotions {
+                        let _ = pubsub.send(OperatorMessage::Demotion(demotion)).await;
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(?e, "failed to load demotions from DB. Operators not updated.");
                 }
             }
         }
@@ -193,20 +218,28 @@ where
                         };
                         match msg {
                             OperatorMessage::Demotion(demotion) => {
-                                if local_cache.demote_builder(&demotion.builder_pubkey) {
-                                    let builder_id = local_cache
-                                        .get_builder_info(&demotion.builder_pubkey)
-                                        .and_then(|info| info.builder_id)
-                                        .unwrap_or_default();
+                                let builder_id = local_cache
+                                    .get_builder_info(&demotion.builder_pubkey)
+                                    .and_then(|info| info.builder_id)
+                                    .unwrap_or_default();
+                                let newly_demoted =
+                                    local_cache.demote_builder(&demotion.builder_pubkey);
 
-                                    db_handle.db_demote_builder(
-                                        demotion.slot,
-                                        demotion.builder_pubkey,
-                                        demotion.block_hash,
-                                        String::from_utf8_lossy(&demotion.reason_msg).into_owned(),
-                                        failsafe_triggered.clone(),
-                                    );
+                                // Persist every distinct report, including one for a key that is
+                                // already demoted: a later promotion may supersede only some of
+                                // them, and each contributes to its own slot's reservation.
+                                // Duplicates are already filtered by pool state before forwarding.
+                                db_handle.db_demote_builder(
+                                    demotion.slot,
+                                    demotion.builder_pubkey,
+                                    demotion.block_hash,
+                                    String::from_utf8_lossy(&demotion.collateral_id).into_owned(),
+                                    U256::from(demotion.bid_value_wei),
+                                    String::from_utf8_lossy(&demotion.reason_msg).into_owned(),
+                                    failsafe_triggered.clone(),
+                                );
 
+                                if newly_demoted {
                                     let token = alert_manager.generate_token(demotion.builder_pubkey);
                                     let message = format_demotion_alert(
                                         demotion.slot,
@@ -222,9 +255,24 @@ where
                                 }
                             }
                             OperatorMessage::Promotion(promotion) => {
-                                if local_cache.promote_builder(&promotion.builder_pubkey) {
-                                    db_handle.db_promote_builder(promotion.builder_pubkey);
+                                let collateral_id =
+                                    String::from_utf8_lossy(&promotion.collateral_id).into_owned();
+                                // The promotion record is the retention watermark, so persist it
+                                // whether or not a local flag changed. The upsert never moves the
+                                // watermark backwards.
+                                db_handle.db_promote_builder(
+                                    promotion.builder_pubkey,
+                                    collateral_id,
+                                    promotion.ts_ms,
+                                    promotion.slot,
+                                );
 
+                                // The flag stays per pubkey. The pool-wide effect lives in pool
+                                // state, which admission reads from `Follow`.
+                                let promoted =
+                                    local_cache.promote_builder(&promotion.builder_pubkey);
+
+                                if promoted {
                                     let builder_info = local_cache
                                         .get_builder_info(&promotion.builder_pubkey)
                                         .unwrap_or_default();
@@ -237,23 +285,10 @@ where
                                     );
                                 }
                             }
-                            OperatorMessage::Collateral(builder_collateral) => {
-                                if operator_group == builder_collateral.operator_group {
-                                    // ignore collateral messages from our own group
-                                    continue;
-                                }
-                                if operator.operator_group.as_ref().map(|s| s.as_bytes()) != builder_collateral.operator_group.as_deref() {
-                                    tracing::error!(config_operator_group=?operator.operator_group, msg_operator_group=?builder_collateral.operator_group, "operator group mismatch");
-                                    continue;
-                                }
-
-                                local_cache.update_operator_collateral(
-                                    &builder_collateral.builder_pubkeys,
-                                    &operator.pubkey,
-                                    builder_collateral.collateral_wei,
-                                    builder_collateral.operator_group,
-                                );
-                            }
+                            // Collateral and membership are held in pool state in the pubsub
+                            // task, keyed by (operator group, pool). Nothing on the live auction
+                            // path reads them below `Share`.
+                            OperatorMessage::Collateral(_) | OperatorMessage::Membership(_) => {}
                             OperatorMessage::Payload(payload) => {
                                 payload_handler(payload);
                             },
@@ -261,8 +296,20 @@ where
                     },
                     _ = tokio::time::sleep_until(collateral_resync) => {
                         let ts_ms = utcnow_ms();
-                        for (builder_id, (pubkeys, collateral)) in local_cache.all_builder_local_collateral() {
-                            let _ = pubsub.send(Some(builder_id), OperatorMessage::Collateral(BuilderCollateral { ts_ms, slot: 0, builder_pubkeys: pubkeys, collateral_wei: collateral.to(), operator_group: operator_group.clone() })).await;
+                        for (builder_id, (builder_pubkeys, collateral)) in local_cache.all_builder_local_collateral() {
+                            let collateral_id = builder_id.into_bytes();
+                            let _ = pubsub.send(OperatorMessage::Membership(CollateralMembership {
+                                ts_ms,
+                                collateral_id: collateral_id.clone(),
+                                builder_pubkeys,
+                            })).await;
+                            let _ = pubsub.send(OperatorMessage::Collateral(BuilderCollateral {
+                                ts_ms,
+                                slot: 0,
+                                collateral_id,
+                                collateral_wei: collateral.to(),
+                                operator_group: operator_group.clone(),
+                            })).await;
                         }
                         collateral_resync = tokio::time::Instant::now() + Duration::from_secs(30);
                     }
@@ -276,9 +323,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{str::FromStr, time::Duration};
+    use std::{str::FromStr, sync::Arc, time::Duration};
 
     use alloy_primitives::B256;
+    use helix_common::local_cache::LocalCache;
     use helix_types::{BlsPublicKeyBytes, Demotion, OperatorMessage, Promotion};
     use libp2p::{Multiaddr, identity::Keypair};
 
@@ -308,6 +356,9 @@ mod tests {
             keypair_a,
             vec![operator_b],
             helix_common::OperatorP2pMode::On,
+            None,
+            helix_common::PromotionMode::Observe,
+            Arc::new(LocalCache::new_test()),
         );
         // Ensure A is listening before B initiates its dial.
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -316,6 +367,9 @@ mod tests {
             keypair_b,
             vec![operator_a],
             helix_common::OperatorP2pMode::On,
+            None,
+            helix_common::PromotionMode::Observe,
+            Arc::new(LocalCache::new_test()),
         );
         // Wait for the gossipsub subscription exchange before publishing. Messages are
         // intentionally best-effort and are not queued for peers that have not subscribed yet.
@@ -325,13 +379,16 @@ mod tests {
         let demotion = Demotion {
             ts_ms: 1,
             slot: 1,
+            collateral_id: b"C1".to_vec(),
             builder_pubkey,
             block_hash: B256::random(),
+            bid_value_wei: 1,
             // Exercise a message larger than floodsub's former 2 KiB frame limit.
             reason_msg: vec![42; 4 * 1024],
         };
-        let promotion = Promotion { ts_ms: 2, slot: 2, builder_pubkey };
-        op_a.send(None, helix_types::OperatorMessage::Demotion(demotion)).await.unwrap();
+        let promotion =
+            Promotion { ts_ms: 2, slot: 2, collateral_id: b"C1".to_vec(), builder_pubkey };
+        op_a.send(helix_types::OperatorMessage::Demotion(demotion)).await.unwrap();
         let (_, msg) = tokio::time::timeout(Duration::from_secs(5), op_b.recv())
             .await
             .expect("timed out waiting for demotion")
@@ -340,7 +397,7 @@ mod tests {
             matches!(msg, OperatorMessage::Demotion(demotion) if demotion.reason_msg.len() == 4 * 1024)
         );
 
-        op_b.send(None, OperatorMessage::Promotion(promotion)).await.unwrap();
+        op_b.send(OperatorMessage::Promotion(promotion)).await.unwrap();
         let (_, msg) = tokio::time::timeout(Duration::from_secs(5), op_a.recv())
             .await
             .expect("timed out waiting for promotion")
