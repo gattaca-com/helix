@@ -544,6 +544,7 @@ fn handle_active_message(
             metrics::ingest("slot_end");
             send_control(engine_tx, EngineEvent::SlotEnd { slot: msg.slot });
         }
+        MergingMsgId::ActivateBaseBlockV1 => {}
         MergingMsgId::MergeableBlockV1 => {
             // Not decoded here: the engine does SSZ + tx decoding off the tile
             // thread. Only the slot for a possible Busy reject is peeked.

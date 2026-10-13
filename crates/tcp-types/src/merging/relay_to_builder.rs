@@ -16,6 +16,12 @@ pub struct SlotStartV1 {
     pub parent_beacon_block_root: B256,
 }
 
+/// A forwarded builder submission carrying merging data. The builder derives
+/// the slot's order pool from `merge_orders` (attribution goes to the
+/// highest-value block on duplicates) and, when `allow_appending`, stores the
+/// payload as a merge-base candidate so a later `ActivateBaseBlockV1` is the
+/// only message on the top-bid critical path.
+///
 /// `execution_payload.transactions` entries are dehydrated relative to this
 /// connection: an entry of `order::TX_HASH_REF_LEN` bytes
 /// (`order::is_tx_hash_ref`) is `keccak256(rlp)` of a tx already sent once on
@@ -53,6 +59,15 @@ pub struct RevokeOrderV1 {
     pub slot: u64,
     pub order_hash: B256,
     pub builder_pubkey: BlsPublicKey,
+}
+
+/// Selects the merge base among forwarded appendable blocks: the relay's
+/// current top bid. Merged blocks are built on and returned for this block
+/// exclusively.
+#[derive(Debug, Clone, Copy, PartialEq, Encode, Decode)]
+pub struct ActivateBaseBlockV1 {
+    pub slot: u64,
+    pub block_hash: B256,
 }
 
 /// Early stop for the slot (payload delivered / auction over).
