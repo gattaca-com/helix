@@ -500,6 +500,7 @@ pub struct Report {
     pub applied: Vec<Arc<Effect>>,
     /// The effects of the txs B ran itself.
     pub ran: Vec<Arc<Effect>>,
+    pub warmed: Vec<Arc<Effect>>,
     /// The coinbase after the base.
     pub coinbase: Option<Coinbase>,
     /// The proposer's account just before the base's last tx.
@@ -510,7 +511,14 @@ pub struct Report {
 
 /// Diffs the base in `exec` against `prior`: a tx is skipped when one of its known effects still
 /// holds on B's state at that point, otherwise B runs it. `None` when a tx cannot run.
-pub fn diff(prior: &Arc<Prior>, known: &Known, exec: &Exec) -> Option<Report> {
+pub type Prewarmed = dashmap::DashMap<B256, Arc<Effect>, rustc_hash::FxBuildHasher>;
+
+pub fn diff(
+    prior: &Arc<Prior>,
+    known: &Known,
+    prewarmed: &Prewarmed,
+    exec: &Exec,
+) -> Option<Report> {
     let start = Instant::now();
     let old = &prior.effects;
     let aligned = prior.align(&exec.txs);
@@ -584,6 +592,7 @@ pub fn diff(prior: &Arc<Prior>, known: &Known, exec: &Exec) -> Option<Report> {
                     .iter()
                     .all(|(key, val)| dirty.get(key).is_none_or(|now| now.as_ref() == Some(val)))
         });
+        let warm = prewarmed.get(&tx.hash).map(|e| e.clone());
         let chosen: Option<&Arc<Effect>> = if same_old {
             aligned[i].map(|p| &old[p])
         } else {
@@ -593,9 +602,14 @@ pub fn diff(prior: &Arc<Prior>, known: &Known, exec: &Exec) -> Option<Report> {
                 .map(|p| &old[*p])
                 .into_iter()
                 .chain(known.variants(&tx.hash))
+                .chain(warm.as_ref())
                 .find(|e| holds(e, &dirty))
         };
         let applied = match chosen {
+            Some(effect) if warm.as_ref().is_some_and(|w| Arc::ptr_eq(w, effect)) => {
+                report.warmed.push(effect.clone());
+                effect.clone()
+            }
             Some(effect) => effect.clone(),
             None => {
                 let exec_start = Instant::now();

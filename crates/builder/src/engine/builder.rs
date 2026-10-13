@@ -67,6 +67,7 @@ static POOL: std::sync::LazyLock<rayon::ThreadPool> = std::sync::LazyLock::new(|
 #[derive(Default)]
 pub struct Slot {
     known: RwLock<Known>,
+    prewarmed: crate::engine::state::Prewarmed,
     parent: OnceLock<Result<Parent, String>>,
 }
 
@@ -136,6 +137,15 @@ impl Parent {
 }
 
 /// Learns the effects of orders as they are pooled, off every merge's path.
+static PREWARM: std::sync::LazyLock<rayon::ThreadPool> = std::sync::LazyLock::new(|| {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(8)
+        .stack_size(EVM_STACK)
+        .thread_name(|i| format!("b-prewarm-{i}"))
+        .build()
+        .expect("b prewarm pool")
+});
+
 static INGEST: std::sync::LazyLock<rayon::ThreadPool> = std::sync::LazyLock::new(|| {
     rayon::ThreadPoolBuilder::new()
         .num_threads(4)
@@ -214,9 +224,46 @@ pub fn prefetch(shared: Arc<SharedSlot>, store: Store, base: Arc<PreparedBlock>)
                 keys.push(Key::Account(to));
             }
         }
-        if let Ok(known) = shared.state.known.read() {
+        let (cold, codes) = {
+            let Ok(known) = shared.state.known.read() else { return };
             let writes = base.txs.iter().flat_map(|tx| known.variants(&tx.hash));
             keys.extend(writes.flat_map(|effect| effect.writes.iter().map(|(key, _)| *key)));
+            let cold: Vec<Arc<crate::engine::types::DecodedTx>> = base
+                .txs
+                .iter()
+                .filter(|tx| {
+                    known.variants(&tx.hash).next().is_none() &&
+                        !shared.state.prewarmed.contains_key(&tx.hash)
+                })
+                .cloned()
+                .collect();
+            (cold, known.codes.clone())
+        };
+        if let Ok(state) = parent.db.get_account_state(eaddr(base.beneficiary())) {
+            let header = Arc::new(header);
+            let coinbase = Coinbase {
+                address: eaddr(base.beneficiary()),
+                balance: state.balance,
+                nonce: state.nonce,
+            };
+            for tx in cold {
+                let (shared, header, codes) = (shared.clone(), header.clone(), codes.clone());
+                let (system, db) = (parent.writes.clone(), parent.db.clone());
+                PREWARM.spawn(move || {
+                    let view = View {
+                        prior: Arc::new(Prior::new(B256::ZERO, Vec::new(), &mut Known::default())),
+                        at: 0,
+                        layers: vec![Arc::new(FxHashMap::default())],
+                        coinbase,
+                        codes,
+                        system,
+                        store: db,
+                    };
+                    if let Some(effect) = execute(view, &tx, &header) {
+                        shared.state.prewarmed.insert(tx.hash, Arc::new(effect));
+                    }
+                });
+            }
         }
         parent.prefetch(&store, &paths(keys.into_iter()));
     });
@@ -475,6 +522,7 @@ impl Builder {
                         live_us = (now - built_ns) / 1000,
                         base_txs = job.base.txs.len(),
                         run = merge.run,
+                        base_warm = merge.warmed,
                         same_stream = merge.same_stream,
                         extend_us = merge.extend_us,
                         ext_orders = merge.extend_stats.orders,
@@ -653,7 +701,7 @@ impl Builder {
         };
         let report = {
             let known = job.shared.state.known.read().expect("known poisoned");
-            diff(&prior, &known, &exec)
+            diff(&prior, &known, &job.shared.state.prewarmed, &exec)
         }
         .ok_or_else(|| MergeError::InvalidBaseBlock("base tx failed".into()))?;
         let gas_used: u64 = report.applied.iter().map(|e| e.outcome.gas_used).sum();
@@ -670,7 +718,7 @@ impl Builder {
         };
         let (next, codes) = {
             let mut known = job.shared.state.known.write().expect("known poisoned");
-            for effect in &report.ran {
+            for effect in report.ran.iter().chain(&report.warmed) {
                 known.add(effect.clone());
             }
             let next = Arc::new(Prior::new(base.block_hash, report.applied, &mut known));
@@ -724,6 +772,7 @@ impl Builder {
         self.streams.insert(pubkey, Stream { prior: next.clone(), trie: None });
         self.latest = Some(pubkey);
         let run = report.ran.len();
+        let warmed = report.warmed.len();
         Ok(Merge {
             base: base.clone(),
             exec,
@@ -762,6 +811,7 @@ impl Builder {
             state_read_us: 0,
             trie_wait_us: 0,
             run,
+            warmed,
             same_stream,
             trace: MergeTraceV1 { base_block_recv_ns: base.recv_ns, ..Default::default() },
         })
@@ -1120,6 +1170,7 @@ struct Merge {
     emissions: u64,
     /// Base txs B ran.
     run: usize,
+    warmed: usize,
     same_stream: bool,
     trace: MergeTraceV1,
 }
