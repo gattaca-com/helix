@@ -20,7 +20,7 @@ use helix_tcp_types::{
         MERGING_HEADER_SIZE, MergingFrameHeader, MergingHeaderError, MergingMsgId,
         builder_to_relay::{FatalV1, RejectCode, RejectSubject, RejectV1},
         control::{MergerAckV1, MergerRegistrationV1, PingV1, PongV1, RelayConfigV1},
-        relay_to_builder::{ActivateBaseBlockV1, SlotEndV1, SlotStartV1},
+        relay_to_builder::{SlotEndV1, SlotStartV1},
     },
 };
 use rustc_hash::FxHashMap;
@@ -543,19 +543,6 @@ fn handle_active_message(
             debug!(slot = msg.slot, "slot end");
             metrics::ingest("slot_end");
             send_control(engine_tx, EngineEvent::SlotEnd { slot: msg.slot });
-        }
-        MergingMsgId::ActivateBaseBlockV1 => {
-            let Ok(msg) = ActivateBaseBlockV1::from_ssz_bytes(body) else {
-                fatal(replies, to_disconnect, RejectCode::InvalidOrder, "undecodable activation");
-                return;
-            };
-            debug!(slot = msg.slot, block_hash = %msg.block_hash, "activate base block");
-            metrics::ingest("activate_base");
-            send_control(engine_tx, EngineEvent::ActivateBase {
-                slot: msg.slot,
-                block_hash: msg.block_hash,
-                generation,
-            });
         }
         MergingMsgId::MergeableBlockV1 => {
             // Not decoded here: the engine does SSZ + tx decoding off the tile

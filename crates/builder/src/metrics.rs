@@ -228,8 +228,6 @@ lazy_static! {
 
     //////////////// PIPELINE ////////////////
 
-    /// Critical-path cost by stage: replay, extend, emit, and the activation
-    /// queue wait.
     static ref STAGE_LATENCY: HistogramVec = register_histogram_vec_with_registry!(
         "merge_stage_latency_us",
         "Merge pipeline latency by stage",
@@ -239,7 +237,6 @@ lazy_static! {
     )
     .unwrap();
 
-    /// Speculative replay bookkeeping, and where activations were served from.
     static ref SPECULATION: IntCounterVec = register_int_counter_vec_with_registry!(
         "merge_speculation_total",
         "Speculative replay events by outcome",
@@ -281,17 +278,9 @@ lazy_static! {
     )
     .unwrap();
 
-    static ref ACTIVATION_SOURCE: IntCounterVec = register_int_counter_vec_with_registry!(
-        "merge_activation_source_total",
-        "Merge session activations by where the session came from",
-        &["source"],
-        &BUILDER_METRICS_REGISTRY
-    )
-    .unwrap();
-
     static ref REJECTION: IntCounterVec = register_int_counter_vec_with_registry!(
         "merge_rejection_total",
-        "Blocks and activations refused, by reason",
+        "Blocks refused, by reason",
         &["stage", "reason"],
         &BUILDER_METRICS_REGISTRY
     )
@@ -447,10 +436,6 @@ pub fn stage_latency(stage: &str, micros: u64) {
 
 pub fn speculation(outcome: &str) {
     SPECULATION.with_label_values(&[outcome]).inc();
-}
-
-pub fn activation_source(source: &str) {
-    ACTIVATION_SOURCE.with_label_values(&[source]).inc();
 }
 
 pub fn rejection(stage: &str, reason: &str) {

@@ -251,10 +251,6 @@ pub struct SlotState {
     /// `order::is_tx_hash_ref`). Scope matches the relay's own `sent_txs`
     /// cache: per connection, cleared every slot.
     pub tx_cache: FxHashMap<B256, Arc<DecodedTx>>,
-    /// Builder the relay last named as top bid. Advisory: the streams merge
-    /// for every candidate builder regardless, since we cannot know which one
-    /// will be top when get_header is called.
-    pub top_builder: Option<Address>,
     pub stream: StreamStats,
 }
 
@@ -315,7 +311,6 @@ impl SlotState {
             blocks: FxHashMap::default(),
             recovery_cache: FxHashMap::default(),
             tx_cache: FxHashMap::default(),
-            top_builder: None,
             stream: StreamStats::default(),
         }
     }

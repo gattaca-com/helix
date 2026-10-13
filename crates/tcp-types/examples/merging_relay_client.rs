@@ -39,7 +39,7 @@ use helix_tcp_types::merging::{
         BuilderCollateral, MergerAckV1, MergerRegistrationV1, PingV1, PongV1, RelayConfigV1,
     },
     order::{BundleOrderRef, MergeOrderRef, TxOrderRef},
-    relay_to_builder::{ActivateBaseBlockV1, MergeableBlockV1, SlotStartV1},
+    relay_to_builder::{MergeableBlockV1, SlotStartV1},
 };
 use ssz::{Decode, Encode};
 use tokio::{
@@ -163,14 +163,6 @@ async fn main() -> std::io::Result<()> {
             base_block_hash,
             vec![order_tx, bundle_tx_0, bundle_tx_1, payment_tx],
         ),
-    })
-    .await?;
-
-    // -- 6. Select the merge base (the relay's top bid); this starts the
-    //       merge session. The only message on the top-bid critical path.
-    write_msg(&mut stream, MergingMsgId::ActivateBaseBlockV1, &ActivateBaseBlockV1 {
-        slot,
-        block_hash: base_block_hash,
     })
     .await?;
 

@@ -28,7 +28,6 @@ pub const KIND_RELAY_CONFIG: u8 = 0;
 pub const KIND_SLOT_START: u8 = 1;
 pub const KIND_SLOT_END: u8 = 2;
 pub const KIND_MERGEABLE: u8 = 3;
-pub const KIND_ACTIVATE: u8 = 4;
 
 /// Signs distributions in replay; a fixture key, so no production key leaves the builder.
 pub fn replay_signer() -> alloy_signer_local::PrivateKeySigner {
@@ -108,9 +107,6 @@ impl SlotRecorder {
             EngineEvent::SlotStart(msg) => (KIND_SLOT_START, msg.as_ssz_bytes()),
             EngineEvent::SlotEnd { slot } => (KIND_SLOT_END, slot.to_le_bytes().to_vec()),
             EngineEvent::MergeableBlock { body, .. } => (KIND_MERGEABLE, body.clone()),
-            EngineEvent::ActivateBase { slot, block_hash, .. } => {
-                (KIND_ACTIVATE, [&slot.to_le_bytes()[..], block_hash.as_slice()].concat())
-            }
             EngineEvent::ConnectionReset { .. } => return,
         };
         let mut events = self.events.lock().expect("recorder poisoned");

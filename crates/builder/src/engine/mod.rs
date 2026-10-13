@@ -74,11 +74,6 @@ pub enum EngineEvent {
         recv_ns: u64,
         generation: u64,
     },
-    ActivateBase {
-        slot: u64,
-        block_hash: B256,
-        generation: u64,
-    },
 }
 
 /// Outputs to the server tile. `response_id` on `MergedBlockV1` is left 0; the
@@ -234,7 +229,6 @@ impl MergeEngine {
             EngineEvent::SlotStart(_) => "engine_slot_start",
             EngineEvent::SlotEnd { .. } => "engine_slot_end",
             EngineEvent::MergeableBlock { .. } => "engine_mergeable_block",
-            EngineEvent::ActivateBase { .. } => "engine_activate_base",
         };
         let start = std::time::Instant::now();
         let pass = self.apply_event(event);
@@ -343,34 +337,6 @@ impl MergeEngine {
                     }
                 }
             }
-            EngineEvent::ActivateBase { slot, block_hash, generation } => {
-                if generation != self.generation {
-                    return false;
-                }
-                let Some(state) = self.slot.as_mut() else { return false };
-                if state.slot != slot {
-                    let _unused = self.out.send(EngineOutput::reject(
-                        self.generation,
-                        slot,
-                        RejectCode::StaleSlot,
-                        RejectSubject::BlockHash(block_hash),
-                        "activation for a slot that is not current",
-                    ));
-                    return false;
-                }
-                // Advisory only. We cannot know which builder holds the top bid
-                // when get_header is called, so every candidate builder gets a
-                // stream regardless; this just records the relay's current view.
-                match state.blocks.get(&block_hash) {
-                    Some(base) => {
-                        let beneficiary = base.beneficiary();
-                        state.top_builder = Some(beneficiary);
-                        metrics::activation_source("advisory");
-                    }
-                    None => metrics::activation_source("unknown_base_block"),
-                }
-                false
-            }
         }
     }
 
@@ -390,7 +356,7 @@ impl MergeEngine {
                 let inner = shared.inner.read().expect("shared slot poisoned");
                 inner.top_builders(top_k).contains(&beneficiary)
             };
-            if !in_top_k && state.top_builder != Some(beneficiary) {
+            if !in_top_k {
                 state.stream.skipped_not_top_k += 1;
                 metrics::speculation("skipped_not_top_k");
                 return;
@@ -769,7 +735,6 @@ fn prepare_order(
     }
 }
 
-/// Test/scaffolding engine: pools nothing and rejects every activation.
 #[cfg(test)]
 pub struct NoopEngine;
 
@@ -783,17 +748,8 @@ impl NoopEngine {
         std::thread::Builder::new()
             .name("noop-merge-engine".into())
             .spawn(move || {
-                while let Ok(event) = events.recv() {
-                    if let EngineEvent::ActivateBase { slot, block_hash, generation, .. } = event {
-                        let _ = out.send(EngineOutput::reject(
-                            generation,
-                            slot,
-                            RejectCode::UnknownBaseBlock,
-                            RejectSubject::BlockHash(block_hash),
-                            "noop engine",
-                        ));
-                    }
-                }
+                let _out = out;
+                while events.recv().is_ok() {}
             })
             .expect("failed to spawn noop engine thread")
     }

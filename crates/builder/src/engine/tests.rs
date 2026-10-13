@@ -446,10 +446,6 @@ fn mergeable_event(msg: &MergeableBlockV1, arrival: u64) -> EngineEvent {
     }
 }
 
-fn activate_event(block_hash: B256) -> EngineEvent {
-    EngineEvent::ActivateBase { slot: SLOT, block_hash, generation: 0 }
-}
-
 fn expect_merged(
     output: EngineOutput,
 ) -> Box<helix_tcp_types::merging::builder_to_relay::MergedBlockV1> {
@@ -485,7 +481,6 @@ async fn merges_order_into_activated_base_block() {
     event_tx.send(EngineEvent::SlotStart(fixture.slot_start())).unwrap();
     event_tx.send(mergeable_event(&base_msg, 1)).unwrap();
     event_tx.send(mergeable_event(&mergeable_msg, 2)).unwrap();
-    event_tx.send(activate_event(base_block_hash)).unwrap();
 
     let output = output_rx.recv_timeout(Duration::from_secs(60)).expect("engine produced nothing");
     let merged = expect_merged(output);
@@ -547,8 +542,8 @@ fn pubkey(byte: u8) -> alloy_rpc_types::beacon::BlsPublicKey {
 #[tokio::test(flavor = "multi_thread")]
 async fn exclusion_holds_across_later_sessions() {
     let fixture = Fixture::new().await;
-    let (base_a, base_a_hash) = fixture.build_base(U256::from(ETH));
-    let (base_b, base_b_hash) = fixture.build_base(U256::from(ETH));
+    let (base_a, _) = fixture.build_base(U256::from(ETH));
+    let (base_b, _) = fixture.build_base(U256::from(ETH));
     let a = pubkey(0xaa);
     let (with_order, hashes) = fixture.mergeable_orders(&base_a, a, &[3], true, 0xd1);
     let (without_order, _) = fixture.mergeable_orders(&base_a, a, &[], true, 0xd2);
@@ -559,10 +554,7 @@ async fn exclusion_holds_across_later_sessions() {
     engine.handle_event(mergeable_event(&with_order, 3));
     engine.handle_event(mergeable_event(&without_order, 4));
 
-    engine.handle_event(activate_event(base_a_hash));
     while output_rx.try_recv().is_ok() {}
-
-    engine.handle_event(activate_event(base_b_hash));
 
     assert!(shared_excluded(&engine, &hashes[0]));
     while let Ok(out) = output_rx.try_recv() {
@@ -578,7 +570,7 @@ async fn exclusion_holds_across_later_sessions() {
 #[tokio::test(flavor = "multi_thread")]
 async fn exclusion_applies_within_the_live_session() {
     let fixture = Fixture::new().await;
-    let (base, base_hash) = fixture.build_base(U256::from(ETH));
+    let (base, _) = fixture.build_base(U256::from(ETH));
     let a = pubkey(0xaa);
     let (with_order, hashes) = fixture.mergeable_orders(&base, a, &[3], true, 0xd1);
     let (without_order, _) = fixture.mergeable_orders(&base, a, &[], true, 0xd2);
@@ -586,7 +578,6 @@ async fn exclusion_applies_within_the_live_session() {
     let (mut engine, output_rx) = fixture.started_engine();
     engine.handle_event(mergeable_event(&base, 1));
     engine.handle_event(mergeable_event(&with_order, 2));
-    engine.handle_event(activate_event(base_hash));
     engine.handle_event(mergeable_event(&without_order, 3));
 
     assert!(shared_excluded(&engine, &hashes[0]));
@@ -699,14 +690,13 @@ async fn unflagged_content_is_never_excluded_by_absence() {
 #[tokio::test(flavor = "multi_thread")]
 async fn silence_is_not_exclusion() {
     let fixture = Fixture::new().await;
-    let (base, base_hash) = fixture.build_base(U256::from(ETH));
+    let (base, _) = fixture.build_base(U256::from(ETH));
     let a = pubkey(0xaa);
     let (with_order, hashes) = fixture.mergeable_orders(&base, a, &[3], true, 0xd1);
 
     let (mut engine, _rx) = fixture.started_engine();
     engine.handle_event(mergeable_event(&base, 1));
     engine.handle_event(mergeable_event(&with_order, 2));
-    engine.handle_event(activate_event(base_hash));
 
     assert!(!shared_excluded(&engine, &hashes[0]));
 }
@@ -810,7 +800,7 @@ async fn a_block_for_another_slot_alters_nothing() {
 #[tokio::test(flavor = "multi_thread")]
 async fn exclusion_does_not_disturb_an_applied_bundle() {
     let fixture = Fixture::new().await;
-    let (base, base_hash) = fixture.build_base(U256::from(ETH));
+    let (base, _) = fixture.build_base(U256::from(ETH));
     let a = pubkey(0xaa);
     let (with_order, order_hash) = fixture.mergeable_bundle(&base, a, &[3, 4], 0xd1);
     let (without_order, _) = fixture.mergeable_orders(&base, a, &[], true, 0xd2);
@@ -820,7 +810,6 @@ async fn exclusion_does_not_disturb_an_applied_bundle() {
     let (mut engine, output_rx) = fixture.started_engine();
     engine.handle_event(mergeable_event(&base, 1));
     engine.handle_event(mergeable_event(&with_order, 2));
-    engine.handle_event(activate_event(base_hash));
 
     // Merging runs on a stream thread now, so wait for it rather than polling.
     let merged = expect_merged(
@@ -847,7 +836,7 @@ async fn exclusion_does_not_disturb_an_applied_bundle() {
 #[tokio::test(flavor = "multi_thread")]
 async fn emitted_block_stays_valid_across_an_exclusion() {
     let fixture = Fixture::new().await;
-    let (base, base_hash) = fixture.build_base(U256::from(ETH));
+    let (base, _) = fixture.build_base(U256::from(ETH));
     let a = pubkey(0xaa);
     let (with_order, _) = fixture.mergeable_orders(&base, a, &[3, 4], true, 0xd1);
     let (partial, _) = fixture.mergeable_orders(&base, a, &[3], true, 0xd2);
@@ -855,7 +844,6 @@ async fn emitted_block_stays_valid_across_an_exclusion() {
     let (mut engine, output_rx) = fixture.started_engine();
     engine.handle_event(mergeable_event(&base, 1));
     engine.handle_event(mergeable_event(&with_order, 2));
-    engine.handle_event(activate_event(base_hash));
     while output_rx.try_recv().is_ok() {}
 
     engine.handle_event(mergeable_event(&partial, 3));
@@ -879,7 +867,7 @@ async fn exclusion_state_is_independent_of_event_interleaving() {
     use rand_xorshift::XorShiftRng;
 
     let fixture = Fixture::new().await;
-    let (base, base_hash) = fixture.build_base(U256::from(ETH));
+    let (base, _) = fixture.build_base(U256::from(ETH));
     let (a, b) = (pubkey(0xaa), pubkey(0xbb));
     let (a_full, a_hashes) = fixture.mergeable_orders(&base, a, &[3, 4, 5], true, 0xd1);
     let (a_partial, _) = fixture.mergeable_orders(&base, a, &[3, 5], true, 0xd2);
@@ -894,9 +882,7 @@ async fn exclusion_state_is_independent_of_event_interleaving() {
         for msg in blocks {
             engine.handle_event(mergeable_event(msg, 1));
             match rng.next_u32() % 3 {
-                0 => {
-                    engine.handle_event(activate_event(base_hash));
-                }
+                0 => {}
                 _ => {}
             }
         }
@@ -952,7 +938,6 @@ async fn a_base_block_paying_through_a_contract_is_merged() {
     event_tx.send(EngineEvent::SlotStart(fixture.slot_start())).unwrap();
     event_tx.send(mergeable_event(&base_msg, 1)).unwrap();
     event_tx.send(mergeable_event(&mergeable_msg, 2)).unwrap();
-    event_tx.send(activate_event(base_block_hash)).unwrap();
 
     let output = output_rx
         .recv_timeout(Duration::from_secs(60))
@@ -1179,13 +1164,12 @@ async fn distributes_through_the_collateral_safe_after_a_safe_paid_base() {
         100 * GWEI,
         GWEI,
     );
-    let (base, base_hash) = fixture.base_from_txs(vec![user_tx, payment_tx], fixture.block_value);
+    let (base, _) = fixture.base_from_txs(vec![user_tx, payment_tx], fixture.block_value);
     let (order, _) = fixture.mergeable_orders(&base, pubkey(1), &[3], false, 0xa1);
 
     let (mut engine, output_rx) = fixture.started_engine();
     engine.handle_event(mergeable_event(&order, 0));
     engine.handle_event(mergeable_event(&base, 1));
-    engine.handle_event(activate_event(base_hash));
 
     let merged = expect_merged(output_rx.recv_timeout(Duration::from_secs(10)).expect("no merge"));
     assert_eq!(merged.included_order_ids.len(), 1);
@@ -1304,8 +1288,7 @@ async fn replay_slot(
     use ssz::Decode;
 
     use crate::engine::record::{
-        KIND_ACTIVATE, KIND_MERGEABLE, KIND_RELAY_CONFIG, KIND_SLOT_END, KIND_SLOT_START,
-        RecordMeta,
+        KIND_MERGEABLE, KIND_RELAY_CONFIG, KIND_SLOT_END, KIND_SLOT_START, RecordMeta,
     };
     let read = |name: &str| std::fs::read(dir.join(name)).unwrap();
     let meta: RecordMeta = serde_json::from_slice(&read("meta.json")).unwrap();
@@ -1471,11 +1454,6 @@ async fn replay_slot(
                     generation: 0,
                 }
             }
-            KIND_ACTIVATE => EngineEvent::ActivateBase {
-                slot: u64::from_le_bytes(body[..8].try_into().unwrap()),
-                block_hash: B256::from_slice(&body[8..40]),
-                generation: 0,
-            },
             KIND_SLOT_END => {
                 std::thread::sleep(Duration::from_millis(600));
                 EngineEvent::SlotEnd { slot: u64::from_le_bytes(body[..8].try_into().unwrap()) }
@@ -1700,7 +1678,7 @@ async fn drops_a_droppable_tx_whose_gas_limit_no_longer_fits() {
             tx.into_signed(signature),
         ))
     };
-    let (base, base_hash) = fixture.build_base(U256::from(ETH));
+    let (base, _) = fixture.build_base(U256::from(ETH));
     let coinbase = fixture.signers[0].address();
     let bundle = |txs: Vec<Vec<u8>>, reverting: Vec<u16>, dropping: Vec<u16>, byte: u8| {
         let mut msg = base.clone();
@@ -1744,7 +1722,6 @@ async fn drops_a_droppable_tx_whose_gas_limit_no_longer_fits() {
     for msg in [&filler, &late, &base] {
         engine.handle_event(mergeable_event(msg, 0));
     }
-    engine.handle_event(activate_event(base_hash));
     let mut best: Option<Box<helix_tcp_types::merging::builder_to_relay::MergedBlockV1>> = None;
     while let Ok(output) = output_rx.recv_timeout(Duration::from_secs(3)) {
         let merged = expect_merged(output);

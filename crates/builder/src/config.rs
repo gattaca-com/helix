@@ -71,8 +71,6 @@ pub struct CoreConfig {
     pub replay_workers: Vec<usize>,
 }
 
-/// Speculative base-block replay: warms a merge session for every appendable
-/// block as it arrives, so `ActivateBaseBlockV1` costs a lookup, not a replay.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SpeculationConfig {

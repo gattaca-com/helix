@@ -99,7 +99,6 @@ pub enum RejectCode {
     HeadMismatch = 0,
     /// Builder is behind; the relay may resend.
     NotSynced = 1,
-    /// `ActivateBaseBlockV1` for a hash never stored.
     UnknownBaseBlock = 2,
     /// Last tx is not a proposer payment of `block_value`.
     InvalidPayment = 3,
