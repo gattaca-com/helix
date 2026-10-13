@@ -127,7 +127,6 @@ pub struct LocalCache {
     // TODO: this should be an ArcSwap
     pub inclusion_list: Arc<RwLock<Option<InclusionListWithKey>>>,
     builder_info_cache: Arc<DashMap<BlsPublicKeyBytes, BuilderInfo>>,
-    operator_builder_collateral: Arc<DashMap<BlsPublicKeyBytes, FxHashMap<Vec<u8>, u128>>>,
     pub api_key_cache: Arc<DashMap<String, Vec<BuilderConfig>>>,
     /// Derived view, written by the operator task and read on the submission path once
     /// `promotion_mode` applies. Split so the shared budget is stored once per pool rather than
@@ -179,7 +178,6 @@ impl LocalCache {
         Self {
             inclusion_list: Default::default(),
             builder_info_cache,
-            operator_builder_collateral: Default::default(),
             pool_binding,
             pool_view,
             promotion_mode: Arc::new(RwLock::new(PromotionMode::default())),
