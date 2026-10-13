@@ -25,9 +25,7 @@ use ethrex_levm::{
     db::{CachingDatabase, Database, gen_db::GeneralizedDatabase},
     vm::VMType,
 };
-use ethrex_rlp::encode::RLPEncode;
 use ethrex_storage::Store;
-use ethrex_trie::Trie;
 use ethrex_vm::{DynVmDatabase, Evm};
 use helix_tcp_types::merging::{
     builder_to_relay::{BuilderInclusion, MergeTraceV1, MergedBlockV1, UnmergedReason, UnmergedTx},
@@ -41,6 +39,7 @@ use crate::{
         EngineOutput,
         convert::{au256, eaddr, ewithdrawal, h256, payload_v3, requests_to_v4},
         error::{MergeError, SimulationError},
+        list_root::ListRoot,
         payment::{self, DistributionConfig, PaymentInputs},
         record::SlotRecorder,
         state::{Coinbase, Effect, Exec, Key, Known, Prior, Val, View, diff, execute, updates},
@@ -448,11 +447,12 @@ impl Builder {
                         });
                         merge.extend(&orders, &excluded, &shared.state.known);
                         let wait = Instant::now();
-                        let (trie, leaves, run) = rx
+                        let (trie, leaves, lists, run) = rx
                             .recv()
                             .map_err(|_| MergeError::Internal("trie job lost".into()))??;
                         merge.trie = Ok(trie);
                         merge.leaves = leaves;
+                        merge.lists = lists;
                         merge.trie_run = Some(run);
                         merge.trie_wait_us = wait.elapsed().as_micros() as u64;
                     }
@@ -787,6 +787,7 @@ impl Builder {
             max_blobs,
             blobs,
             leaves: Vec::new(),
+            lists: [ListRoot::default(), ListRoot::default()],
             appended: Vec::new(),
             spent,
             deposit_contract: chain_config.deposit_contract_address,
@@ -887,7 +888,7 @@ impl TrieJob {
         store: &Store,
         parent: &Parent,
         spawned: Instant,
-    ) -> Result<(Tree, Vec<Leaf>, TrieRun), MergeError> {
+    ) -> Result<(Tree, Vec<Leaf>, [ListRoot; 2], TrieRun), MergeError> {
         let start = Instant::now();
         let queue_us = start.duration_since(spawned).as_micros() as u64;
         crate::engine::trie::STORE_READS.with(|reads| reads.set((0, 0)));
@@ -900,54 +901,72 @@ impl TrieJob {
                 cumulative += effect.outcome.gas_spent;
                 Leaf::of(tx, effect, cumulative, self.deposit_contract)
             })
-            .collect();
+            .collect::<Vec<Leaf>>();
         let leaves_us = start.elapsed().as_micros() as u64;
         let had_layer = self.layer.is_some();
         let mut keys = 0;
         let (mut updates_us, mut apply_us) = (0, 0);
-        let patched = self.layer.and_then(|(mut trie, written, at_base)| {
-            let at = Instant::now();
-            let mut seen = rustc_hash::FxHashSet::default();
-            let changed: Vec<(Key, Option<Val>)> = at_base
-                .keys()
-                .chain(self.prior.keys())
-                .filter(|key| {
-                    let account = match key {
-                        Key::Account(address) | Key::Slot(address, _) => Key::Account(*address),
-                    };
-                    !written.contains_key(key) &&
-                        written.get(&account) != Some(&Write::Removed) &&
-                        seen.insert(**key)
-                })
-                .filter(|key| self.prior.last(key) != at_base.last(key))
-                .map(|key| (*key, self.prior.last(key).cloned()))
-                .collect();
-            keys = changed.len();
-            let mut updates = updates(changed.into_iter(), &*parent.db, self.coinbase).ok()?;
-            if written.contains_key(&Key::Account(self.coinbase.address)) {
-                for update in updates.iter_mut().filter(|u| u.address == self.coinbase.address) {
-                    update.info = None;
-                }
-            }
-            updates_us = at.elapsed().as_micros() as u64;
-            let at = Instant::now();
-            trie.apply(&updates).ok()?;
-            apply_us = at.elapsed().as_micros() as u64;
-            Some((trie, written))
-        });
-        let (trie, kind) = match patched {
-            Some(trie) => (trie, "patched"),
-            None => (
-                (
-                    build(store, parent, &self.prior, self.coinbase)
-                        .map_err(|e| MergeError::Internal(format!("trie: {e}")))?,
-                    Written::default(),
-                ),
-                if had_layer { "patch_failed" } else { self.missing },
-            ),
-        };
+        let n = leaves.len();
+        let (trie, lists) = POOL.join(
+            || {
+                let patched = self.layer.and_then(|(mut trie, written, at_base)| {
+                    let at = Instant::now();
+                    let mut seen = rustc_hash::FxHashSet::default();
+                    let changed: Vec<(Key, Option<Val>)> = at_base
+                        .keys()
+                        .chain(self.prior.keys())
+                        .filter(|key| {
+                            let account = match key {
+                                Key::Account(address) | Key::Slot(address, _) => {
+                                    Key::Account(*address)
+                                }
+                            };
+                            !written.contains_key(key) &&
+                                written.get(&account) != Some(&Write::Removed) &&
+                                seen.insert(**key)
+                        })
+                        .filter(|key| self.prior.last(key) != at_base.last(key))
+                        .map(|key| (*key, self.prior.last(key).cloned()))
+                        .collect();
+                    keys = changed.len();
+                    let mut updates =
+                        updates(changed.into_iter(), &*parent.db, self.coinbase).ok()?;
+                    if written.contains_key(&Key::Account(self.coinbase.address)) {
+                        for update in
+                            updates.iter_mut().filter(|u| u.address == self.coinbase.address)
+                        {
+                            update.info = None;
+                        }
+                    }
+                    updates_us = at.elapsed().as_micros() as u64;
+                    let at = Instant::now();
+                    trie.apply(&updates).ok()?;
+                    apply_us = at.elapsed().as_micros() as u64;
+                    Some((trie, written))
+                });
+                let (trie, kind) = match patched {
+                    Some(trie) => (trie, "patched"),
+                    None => (
+                        (
+                            build(store, parent, &self.prior, self.coinbase)
+                                .map_err(|e| MergeError::Internal(format!("trie: {e}")))?,
+                            Written::default(),
+                        ),
+                        if had_layer { "patch_failed" } else { self.missing },
+                    ),
+                };
+                Ok::<_, MergeError>((trie, kind))
+            },
+            || {
+                let mut lists = [ListRoot::default(), ListRoot::default()];
+                lists[0].root(n, n, |i| &leaves[i].tx[..]);
+                lists[1].root(n, n, |i| &leaves[i].receipt[..]);
+                lists
+            },
+        );
+        let (trie, kind) = trie?;
         let (reads, read_ns) = crate::engine::trie::STORE_READS.with(|reads| reads.get());
-        Ok((trie, leaves, TrieRun {
+        Ok((trie, leaves, lists, TrieRun {
             kind,
             us: start.elapsed().as_micros() as u64,
             reads,
@@ -1153,6 +1172,7 @@ struct Merge {
     blobs: u64,
     /// The base's tx and receipt entries, then each appended tx's.
     leaves: Vec<Leaf>,
+    lists: [ListRoot; 2],
     appended: Vec<Leaf>,
     /// Receipt gas through the last appended tx.
     spent: u64,
@@ -1533,6 +1553,7 @@ impl Merge {
         }
         let changed: Vec<AccountUpdate> = changed.into_values().collect();
         self.state_keys = changed.iter().map(|u| 1 + u.added_storage.len()).sum();
+        let [txs, receipts] = &mut self.lists;
         let Ok((trie, _)) = &mut self.trie else { return Ok(None) };
         let (state_root, (transactions_root, (receipts_root, logs_bloom))) = POOL.join(
             || {
@@ -1544,16 +1565,11 @@ impl Merge {
             },
             || {
                 let bloom = leaves.iter().fold(Bloom::zero(), |bloom, leaf| bloom | leaf.bloom);
-                let root = |bytes: fn(&Leaf) -> &[u8]| {
-                    Trie::compute_hash_from_unsorted_iter(
-                        leaves
-                            .iter()
-                            .enumerate()
-                            .map(|(ix, leaf)| (ix.encode_to_vec(), bytes(leaf).to_vec())),
-                        &NativeCrypto,
-                    )
-                };
-                POOL.join(|| root(|leaf| &leaf.tx[..]), || (root(|leaf| &leaf.receipt[..]), bloom))
+                let n = leaves.len();
+                POOL.join(
+                    || txs.root(n, n - 1, |i| &leaves[i].tx[..]),
+                    || (receipts.root(n, n - 1, |i| &leaves[i].receipt[..]), bloom),
+                )
             },
         );
         let (state_root, state_us, (state_reads, state_read_ns)) = state_root;

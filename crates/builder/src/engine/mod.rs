@@ -7,6 +7,7 @@ mod builder;
 pub mod convert;
 pub mod error;
 pub mod keccak8;
+mod list_root;
 pub mod payment;
 pub mod record;
 pub mod state;
