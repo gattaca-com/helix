@@ -373,7 +373,12 @@ impl DecoderTile {
                 }
                 .into());
             }
-            cache.check_submission_version(&builder, slot, version)?;
+            if expected_pubkey.is_none() {
+                cache.check_submission_version(&builder, slot, version)?;
+            }
+        }
+        if let Some(builder) = expected_pubkey {
+            cache.check_submission_version(builder, bid_slot, version)?;
         }
 
         let mut decoder = SubmissionDecoder::new(&decoder_params);

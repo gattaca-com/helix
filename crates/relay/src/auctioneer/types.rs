@@ -195,20 +195,17 @@ impl InternalBidSubmissionHeader {
 
     pub fn peek_slot_and_builder(&self, payload: &[u8]) -> Option<(u64, BlsPublicKeyBytes)> {
         let flags = self.flags;
-        if !matches!(self.encoding, Encoding::Ssz) ||
-            self.compression != Compression::None ||
-            flags.is_dehydrated() ||
-            flags.dehydrated_v2()
-        {
+        if !matches!(self.encoding, Encoding::Ssz) || self.compression != Compression::None {
             return None;
         }
-        let start = match (flags.merging_v2(), self.merge_type, flags.with_adjustments()) {
-            (true, MergeType::Mergeable, _) |
-            (true, _, true) |
-            (false, MergeType::Mergeable, false) => {
+        let v2 = flags.merging_v2() || flags.dehydrated_v2();
+        let start = match (v2, flags.is_dehydrated(), self.merge_type, flags.with_adjustments()) {
+            (true, _, MergeType::Mergeable, _) |
+            (true, _, _, true) |
+            (false, false, MergeType::Mergeable, false) => {
                 u32::from_le_bytes(payload.get(..4)?.try_into().ok()?) as usize
             }
-            (false, MergeType::AppendOnly, false) => return None,
+            (false, false, MergeType::AppendOnly, false) => return None,
             _ => 0,
         };
         let trace = payload.get(start..start + 120)?;
