@@ -165,7 +165,11 @@ impl Mpt {
         let node = match &r {
             Ref::Inline { len, data } => decode(&data[..*len as usize])?,
             Ref::Hash(_) => {
-                let key = self.cache_key(path);
+                let mut packed = [0u8; 32];
+                for (i, nib) in path.get().iter().enumerate() {
+                    packed[i / 2] |= nib << (4 * (1 - i % 2));
+                }
+                let key = (self.account, path.len, packed);
                 match self.shared.get(&key) {
                     Some(node) => *node,
                     None => {
@@ -187,106 +191,6 @@ impl Mpt {
             }
         };
         Ok(Some(self.push(node, Some(r))))
-    }
-
-    fn cache_key(&self, path: &Path) -> (Option<H256>, u8, [u8; 32]) {
-        let mut packed = [0u8; 32];
-        for (i, nib) in path.get().iter().enumerate() {
-            packed[i / 2] |= nib << (4 * (1 - i % 2));
-        }
-        (self.account, path.len, packed)
-    }
-
-    fn warm(&self, keys: &[[u8; 32]]) -> Result<(), TrieError> {
-        let mut pending: Vec<(Path, usize, Path)> = Vec::new();
-        for key in keys {
-            let rest = nibbles(key);
-            let (mut path, mut child, mut at) = (Path::EMPTY, self.root, 0);
-            while let Child::Node(id) = child {
-                match &self.slots[id as usize].node {
-                    Node::Leaf { .. } => break,
-                    Node::Ext { path: p, child: c } => {
-                        if !rest.get()[at..].starts_with(p.get()) {
-                            break;
-                        }
-                        path.extend(p.get());
-                        at += p.len as usize;
-                        child = *c;
-                    }
-                    Node::Branch { children } => {
-                        let Some(&ix) = rest.get().get(at) else { break };
-                        child = children[ix as usize];
-                        path.push(ix);
-                        at += 1;
-                    }
-                }
-            }
-            if let Child::Unloaded(Ref::Hash(_)) = child {
-                pending.push((rest, at, path));
-            }
-        }
-        while !pending.is_empty() {
-            let mut seen = rustc_hash::FxHashSet::default();
-            let missing: Vec<Path> = pending
-                .iter()
-                .map(|(_, _, path)| *path)
-                .filter(|path| {
-                    let key = self.cache_key(path);
-                    !self.shared.contains_key(&key) && seen.insert(key)
-                })
-                .collect();
-            let start = std::time::Instant::now();
-            let found = self.db.multi_get(
-                &missing.iter().map(|p| Nibbles::from_hex(p.get().to_vec())).collect::<Vec<_>>(),
-            );
-            STORE_READS.with(|reads| {
-                let (count, nanos) = reads.get();
-                reads
-                    .set((count + missing.len() as u64, nanos + start.elapsed().as_nanos() as u64));
-            });
-            for (path, encoded) in missing.iter().zip(found) {
-                if let Some(encoded) = encoded?.filter(|bytes| !bytes.is_empty()) {
-                    self.shared.insert(self.cache_key(path), decode(&encoded)?);
-                }
-            }
-            let mut next = Vec::new();
-            for (rest, mut at, mut path) in pending {
-                let Some(mut node) = self.shared.get(&self.cache_key(&path)).map(|n| *n) else {
-                    continue;
-                };
-                loop {
-                    let child = match node {
-                        Node::Leaf { .. } => break,
-                        Node::Ext { path: p, child } => {
-                            if !rest.get()[at..].starts_with(p.get()) {
-                                break;
-                            }
-                            path.extend(p.get());
-                            at += p.len as usize;
-                            child
-                        }
-                        Node::Branch { children } => {
-                            let Some(&ix) = rest.get().get(at) else { break };
-                            path.push(ix);
-                            at += 1;
-                            children[ix as usize]
-                        }
-                    };
-                    match child {
-                        Child::Unloaded(Ref::Hash(_)) => {
-                            next.push((rest, at, path));
-                            break;
-                        }
-                        Child::Unloaded(Ref::Inline { len, data }) => {
-                            node = decode(&data[..len as usize])?;
-                        }
-                        _ => break,
-                    }
-                }
-            }
-            pending = next;
-        }
-        Ok(())
     }
 
     fn get(&mut self, key: &[u8]) -> Result<Option<Value>, TrieError> {
@@ -722,10 +626,6 @@ fn decode(encoded: &[u8]) -> Result<Node, TrieError> {
 
 const PARALLEL_TRIES: usize = 64;
 
-const WARM_MIN: usize = 32;
-
-type SlotSet = ([u8; 32], Option<Value>);
-
 static TRIE_POOL: std::sync::LazyLock<rayon::ThreadPool> = std::sync::LazyLock::new(|| {
     rayon::ThreadPoolBuilder::new()
         .num_threads(8)
@@ -782,14 +682,6 @@ impl State {
     /// Applies `updates` and returns the new state root. Storage writes go first, then every
     /// touched storage trie is hashed in parallel, then the account trie.
     pub fn apply(&mut self, updates: &[AccountUpdate]) -> Result<H256, TrieError> {
-        let size: usize = updates.iter().map(|u| 1 + u.added_storage.len()).sum();
-        let warm = size >= WARM_MIN;
-        if warm {
-            let keys: Vec<[u8; 32]> =
-                updates.iter().map(|u| keccak_hash(u.address.as_bytes())).collect();
-            self.accounts.warm(&keys)?;
-        }
-        let mut sets: Vec<(H256, Vec<SlotSet>)> = Vec::new();
         let mut accounts: Vec<(H256, &AccountUpdate, AccountState)> =
             Vec::with_capacity(updates.len());
         for update in updates {
@@ -809,39 +701,25 @@ impl State {
                 self.storage.remove(&hashed);
             }
             if !update.added_storage.is_empty() {
-                if !self.storage.contains_key(&hashed) {
-                    let db = (self.open_storage)(hashed)?;
-                    let trie =
-                        Mpt::open(db, account.storage_root, Some(hashed), self.shared.clone());
-                    self.storage.insert(hashed, trie);
-                }
-                let mut slots = Vec::with_capacity(update.added_storage.len());
+                let trie = match self.storage.entry(hashed) {
+                    std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                    std::collections::hash_map::Entry::Vacant(entry) => entry.insert(Mpt::open(
+                        (self.open_storage)(hashed)?,
+                        account.storage_root,
+                        Some(hashed),
+                        self.shared.clone(),
+                    )),
+                };
                 for (slot, value) in &update.added_storage {
+                    let key = keccak_hash(slot.as_bytes());
                     let value = match *value != U256::zero() {
                         true => Some(Value::of(&value.encode_to_vec())?),
                         false => None,
                     };
-                    slots.push((keccak_hash(slot.as_bytes()), value));
+                    trie.set(&key, value)?;
                 }
-                sets.push((hashed, slots));
             }
             accounts.push((hashed, update, account));
-        }
-        if warm {
-            let storage = &self.storage;
-            TRIE_POOL.install(|| {
-                use rayon::prelude::*;
-                sets.par_iter().try_for_each(|(hashed, slots)| match storage.get(hashed) {
-                    Some(trie) => trie.warm(&slots.iter().map(|(key, _)| *key).collect::<Vec<_>>()),
-                    None => Ok(()),
-                })
-            })?;
-        }
-        for (hashed, slots) in sets {
-            let Some(trie) = self.storage.get_mut(&hashed) else { continue };
-            for (key, value) in slots {
-                trie.set(&key, value)?;
-            }
         }
         let touched: rustc_hash::FxHashSet<H256> = updates
             .iter()
