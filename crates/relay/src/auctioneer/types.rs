@@ -16,10 +16,10 @@ use helix_common::{
 use helix_tcp_types::{BidSubmissionFlags, BidSubmissionHeader};
 use helix_types::{
     BidAdjustmentData, BlockMergingDataV2, BlsPublicKeyBytes, BuilderBid, Compression,
-    ExecutionPayload, ForkName, GetPayloadResponse, GloasSubmissionData, MergeType,
-    PayloadAndBlobs, PayloadBidData, PayloadBidDataRef, SignedBidSubmission,
-    SignedBlindedBeaconBlock, SignedExecutionPayloadBid, Slot, Submission, SubmissionVersion,
-    VersionedSignedProposal, mock_public_key_bytes,
+    ExecutionPayload, ExecutionPayloadBid, ForkName, GetPayloadResponse, GloasSubmissionData,
+    MergeType, PayloadAndBlobs, PayloadBidData, PayloadBidDataRef, SignedBidSubmission,
+    SignedBlindedBeaconBlock, Slot, Submission, SubmissionVersion, VersionedSignedProposal,
+    mock_public_key_bytes,
 };
 use http::{
     HeaderMap, HeaderValue,
@@ -77,8 +77,22 @@ impl SubmissionRef {
 
 pub type GetHeaderResult = Result<PayloadEntry, ProposerApiError>;
 pub type GetPayloadResult = Result<GetPayloadResultData, ProposerApiError>;
-pub type GetExecutionPayloadBidResult = Result<SignedExecutionPayloadBid, ProposerApiError>;
+/// Unsigned: the API task signs it, keeping the BLS signature off the auctioneer.
+pub type GetExecutionPayloadBidResult = Result<ExecutionPayloadBid, ProposerApiError>;
 pub type SubmitBuilderPreferencesResult = Result<(), ProposerApiError>;
+
+/// What a proposer sees change between two Gloas bids: the block, and what it pays.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BidKey {
+    pub block_hash: B256,
+    pub execution_payment: u64,
+}
+
+impl BidKey {
+    pub fn of(bid: &ExecutionPayloadBid) -> Self {
+        Self { block_hash: bid.block_hash.0, execution_payment: bid.execution_payment }
+    }
+}
 
 versioned_struct!(InternalBidSubmissionHeader =>
     #[derive(Default)]
@@ -518,6 +532,9 @@ pub enum Event {
     /// Gloas (ePBS) analogue of `GetHeader`.
     GetExecutionPayloadBid {
         params: GetExecutionPayloadBidParams,
+        /// The bid a stream last sent. A top bid that still matches it is `BidUnchanged`,
+        /// answered without building a bid.
+        last_sent: Option<BidKey>,
         res_tx: oneshot::Sender<GetExecutionPayloadBidResult>,
         span: tracing::Span,
     },
