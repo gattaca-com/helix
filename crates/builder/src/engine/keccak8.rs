@@ -37,14 +37,26 @@ pub fn hash_many(inputs: &[&[u8]], out: &mut Vec<[u8; 32]>) {
     out.clear();
     #[cfg(target_arch = "x86_64")]
     if is_x86_feature_detected!("avx512f") {
-        for chunk in inputs.chunks(8) {
+        let mut order: Vec<usize> = (0..inputs.len()).collect();
+        order.sort_unstable_by_key(|&i| inputs[i].len() / RATE);
+        out.resize(inputs.len(), [0; 32]);
+        for ids in order.chunks(8) {
             // Below three inputs the eight-lane permutation costs more than scalar ones.
-            if chunk.len() < 3 {
-                out.extend(chunk.iter().map(keccak_hash));
+            if ids.len() < 3 {
+                for &i in ids {
+                    out[i] = keccak_hash(inputs[i]);
+                }
                 continue;
             }
+            let mut batch: [&[u8]; 8] = [&[]; 8];
+            for (lane, &i) in ids.iter().enumerate() {
+                batch[lane] = inputs[i];
+            }
             // SAFETY: AVX-512F was detected above.
-            unsafe { out.extend_from_slice(&x8::hash8(chunk)[..chunk.len()]) };
+            let hashes = unsafe { x8::hash8(&batch[..ids.len()]) };
+            for (lane, &i) in ids.iter().enumerate() {
+                out[i] = hashes[lane];
+            }
         }
         return;
     }

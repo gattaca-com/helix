@@ -102,7 +102,7 @@ struct Slot {
 }
 
 /// The parent's nodes, decoded once per slot, by account (`None` for the account trie) and path.
-type Shared = Arc<dashmap::DashMap<(Option<H256>, Path), Node, rustc_hash::FxBuildHasher>>;
+type Shared = Arc<dashmap::DashMap<(Option<H256>, u8, [u8; 32]), Node, rustc_hash::FxBuildHasher>>;
 
 fn shared(parent_root: H256) -> Shared {
     static CACHE: std::sync::Mutex<Option<(H256, Shared)>> = std::sync::Mutex::new(None);
@@ -146,7 +146,8 @@ impl Mpt {
     fn open(db: Box<dyn TrieDB>, root: H256, account: Option<H256>, shared: Shared) -> Self {
         let root =
             if root == *EMPTY_TRIE_HASH { Child::Empty } else { Child::Unloaded(Ref::Hash(root)) };
-        Mpt { slots: Vec::with_capacity(256), root, db, account, shared }
+        let capacity = if account.is_some() { 16 } else { 256 };
+        Mpt { slots: Vec::with_capacity(capacity), root, db, account, shared }
     }
 
     fn push(&mut self, node: Node, cached: Option<Ref>) -> Id {
@@ -164,7 +165,11 @@ impl Mpt {
         let node = match &r {
             Ref::Inline { len, data } => decode(&data[..*len as usize])?,
             Ref::Hash(_) => {
-                let key = (self.account, *path);
+                let mut packed = [0u8; 32];
+                for (i, nib) in path.get().iter().enumerate() {
+                    packed[i / 2] |= nib << (4 * (1 - i % 2));
+                }
+                let key = (self.account, path.len, packed);
                 match self.shared.get(&key) {
                     Some(node) => *node,
                     None => {
