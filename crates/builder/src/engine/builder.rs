@@ -369,6 +369,7 @@ impl Builder {
         let mut passes = 0u64;
         let mut first_emit_ns = 0;
         let mut seen_version = u64::MAX;
+        let mut failed = None;
         loop {
             let version = shared.pool_version.load(Ordering::Acquire);
             let pool_moved = version != seen_version;
@@ -417,12 +418,19 @@ impl Builder {
                 if first_emit_ns > 0 && stream.has_waiting() {
                     break;
                 }
-                if let Some(msg) = merge.emit(
+                let emitted = match merge.emit(
                     shared.ctx.slot,
                     &shared.ctx.proposer_fee_recipient,
                     &shared.relay_config,
                     &shared.engine_config,
-                )? {
+                ) {
+                    Ok(emitted) => emitted,
+                    Err(err) => {
+                        failed = Some(err);
+                        break;
+                    }
+                };
+                if let Some(msg) = emitted {
                     let now = utcnow_ns();
                     if first_emit_ns == 0 {
                         first_emit_ns = now;
@@ -545,7 +553,10 @@ impl Builder {
             stream.trie = trie.map(|(trie, written)| (job.base.block_hash, trie, written));
         }
         self.carry = Some((job.base.block_hash, merge.applied));
-        Ok(merge.best_emitted.saturating_sub(job.base.block_value))
+        match failed {
+            Some(err) => Err(err),
+            None => Ok(merge.best_emitted.saturating_sub(job.base.block_value)),
+        }
     }
 
     /// Validates the base and builds it from the builder's previous base.
