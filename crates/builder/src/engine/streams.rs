@@ -174,6 +174,7 @@ impl MergeStreams {
                 let out = self.out.clone();
                 std::thread::Builder::new()
                     .name(format!("merge-stream-{id}"))
+                    .stack_size(crate::engine::builder::EVM_STACK)
                     .spawn(move || {
                         if let Some(core) = core &&
                             !core_affinity::set_for_current(core_affinity::CoreId { id: core })

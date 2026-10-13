@@ -52,9 +52,12 @@ use crate::{
     utils::utcnow_ns,
 };
 
+pub(crate) const EVM_STACK: usize = 32 << 20;
+
 static POOL: std::sync::LazyLock<rayon::ThreadPool> = std::sync::LazyLock::new(|| {
     rayon::ThreadPoolBuilder::new()
         .num_threads(8)
+        .stack_size(EVM_STACK)
         .thread_name(|i| format!("b-order-{i}"))
         .build()
         .expect("b order pool")
@@ -136,6 +139,7 @@ impl Parent {
 static INGEST: std::sync::LazyLock<rayon::ThreadPool> = std::sync::LazyLock::new(|| {
     rayon::ThreadPoolBuilder::new()
         .num_threads(4)
+        .stack_size(EVM_STACK)
         .thread_name(|i| format!("b-ingest-{i}"))
         .build()
         .expect("b ingest pool")
