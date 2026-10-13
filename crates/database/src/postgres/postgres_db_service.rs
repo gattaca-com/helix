@@ -2967,15 +2967,26 @@ impl PostgresDatabaseService {
             tx_hashes.push(tx.tx_hash.as_slice());
             reasons.push(Some(tx.reason.as_ref()));
         }
+        let (builder_tx_hashes, builder_pubkeys): (Vec<&[u8]>, Vec<&[u8]>) = block
+            .tx_builders
+            .iter()
+            .map(|(tx_hash, pubkey)| (tx_hash.as_slice(), pubkey.as_slice()))
+            .unzip();
 
         self.pool
             .get()
             .await?
             .execute(
                 "
-                INSERT INTO merged_txs (slot, tx_hash, block_hash, base_block_hash, reason)
-                SELECT $1, t.tx_hash, $2, $3, t.reason
+                WITH b AS (
+                    SELECT tx_hash, array_agg(DISTINCT builder_pubkey) AS builder_pubkeys
+                    FROM UNNEST($6::bytea[], $7::bytea[]) AS b(tx_hash, builder_pubkey)
+                    GROUP BY tx_hash
+                )
+                INSERT INTO merged_txs (slot, tx_hash, block_hash, base_block_hash, reason, builder_pubkeys)
+                SELECT $1, t.tx_hash, $2, $3, t.reason, b.builder_pubkeys
                 FROM UNNEST($4::bytea[], $5::text[]) WITH ORDINALITY AS t(tx_hash, reason, ord)
+                LEFT JOIN b USING (tx_hash)
                 ORDER BY t.ord
                 ON CONFLICT (slot, tx_hash) DO NOTHING
                 ",
@@ -2985,6 +2996,8 @@ impl PostgresDatabaseService {
                     &block.original_block_hash.as_slice(),
                     &tx_hashes,
                     &reasons,
+                    &builder_tx_hashes,
+                    &builder_pubkeys,
                 ],
             )
             .await?;
