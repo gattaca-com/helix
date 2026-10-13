@@ -2,13 +2,14 @@ use std::sync::{Arc, atomic::Ordering};
 
 use axum::{
     Extension,
-    extract::{Json, Query},
+    extract::Query,
     http::{HeaderMap, StatusCode},
 };
 use helix_common::{
     PreferencesHeader,
     api::proposer_api::ValidatorRegistrationInfo,
     api_provider::ApiProvider,
+    decoder::Encoding,
     local_cache::RegistrationUpdate,
     metrics::{
         REGISTRATIONS_INVALID, REGISTRATIONS_SKIPPED, REGISTRATIONS_TO_CHECK_COUNT,
@@ -17,6 +18,7 @@ use helix_common::{
     utils::extract_request_id,
 };
 use helix_types::SignedValidatorRegistration;
+use ssz::Decode;
 use tokio::{task::JoinSet, time::Instant};
 use tracing::{error, info, trace, warn};
 
@@ -42,8 +44,14 @@ impl<A: Api> ProposerApi<A> {
         Extension(KnownValidatorsLoaded(known_validators_loaded)): Extension<KnownValidatorsLoaded>,
         headers: HeaderMap,
         Query(query_prefs): Query<PreferencesHeader>,
-        Json(registrations): Json<Vec<SignedValidatorRegistration>>,
+        body: bytes::Bytes,
     ) -> Result<StatusCode, ProposerApiError> {
+        let registrations: Vec<SignedValidatorRegistration> =
+            match Encoding::from_content_type(&headers) {
+                Encoding::Json => serde_json::from_slice(&body)?,
+                Encoding::Ssz => Vec::from_ssz_bytes(&body)?,
+            };
+
         if registrations.is_empty() {
             return Err(ProposerApiError::EmptyRequest);
         }
