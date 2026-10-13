@@ -22,6 +22,7 @@ pub mod simulator;
 pub mod slot_info;
 pub mod task;
 pub mod traces;
+pub mod tx_sink;
 pub mod utils;
 pub mod validator;
 pub mod validator_preferences;

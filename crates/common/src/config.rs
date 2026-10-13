@@ -106,7 +106,7 @@ pub struct DataGatherConfig {
     pub s3: Option<S3Config>,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ClickhouseConfig {
     /// Native `host:port` of the HTTP interface; the client speaks plaintext.
     pub addr: SocketAddr,
