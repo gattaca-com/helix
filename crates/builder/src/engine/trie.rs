@@ -722,7 +722,7 @@ fn decode(encoded: &[u8]) -> Result<Node, TrieError> {
 
 const PARALLEL_TRIES: usize = 64;
 
-const WARM_MIN: usize = 512;
+const WARM_MIN: usize = 32;
 
 type SlotSet = ([u8; 32], Option<Value>);
 
