@@ -193,6 +193,25 @@ impl InternalBidSubmissionHeader {
         }
     }
 
+    pub fn peek_slot_and_builder(&self, payload: &[u8]) -> Option<(u64, BlsPublicKeyBytes)> {
+        let flags = self.flags;
+        if !matches!(self.encoding, Encoding::Ssz) || self.compression != Compression::None {
+            return None;
+        }
+        let v2 = flags.merging_v2() || flags.dehydrated_v2();
+        let start = match (v2, flags.is_dehydrated(), self.merge_type, flags.with_adjustments()) {
+            (true, _, MergeType::Mergeable, _) |
+            (true, _, _, true) |
+            (false, false, MergeType::Mergeable, false) => {
+                u32::from_le_bytes(payload.get(..4)?.try_into().ok()?) as usize
+            }
+            (false, false, MergeType::AppendOnly, false) => return None,
+            _ => 0,
+        };
+        let trace = payload.get(start..start + 120)?;
+        Some((u64::from_le_bytes(trace[..8].try_into().ok()?), trace[72..].try_into().ok()?))
+    }
+
     pub fn to_bytes(self) -> SerialisedHeader {
         let mut buf = [0u8; Self::MAX_SERIALISED_LEN];
         buf[0..16].copy_from_slice(self.submission_id.as_bytes());

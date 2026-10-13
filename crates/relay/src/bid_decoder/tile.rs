@@ -19,8 +19,8 @@ use helix_common::{
     utils::utcnow_ns,
 };
 use helix_types::{
-    BidAdjustmentData, BlockMergingDataV2, BlsPublicKeyBytes, MergeType, SignedBidSubmission,
-    Submission, SubmissionVersion,
+    BidAdjustmentData, BlockMergingDataV2, BlockValidationError, BlsPublicKeyBytes, MergeType,
+    SignedBidSubmission, Slot, Submission, SubmissionVersion,
 };
 use rustc_hash::FxHashMap;
 use tracing::{info, trace, warn};
@@ -127,6 +127,7 @@ impl DecoderTile {
                     &mut self.buffer.borrow_mut(),
                     new_bid.trace,
                     new_bid.expected_pubkey(),
+                    self.bid_slot,
                 )
             },
             |res, producers| match res {
@@ -258,6 +259,7 @@ impl DecoderTile {
         buffer: &mut Vec<u8>,
         mut trace: SubmissionTrace,
         expected_pubkey: Option<&BlsPublicKeyBytes>,
+        bid_slot: u64,
     ) -> Result<(SubmissionData, tracing::Span), BuilderApiError> {
         record_submission_step_ns("recv_worker", trace.receive_ns.0, utcnow_ns());
         trace!("received by worker");
@@ -277,6 +279,7 @@ impl DecoderTile {
             payload,
             buffer,
             &mut trace,
+            bid_slot,
         )?;
 
         trace!("sending to auctioneer");
@@ -329,6 +332,7 @@ impl DecoderTile {
         payload: &[u8],
         buffer: &mut Vec<u8>,
         trace: &mut SubmissionTrace,
+        bid_slot: u64,
     ) -> Result<
         (
             Submission,
@@ -358,6 +362,24 @@ impl DecoderTile {
             mark_all_txs_mergeable: config.block_merging_config.mark_all_txs_mergeable,
             fork_name: chain_info.current_fork_name(),
         };
+
+        let sequence_number = header.has_sequence_number.then_some(header.sequence_number);
+        let version = SubmissionVersion::new(trace.receive_ns.0, sequence_number);
+        if let Some((slot, builder)) = header.peek_slot_and_builder(payload) {
+            if slot < bid_slot {
+                return Err(BlockValidationError::SubmissionForWrongSlot {
+                    expected: Slot::new(bid_slot),
+                    got: Slot::new(slot),
+                }
+                .into());
+            }
+            if expected_pubkey.is_none() {
+                cache.check_submission_version(&builder, slot, version)?;
+            }
+        }
+        if let Some(builder) = expected_pubkey {
+            cache.check_submission_version(builder, bid_slot, version)?;
+        }
 
         let mut decoder = SubmissionDecoder::new(&decoder_params);
         let (mut submission, merging_data, bid_adjustment_data) =
@@ -390,7 +412,6 @@ impl DecoderTile {
 
         let withdrawals_root = submission.withdrawal_root();
 
-        let sequence_number = header.has_sequence_number.then_some(header.sequence_number);
         trace!(
             ?sequence_number,
             is_dehydrated,
@@ -400,7 +421,6 @@ impl DecoderTile {
             "processed payload"
         );
 
-        let version = SubmissionVersion::new(trace.receive_ns.0, sequence_number);
         Ok((
             submission,
             withdrawals_root,
