@@ -101,27 +101,27 @@ struct Slot {
     cached: Option<Ref>,
 }
 
-/// The parent's nodes, decoded once per slot, by account (`None` for the account trie) and path.
-type Shared = Arc<dashmap::DashMap<(Option<H256>, u8, [u8; 32]), Node, rustc_hash::FxBuildHasher>>;
+type Shared = Arc<dashmap::DashMap<H256, Node, rustc_hash::FxBuildHasher>>;
+
+const SHARED_MAX: usize = 1 << 18;
 
 fn shared(parent_root: H256) -> Shared {
     static CACHE: std::sync::Mutex<Option<(H256, Shared)>> = std::sync::Mutex::new(None);
     let Ok(mut cache) = CACHE.lock() else { return Shared::default() };
-    match cache.as_ref() {
-        Some((root, shared)) if *root == parent_root => shared.clone(),
-        _ => {
-            let shared = Shared::default();
-            *cache = Some((parent_root, shared.clone()));
-            shared
+    let (root, shared) = cache.get_or_insert_with(|| (parent_root, Shared::default()));
+    if *root != parent_root {
+        *root = parent_root;
+        if shared.len() > SHARED_MAX {
+            shared.clear();
         }
     }
+    shared.clone()
 }
 
 pub struct Mpt {
     slots: Vec<Slot>,
     root: Child,
     db: Box<dyn TrieDB>,
-    account: Option<H256>,
     shared: Shared,
 }
 
@@ -147,7 +147,7 @@ impl Mpt {
         let root =
             if root == *EMPTY_TRIE_HASH { Child::Empty } else { Child::Unloaded(Ref::Hash(root)) };
         let capacity = if account.is_some() { 16 } else { 256 };
-        Mpt { slots: Vec::with_capacity(capacity), root, db, account, shared }
+        Mpt { slots: Vec::with_capacity(capacity), root, db, shared }
     }
 
     fn push(&mut self, node: Node, cached: Option<Ref>) -> Id {
@@ -164,12 +164,8 @@ impl Mpt {
         };
         let node = match &r {
             Ref::Inline { len, data } => decode(&data[..*len as usize])?,
-            Ref::Hash(_) => {
-                let mut packed = [0u8; 32];
-                for (i, nib) in path.get().iter().enumerate() {
-                    packed[i / 2] |= nib << (4 * (1 - i % 2));
-                }
-                let key = (self.account, path.len, packed);
+            Ref::Hash(hash) => {
+                let key = *hash;
                 match self.shared.get(&key) {
                     Some(node) => *node,
                     None => {
