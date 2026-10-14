@@ -65,7 +65,7 @@ pub struct BidSubmissionTcpListener {
 
 impl BidSubmissionTcpListener {
     pub fn new(
-        listener_addr: SocketAddr,
+        listener_addrs: &[SocketAddr],
         api_key_cache: Arc<DashMap<String, Vec<BuilderConfig>>>,
         max_connections: usize,
         dcache_ptr: DCachePtr,
@@ -81,7 +81,13 @@ impl BidSubmissionTcpListener {
             max_frame_size: u32::MAX as usize,
             ..Default::default()
         });
-        listener.listen(group, listener_addr).expect("failed to initialise the TCP listener");
+        // One socket per address in the same Network: connection tokens stay unique, so
+        // submission results still reach the right connection.
+        for addr in listener_addrs {
+            listener
+                .listen(group, *addr)
+                .unwrap_or_else(|e| panic!("failed to initialise the TCP listener on {addr}: {e}"));
+        }
 
         Self {
             listener,

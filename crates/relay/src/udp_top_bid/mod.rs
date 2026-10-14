@@ -59,7 +59,7 @@ pub struct UdpTopBidTile {
 
 impl UdpTopBidTile {
     pub fn new(
-        listener_addr: SocketAddr,
+        listener_addrs: &[SocketAddr],
         api_key_cache: Arc<DashMap<String, Vec<BuilderConfig>>>,
         max_per_key: usize,
     ) -> Self {
@@ -79,7 +79,11 @@ impl UdpTopBidTile {
             )),
             ..Default::default()
         });
-        driver.listen(group, listener_addr).expect("failed to initialise the UDP top bid listener");
+        for addr in listener_addrs {
+            driver.listen(group, *addr).unwrap_or_else(|e| {
+                panic!("failed to initialise the UDP top bid listener on {addr}: {e}")
+            });
+        }
 
         Self {
             driver,

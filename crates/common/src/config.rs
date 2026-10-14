@@ -1,4 +1,9 @@
-use std::{env, fs::File, net::SocketAddr, path::PathBuf};
+use std::{
+    env,
+    fs::File,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    path::PathBuf,
+};
 
 use alloy_primitives::Address;
 use clap::Parser;
@@ -71,6 +76,8 @@ pub struct RelayConfig {
     pub api_port: u16,
     #[serde(default = "default_u16::<4041>")]
     pub tcp_port: u16,
+    #[serde(default = "default_bind_ips")]
+    pub bind_ips: Vec<IpAddr>,
     #[serde(default = "default_usize::<512>")]
     pub tcp_max_connections: usize,
     /// Serve the top-bid feed over UDP as well, on `tcp_port`.
@@ -115,6 +122,16 @@ pub struct ClickhouseConfig {
 }
 
 impl RelayConfig {
+    pub fn bind_addrs(&self, port: u16) -> Vec<SocketAddr> {
+        assert!(!self.bind_ips.is_empty(), "bind_ips is empty");
+        assert!(
+            self.bind_ips.len() == 1 || self.bind_ips.iter().all(|ip| !ip.is_unspecified()),
+            "bind_ips: 0.0.0.0 cannot be combined with specific IPs: {:?}",
+            self.bind_ips
+        );
+        self.bind_ips.iter().map(|ip| SocketAddr::new(*ip, port)).collect()
+    }
+
     pub fn empty_for_test() -> Self {
         Self {
             instance_id: Default::default(),
@@ -158,6 +175,7 @@ impl RelayConfig {
             ip_frequency_threshold: default_ip_frequency_threshold(),
             api_port: 4040,
             tcp_port: 4041,
+            bind_ips: default_bind_ips(),
             tcp_max_connections: 512,
             udp_top_bid_enabled: false,
             udp_top_bid_max_connections_per_key: 5,
@@ -412,6 +430,10 @@ const DEFAULT_IP_FREQUENCY_THRESHOLD: f64 = 0.2;
 
 const fn default_ip_frequency_threshold() -> f64 {
     DEFAULT_IP_FREQUENCY_THRESHOLD
+}
+
+fn default_bind_ips() -> Vec<IpAddr> {
+    vec![IpAddr::V4(Ipv4Addr::UNSPECIFIED)]
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
