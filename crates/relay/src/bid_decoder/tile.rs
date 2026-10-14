@@ -373,11 +373,13 @@ impl DecoderTile {
                 }
                 .into());
             }
-            if expected_pubkey.is_none() {
+            if expected_pubkey.is_none() && !is_dehydrated {
                 cache.check_submission_version(&builder, slot, version)?;
             }
         }
-        if let Some(builder) = expected_pubkey {
+        if let Some(builder) = expected_pubkey &&
+            !is_dehydrated
+        {
             cache.check_submission_version(builder, bid_slot, version)?;
         }
 
