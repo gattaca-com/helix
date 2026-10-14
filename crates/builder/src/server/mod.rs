@@ -30,7 +30,7 @@ use tracing::{debug, error, info, trace, warn};
 
 use crate::{
     config::MergingConfig,
-    engine::{EngineEvent, EngineOutput},
+    engine::{EngineEvent, EngineOutput, Lanes},
     metrics,
     spine::BuilderSpine,
     utils::utcnow_ns,
@@ -65,6 +65,7 @@ pub struct MergingServerTile {
 
     engine_tx: Sender<EngineEvent>,
     engine_rx: Receiver<EngineOutput>,
+    lanes: Lanes,
 
     ping: Repeater,
     ping_nonce: u64,
@@ -105,6 +106,7 @@ impl MergingServerTile {
             sessions: FxHashMap::default(),
             active: None,
             generation: 0,
+            lanes: Lanes::spawn(config.event_queue_capacity, engine_tx.clone()),
             engine_tx,
             engine_rx,
             ping: Repeater::every(flux::timing::Duration::from_secs(PING_INTERVAL_S)),
@@ -167,6 +169,7 @@ impl MergingServerTile {
             active,
             generation,
             engine_tx,
+            lanes,
             replies,
             to_disconnect,
             ..
@@ -226,6 +229,7 @@ impl MergingServerTile {
                         *max_frame_bytes,
                         *generation,
                         engine_tx,
+                        lanes,
                         replies,
                         to_disconnect,
                     ),
@@ -452,6 +456,7 @@ fn handle_active_message(
     max_frame_bytes: u32,
     generation: u64,
     engine_tx: &Sender<EngineEvent>,
+    lanes: &mut Lanes,
     replies: &mut Vec<(Token, Reply)>,
     to_disconnect: &mut Vec<Token>,
 ) {
@@ -546,15 +551,8 @@ fn handle_active_message(
         }
         MergingMsgId::ActivateBaseBlockV1 => {}
         MergingMsgId::MergeableBlockV1 => {
-            // Not decoded here: the engine does SSZ + tx decoding off the tile
-            // thread. Only the slot for a possible Busy reject is peeked.
-            let event = EngineEvent::MergeableBlock {
-                body: body.to_vec(),
-                recv_ns: utcnow_ns(),
-                generation,
-            };
             metrics::ingest("mergeable_block");
-            if let Err(TrySendError::Full(_)) = engine_tx.try_send(event) {
+            if lanes.submit(body.to_vec(), utcnow_ns(), generation).is_err() {
                 metrics::queue_drop("engine_mergeable");
                 let slot = peek_slot(body).unwrap_or_default();
                 debug!(?token, slot, "engine busy, rejecting mergeable block");

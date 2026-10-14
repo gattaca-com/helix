@@ -44,8 +44,8 @@ use crate::{
         error::MergeError,
         streams::{MergeStreams, Offer, StreamJob},
         types::{
-            DecodedTx, EngineConfig, PreparedBlock, PreparedOrder, SharedInner, SharedSlot,
-            SlotState,
+            Decoded, DecodedTx, EngineConfig, PreparedBlock, PreparedOrder, SharedInner,
+            SharedSlot, SlotState, SlotTxs,
         },
     },
     metrics,
@@ -67,12 +67,11 @@ pub enum EngineEvent {
     SlotEnd {
         slot: u64,
     },
-    /// Raw SSZ body of a `MergeableBlockV1` (already decompressed). The engine
-    /// does the SSZ + transaction decoding off the tile thread.
     MergeableBlock {
         body: Vec<u8>,
         recv_ns: u64,
         generation: u64,
+        decoded: Option<Box<Decoded>>,
     },
 }
 
@@ -311,11 +310,11 @@ impl MergeEngine {
                 }
                 false
             }
-            EngineEvent::MergeableBlock { body, recv_ns, generation } => {
+            EngineEvent::MergeableBlock { body, recv_ns, generation, decoded } => {
                 if generation != self.generation {
                     return false;
                 }
-                match self.ingest_mergeable_block(&body, recv_ns) {
+                match self.ingest_mergeable_block(&body, recv_ns, decoded) {
                     Ok(()) => true,
                     Err((slot, block_hash, err)) => {
                         metrics::rejection("ingest", err.metric_label());
@@ -397,15 +396,23 @@ impl MergeEngine {
         &mut self,
         body: &[u8],
         recv_ns: u64,
+        decoded: Option<Box<Decoded>>,
     ) -> Result<(), (u64, Option<B256>, MergeError)> {
         metrics::stage_latency(
             "ingest_queue",
             crate::utils::utcnow_ns().saturating_sub(recv_ns) / 1000,
         );
         let current_slot = self.slot.as_ref().map(|s| s.slot).unwrap_or_default();
-        let msg = MergeableBlockV1::from_ssz_bytes(body).map_err(|e| {
-            (current_slot, None, MergeError::InvalidOrder(format!("undecodable block: {e:?}")))
-        })?;
+        let (msg, txs) = match decoded {
+            Some(decoded) => (decoded.msg, Some(decoded.txs)),
+            None => (
+                MergeableBlockV1::from_ssz_bytes(body).map_err(|e| {
+                    let err = MergeError::InvalidOrder(format!("undecodable block: {e:?}"));
+                    (current_slot, None, err)
+                })?,
+                None,
+            ),
+        };
         let block_hash = msg.execution_payload.payload_inner.payload_inner.block_hash;
         let fail = |err: MergeError| (msg.slot, Some(block_hash), err);
 
@@ -451,10 +458,16 @@ impl MergeEngine {
         // cache (incremental submissions share most txs); resolves any
         // tx-hash references against txs already seen whole this slot. Runs before the
         // order checks so a block rejected for its orders still fills the tx cache.
-        let decode_start = std::time::Instant::now();
-        let decoded = decode_block_txs(&msg, &mut state.recovery_cache, &mut state.tx_cache)
-            .map_err(|err| fail(MergeError::InvalidOrder(err)))?;
-        metrics::stage_latency("ingest_decode", decode_start.elapsed().as_micros() as u64);
+        let decoded = match txs {
+            Some(txs) => txs,
+            None => {
+                let decode_start = std::time::Instant::now();
+                let txs = decode_block_txs(&msg, &state.txs);
+                metrics::stage_latency("ingest_decode", decode_start.elapsed().as_micros() as u64);
+                txs
+            }
+        }
+        .map_err(|err| fail(MergeError::InvalidOrder(err)))?;
 
         for order in &msg.merge_orders {
             order
@@ -563,6 +576,81 @@ impl MergeEngine {
     }
 }
 
+const DECODE_LANES: usize = 8;
+
+type LaneJob = (Vec<u8>, u64, u64, Arc<SlotTxs>);
+
+pub struct Lanes {
+    senders: Vec<Sender<LaneJob>>,
+    by_builder: rustc_hash::FxHashMap<[u8; 48], usize>,
+    scope: (u64, u64),
+    txs: Arc<SlotTxs>,
+}
+
+impl Lanes {
+    pub fn spawn(capacity: usize, engine_tx: Sender<EngineEvent>) -> Self {
+        let senders = (0..DECODE_LANES)
+            .map(|i| {
+                let (tx, rx) = crossbeam_channel::bounded::<LaneJob>(capacity);
+                let engine_tx = engine_tx.clone();
+                std::thread::Builder::new()
+                    .name(format!("b-decode-{i}"))
+                    .spawn(move || {
+                        for (body, recv_ns, generation, txs) in rx {
+                            let start = std::time::Instant::now();
+                            let decoded = MergeableBlockV1::from_ssz_bytes(&body).ok().map(|msg| {
+                                let txs = decode_block_txs(&msg, &txs);
+                                Box::new(Decoded { msg, txs })
+                            });
+                            metrics::stage_latency("ingest_decode", start.elapsed().as_micros() as u64);
+                            let event =
+                                EngineEvent::MergeableBlock { body, recv_ns, generation, decoded };
+                            if engine_tx.send(event).is_err() {
+                                break;
+                            }
+                        }
+                    })
+                    .expect("failed to spawn decode lane");
+                tx
+            })
+            .collect();
+        Lanes { senders, by_builder: Default::default(), scope: (0, 0), txs: Default::default() }
+    }
+
+    pub fn submit(&mut self, body: Vec<u8>, recv_ns: u64, generation: u64) -> Result<(), Vec<u8>> {
+        let slot = body.get(..8).and_then(|b| b.try_into().ok()).map(u64::from_le_bytes);
+        let slot = slot.unwrap_or_default();
+        if generation != self.scope.0 || slot > self.scope.1 {
+            self.scope = (generation, slot);
+            self.txs = Default::default();
+        }
+        let word = |bytes: &[u8], at: usize| {
+            bytes.get(at..at + 4).and_then(|b| b.try_into().ok()).map(u32::from_le_bytes)
+        };
+        let payload = word(&body, 165).unwrap_or_default() as usize;
+        let start = word(&body, payload + 504).unwrap_or_default() as usize;
+        let end = word(&body, payload + 508).unwrap_or_default() as usize;
+        let list = body.get(payload + start..payload + end).unwrap_or_default();
+        let count = word(list, 0).unwrap_or_default() as usize / 4;
+        for i in 0..count {
+            let from = word(list, 4 * i).unwrap_or_default() as usize;
+            let to = if i + 1 < count { word(list, 4 * i + 4) } else { Some(list.len() as u32) };
+            let tx = list.get(from..to.unwrap_or_default() as usize).unwrap_or_default();
+            if !tx.is_empty() && !is_tx_hash_ref(tx) {
+                self.txs.raw.insert(keccak256(tx), alloy_primitives::Bytes::copy_from_slice(tx));
+            }
+        }
+        let mut builder = [0; 48];
+        if let Some(pubkey) = body.get(8..56) {
+            builder.copy_from_slice(pubkey);
+        }
+        let next = self.by_builder.len() % DECODE_LANES;
+        let lane = *self.by_builder.entry(builder).or_insert(next);
+        let job = (body, recv_ns, generation, self.txs.clone());
+        self.senders[lane].try_send(job).map_err(|err| err.into_inner().0)
+    }
+}
+
 /// Decodes every tx in the payload and recovers senders (cache-assisted, the
 /// misses in parallel). Entries of `order::TX_HASH_REF_LEN` bytes are
 /// tx-hash references rather than raw txs (see `MergeableBlockV1`'s doc
@@ -580,8 +668,7 @@ static RECOVERY_POOL: std::sync::LazyLock<rayon::ThreadPool> = std::sync::LazyLo
 #[timed]
 fn decode_block_txs(
     msg: &MergeableBlockV1,
-    recovery_cache: &mut rustc_hash::FxHashMap<B256, ethrex_common::Address>,
-    tx_cache: &mut rustc_hash::FxHashMap<B256, Arc<DecodedTx>>,
+    cache: &SlotTxs,
 ) -> Result<Vec<Arc<DecodedTx>>, String> {
     use rayon::prelude::*;
 
@@ -605,25 +692,25 @@ fn decode_block_txs(
     let entries: Vec<Option<Entry>> = tx_bytes
         .iter()
         .map(|bytes| {
-            let entry = if is_tx_hash_ref(bytes) {
-                let hash = B256::from_slice(bytes);
-                tx_cache
-                    .get(&hash)
-                    .cloned()
-                    .map(Entry::Cached)
-                    .ok_or_else(|| format!("unresolved tx hash reference: {hash}"))
-            } else {
-                ethrex_common::types::Transaction::decode_canonical(bytes)
+            let raw = match is_tx_hash_ref(bytes) {
+                true => {
+                    let hash = B256::from_slice(bytes);
+                    if let Some(tx) = cache.txs.get(&hash) {
+                        return Some(Entry::Cached(tx.clone()));
+                    }
+                    cache.raw.get(&hash).map(|raw| raw.clone())
+                }
+                false => Some(bytes.clone()),
+            };
+            let entry = match raw {
+                None => Err(format!("unresolved tx hash reference: {}", B256::from_slice(bytes))),
+                Some(bytes) => ethrex_common::types::Transaction::decode_canonical(&bytes)
                     .map_err(|e| format!("tx decode: {e}"))
                     .map(|tx| {
-                        let hash = keccak256(bytes);
-                        Entry::New(Box::new(Partial {
-                            tx,
-                            encoded: bytes.clone(),
-                            hash,
-                            cached_sender: recovery_cache.get(&hash).copied(),
-                        }))
-                    })
+                        let hash = keccak256(&bytes);
+                        let cached_sender = cache.senders.get(&hash).map(|sender| *sender);
+                        Entry::New(Box::new(Partial { tx, encoded: bytes, hash, cached_sender }))
+                    }),
             };
             match entry {
                 Ok(entry) => Some(entry),
@@ -668,8 +755,8 @@ fn decode_block_txs(
     for entry in decoded {
         match entry {
             Some(Ok(tx)) => {
-                recovery_cache.insert(tx.hash, tx.sender);
-                tx_cache.entry(tx.hash).or_insert_with(|| tx.clone());
+                cache.senders.insert(tx.hash, tx.sender);
+                cache.txs.entry(tx.hash).or_insert_with(|| tx.clone());
                 txs.push(tx);
             }
             Some(Err(err)) => {

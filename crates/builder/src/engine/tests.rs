@@ -425,14 +425,11 @@ async fn an_unresolved_reference_still_caches_the_blocks_own_txs() {
         .transactions
         .push(alloy_primitives::Bytes::copy_from_slice(B256::repeat_byte(0xab).as_slice()));
 
-    let mut recovery_cache = rustc_hash::FxHashMap::default();
-    let mut tx_cache = rustc_hash::FxHashMap::default();
-    let err = crate::engine::decode_block_txs(&msg, &mut recovery_cache, &mut tx_cache)
-        .err()
-        .unwrap_or_default();
+    let cache = crate::engine::types::SlotTxs::default();
+    let err = crate::engine::decode_block_txs(&msg, &cache).err().unwrap_or_default();
 
     assert!(err.starts_with("unresolved tx hash reference"), "{err}");
-    assert_eq!(tx_cache.len(), own_txs);
+    assert_eq!(cache.txs.len(), own_txs);
 }
 
 /// `arrival` only documents the order blocks appear in a test; the event is
@@ -443,6 +440,7 @@ fn mergeable_event(msg: &MergeableBlockV1, arrival: u64) -> EngineEvent {
         body: msg.as_ssz_bytes(),
         recv_ns: crate::utils::utcnow_ns(),
         generation: 0,
+        decoded: None,
     }
 }
 
@@ -1412,6 +1410,7 @@ async fn replay_slot(
     let (output_tx, output_rx) = crossbeam_channel::bounded(1 << 16);
     let validator = blockchain.clone();
     let engine = MergeEngine::spawn(config, store, head, event_tx.clone(), event_rx, output_tx);
+    let mut lanes = super::Lanes::spawn(1 << 16, event_tx.clone());
     let mut beacon_root = B256::ZERO;
 
     let collector = std::thread::spawn(move || {
@@ -1448,11 +1447,8 @@ async fn replay_slot(
             KIND_MERGEABLE => {
                 let mut msg = MergeableBlockV1::from_ssz_bytes(&body).unwrap();
                 msg.execution_payload.payload_inner.payload_inner.parent_hash = b256(parent_hash);
-                EngineEvent::MergeableBlock {
-                    body: msg.as_ssz_bytes(),
-                    recv_ns: crate::utils::utcnow_ns(),
-                    generation: 0,
-                }
+                lanes.submit(msg.as_ssz_bytes(), crate::utils::utcnow_ns(), 0).unwrap();
+                continue;
             }
             KIND_SLOT_END => {
                 std::thread::sleep(Duration::from_millis(600));
@@ -1463,6 +1459,7 @@ async fn replay_slot(
         event_tx.send(event).unwrap();
     }
     std::thread::sleep(Duration::from_millis(600));
+    drop(lanes);
     drop(event_tx);
     engine.join().unwrap();
     drop(head_tx);

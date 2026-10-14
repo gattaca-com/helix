@@ -106,7 +106,15 @@ impl SlotRecorder {
             EngineEvent::RelayConfig(config) => (KIND_RELAY_CONFIG, config.as_ssz_bytes()),
             EngineEvent::SlotStart(msg) => (KIND_SLOT_START, msg.as_ssz_bytes()),
             EngineEvent::SlotEnd { slot } => (KIND_SLOT_END, slot.to_le_bytes().to_vec()),
-            EngineEvent::MergeableBlock { body, .. } => (KIND_MERGEABLE, body.clone()),
+            EngineEvent::MergeableBlock { body, decoded, .. } => match decoded.as_deref() {
+                Some(super::types::Decoded { msg, txs: Ok(txs) }) => {
+                    let mut msg = msg.clone();
+                    msg.execution_payload.payload_inner.payload_inner.transactions =
+                        txs.iter().map(|tx| tx.encoded.clone()).collect();
+                    (KIND_MERGEABLE, msg.as_ssz_bytes())
+                }
+                _ => (KIND_MERGEABLE, body.clone()),
+            },
             EngineEvent::ConnectionReset { .. } => return,
         };
         let mut events = self.events.lock().expect("recorder poisoned");

@@ -46,6 +46,18 @@ impl EngineConfig {
 }
 
 /// A transaction decoded from a forwarded payload, with its recovered sender.
+#[derive(Default)]
+pub struct SlotTxs {
+    pub senders: dashmap::DashMap<B256, ethrex_common::Address, rustc_hash::FxBuildHasher>,
+    pub txs: dashmap::DashMap<B256, Arc<DecodedTx>, rustc_hash::FxBuildHasher>,
+    pub raw: dashmap::DashMap<B256, alloy_primitives::Bytes, rustc_hash::FxBuildHasher>,
+}
+
+pub struct Decoded {
+    pub msg: helix_tcp_types::merging::relay_to_builder::MergeableBlockV1,
+    pub txs: Result<Vec<Arc<DecodedTx>>, String>,
+}
+
 pub struct DecodedTx {
     pub tx: ethrex_common::types::Transaction,
     pub sender: ethrex_common::Address,
@@ -244,13 +256,11 @@ pub struct SlotState {
     /// Shared with the merge streams; `None` until the relay config arrives.
     pub shared: Option<Arc<SharedSlot>>,
     pub blocks: FxHashMap<B256, Arc<PreparedBlock>>,
-    /// Sender-recovery cache: incremental submissions share most txs.
-    pub recovery_cache: FxHashMap<B256, ethrex_common::Address>,
     /// Decoded txs already seen whole on this connection this slot, keyed by
     /// hash; resolves `MergeableBlockV1` tx-hash references (see
     /// `order::is_tx_hash_ref`). Scope matches the relay's own `sent_txs`
     /// cache: per connection, cleared every slot.
-    pub tx_cache: FxHashMap<B256, Arc<DecodedTx>>,
+    pub txs: SlotTxs,
     pub stream: StreamStats,
 }
 
@@ -309,8 +319,7 @@ impl SlotState {
             ctx,
             shared: None,
             blocks: FxHashMap::default(),
-            recovery_cache: FxHashMap::default(),
-            tx_cache: FxHashMap::default(),
+            txs: SlotTxs::default(),
             stream: StreamStats::default(),
         }
     }
