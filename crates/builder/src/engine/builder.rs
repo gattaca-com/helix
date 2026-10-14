@@ -43,7 +43,9 @@ use crate::{
         error::{MergeError, SimulationError},
         payment::{self, DistributionConfig, PaymentInputs},
         record::SlotRecorder,
-        state::{Coinbase, Effect, Exec, Key, Known, Prior, Val, View, diff, execute, updates},
+        state::{
+            Coinbase, Effect, Exec, Id, Key, Keys, Known, Prior, Val, View, diff, execute, updates,
+        },
         streams::{BuilderStream, POLL, StreamJob},
         trie::State,
         types::{EngineConfig, OriginRevenue, PreparedBlock, PreparedOrder, SharedSlot},
@@ -69,6 +71,7 @@ pub struct Slot {
     known: RwLock<Known>,
     prewarmed: crate::engine::state::Prewarmed,
     parent: OnceLock<Result<Parent, String>>,
+    keys: Arc<Keys>,
 }
 
 struct Parent {
@@ -77,7 +80,7 @@ struct Parent {
     db: Arc<dyn Database>,
     /// The slot's system-call writes, before any tx, as updates and as values.
     system: Vec<AccountUpdate>,
-    writes: Arc<FxHashMap<Key, Val>>,
+    writes: Arc<FxHashMap<Id, Val>>,
 }
 
 impl Parent {
@@ -85,6 +88,7 @@ impl Parent {
         store: &Store,
         header: &BlockHeader,
         recorder: Option<&Arc<SlotRecorder>>,
+        keys: &Keys,
     ) -> Result<Self, String> {
         let parent = store
             .get_block_header_by_hash(header.parent_hash)
@@ -105,7 +109,7 @@ impl Parent {
         let mut writes = FxHashMap::default();
         for update in &system {
             for (slot, value) in &update.added_storage {
-                writes.insert(Key::Slot(update.address, *slot), Val::Slot(*value));
+                writes.insert(keys.id(Key::Slot(update.address, *slot)), Val::Slot(*value));
             }
         }
         Ok(Parent { header: parent, db, system, writes: Arc::new(writes) })
@@ -175,13 +179,20 @@ pub fn learn(
             let parent = shared
                 .state
                 .parent
-                .get_or_init(|| Parent::open(&store, &header, shared.ctx.recorder.as_ref()));
+                .get_or_init(|| {
+                    Parent::open(&store, &header, shared.ctx.recorder.as_ref(), &shared.state.keys)
+                });
             let Ok(parent) = parent.as_ref() else { return };
             let Ok(state) = parent.db.get_account_state(coinbase) else { return };
             let ran = {
                 let Ok(known) = shared.state.known.read() else { return };
                 let view = View {
-                    prior: Arc::new(Prior::new(B256::ZERO, Vec::new(), &mut Known::default())),
+                    prior: Arc::new(Prior::new(
+                        B256::ZERO,
+                        Vec::new(),
+                        &mut Known::default(),
+                        shared.state.keys.clone(),
+                    )),
                     at: 0,
                     layers: vec![Arc::new(FxHashMap::default())],
                     coinbase: Coinbase {
@@ -198,7 +209,9 @@ pub fn learn(
             if ran.is_empty() {
                 return;
             }
-            let paths = paths(ran.iter().flat_map(|effect| &effect.writes).map(|(key, _)| *key));
+            let keys = &shared.state.keys;
+            let writes = ran.iter().flat_map(|effect| &effect.writes);
+            let paths = paths(writes.filter_map(|(id, _)| keys.key(*id)));
             if let Ok(mut known) = shared.state.known.write() {
                 for effect in ran {
                     known.add(effect);
@@ -215,7 +228,9 @@ pub fn prefetch(shared: Arc<SharedSlot>, store: Store, base: Arc<PreparedBlock>)
         let parent = shared
             .state
             .parent
-            .get_or_init(|| Parent::open(&store, &header, shared.ctx.recorder.as_ref()));
+            .get_or_init(|| {
+                    Parent::open(&store, &header, shared.ctx.recorder.as_ref(), &shared.state.keys)
+                });
         let Ok(parent) = parent.as_ref() else { return };
         let mut keys: Vec<Key> = Vec::new();
         for tx in base.txs.iter() {
@@ -227,7 +242,8 @@ pub fn prefetch(shared: Arc<SharedSlot>, store: Store, base: Arc<PreparedBlock>)
         let (cold, codes) = {
             let Ok(known) = shared.state.known.read() else { return };
             let writes = base.txs.iter().flat_map(|tx| known.variants(&tx.hash));
-            keys.extend(writes.flat_map(|effect| effect.writes.iter().map(|(key, _)| *key)));
+            let ids = writes.flat_map(|effect| effect.writes.iter().map(|(id, _)| *id));
+            keys.extend(ids.filter_map(|id| shared.state.keys.key(id)));
             let cold: Vec<Arc<crate::engine::types::DecodedTx>> = base
                 .txs
                 .iter()
@@ -251,7 +267,12 @@ pub fn prefetch(shared: Arc<SharedSlot>, store: Store, base: Arc<PreparedBlock>)
                 let (system, db) = (parent.writes.clone(), parent.db.clone());
                 PREWARM.spawn(move || {
                     let view = View {
-                        prior: Arc::new(Prior::new(B256::ZERO, Vec::new(), &mut Known::default())),
+                        prior: Arc::new(Prior::new(
+                        B256::ZERO,
+                        Vec::new(),
+                        &mut Known::default(),
+                        shared.state.keys.clone(),
+                    )),
                         at: 0,
                         layers: vec![Arc::new(FxHashMap::default())],
                         coinbase,
@@ -268,7 +289,12 @@ pub fn prefetch(shared: Arc<SharedSlot>, store: Store, base: Arc<PreparedBlock>)
             let shared = shared.clone();
             PREWARM.spawn(move || {
                 let mut view = View {
-                    prior: Arc::new(Prior::new(B256::ZERO, Vec::new(), &mut Known::default())),
+                    prior: Arc::new(Prior::new(
+                        B256::ZERO,
+                        Vec::new(),
+                        &mut Known::default(),
+                        shared.state.keys.clone(),
+                    )),
                     at: 0,
                     layers: vec![Arc::new(FxHashMap::default())],
                     coinbase,
@@ -355,7 +381,7 @@ fn evm(db: Arc<dyn Database>) -> Evm {
 #[derive(Default)]
 pub struct Builder {
     slot: u64,
-    parent: B256,
+    keys: Arc<Keys>,
     streams: FxHashMap<alloy_rpc_types::beacon::BlsPublicKey, Stream>,
     latest: Option<alloy_rpc_types::beacon::BlsPublicKey>,
     carry: Option<(B256, Vec<Applied>)>,
@@ -414,10 +440,10 @@ impl Builder {
         if shared.ctx.slot < self.slot {
             return Ok(U256::ZERO);
         }
-        if shared.ctx.slot != self.slot || shared.ctx.parent_hash != self.parent {
+        if !Arc::ptr_eq(&shared.state.keys, &self.keys) {
             *self = Builder {
                 slot: shared.ctx.slot,
-                parent: shared.ctx.parent_hash,
+                keys: shared.state.keys.clone(),
                 ..Default::default()
             };
         }
@@ -680,7 +706,7 @@ impl Builder {
             .shared
             .state
             .parent
-            .get_or_init(|| Parent::open(store, &header, ctx.recorder.as_ref()))
+            .get_or_init(|| Parent::open(store, &header, ctx.recorder.as_ref(), &job.shared.state.keys))
             .as_ref()
             .map_err(|e| MergeError::Internal(e.clone()))?;
         if header.number != parent.header.number + 1 {
@@ -729,7 +755,12 @@ impl Builder {
         let same_stream = self.latest == Some(pubkey);
         let prior = match self.streams.get(&self.latest.unwrap_or_default()) {
             Some(stream) => stream.prior.clone(),
-            None => Arc::new(Prior::new(B256::ZERO, Vec::new(), &mut Known::default())),
+            None => Arc::new(Prior::new(
+                B256::ZERO,
+                Vec::new(),
+                &mut Known::default(),
+                job.shared.state.keys.clone(),
+            )),
         };
         let report = {
             let known = job.shared.state.known.read().expect("known poisoned");
@@ -753,7 +784,8 @@ impl Builder {
             for effect in report.ran.iter().chain(&report.warmed) {
                 known.add(effect.clone());
             }
-            let next = Arc::new(Prior::new(base.block_hash, report.applied, &mut known));
+            let keys = job.shared.state.keys.clone();
+            let next = Arc::new(Prior::new(base.block_hash, report.applied, &mut known, keys));
             (next, known.codes.clone())
         };
         let view = View {
@@ -940,19 +972,18 @@ impl TrieJob {
         let patched = self.layer.and_then(|(mut trie, written, at_base)| {
             let at = Instant::now();
             let mut seen = rustc_hash::FxHashSet::default();
+            let ids = &self.prior.keys;
             let changed: Vec<(Key, Option<Val>)> = at_base
                 .keys()
                 .chain(self.prior.keys())
-                .filter(|key| {
+                .filter(|id| seen.insert(**id) && self.prior.last(id) != at_base.last(id))
+                .filter_map(|id| Some((ids.key(*id)?, self.prior.last(id).cloned())))
+                .filter(|(key, _)| {
                     let account = match key {
                         Key::Account(address) | Key::Slot(address, _) => Key::Account(*address),
                     };
-                    !written.contains_key(key) &&
-                        written.get(&account) != Some(&Write::Removed) &&
-                        seen.insert(**key)
+                    !written.contains_key(key) && written.get(&account) != Some(&Write::Removed)
                 })
-                .filter(|key| self.prior.last(key) != at_base.last(key))
-                .map(|key| (*key, self.prior.last(key).cloned()))
                 .collect();
             keys = changed.len();
             let mut updates = updates(changed.into_iter(), &*parent.db, self.coinbase).ok()?;
@@ -1002,7 +1033,9 @@ fn build(
 ) -> Result<State, String> {
     let mut trie = parent.trie(store)?;
     trie.apply(&parent.system).map_err(|e| e.to_string())?;
-    let finals = prior.keys().map(|key| (*key, prior.last(key).cloned()));
+    let finals = prior
+        .keys()
+        .filter_map(|id| Some((prior.keys.key(*id)?, prior.last(id).cloned())));
     let updates = updates(finals, &*parent.db, coinbase).map_err(|e| e.to_string())?;
     trie.apply(&updates).map_err(|e| e.to_string())?;
     Ok(trie)
@@ -1195,7 +1228,7 @@ struct Merge {
     included_order_ids: Vec<B256>,
     applied: Vec<Applied>,
     carried: Vec<Applied>,
-    dirty: FxHashSet<Key>,
+    dirty: FxHashSet<Id>,
     /// Why each order left out was, with its txs.
     unmerged: FxHashMap<B256, (UnmergedReason, Vec<B256>)>,
     best_emitted: U256,
@@ -1235,7 +1268,7 @@ impl Merge {
         let (carried_n, mut carry_reran) = (carried.len(), 0);
         let mut ran: Vec<Arc<Effect>> = Vec::new();
         for (order, effects) in carried {
-            let writes = |effects: &[Option<Arc<Effect>>], dirty: &mut FxHashSet<Key>| {
+            let writes = |effects: &[Option<Arc<Effect>>], dirty: &mut FxHashSet<Id>| {
                 dirty
                     .extend(effects.iter().flatten().flat_map(|e| e.writes.iter().map(|(k, _)| *k)))
             };
@@ -1247,7 +1280,8 @@ impl Merge {
                 continue;
             }
             let clean = effects.iter().flatten().all(|e| {
-                self.view.coinbase.admits(e) && e.reads.iter().all(|(k, _)| !self.dirty.contains(k))
+                self.view.coinbase.admits(e, &self.view.prior.keys) &&
+                    e.reads.iter().all(|(k, _)| !self.dirty.contains(k))
             });
             carry_reran += usize::from(!clean);
             let mut view = self.view.clone();
@@ -1502,9 +1536,10 @@ impl Merge {
         vm.process_withdrawals(&withdrawals).map_err(|e| internal(&e))?;
         let emission = vm.get_state_transitions().map_err(|e| internal(&e))?;
 
-        let orders =
-            self.view.layers.first().map(|layer| layer.as_ref().clone()).unwrap_or_default();
-        let orders = updates(orders.into_iter(), &*self.exec.store, self.view.coinbase)
+        let keys = &self.view.prior.keys;
+        let orders = self.view.layers.first().into_iter().flat_map(|layer| layer.iter());
+        let orders = orders.filter_map(|(id, val)| Some((keys.key(*id)?, val.clone())));
+        let orders = updates(orders, &*self.exec.store, self.view.coinbase)
             .map_err(|e| internal(&e))?;
         let target = writes(&merged(orders.into_iter().chain(emission)))?;
         self.evm_us = evm_start.elapsed().as_micros() as u64;
@@ -1549,18 +1584,18 @@ impl Merge {
             _ => None,
         });
         for address in revived {
-            let slots = self.view.prior.keys().filter(|key| {
+            let slots = self.view.prior.keys().filter_map(|id| keys.key(*id)).filter(|key| {
                 matches!(key, Key::Slot(a, _) if *a == address) && !target.contains_key(key)
             });
             for key in slots {
-                let (Key::Slot(_, slot), Some(Val::Slot(value))) = (key, base.value(key)) else {
+                let (Key::Slot(_, slot), Some(Val::Slot(value))) = (key, base.value(&key)) else {
                     continue;
                 };
                 changed
                     .entry(address)
                     .or_insert_with(|| AccountUpdate::new(address))
                     .added_storage
-                    .insert(*slot, value);
+                    .insert(slot, value);
             }
         }
         let changed: Vec<AccountUpdate> = changed.into_values().collect();

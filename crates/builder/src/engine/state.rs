@@ -39,6 +39,36 @@ pub enum Key {
     Slot(Address, H256),
 }
 
+pub type Id = u32;
+
+#[derive(Default)]
+pub struct Keys {
+    ids: dashmap::DashMap<Key, Id, rustc_hash::FxBuildHasher>,
+    keys: dashmap::DashMap<Id, Key, rustc_hash::FxBuildHasher>,
+    next: std::sync::atomic::AtomicU32,
+}
+
+impl Keys {
+    pub fn id(&self, key: Key) -> Id {
+        if let Some(id) = self.ids.get(&key) {
+            return *id;
+        }
+        *self.ids.entry(key).or_insert_with(|| {
+            let id = self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.keys.insert(id, key);
+            id
+        })
+    }
+
+    pub fn get(&self, key: &Key) -> Option<Id> {
+        self.ids.get(key).map(|id| *id)
+    }
+
+    pub fn key(&self, id: Id) -> Option<Key> {
+        self.keys.get(&id).map(|key| *key)
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Val {
     Account { balance: U256, nonce: u64, code_hash: H256, exists: bool, has_storage: bool },
@@ -78,8 +108,8 @@ impl Val {
 /// What one tx read (first value seen) and wrote (final value), coinbase excluded.
 pub struct Effect {
     pub hash: B256,
-    pub reads: Vec<(Key, Val)>,
-    pub writes: Vec<(Key, Val)>,
+    pub reads: Vec<(Id, Val)>,
+    pub writes: Vec<(Id, Val)>,
     pub reads_coinbase: bool,
     pub credit: U256,
     /// What the tx took from the coinbase (the builder's own payments).
@@ -117,6 +147,7 @@ impl Effect {
         coinbase: Address,
         (credit, debit): (U256, U256),
         outcome: Outcome,
+        keys: &Keys,
     ) -> Option<Self> {
         let mut out = Effect {
             hash,
@@ -143,7 +174,7 @@ impl Effect {
             if *address == coinbase {
                 continue;
             }
-            let key = Key::Account(*address);
+            let key = keys.id(Key::Account(*address));
             let before = Val::of(before);
             let after = AccountSnapshot::of(db.current_accounts_state.get(address)?);
             if after.info.code_hash != code_hash(&before) {
@@ -156,7 +187,7 @@ impl Effect {
             out.reads.push((key, before));
         }
         for (&(address, slot), before) in &reads.slots {
-            let key = Key::Slot(address, slot);
+            let key = keys.id(Key::Slot(address, slot));
             let after = *db.current_accounts_state.get(&address)?.storage.get(&slot)?;
             if after != *before {
                 out.writes.push((key, Val::Slot(after)));
@@ -213,13 +244,13 @@ impl Coinbase {
     /// if it never involved this one, since its reads and writes leave the coinbase out. Under
     /// this one a tx that read the coinbase needs the same nonce, an uninspected balance, and at
     /// least the balance it found.
-    pub fn admits(&self, effect: &Effect) -> bool {
+    pub fn admits(&self, effect: &Effect, keys: &Keys) -> bool {
         if effect.coinbase != self.address {
-            let mine = Key::Account(self.address);
+            let mine = keys.get(&Key::Account(self.address));
             return !(effect.reads_coinbase ||
                 effect.coinbase_address ||
-                effect.reads.iter().any(|(k, _)| *k == mine) ||
-                effect.writes.iter().any(|(k, _)| *k == mine));
+                effect.reads.iter().any(|(k, _)| Some(*k) == mine) ||
+                effect.writes.iter().any(|(k, _)| Some(*k) == mine));
         }
         match effect.coinbase_seen {
             _ if !effect.reads_coinbase => true,
@@ -247,12 +278,13 @@ pub struct Prior {
     pub effects: Vec<Arc<Effect>>,
     position: FxHashMap<B256, usize>,
     /// Every write per key in tx order.
-    history: FxHashMap<Key, Vec<(usize, Val)>>,
+    history: FxHashMap<Id, Vec<(usize, Val)>>,
+    pub keys: Arc<Keys>,
 }
 
 impl Prior {
-    pub fn new(base: B256, effects: Vec<Arc<Effect>>, known: &mut Known) -> Self {
-        let mut history: FxHashMap<Key, Vec<(usize, Val)>> = FxHashMap::default();
+    pub fn new(base: B256, effects: Vec<Arc<Effect>>, known: &mut Known, keys: Arc<Keys>) -> Self {
+        let mut history: FxHashMap<Id, Vec<(usize, Val)>> = FxHashMap::default();
         for (ix, effect) in effects.iter().enumerate() {
             for (key, val) in &effect.reads {
                 if !history.contains_key(key) {
@@ -264,23 +296,23 @@ impl Prior {
             }
         }
         let position = effects.iter().enumerate().map(|(ix, e)| (e.hash, ix)).collect();
-        Prior { base, effects, position, history }
+        Prior { base, effects, position, history, keys }
     }
 
     /// The key's value in this run just before tx `at`; `None` when unwritten so far.
-    fn before(&self, key: &Key, at: usize) -> Option<&Val> {
+    fn before(&self, key: &Id, at: usize) -> Option<&Val> {
         let writes = self.history.get(key)?;
         let n = writes.partition_point(|(ix, _)| *ix < at);
         n.checked_sub(1).map(|n| &writes[n].1)
     }
 
     /// The key's value at the end of the run; `None` when the run never wrote it.
-    pub fn last(&self, key: &Key) -> Option<&Val> {
+    pub fn last(&self, key: &Id) -> Option<&Val> {
         self.before(key, self.effects.len())
     }
 
     /// Every key the run wrote.
-    pub fn keys(&self) -> impl Iterator<Item = &Key> {
+    pub fn keys(&self) -> impl Iterator<Item = &Id> {
         self.history.keys()
     }
 
@@ -318,7 +350,7 @@ const VARIANTS: usize = 16;
 /// Slot-wide knowledge: parent values seen in reads, every effect seen per tx, and deployed code.
 #[derive(Default)]
 pub struct Known {
-    parents: FxHashMap<Key, Val>,
+    parents: FxHashMap<Id, Val>,
     effects: FxHashMap<B256, Vec<Arc<Effect>>>,
     pub codes: Arc<FxHashMap<H256, Code>>,
 }
@@ -353,7 +385,7 @@ pub struct Exec {
     pub coinbase: Address,
     pub proposer: Address,
     /// The storage the slot's system calls wrote before any tx.
-    pub system: Arc<FxHashMap<Key, Val>>,
+    pub system: Arc<FxHashMap<Id, Val>>,
 }
 
 /// A run's state just before one tx: the innermost layer holding a key, else `prior`'s run at
@@ -363,16 +395,16 @@ pub struct View {
     pub prior: Arc<Prior>,
     pub at: usize,
     /// Values over `prior`'s, innermost last; `None` is back to the parent's.
-    pub layers: Vec<Arc<FxHashMap<Key, Option<Val>>>>,
+    pub layers: Vec<Arc<FxHashMap<Id, Option<Val>>>>,
     pub coinbase: Coinbase,
     pub codes: Arc<FxHashMap<H256, Code>>,
-    pub system: Arc<FxHashMap<Key, Val>>,
+    pub system: Arc<FxHashMap<Id, Val>>,
     pub store: Arc<dyn Database>,
 }
 
 impl View {
     /// The key's value above the parent; `None` when the run holds the parent's.
-    fn val(&self, key: &Key) -> Option<Val> {
+    fn val(&self, key: &Id) -> Option<Val> {
         for layer in self.layers.iter().rev() {
             if let Some(val) = layer.get(key) {
                 return val.clone();
@@ -383,21 +415,34 @@ impl View {
 
     /// The key's value, through to the parent state.
     pub fn value(&self, key: &Key) -> Option<Val> {
-        self.val(key).or_else(|| self.system.get(key).cloned()).or_else(|| match key {
+        match self.prior.keys.get(key) {
+            Some(id) => self.value_of(id),
+            None => self.stored(key),
+        }
+    }
+
+    fn value_of(&self, id: Id) -> Option<Val> {
+        self.val(&id)
+            .or_else(|| self.system.get(&id).cloned())
+            .or_else(|| self.prior.keys.key(id).and_then(|key| self.stored(&key)))
+    }
+
+    fn stored(&self, key: &Key) -> Option<Val> {
+        match key {
             Key::Account(address) => {
                 self.store.get_account_state(*address).ok().map(|state| Val::of_state(&state))
             }
             Key::Slot(address, slot) => {
                 self.store.get_storage_value(*address, *slot).ok().map(Val::Slot)
             }
-        })
+        }
     }
 
     /// Whether `effect` still holds here: its reads are the values here and its use of the
     /// coinbase fits.
     pub fn holds(&self, effect: &Effect) -> bool {
-        self.coinbase.admits(effect) &&
-            effect.reads.iter().all(|(key, val)| self.value(key).as_ref() == Some(val))
+        self.coinbase.admits(effect, &self.prior.keys) &&
+            effect.reads.iter().all(|(id, val)| self.value_of(*id).as_ref() == Some(val))
     }
 }
 
@@ -409,7 +454,7 @@ impl Database for View {
             state.nonce = self.coinbase.nonce;
             return Ok(state);
         }
-        match self.val(&Key::Account(address)) {
+        match self.prior.keys.get(&Key::Account(address)).and_then(|id| self.val(&id)) {
             Some(Val::Account { balance, nonce, code_hash, exists, has_storage }) => {
                 if !exists {
                     return Ok(AccountState::default());
@@ -426,8 +471,8 @@ impl Database for View {
     }
 
     fn get_storage_value(&self, address: Address, key: H256) -> Result<U256, DatabaseError> {
-        let slot = Key::Slot(address, key);
-        match self.val(&slot).or_else(|| self.system.get(&slot).cloned()) {
+        let id = self.prior.keys.get(&Key::Slot(address, key));
+        match id.and_then(|id| self.val(&id).or_else(|| self.system.get(&id).cloned())) {
             Some(Val::Slot(v)) => Ok(v),
             _ => self.store.get_storage_value(address, key),
         }
@@ -464,6 +509,7 @@ impl Database for View {
 pub fn execute(view: View, tx: &DecodedTx, header: &BlockHeader) -> Option<Effect> {
     let coinbase = view.coinbase.address;
     let before = view.coinbase.balance;
+    let keys = view.prior.keys.clone();
     let mut vm = Evm {
         db: GeneralizedDatabase::new(Arc::new(view)),
         vm_type: VMType::L1,
@@ -488,6 +534,7 @@ pub fn execute(view: View, tx: &DecodedTx, header: &BlockHeader) -> Option<Effec
             gas_spent: ran.gas_spent,
             logs: receipt.logs,
         },
+        &keys,
     )
 }
 
@@ -495,7 +542,7 @@ pub fn execute(view: View, tx: &DecodedTx, header: &BlockHeader) -> Option<Effec
 #[derive(Default)]
 pub struct Report {
     /// Keys whose final value differs from the prior's final value; `None` is the parent's.
-    pub dirty: FxHashMap<Key, Option<Val>>,
+    pub dirty: FxHashMap<Id, Option<Val>>,
     /// The effect applied per tx, in base order.
     pub applied: Vec<Arc<Effect>>,
     /// The effects of the txs B ran itself.
@@ -524,29 +571,32 @@ pub fn diff(
     let aligned = prior.align(&exec.txs);
     // A parent value no earlier tx read comes from the parent store, through the slot's system
     // calls, and is kept for the rest of this base.
-    let fetched: RefCell<FxHashMap<Key, Option<Val>>> = RefCell::new(FxHashMap::default());
-    let parent = |key: &Key| -> Option<Val> {
+    let keys = &prior.keys;
+    let fetched: RefCell<FxHashMap<Id, Option<Val>>> = RefCell::new(FxHashMap::default());
+    let parent = |key: &Id| -> Option<Val> {
         if let Some(v) = known.parents.get(key).or_else(|| exec.system.get(key)) {
             return Some(v.clone());
         }
         if let Some(v) = fetched.borrow().get(key) {
             return v.clone();
         }
-        let v = match key {
-            Key::Account(address) => {
-                exec.store.get_account_state(*address).ok().map(|state| Val::of_state(&state))
+        let v = match keys.key(*key) {
+            Some(Key::Account(address)) => {
+                exec.store.get_account_state(address).ok().map(|state| Val::of_state(&state))
             }
-            Key::Slot(address, slot) => {
-                exec.store.get_storage_value(*address, *slot).ok().map(Val::Slot)
+            Some(Key::Slot(address, slot)) => {
+                exec.store.get_storage_value(address, slot).ok().map(Val::Slot)
             }
+            None => None,
         };
         fetched.borrow_mut().insert(*key, v.clone());
         v
     };
     let resolve =
-        |key: &Key, v: Option<&Val>| -> Option<Val> { v.cloned().or_else(|| parent(key)) };
+        |key: &Id, v: Option<&Val>| -> Option<Val> { v.cloned().or_else(|| parent(key)) };
     // `dirty[k]`: k's value in the new run where it differs from the old run at `optr`.
-    let mut dirty: FxHashMap<Key, Option<Val>> = FxHashMap::default();
+    let mut dirty: FxHashMap<Id, Option<Val>> = FxHashMap::default();
+    let proposer = keys.id(Key::Account(exec.proposer));
     let mut optr = 0usize;
     let parent_coinbase = exec.store.get_account_state(exec.coinbase).ok()?;
     let mut coinbase = Coinbase {
@@ -571,22 +621,22 @@ pub fn diff(
             }
             optr = p;
         }
-        let now = |dirty: &FxHashMap<Key, Option<Val>>, key: &Key| -> Option<Val> {
+        let now = |dirty: &FxHashMap<Id, Option<Val>>, key: &Id| -> Option<Val> {
             match dirty.get(key) {
                 Some(v) => v.clone(),
                 None => resolve(key, prior.before(key, optr)),
             }
         };
         if i + 1 == exec.txs.len() {
-            report.proposer_before = now(&dirty, &Key::Account(exec.proposer));
+            report.proposer_before = now(&dirty, &proposer);
         }
-        let holds = |e: &Effect, dirty: &FxHashMap<Key, Option<Val>>| {
-            coinbase.admits(e) &&
+        let holds = |e: &Effect, dirty: &FxHashMap<Id, Option<Val>>| {
+            coinbase.admits(e, keys) &&
                 e.reads.iter().all(|(key, val)| now(dirty, key).as_ref() == Some(val))
         };
         // The aligned old effect holds unless a read is dirty, so check only those.
         let same_old = aligned[i].is_some_and(|p| {
-            coinbase.admits(&old[p]) &&
+            coinbase.admits(&old[p], keys) &&
                 old[p]
                     .reads
                     .iter()
@@ -644,12 +694,12 @@ pub fn diff(
             continue;
         }
         // Keys either run wrote may now differ between the two runs.
-        let mut keys: Vec<Key> = applied.writes.iter().map(|(k, _)| *k).collect();
+        let mut changed: Vec<Id> = applied.writes.iter().map(|(k, _)| *k).collect();
         let advance = aligned[i].is_some();
         if advance {
-            keys.extend(old[optr].writes.iter().map(|(k, _)| *k));
+            changed.extend(old[optr].writes.iter().map(|(k, _)| *k));
         }
-        let values: Vec<(Key, Option<Val>)> = keys
+        let values: Vec<(Id, Option<Val>)> = changed
             .iter()
             .map(|key| {
                 let v = match applied.writes.iter().find(|(k, _)| k == key) {
