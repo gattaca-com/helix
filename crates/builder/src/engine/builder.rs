@@ -779,12 +779,14 @@ impl Builder {
             Some((at, applied)) if at == prior.base => applied,
             _ => Vec::new(),
         };
+        let dirty: Vec<Id>;
         let (next, codes) = {
             let mut known = job.shared.state.known.write().expect("known poisoned");
             for effect in report.ran.iter().chain(&report.warmed) {
                 known.add(effect.clone());
             }
             let keys = job.shared.state.keys.clone();
+            dirty = report.dirty;
             let next = Arc::new(Prior::new(base.block_hash, report.applied, &mut known, keys));
             (next, known.codes.clone())
         };
@@ -825,12 +827,7 @@ impl Builder {
         };
         let dirty = match carried.is_empty() {
             true => FxHashSet::default(),
-            false => prior
-                .keys()
-                .chain(next.keys())
-                .filter(|key| prior.last(key) != next.last(key))
-                .copied()
-                .collect(),
+            false => dirty.into_iter().collect(),
         };
         let spent = next.effects.iter().map(|e| e.outcome.gas_spent).sum();
         self.streams.insert(pubkey, Stream { prior: next.clone(), trie: None });

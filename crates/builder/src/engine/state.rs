@@ -278,32 +278,44 @@ pub struct Prior {
     pub effects: Vec<Arc<Effect>>,
     position: FxHashMap<B256, usize>,
     /// Every write per key in tx order.
-    history: FxHashMap<Id, Vec<(usize, Val)>>,
+    history: FxHashMap<Id, (u32, u32)>,
+    writes: Vec<(Id, u32, u32)>,
     pub keys: Arc<Keys>,
 }
 
 impl Prior {
     pub fn new(base: B256, effects: Vec<Arc<Effect>>, known: &mut Known, keys: Arc<Keys>) -> Self {
-        let mut history: FxHashMap<Id, Vec<(usize, Val)>> = FxHashMap::default();
+        let mut writes = Vec::with_capacity(effects.iter().map(|e| e.writes.len()).sum());
+        for (ix, effect) in effects.iter().enumerate() {
+            for (w, (key, _)) in effect.writes.iter().enumerate() {
+                writes.push((*key, ix as u32, w as u32));
+            }
+        }
+        writes.sort_by_key(|(key, _, _)| *key);
+        let mut history: FxHashMap<Id, (u32, u32)> =
+            FxHashMap::with_capacity_and_hasher(writes.len(), Default::default());
+        for (at, (key, _, _)) in writes.iter().enumerate() {
+            history.entry(*key).or_insert((at as u32, 0)).1 += 1;
+        }
         for (ix, effect) in effects.iter().enumerate() {
             for (key, val) in &effect.reads {
-                if !history.contains_key(key) {
+                let first = history.get(key).map(|(start, _)| writes[*start as usize].1 as usize);
+                if first.is_none_or(|first| first >= ix) {
                     known.parents.entry(*key).or_insert_with(|| val.clone());
                 }
             }
-            for (key, val) in &effect.writes {
-                history.entry(*key).or_default().push((ix, val.clone()));
-            }
         }
         let position = effects.iter().enumerate().map(|(ix, e)| (e.hash, ix)).collect();
-        Prior { base, effects, position, history, keys }
+        Prior { base, effects, position, history, writes, keys }
     }
 
     /// The key's value in this run just before tx `at`; `None` when unwritten so far.
     fn before(&self, key: &Id, at: usize) -> Option<&Val> {
-        let writes = self.history.get(key)?;
-        let n = writes.partition_point(|(ix, _)| *ix < at);
-        n.checked_sub(1).map(|n| &writes[n].1)
+        let (start, len) = *self.history.get(key)?;
+        let writes = &self.writes[start as usize..(start + len) as usize];
+        let n = writes.partition_point(|(_, ix, _)| (*ix as usize) < at);
+        let (_, ix, w) = writes.get(n.checked_sub(1)?)?;
+        Some(&self.effects[*ix as usize].writes[*w as usize].1)
     }
 
     /// The key's value at the end of the run; `None` when the run never wrote it.
@@ -542,7 +554,7 @@ pub fn execute(view: View, tx: &DecodedTx, header: &BlockHeader) -> Option<Effec
 #[derive(Default)]
 pub struct Report {
     /// Keys whose final value differs from the prior's final value; `None` is the parent's.
-    pub dirty: FxHashMap<Id, Option<Val>>,
+    pub dirty: Vec<Id>,
     /// The effect applied per tx, in base order.
     pub applied: Vec<Arc<Effect>>,
     /// The effects of the txs B ran itself.
@@ -560,11 +572,78 @@ pub struct Report {
 /// holds on B's state at that point, otherwise B runs it. `None` when a tx cannot run.
 pub type Prewarmed = dashmap::DashMap<B256, Arc<Effect>, rustc_hash::FxBuildHasher>;
 
+#[derive(Default)]
+struct Dirty {
+    at: Vec<u32>,
+    vals: Vec<Option<Val>>,
+    stamp: u32,
+    ids: Vec<Id>,
+}
+
+impl Dirty {
+    fn begin(&mut self) {
+        self.stamp = self.stamp.wrapping_add(1);
+        if self.stamp == 0 {
+            self.at.fill(0);
+            self.stamp = 1;
+        }
+        self.ids.clear();
+    }
+
+    fn contains_key(&self, id: &Id) -> bool {
+        self.at.get(*id as usize) == Some(&self.stamp)
+    }
+
+    fn get(&self, id: &Id) -> Option<&Option<Val>> {
+        self.contains_key(id).then(|| &self.vals[*id as usize])
+    }
+
+    fn insert(&mut self, id: Id, val: Option<Val>) {
+        let ix = id as usize;
+        if ix >= self.at.len() {
+            self.at.resize(ix + 1, 0);
+            self.vals.resize(ix + 1, None);
+        }
+        if self.at[ix] != self.stamp {
+            self.at[ix] = self.stamp;
+            self.ids.push(id);
+        }
+        self.vals[ix] = val;
+    }
+
+    fn remove(&mut self, id: &Id) {
+        if let Some(at) = self.at.get_mut(*id as usize) {
+            *at = 0;
+        }
+    }
+
+    fn present(&self) -> impl Iterator<Item = Id> + '_ {
+        self.ids.iter().copied().filter(|id| self.contains_key(id))
+    }
+}
+
+thread_local! {
+    static DIRTY: RefCell<Dirty> = RefCell::default();
+}
+
 pub fn diff(
     prior: &Arc<Prior>,
     known: &Known,
     prewarmed: &Prewarmed,
     exec: &Exec,
+) -> Option<Report> {
+    DIRTY.with_borrow_mut(|dirty| {
+        dirty.begin();
+        diff_with(prior, known, prewarmed, exec, dirty)
+    })
+}
+
+fn diff_with(
+    prior: &Arc<Prior>,
+    known: &Known,
+    prewarmed: &Prewarmed,
+    exec: &Exec,
+    dirty: &mut Dirty,
 ) -> Option<Report> {
     let start = Instant::now();
     let old = &prior.effects;
@@ -595,7 +674,6 @@ pub fn diff(
     let resolve =
         |key: &Id, v: Option<&Val>| -> Option<Val> { v.cloned().or_else(|| parent(key)) };
     // `dirty[k]`: k's value in the new run where it differs from the old run at `optr`.
-    let mut dirty: FxHashMap<Id, Option<Val>> = FxHashMap::default();
     let proposer = keys.id(Key::Account(exec.proposer));
     let mut optr = 0usize;
     let parent_coinbase = exec.store.get_account_state(exec.coinbase).ok()?;
@@ -621,16 +699,16 @@ pub fn diff(
             }
             optr = p;
         }
-        let now = |dirty: &FxHashMap<Id, Option<Val>>, key: &Id| -> Option<Val> {
+        let now = |dirty: &Dirty, key: &Id| -> Option<Val> {
             match dirty.get(key) {
                 Some(v) => v.clone(),
                 None => resolve(key, prior.before(key, optr)),
             }
         };
         if i + 1 == exec.txs.len() {
-            report.proposer_before = now(&dirty, &proposer);
+            report.proposer_before = now(dirty, &proposer);
         }
-        let holds = |e: &Effect, dirty: &FxHashMap<Id, Option<Val>>| {
+        let holds = |e: &Effect, dirty: &Dirty| {
             coinbase.admits(e, keys) &&
                 e.reads.iter().all(|(key, val)| now(dirty, key).as_ref() == Some(val))
         };
@@ -653,7 +731,7 @@ pub fn diff(
                 .into_iter()
                 .chain(known.variants(&tx.hash))
                 .chain(warm.as_ref())
-                .find(|e| holds(e, &dirty))
+                .find(|e| holds(e, dirty))
         };
         let applied = match chosen {
             Some(effect) if warm.as_ref().is_some_and(|w| Arc::ptr_eq(w, effect)) => {
@@ -666,7 +744,9 @@ pub fn diff(
                 let view = View {
                     prior: prior.clone(),
                     at: optr,
-                    layers: vec![Arc::new(dirty.clone())],
+                    layers: vec![Arc::new(
+                        dirty.present().map(|id| (id, dirty.vals[id as usize].clone())).collect(),
+                    )],
                     coinbase,
                     codes: codes.clone(),
                     system: exec.system.clone(),
@@ -704,7 +784,7 @@ pub fn diff(
             .map(|key| {
                 let v = match applied.writes.iter().find(|(k, _)| k == key) {
                     Some((_, v)) => Some(v.clone()),
-                    None => now(&dirty, key),
+                    None => now(dirty, key),
                 };
                 (*key, v)
             })
@@ -732,7 +812,7 @@ pub fn diff(
     }
     report.micros = start.elapsed().as_micros() as u64;
     report.coinbase = Some(coinbase);
-    report.dirty = dirty;
+    report.dirty = dirty.present().collect();
     Some(report)
 }
 
