@@ -125,6 +125,34 @@ pub struct Mpt {
     shared: Shared,
 }
 
+const ARENA: [(usize, usize); 2] = [(32, 1 << 14), (4096, 64)];
+
+static ARENAS: [std::sync::Mutex<Vec<Vec<Slot>>>; 2] =
+    [const { std::sync::Mutex::new(Vec::new()) }; 2];
+
+pub fn preallocate() {
+    let filler = Slot { node: Node::Branch { children: [Child::Empty; 16] }, cached: None };
+    for (pool, (count, capacity)) in ARENAS.iter().zip(ARENA) {
+        let Ok(mut pool) = pool.lock() else { continue };
+        pool.extend((0..count).map(|_| {
+            let mut slots = vec![filler; capacity];
+            slots.clear();
+            slots
+        }));
+    }
+}
+
+impl Drop for Mpt {
+    fn drop(&mut self) {
+        let mut slots = std::mem::take(&mut self.slots);
+        slots.clear();
+        let class = usize::from(slots.capacity() < ARENA[0].1);
+        if let Ok(mut pool) = ARENAS[class].lock() {
+            pool.push(slots);
+        }
+    }
+}
+
 thread_local! {
     pub static STORE_READS: std::cell::Cell<(u64, u64)> = const { std::cell::Cell::new((0, 0)) };
 }
@@ -146,8 +174,10 @@ impl Mpt {
     fn open(db: Box<dyn TrieDB>, root: H256, account: Option<H256>, shared: Shared) -> Self {
         let root =
             if root == *EMPTY_TRIE_HASH { Child::Empty } else { Child::Unloaded(Ref::Hash(root)) };
-        let capacity = if account.is_some() { 16 } else { 256 };
-        Mpt { slots: Vec::with_capacity(capacity), root, db, shared }
+        let class = usize::from(account.is_some());
+        let slots = ARENAS[class].lock().ok().and_then(|mut pool| pool.pop());
+        let slots = slots.unwrap_or_else(|| Vec::with_capacity(ARENA[class].1));
+        Mpt { slots, root, db, shared }
     }
 
     fn push(&mut self, node: Node, cached: Option<Ref>) -> Id {

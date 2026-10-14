@@ -137,6 +137,7 @@ impl MergeEngine {
                 {
                     warn!(core, "failed to pin merge engine thread");
                 }
+                trie::preallocate();
                 let config = Arc::new(config);
                 let streams = (config.max_builder_streams > 0).then(|| {
                     MergeStreams::new(
