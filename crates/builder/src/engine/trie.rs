@@ -651,6 +651,7 @@ fn decode(encoded: &[u8]) -> Result<Node, TrieError> {
 }
 
 const PARALLEL_TRIES: usize = 64;
+const PARALLEL_KEYS: usize = 512;
 
 static TRIE_POOL: std::sync::LazyLock<rayon::ThreadPool> = std::sync::LazyLock::new(|| {
     rayon::ThreadPoolBuilder::new()
@@ -710,6 +711,8 @@ impl State {
     pub fn apply(&mut self, updates: &[AccountUpdate]) -> Result<H256, TrieError> {
         let mut accounts: Vec<(H256, &AccountUpdate, AccountState)> =
             Vec::with_capacity(updates.len());
+        let mut touched: FxHashMap<H256, &AccountUpdate> = FxHashMap::default();
+        let mut keys = 0;
         for update in updates {
             let hashed = H256(keccak_hash(update.address.as_bytes()));
             if update.removed {
@@ -727,16 +730,30 @@ impl State {
                 self.storage.remove(&hashed);
             }
             if !update.added_storage.is_empty() {
-                let trie = match self.storage.entry(hashed) {
-                    std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
-                    std::collections::hash_map::Entry::Vacant(entry) => entry.insert(Mpt::open(
+                if let std::collections::hash_map::Entry::Vacant(entry) = self.storage.entry(hashed)
+                {
+                    entry.insert(Mpt::open(
                         (self.open_storage)(hashed)?,
                         account.storage_root,
                         Some(hashed),
                         self.shared.clone(),
-                    )),
-                };
-                for (slot, value) in &update.added_storage {
+                    ));
+                }
+                keys += update.added_storage.len();
+                touched.insert(hashed, update);
+            }
+            accounts.push((hashed, update, account));
+        }
+        let mut storage: Vec<(H256, &mut Mpt)> = self
+            .storage
+            .iter_mut()
+            .filter(|(hashed, _)| touched.contains_key(*hashed))
+            .map(|(h, t)| (*h, t))
+            .collect();
+        let work = |group: &mut [(H256, &mut Mpt)]| -> Result<(u64, u64), TrieError> {
+            let before = STORE_READS.with(|reads| reads.get());
+            for (hashed, trie) in group.iter_mut() {
+                for (slot, value) in &touched[hashed].added_storage {
                     let key = keccak_hash(slot.as_bytes());
                     let value = match *value != U256::zero() {
                         true => Some(Value::of(&value.encode_to_vec())?),
@@ -745,30 +762,25 @@ impl State {
                     trie.set(&key, value)?;
                 }
             }
-            accounts.push((hashed, update, account));
-        }
-        let touched: rustc_hash::FxHashSet<H256> = updates
-            .iter()
-            .filter(|u| !u.removed && !u.added_storage.is_empty())
-            .map(|u| H256(keccak_hash(u.address.as_bytes())))
-            .collect();
-        let mut storage: Vec<(H256, &mut Mpt)> = self
-            .storage
-            .iter_mut()
-            .filter(|(hashed, _)| touched.contains(*hashed))
-            .map(|(h, t)| (*h, t))
-            .collect();
-        let mut tries: Vec<&mut Mpt> = storage.iter_mut().map(|(_, t)| &mut **t).collect();
-        // A large delta touches many storage tries: hash them in groups across cores, each group
-        // still batched by depth.
-        if tries.len() >= PARALLEL_TRIES {
-            let group = tries.len().div_ceil(8);
-            TRIE_POOL.install(|| {
+            let mut tries: Vec<&mut Mpt> = group.iter_mut().map(|(_, t)| &mut **t).collect();
+            hash_tries(&mut tries);
+            let after = STORE_READS.with(|reads| reads.get());
+            Ok((after.0 - before.0, after.1 - before.1))
+        };
+        if keys >= PARALLEL_KEYS || storage.len() >= PARALLEL_TRIES {
+            let group = storage.len().div_ceil(16).max(1);
+            let (count, nanos) = TRIE_POOL.install(|| {
                 use rayon::prelude::*;
-                tries.par_chunks_mut(group).for_each(hash_tries);
+                storage.par_chunks_mut(group).map(work).try_reduce(|| (0, 0), |a, b| {
+                    Ok((a.0 + b.0, a.1 + b.1))
+                })
+            })?;
+            STORE_READS.with(|reads| {
+                let (c, n) = reads.get();
+                reads.set((c + count, n + nanos));
             });
         } else {
-            hash_tries(&mut tries);
+            work(&mut storage)?;
         }
         let roots: FxHashMap<H256, H256> =
             storage.iter().map(|(h, t)| (*h, t.root_ref())).collect();
