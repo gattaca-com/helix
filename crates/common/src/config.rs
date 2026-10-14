@@ -122,7 +122,6 @@ pub struct ClickhouseConfig {
 }
 
 impl RelayConfig {
-
     pub fn bind_addrs(&self, port: u16) -> Vec<SocketAddr> {
         assert!(!self.bind_ips.is_empty(), "bind_ips is empty");
         assert!(
