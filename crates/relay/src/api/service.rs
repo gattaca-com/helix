@@ -190,16 +190,24 @@ pub async fn run_api_service<A: Api>(
         terminating,
     );
 
-    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", config.api_port))
-        .await
-        .unwrap()
-        .tap_io(|tcp_stream| {
-            if let Err(e) = tcp_stream.set_nodelay(true) {
-                error!("failed to set TCP_NODELAY on incoming connection: {e}");
-            }
-        });
-    match axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>()).await {
-        Ok(_) => info!("Server exited successfully"),
-        Err(e) => error!("Server exited with error: {e}"),
+    let mut servers = tokio::task::JoinSet::new();
+    for addr in config.bind_addrs(config.api_port) {
+        let listener = tokio::net::TcpListener::bind(addr)
+            .await
+            .unwrap_or_else(|e| panic!("failed to bind the API on {addr}: {e}"))
+            .tap_io(|tcp_stream| {
+                if let Err(e) = tcp_stream.set_nodelay(true) {
+                    error!("failed to set TCP_NODELAY on incoming connection: {e}");
+                }
+            });
+        let service = router.clone().into_make_service_with_connect_info::<SocketAddr>();
+        servers.spawn(async move { (addr, axum::serve(listener, service).await) });
+    }
+    while let Some(res) = servers.join_next().await {
+        match res {
+            Ok((addr, Ok(()))) => info!(%addr, "Server exited successfully"),
+            Ok((addr, Err(e))) => error!(%addr, "Server exited with error: {e}"),
+            Err(e) => error!("Server task failed: {e}"),
+        }
     }
 }

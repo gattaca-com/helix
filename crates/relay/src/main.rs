@@ -1,5 +1,4 @@
 use std::{
-    net::{Ipv4Addr, SocketAddr, SocketAddrV4},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -296,10 +295,9 @@ async fn run(
                 attach_tile(decoder_tile, spine, config.cores.tile(core));
             }
 
-            let sock_addr =
-                SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, config.tcp_port));
+            let sock_addrs = config.bind_addrs(config.tcp_port);
             let block_submission_tcp_listener = BidSubmissionTcpListener::new(
-                sock_addr,
+                &sock_addrs,
                 local_cache.api_key_cache.clone(),
                 config.tcp_max_connections,
                 spine.spine.dcache_ptr_for::<NewTcpBidSubmission>(),
@@ -320,7 +318,7 @@ async fn run(
             if config.udp_top_bid_enabled {
                 attach_tile(
                     UdpTopBidTile::new(
-                        sock_addr,
+                        &sock_addrs,
                         local_cache.api_key_cache.clone(),
                         config.udp_top_bid_max_connections_per_key,
                     ),
