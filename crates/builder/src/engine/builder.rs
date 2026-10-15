@@ -25,9 +25,7 @@ use ethrex_levm::{
     db::{CachingDatabase, Database, gen_db::GeneralizedDatabase},
     vm::VMType,
 };
-use ethrex_rlp::encode::RLPEncode;
 use ethrex_storage::Store;
-use ethrex_trie::Trie;
 use ethrex_vm::{DynVmDatabase, Evm};
 use helix_tcp_types::merging::{
     builder_to_relay::{BuilderInclusion, MergeTraceV1, MergedBlockV1, UnmergedReason, UnmergedTx},
@@ -41,6 +39,7 @@ use crate::{
         EngineOutput,
         convert::{au256, eaddr, ewithdrawal, h256, payload_v3, requests_to_v4},
         error::{MergeError, SimulationError},
+        list_root::ListRoot,
         payment::{self, DistributionConfig, PaymentInputs},
         record::SlotRecorder,
         state::{
@@ -483,6 +482,12 @@ impl Builder {
                         let (tx, rx) = crossbeam_channel::bounded(1);
                         let (store, slot) = (store.clone(), shared.clone());
                         let spawned = Instant::now();
+                        let (leaves_tx, leaves_rx) = crossbeam_channel::bounded(1);
+                        let (txs, prior, deposit) =
+                            (trie.txs.clone(), trie.prior.clone(), trie.deposit_contract);
+                        WORKERS.spawn_job(move || {
+                            let _unused = leaves_tx.send(base_leaves(&txs, &prior, deposit));
+                        });
                         WORKERS.spawn_job(move || {
                             let parent = slot.state.parent.get().and_then(|p| p.as_ref().ok());
                             let trie = match parent {
@@ -493,11 +498,15 @@ impl Builder {
                         });
                         merge.extend(&orders, &excluded, &shared.state.known);
                         let wait = Instant::now();
-                        let (trie, leaves, run) = rx
+                        let (trie, run) = rx
                             .recv()
                             .map_err(|_| MergeError::Internal("trie job lost".into()))??;
+                        let (leaves, lists) = leaves_rx
+                            .recv()
+                            .map_err(|_| MergeError::Internal("leaves job lost".into()))?;
                         merge.trie = Ok(trie);
                         merge.leaves = leaves;
+                        merge.lists = lists;
                         merge.trie_run = Some(run);
                         merge.trie_wait_us = wait.elapsed().as_micros() as u64;
                     }
@@ -587,7 +596,6 @@ impl Builder {
                         trie_reads = merge.trie_run.map_or(0, |run| run.reads),
                         trie_read_us = merge.trie_run.map_or(0, |run| run.read_us),
                         trie_queue_us = merge.trie_run.map_or(0, |run| run.queue_us),
-                        trie_leaves_us = merge.trie_run.map_or(0, |run| run.leaves_us),
                         trie_updates_us = merge.trie_run.map_or(0, |run| run.updates_us),
                         trie_apply_us = merge.trie_run.map_or(0, |run| run.apply_us),
                         trie_keys = merge.trie_run.map_or(0, |run| run.keys),
@@ -837,6 +845,7 @@ impl Builder {
             max_blobs,
             blobs,
             leaves: Vec::new(),
+            lists: Default::default(),
             appended: Vec::new(),
             spent,
             deposit_contract: chain_config.deposit_contract_address,
@@ -914,7 +923,6 @@ struct TrieRun {
     reads: u64,
     read_us: u64,
     queue_us: u64,
-    leaves_us: u64,
     updates_us: u64,
     apply_us: u64,
     keys: usize,
@@ -931,27 +939,37 @@ struct TrieJob {
     deposit_contract: ethrex_common::Address,
 }
 
+fn base_leaves(
+    txs: &[Arc<crate::engine::types::DecodedTx>],
+    prior: &Prior,
+    deposit_contract: ethrex_common::Address,
+) -> (Vec<Leaf>, [ListRoot; 2]) {
+    let mut cumulative = 0;
+    let leaves: Vec<Leaf> = txs
+        .iter()
+        .zip(&prior.effects)
+        .map(|(tx, effect)| {
+            cumulative += effect.outcome.gas_spent;
+            Leaf::of(tx, effect, cumulative, deposit_contract)
+        })
+        .collect();
+    let n = leaves.len();
+    let mut lists: [ListRoot; 2] = Default::default();
+    lists[0].root(n, n, |i| &leaves[i].tx[..]);
+    lists[1].root(n, n, |i| &leaves[i].receipt[..]);
+    (leaves, lists)
+}
+
 impl TrieJob {
     fn run(
         self,
         store: &Store,
         parent: &Parent,
         spawned: Instant,
-    ) -> Result<(Tree, Vec<Leaf>, TrieRun), MergeError> {
+    ) -> Result<(Tree, TrieRun), MergeError> {
         let start = Instant::now();
         let queue_us = start.duration_since(spawned).as_micros() as u64;
         crate::engine::trie::STORE_READS.with(|reads| reads.set((0, 0)));
-        let mut cumulative = 0;
-        let leaves = self
-            .txs
-            .iter()
-            .zip(&self.prior.effects)
-            .map(|(tx, effect)| {
-                cumulative += effect.outcome.gas_spent;
-                Leaf::of(tx, effect, cumulative, self.deposit_contract)
-            })
-            .collect();
-        let leaves_us = start.elapsed().as_micros() as u64;
         let had_layer = self.layer.is_some();
         let mut keys = 0;
         let (mut updates_us, mut apply_us) = (0, 0);
@@ -996,13 +1014,12 @@ impl TrieJob {
             ),
         };
         let (reads, read_ns) = crate::engine::trie::STORE_READS.with(|reads| reads.get());
-        Ok((trie, leaves, TrieRun {
+        Ok((trie, TrieRun {
             kind,
             us: start.elapsed().as_micros() as u64,
             reads,
             read_us: read_ns / 1000,
             queue_us,
-            leaves_us,
             updates_us,
             apply_us,
             keys,
@@ -1203,6 +1220,7 @@ struct Merge {
     blobs: u64,
     /// The base's tx and receipt entries, then each appended tx's.
     leaves: Vec<Leaf>,
+    lists: [ListRoot; 2],
     appended: Vec<Leaf>,
     /// Receipt gas through the last appended tx.
     spent: u64,
@@ -1590,15 +1608,9 @@ impl Merge {
         let Ok((trie, _)) = &mut self.trie else { return Ok(None) };
         let trie = Mutex::new(trie);
         let (state, txs, receipts) = (Mutex::new(None), Mutex::new(None), Mutex::new(None));
-        let root = |bytes: fn(&Leaf) -> &[u8]| {
-            Trie::compute_hash_from_unsorted_iter(
-                leaves
-                    .iter()
-                    .enumerate()
-                    .map(|(ix, leaf)| (ix.encode_to_vec(), bytes(leaf).to_vec())),
-                &NativeCrypto,
-            )
-        };
+        let (base, n) = (self.leaves.len(), leaves.len());
+        let [tx_list, receipt_list] = &mut self.lists;
+        let (tx_list, receipt_list) = (Mutex::new(tx_list), Mutex::new(receipt_list));
         WORKERS.run(3, &|ix| match ix {
             0 => {
                 if let (Ok(mut trie), Ok(mut out)) = (trie.lock(), state.lock()) {
@@ -1610,13 +1622,13 @@ impl Merge {
                 }
             }
             1 => {
-                if let Ok(mut out) = txs.lock() {
-                    *out = Some(root(|leaf| &leaf.tx[..]));
+                if let (Ok(mut list), Ok(mut out)) = (tx_list.lock(), txs.lock()) {
+                    *out = Some(list.root(n, base, |i| &leaves[i].tx[..]));
                 }
             }
             _ => {
-                if let Ok(mut out) = receipts.lock() {
-                    *out = Some(root(|leaf| &leaf.receipt[..]));
+                if let (Ok(mut list), Ok(mut out)) = (receipt_list.lock(), receipts.lock()) {
+                    *out = Some(list.root(n, base, |i| &leaves[i].receipt[..]));
                 }
             }
         });
