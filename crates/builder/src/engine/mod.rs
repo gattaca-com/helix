@@ -524,11 +524,6 @@ impl MergeEngine {
             }
         }
 
-        shared.pool_version.fetch_add(1, Ordering::Release);
-        if let Some(streams) = self.streams.as_ref() {
-            streams.wake_all();
-        }
-
         debug!(
             slot = msg.slot,
             %block_hash,
@@ -559,6 +554,10 @@ impl MergeEngine {
         if prepared.allow_appending {
             builder::prefetch(shared.clone(), self.store.clone(), prepared.clone());
             self.offer_to_stream(&prepared);
+        }
+        shared.pool_version.fetch_add(1, Ordering::Release);
+        if let Some(streams) = self.streams.as_ref() {
+            streams.wake_all();
         }
 
         // Dropped orders still leave a usable base candidate, so keep the block.

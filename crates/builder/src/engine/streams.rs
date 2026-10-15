@@ -13,12 +13,13 @@
 
 use std::sync::{
     Arc, Condvar, Mutex,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
 /// Bound on how long a stream sleeps with nothing to do. Only sets how late the
 /// staleness backstop can fire; real work arrives by wake-up.
 pub(crate) const POLL: std::time::Duration = std::time::Duration::from_millis(5);
+const SPIN: std::time::Duration = std::time::Duration::from_millis(100);
 
 use alloy_primitives::Address;
 use crossbeam_channel::Sender;
@@ -57,11 +58,17 @@ pub(crate) struct BuilderStream {
     pending: Mutex<Option<StreamJob>>,
     signal: Condvar,
     stopped: AtomicBool,
+    changes: AtomicU64,
 }
 
 impl BuilderStream {
     pub(crate) fn new() -> Self {
-        Self { pending: Mutex::new(None), signal: Condvar::new(), stopped: AtomicBool::new(false) }
+        Self {
+            pending: Mutex::new(None),
+            signal: Condvar::new(),
+            stopped: AtomicBool::new(false),
+            changes: AtomicU64::new(0),
+        }
     }
 
     pub(crate) fn offer(&self, job: StreamJob) -> Offer {
@@ -69,7 +76,7 @@ impl BuilderStream {
         let outcome = if pending.is_some() { Offer::Superseded } else { Offer::Accepted };
         *pending = Some(job);
         drop(pending);
-        self.signal.notify_one();
+        self.wake();
         outcome
     }
 
@@ -83,7 +90,34 @@ impl BuilderStream {
         self.pending.lock().ok()?.take()
     }
 
+    fn wake(&self) {
+        self.changes.fetch_add(1, Ordering::Release);
+        self.signal.notify_all();
+    }
+
+    fn spin(&self, seen: u64, timeout: std::time::Duration) -> bool {
+        let start = std::time::Instant::now();
+        while start.elapsed() < timeout {
+            if self.changes.load(Ordering::Acquire) != seen {
+                return true;
+            }
+            std::hint::spin_loop();
+        }
+        false
+    }
+
     fn take_blocking(&self) -> Option<StreamJob> {
+        let start = std::time::Instant::now();
+        while let Some(left) = SPIN.checked_sub(start.elapsed()) {
+            let seen = self.changes.load(Ordering::Acquire);
+            if self.stopped.load(Ordering::Acquire) {
+                return None;
+            }
+            if let Some(job) = self.try_take() {
+                return Some(job);
+            }
+            self.spin(seen, left);
+        }
         let mut pending = self.pending.lock().ok()?;
         loop {
             if self.stopped.load(Ordering::Acquire) {
@@ -97,14 +131,17 @@ impl BuilderStream {
     }
 
     /// Blocks until a new base is offered, the pool changes, or `timeout`.
-    pub(crate) fn wait_for_change(&self, timeout: std::time::Duration) {
-        let Ok(pending) = self.pending.lock() else { return };
-        let _unused = self.signal.wait_timeout(pending, timeout);
+    pub(crate) fn wait_for_change(&self, seen: u64, timeout: std::time::Duration) {
+        self.spin(seen, timeout);
+    }
+
+    pub(crate) fn changes(&self) -> u64 {
+        self.changes.load(Ordering::Acquire)
     }
 
     fn stop(&self) {
         self.stopped.store(true, Ordering::Release);
-        self.signal.notify_all();
+        self.wake();
     }
 }
 
@@ -151,7 +188,7 @@ impl MergeStreams {
     pub fn wake_all(&self) {
         if let Ok(streams) = self.streams.lock() {
             for stream in streams.values() {
-                stream.signal.notify_all();
+                stream.wake();
             }
         }
     }

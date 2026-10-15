@@ -462,6 +462,7 @@ impl Builder {
         let mut seen_version = u64::MAX;
         let mut failed = None;
         loop {
+            let changes = stream.changes();
             let version = shared.pool_version.load(Ordering::Acquire);
             let pool_moved = version != seen_version;
             if pool_moved && first_emit_ns > 0 && stream.has_waiting() {
@@ -614,7 +615,7 @@ impl Builder {
                 break;
             }
             if !pool_moved {
-                stream.wait_for_change(POLL);
+                stream.wait_for_change(changes, POLL);
             }
         }
         info!(
