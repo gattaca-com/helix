@@ -671,8 +671,7 @@ fn diff_with(
         fetched.borrow_mut().insert(*key, v.clone());
         v
     };
-    let resolve =
-        |key: &Id, v: Option<&Val>| -> Option<Val> { v.cloned().or_else(|| parent(key)) };
+    let resolve = |key: &Id, v: Option<&Val>| -> Option<Val> { v.cloned().or_else(|| parent(key)) };
     // `dirty[k]`: k's value in the new run where it differs from the old run at `optr`.
     let proposer = keys.id(Key::Account(exec.proposer));
     let mut optr = 0usize;

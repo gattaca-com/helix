@@ -176,12 +176,9 @@ pub fn learn(
     for order in orders {
         let (shared, store, header) = (shared.clone(), store.clone(), header.clone());
         INGEST.spawn(move || {
-            let parent = shared
-                .state
-                .parent
-                .get_or_init(|| {
-                    Parent::open(&store, &header, shared.ctx.recorder.as_ref(), &shared.state.keys)
-                });
+            let parent = shared.state.parent.get_or_init(|| {
+                Parent::open(&store, &header, shared.ctx.recorder.as_ref(), &shared.state.keys)
+            });
             let Ok(parent) = parent.as_ref() else { return };
             let Ok(state) = parent.db.get_account_state(coinbase) else { return };
             let ran = {
@@ -225,12 +222,9 @@ pub fn learn(
 pub fn prefetch(shared: Arc<SharedSlot>, store: Store, base: Arc<PreparedBlock>) {
     INGEST.spawn(move || {
         let header = header(&base, shared.ctx.parent_beacon_block_root);
-        let parent = shared
-            .state
-            .parent
-            .get_or_init(|| {
-                    Parent::open(&store, &header, shared.ctx.recorder.as_ref(), &shared.state.keys)
-                });
+        let parent = shared.state.parent.get_or_init(|| {
+            Parent::open(&store, &header, shared.ctx.recorder.as_ref(), &shared.state.keys)
+        });
         let Ok(parent) = parent.as_ref() else { return };
         let mut keys: Vec<Key> = Vec::new();
         for tx in base.txs.iter() {
@@ -268,11 +262,11 @@ pub fn prefetch(shared: Arc<SharedSlot>, store: Store, base: Arc<PreparedBlock>)
                 PREWARM.spawn(move || {
                     let view = View {
                         prior: Arc::new(Prior::new(
-                        B256::ZERO,
-                        Vec::new(),
-                        &mut Known::default(),
-                        shared.state.keys.clone(),
-                    )),
+                            B256::ZERO,
+                            Vec::new(),
+                            &mut Known::default(),
+                            shared.state.keys.clone(),
+                        )),
                         at: 0,
                         layers: vec![Arc::new(FxHashMap::default())],
                         coinbase,
@@ -706,7 +700,9 @@ impl Builder {
             .shared
             .state
             .parent
-            .get_or_init(|| Parent::open(store, &header, ctx.recorder.as_ref(), &job.shared.state.keys))
+            .get_or_init(|| {
+                Parent::open(store, &header, ctx.recorder.as_ref(), &job.shared.state.keys)
+            })
             .as_ref()
             .map_err(|e| MergeError::Internal(e.clone()))?;
         if header.number != parent.header.number + 1 {
@@ -1030,9 +1026,8 @@ fn build(
 ) -> Result<State, String> {
     let mut trie = parent.trie(store)?;
     trie.apply(&parent.system).map_err(|e| e.to_string())?;
-    let finals = prior
-        .keys()
-        .filter_map(|id| Some((prior.keys.key(*id)?, prior.last(id).cloned())));
+    let finals =
+        prior.keys().filter_map(|id| Some((prior.keys.key(*id)?, prior.last(id).cloned())));
     let updates = updates(finals, &*parent.db, coinbase).map_err(|e| e.to_string())?;
     trie.apply(&updates).map_err(|e| e.to_string())?;
     Ok(trie)
@@ -1536,8 +1531,8 @@ impl Merge {
         let keys = &self.view.prior.keys;
         let orders = self.view.layers.first().into_iter().flat_map(|layer| layer.iter());
         let orders = orders.filter_map(|(id, val)| Some((keys.key(*id)?, val.clone())));
-        let orders = updates(orders, &*self.exec.store, self.view.coinbase)
-            .map_err(|e| internal(&e))?;
+        let orders =
+            updates(orders, &*self.exec.store, self.view.coinbase).map_err(|e| internal(&e))?;
         let target = writes(&merged(orders.into_iter().chain(emission)))?;
         self.evm_us = evm_start.elapsed().as_micros() as u64;
         let roots_start = Instant::now();

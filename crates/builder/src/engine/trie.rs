@@ -771,9 +771,10 @@ impl State {
             let group = storage.len().div_ceil(16).max(1);
             let (count, nanos) = TRIE_POOL.install(|| {
                 use rayon::prelude::*;
-                storage.par_chunks_mut(group).map(work).try_reduce(|| (0, 0), |a, b| {
-                    Ok((a.0 + b.0, a.1 + b.1))
-                })
+                storage
+                    .par_chunks_mut(group)
+                    .map(work)
+                    .try_reduce(|| (0, 0), |a, b| Ok((a.0 + b.0, a.1 + b.1)))
             })?;
             STORE_READS.with(|reads| {
                 let (c, n) = reads.get();
