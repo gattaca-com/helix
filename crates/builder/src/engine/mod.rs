@@ -15,6 +15,7 @@ pub mod streams;
 mod tests;
 pub mod trie;
 pub mod types;
+pub mod workers;
 
 use std::sync::{
     Arc, RwLock,
@@ -137,6 +138,7 @@ impl MergeEngine {
                     warn!(core, "failed to pin merge engine thread");
                 }
                 trie::preallocate();
+                let _unused = workers::CORES.set(config.order_worker_cores.clone());
                 let config = Arc::new(config);
                 let streams = (config.max_builder_streams > 0).then(|| {
                     MergeStreams::new(

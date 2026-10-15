@@ -149,6 +149,7 @@ fn main() -> eyre::Result<()> {
             ),
             warmup: true,
             replay_worker_cores: merging_config.cores.replay_workers.clone(),
+            order_worker_cores: merging_config.cores.order_workers.clone(),
             record: merging_config.record.clone(),
         };
         let _engine = MergeEngine::spawn(

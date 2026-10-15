@@ -69,6 +69,8 @@ pub struct CoreConfig {
     /// run unpinned, so a short list is a valid choice, not an error.
     #[serde(default)]
     pub replay_workers: Vec<usize>,
+    #[serde(default)]
+    pub order_workers: Vec<usize>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

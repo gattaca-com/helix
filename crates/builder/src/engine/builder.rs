@@ -3,7 +3,7 @@
 //! emission runs only the payment, withdrawals and requests before one patch of the trie.
 
 use std::{
-    sync::{Arc, OnceLock, RwLock, atomic::Ordering},
+    sync::{Arc, Mutex, OnceLock, RwLock, atomic::Ordering},
     time::Instant,
 };
 
@@ -49,21 +49,13 @@ use crate::{
         streams::{BuilderStream, POLL, StreamJob},
         trie::State,
         types::{EngineConfig, OriginRevenue, PreparedBlock, PreparedOrder, SharedSlot},
+        workers::WORKERS,
     },
     metrics,
     utils::utcnow_ns,
 };
 
 pub(crate) const EVM_STACK: usize = 32 << 20;
-
-static POOL: std::sync::LazyLock<rayon::ThreadPool> = std::sync::LazyLock::new(|| {
-    rayon::ThreadPoolBuilder::new()
-        .num_threads(8)
-        .stack_size(EVM_STACK)
-        .thread_name(|i| format!("b-order-{i}"))
-        .build()
-        .expect("b order pool")
-});
 
 /// The slot-wide part of B: what every builder's runs learn from, and the parent state.
 #[derive(Default)]
@@ -490,7 +482,7 @@ impl Builder {
                         let (tx, rx) = crossbeam_channel::bounded(1);
                         let (store, slot) = (store.clone(), shared.clone());
                         let spawned = Instant::now();
-                        POOL.spawn(move || {
+                        WORKERS.spawn_job(move || {
                             let parent = slot.state.parent.get().and_then(|p| p.as_ref().ok());
                             let trie = match parent {
                                 Some(parent) => trie.run(&store, parent, spawned),
@@ -1326,18 +1318,20 @@ impl Merge {
         let mut runs: Vec<(usize, Run)> = {
             let known = known.read().expect("known poisoned");
             let (view, header) = (&self.view, &self.exec.header);
-            POOL.install(|| {
-                use rayon::prelude::*;
-                candidates
-                    .par_iter()
-                    .enumerate()
-                    .map(|(ix, order)| {
-                        let mut view = view.clone();
-                        view.layers.push(Arc::new(FxHashMap::default()));
-                        (ix, run_order(order, view, header, space, &known, None, false))
-                    })
-                    .collect::<Vec<_>>()
-            })
+            let runs: Vec<Mutex<Option<Result<Run, SimulationError>>>> =
+                candidates.iter().map(|_| Mutex::new(None)).collect();
+            WORKERS.run(candidates.len(), &|ix| {
+                let mut view = view.clone();
+                view.layers.push(Arc::new(FxHashMap::default()));
+                let run = run_order(&candidates[ix], view, header, space, &known, None, false);
+                if let Ok(mut slot) = runs[ix].lock() {
+                    *slot = Some(run);
+                }
+            });
+            runs.into_iter()
+                .enumerate()
+                .filter_map(|(ix, run)| Some((ix, run.into_inner().ok().flatten()?)))
+                .collect::<Vec<_>>()
         }
         .into_iter()
         .filter_map(|(ix, run)| match run {
@@ -1593,28 +1587,44 @@ impl Merge {
         let changed: Vec<AccountUpdate> = changed.into_values().collect();
         self.state_keys = changed.iter().map(|u| 1 + u.added_storage.len()).sum();
         let Ok((trie, _)) = &mut self.trie else { return Ok(None) };
-        let (state_root, (transactions_root, (receipts_root, logs_bloom))) = POOL.join(
-            || {
-                let start = Instant::now();
-                crate::engine::trie::STORE_READS.with(|reads| reads.set((0, 0)));
-                let root = trie.apply(&changed);
-                let reads = crate::engine::trie::STORE_READS.with(|reads| reads.get());
-                (root, start.elapsed().as_micros() as u64, reads)
-            },
-            || {
-                let bloom = leaves.iter().fold(Bloom::zero(), |bloom, leaf| bloom | leaf.bloom);
-                let root = |bytes: fn(&Leaf) -> &[u8]| {
-                    Trie::compute_hash_from_unsorted_iter(
-                        leaves
-                            .iter()
-                            .enumerate()
-                            .map(|(ix, leaf)| (ix.encode_to_vec(), bytes(leaf).to_vec())),
-                        &NativeCrypto,
-                    )
-                };
-                POOL.join(|| root(|leaf| &leaf.tx[..]), || (root(|leaf| &leaf.receipt[..]), bloom))
-            },
-        );
+        let trie = Mutex::new(trie);
+        let (state, txs, receipts) = (Mutex::new(None), Mutex::new(None), Mutex::new(None));
+        let root = |bytes: fn(&Leaf) -> &[u8]| {
+            Trie::compute_hash_from_unsorted_iter(
+                leaves
+                    .iter()
+                    .enumerate()
+                    .map(|(ix, leaf)| (ix.encode_to_vec(), bytes(leaf).to_vec())),
+                &NativeCrypto,
+            )
+        };
+        WORKERS.run(3, &|ix| match ix {
+            0 => {
+                if let (Ok(mut trie), Ok(mut out)) = (trie.lock(), state.lock()) {
+                    let start = Instant::now();
+                    crate::engine::trie::STORE_READS.with(|reads| reads.set((0, 0)));
+                    let root = trie.apply(&changed);
+                    let reads = crate::engine::trie::STORE_READS.with(|reads| reads.get());
+                    *out = Some((root, start.elapsed().as_micros() as u64, reads));
+                }
+            }
+            1 => {
+                if let Ok(mut out) = txs.lock() {
+                    *out = Some(root(|leaf| &leaf.tx[..]));
+                }
+            }
+            _ => {
+                if let Ok(mut out) = receipts.lock() {
+                    *out = Some(root(|leaf| &leaf.receipt[..]));
+                }
+            }
+        });
+        let roots = (state.into_inner(), txs.into_inner(), receipts.into_inner());
+        let (Ok(Some(state_root)), Ok(Some(transactions_root)), Ok(Some(receipts_root))) = roots
+        else {
+            return Err(internal(&"roots missing"));
+        };
+        let logs_bloom = leaves.iter().fold(Bloom::zero(), |bloom, leaf| bloom | leaf.bloom);
         let (state_root, state_us, (state_reads, state_read_ns)) = state_root;
         self.state_reads = state_reads;
         self.state_read_us = state_read_ns / 1000;

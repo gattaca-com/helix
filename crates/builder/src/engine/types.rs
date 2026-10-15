@@ -34,6 +34,7 @@ pub struct EngineConfig {
     pub speculation_top_k: usize,
     /// One core per merge stream, in creation order; empty leaves them unpinned.
     pub replay_worker_cores: Vec<usize>,
+    pub order_worker_cores: Vec<usize>,
     pub record: Option<crate::engine::record::RecordConfig>,
 }
 

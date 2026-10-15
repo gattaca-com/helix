@@ -109,6 +109,7 @@ impl Fixture {
             max_builder_streams: 8,
             speculation_top_k: 0,
             replay_worker_cores: Vec::new(),
+            order_worker_cores: Vec::new(),
             record: None,
         }
     }
@@ -1401,6 +1402,7 @@ async fn replay_slot(
         max_builder_streams: 16,
         speculation_top_k: 4,
         replay_worker_cores: Vec::new(),
+        order_worker_cores: Vec::new(),
         record: record_into.map(|dir| crate::engine::record::RecordConfig {
             dir: dir.to_path_buf(),
             every_n_slots: 1,
