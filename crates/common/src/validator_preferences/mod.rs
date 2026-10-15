@@ -25,7 +25,7 @@ pub struct ValidatorPreferences {
     #[serde(default)]
     pub disable_optimistic: bool,
 
-    #[serde(skip)]
+    #[serde(default)]
     pub api_key: Option<Uuid>,
 }
 
