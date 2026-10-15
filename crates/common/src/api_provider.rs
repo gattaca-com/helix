@@ -70,7 +70,7 @@ pub trait ApiProvider: Send + Sync + Clone + 'static {
     }
 
     /// Payload delivered for a signature-verified blinded block: this ip is the slot's proposer.
-    fn on_proposer_confirmed(&self, _ip: IpAddr) {}
+    fn on_proposer_confirmed(&self, _ip: IpAddr, _api_key: Option<Uuid>) {}
 
     /// Held `get_header` dropped before sending: bounds this client's real deadline from above.
     fn on_request_abandoned(&self, _ip: IpAddr, _elapsed_ms: u64) {}

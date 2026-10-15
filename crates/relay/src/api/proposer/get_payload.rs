@@ -4,7 +4,8 @@ use alloy_primitives::{Address, B256};
 use axum::{Extension, http::HeaderMap, response::IntoResponse};
 use helix_common::{
     Filtering, GetPayloadTrace, RequestTimings,
-    api_provider::{ApiProvider, header_ip_addr},
+    api::HEADER_API_KEY,
+    api_provider::{ApiProvider, header_ip_addr, header_uuid},
     beacon::types::BroadcastValidation,
     chain_info::ChainInfo,
     decoder::{Encoding, HEADER_SSZ},
@@ -683,6 +684,6 @@ mod tests {
 /// A delivered payload proves the caller signed the blinded block, so its ip is the proposer's.
 fn confirm_proposer_ip<A: Api>(proposer_api: &ProposerApi<A>, headers: &HeaderMap) {
     if let Some(ip) = header_ip_addr(headers) {
-        proposer_api.api_provider.on_proposer_confirmed(ip);
+        proposer_api.api_provider.on_proposer_confirmed(ip, header_uuid(headers, HEADER_API_KEY));
     }
 }
