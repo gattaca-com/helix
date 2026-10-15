@@ -1,0 +1,107 @@
+/// @title Slot-Locked Ether Disperser
+///
+/// CALLDATA LAYOUT:
+/// Offset 0..3:    [uint32 timestamp] (4 bytes)
+/// Offset 4..23:   Recipient 1        (20 bytes)
+/// Offset 24..55:  Amount 1           (32 bytes)
+/// Offset 56..75:  Recipient 2        (20 bytes)
+/// Offset 76..107: Amount 2           (32 bytes)
+/// ... repeating [20-byte address][32-byte value] ...
+///
+/// Revert reasons are encoded as standard Solidity custom errors so callers
+/// can decode them with `cast` / an ABI instead of a bare revert(0,0):
+///   error AlreadyEntered();
+///   error TimestampMismatch();
+///   error TransferFailed(address recipient);
+///
+/// TransferFailed also covers the final refund-to-caller CALL, so a caller
+/// that can't accept plain ETH (e.g. a contract with no payable fallback)
+/// gets a clean revert instead of having its refund silently stranded here.
+
+#define constant LOCK_SLOT = FREE_STORAGE_POINTER()
+
+#define constant SEL_ALREADY_ENTERED = 0x78636683
+#define constant SEL_TIMESTAMP_MISMATCH = 0xf98e0b1d
+#define constant SEL_TRANSFER_FAILED = 0x39f1c8d9
+
+#define macro CONSTRUCTOR() = takes (0) returns (0) {}
+
+#define macro MAIN() = takes (0) returns (0) {
+    // -------------------------------------------------------------------------
+    // 0. REENTRANCY GUARD
+    // -------------------------------------------------------------------------
+    // CALL below forwards all remaining gas, so a malicious recipient's
+    // fallback can call back into this contract while the outer invocation
+    // is still mid-loop / about to refund. Block any nested entry.
+    [LOCK_SLOT] sload already_entered jumpi
+    push1 0x01 [LOCK_SLOT] sstore
+
+    // -------------------------------------------------------------------------
+    // 1. TIMESTAMP VALIDATION (From snippet #1)
+    // -------------------------------------------------------------------------
+    push0 calldataload   // [calldata_word]
+    dup1 0xe0 shr        // [timestamp_arg, calldata_word]
+    timestamp xor        // [timestamp_arg ^ block.timestamp, calldata_word]
+    timestamp_mismatch jumpi   // Revert if timestamp != block.timestamp
+
+    // -------------------------------------------------------------------------
+    // 2. DISPERSAL LOOP (Offset starts at 4 bytes to skip timestamp)
+    // -------------------------------------------------------------------------
+    push1 0x04           // [offset = 4]
+    loop:
+        dup1 calldatasize eq done jumpi
+
+        // Read value (32 bytes) starting at offset + 20
+        dup1 push1 0x14 add calldataload
+
+        // Read recipient (20 bytes) starting at offset
+        dup2 calldataload push1 0x60 shr
+
+        // Execute raw CALL
+        push0 push0 push0 push0
+        swap4 swap1 swap5 swap1
+        gas call
+        iszero transfer_failed jumpi
+
+        // Advance offset by 52 bytes (20 + 32)
+        push1 0x34 add
+        loop jump
+
+    already_entered:
+        [SEL_ALREADY_ENTERED] 0xe0 shl push0 mstore
+        push1 0x04 push0 revert
+
+    timestamp_mismatch:
+        // stack: [calldata_word] -- unused, ignored by revert
+        [SEL_TIMESTAMP_MISMATCH] 0xe0 shl push0 mstore
+        push1 0x04 push0 revert
+
+    transfer_failed:
+        // stack: [offset, calldata_word] -- recover the recipient that just failed
+        dup1 calldataload push1 0x60 shr   // [recipient, offset, calldata_word]
+        [SEL_TRANSFER_FAILED] 0xe0 shl push0 mstore   // mem[0:4)  = selector
+        push1 0x04 mstore                              // mem[4:36) = recipient
+        push1 0x24 push0 revert                        // revert(0, 36)
+
+    done:
+        // Refund remaining balance to msg.sender
+        selfbalance iszero exit jumpi
+        push0 push0 push0 push0
+        selfbalance caller gas call
+        iszero refund_failed jumpi
+
+    exit:
+        // Release the lock before returning control to the caller.
+        push0 [LOCK_SLOT] sstore
+        stop
+
+    refund_failed:
+        // If the caller can't accept the refund (e.g. it's a contract with no
+        // payable receive/fallback), don't silently strand the balance in
+        // this contract -- revert the whole call atomically, same as any
+        // other failed payment.
+        caller
+        [SEL_TRANSFER_FAILED] 0xe0 shl push0 mstore
+        push1 0x04 mstore
+        push1 0x24 push0 revert
+}
