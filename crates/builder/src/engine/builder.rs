@@ -488,15 +488,55 @@ impl Builder {
                         WORKERS.spawn_job(move || {
                             let _unused = leaves_tx.send(base_leaves(&txs, &prior, deposit));
                         });
+                        let (carried_tx, carried_rx) = crossbeam_channel::bounded::<Layer>(1);
+                        let coinbase = merge.view.coinbase.address;
                         WORKERS.spawn_job(move || {
                             let parent = slot.state.parent.get().and_then(|p| p.as_ref().ok());
                             let trie = match parent {
-                                Some(parent) => trie.run(&store, parent, spawned),
+                                Some(parent) => trie.run(&store, parent, spawned).and_then(
+                                    |((mut state, mut written), run)| {
+                                        if let Ok(layer) = carried_rx.recv() {
+                                            let keys = layer.iter().filter_map(|(id, val)| {
+                                                Some((slot.state.keys.key(*id)?, val.clone()))
+                                            });
+                                            let keys = keys.filter(|(key, _)| match key {
+                                                Key::Account(a) | Key::Slot(a, _) => *a != coinbase,
+                                            });
+                                            let target = updates(keys, &*parent.db, Coinbase {
+                                                address: coinbase,
+                                                balance: Default::default(),
+                                                nonce: 0,
+                                            })
+                                            .ok()
+                                            .and_then(|ups| {
+                                                writes(
+                                                    &ups.into_iter()
+                                                        .filter(|u| u.address != coinbase)
+                                                        .collect::<Vec<_>>(),
+                                                )
+                                                .ok()
+                                            });
+                                            if let Some(target) = target {
+                                                let sets: Vec<(Key, Write)> = target
+                                                    .into_iter()
+                                                    .filter(|(k, w)| written.get(k) != Some(w))
+                                                    .collect();
+                                                let changed = account_updates(sets.iter().cloned())
+                                                    .map_err(MergeError::Internal)?;
+                                                state.apply(&changed).map_err(|e| {
+                                                    MergeError::Internal(format!("trie: {e}"))
+                                                })?;
+                                                written.extend(sets);
+                                            }
+                                        }
+                                        Ok(((state, written), run))
+                                    },
+                                ),
                                 None => Err(MergeError::Internal("no parent".into())),
                             };
                             let _unused = tx.send(trie);
                         });
-                        merge.extend(&orders, &excluded, &shared.state.known);
+                        merge.extend(&orders, &excluded, &shared.state.known, Some(carried_tx));
                         let wait = Instant::now();
                         let (trie, run) = rx
                             .recv()
@@ -510,7 +550,7 @@ impl Builder {
                         merge.trie_run = Some(run);
                         merge.trie_wait_us = wait.elapsed().as_micros() as u64;
                     }
-                    None => merge.extend(&orders, &excluded, &shared.state.known),
+                    None => merge.extend(&orders, &excluded, &shared.state.known, None),
                 }
                 merge.extend_us = extend_start.elapsed().as_micros() as u64;
                 if warming {
@@ -1264,6 +1304,7 @@ impl Merge {
         orders: &[Arc<PreparedOrder>],
         excluded: &FxHashSet<B256>,
         known: &RwLock<Known>,
+        carried_tx: Option<Sender<Layer>>,
     ) {
         self.trace.sim_start_ns = utcnow_ns();
         let start = Instant::now();
@@ -1313,6 +1354,9 @@ impl Merge {
                     self.unmerged(&order, err.unmerged_reason());
                 }
             }
+        }
+        if let (Some(tx), Some(layer)) = (carried_tx, self.view.layers.first()) {
+            let _unused = tx.send(layer.clone());
         }
         let carry_us = start.elapsed().as_micros() as u64;
         let applied: FxHashSet<B256> = self.included_order_ids.iter().copied().collect();
@@ -1551,7 +1595,6 @@ impl Merge {
         let roots_start = Instant::now();
         let Ok((_, written)) = &self.trie else { return Ok(None) };
         let base = View { layers: Vec::new(), ..self.view.clone() };
-        let mut changed: FxHashMap<ethrex_common::Address, AccountUpdate> = FxHashMap::default();
         let resets = written.keys().filter(|key| !target.contains_key(key)).map(|key| {
             let write = match base.value(key) {
                 Some(Val::Account { exists: false, .. }) => Write::Removed,
@@ -1567,21 +1610,13 @@ impl Merge {
             .iter()
             .filter(|(key, write)| written.get(key) != Some(*write))
             .map(|(key, write)| Ok((*key, write.clone())));
-        for set in sets.chain(resets) {
-            let (key, write) = set?;
-            let address = match key {
-                Key::Account(address) | Key::Slot(address, _) => address,
-            };
-            let update = changed.entry(address).or_insert_with(|| AccountUpdate::new(address));
-            match (key, write) {
-                (_, Write::Removed) => update.removed = true,
-                (_, Write::Info(info)) => update.info = Some(info),
-                (Key::Slot(_, slot), Write::Slot(value)) => {
-                    update.added_storage.insert(slot, value);
-                }
-                (Key::Account(_), Write::Slot(_)) => return Err(internal(&"slot write on account")),
-            }
-        }
+        let sets: Vec<(Key, Write)> = sets.chain(resets).collect::<Result<_, MergeError>>()?;
+        let mut changed: FxHashMap<ethrex_common::Address, AccountUpdate> =
+            account_updates(sets.into_iter())
+                .map_err(|e| internal(&e))?
+                .into_iter()
+                .map(|u| (u.address, u))
+                .collect();
         let revived = written.iter().filter_map(|(key, write)| match (key, write) {
             (Key::Account(address), Write::Removed) if target.get(key) != Some(&Write::Removed) => {
                 Some(*address)
@@ -1709,6 +1744,27 @@ impl Merge {
 }
 
 /// One update per account, later updates merged over earlier ones.
+type Layer = Arc<FxHashMap<Id, Option<Val>>>;
+
+fn account_updates(sets: impl Iterator<Item = (Key, Write)>) -> Result<Vec<AccountUpdate>, String> {
+    let mut changed: FxHashMap<ethrex_common::Address, AccountUpdate> = FxHashMap::default();
+    for (key, write) in sets {
+        let address = match key {
+            Key::Account(address) | Key::Slot(address, _) => address,
+        };
+        let update = changed.entry(address).or_insert_with(|| AccountUpdate::new(address));
+        match (key, write) {
+            (_, Write::Removed) => update.removed = true,
+            (_, Write::Info(info)) => update.info = Some(info),
+            (Key::Slot(_, slot), Write::Slot(value)) => {
+                update.added_storage.insert(slot, value);
+            }
+            (Key::Account(_), Write::Slot(_)) => return Err("slot write on account".into()),
+        }
+    }
+    Ok(changed.into_values().collect())
+}
+
 fn merged(updates: impl IntoIterator<Item = AccountUpdate>) -> Vec<AccountUpdate> {
     let mut out: Vec<AccountUpdate> = Vec::new();
     let mut at: FxHashMap<ethrex_common::Address, usize> = FxHashMap::default();
