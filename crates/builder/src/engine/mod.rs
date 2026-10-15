@@ -602,7 +602,10 @@ impl Lanes {
                                 let txs = decode_block_txs(&msg, &txs);
                                 Box::new(Decoded { msg, txs })
                             });
-                            metrics::stage_latency("ingest_decode", start.elapsed().as_micros() as u64);
+                            metrics::stage_latency(
+                                "ingest_decode",
+                                start.elapsed().as_micros() as u64,
+                            );
                             let event =
                                 EngineEvent::MergeableBlock { body, recv_ns, generation, decoded };
                             if engine_tx.send(event).is_err() {
@@ -650,6 +653,8 @@ impl Lanes {
         self.senders[lane].try_send(job).map_err(|err| err.into_inner().0)
     }
 }
+
+const PARALLEL_RECOVER: usize = 8;
 
 /// Decodes every tx in the payload and recovers senders (cache-assisted, the
 /// misses in parallel). Entries of `order::TX_HASH_REF_LEN` bytes are
@@ -722,34 +727,37 @@ fn decode_block_txs(
         })
         .collect();
 
-    let decoded: Vec<Option<Result<Arc<DecodedTx>, String>>> = RECOVERY_POOL.install(|| {
-        entries
-            .into_par_iter()
-            .map(|entry| {
-                let partial = match entry? {
-                    Entry::Cached(tx) => return Some(Ok(tx)),
-                    Entry::New(partial) => *partial,
-                };
-                let sender = match partial.cached_sender {
-                    Some(sender) => sender,
-                    None => match partial.tx.sender(&NativeCrypto) {
-                        Ok(sender) => sender,
-                        Err(e) => return Some(Err(format!("sender recovery: {e}"))),
-                    },
-                };
-                let blob_hashes =
-                    partial.tx.blob_versioned_hashes().into_iter().map(convert::b256).collect();
-                Some(Ok(Arc::new(DecodedTx {
-                    gas_limit: partial.tx.gas_limit(),
-                    blob_hashes,
-                    hash: partial.hash,
-                    sender,
-                    tx: partial.tx,
-                    encoded: partial.encoded,
-                })))
-            })
-            .collect()
-    });
+    let finish = |entry: Option<Entry>| {
+        let partial = match entry? {
+            Entry::Cached(tx) => return Some(Ok(tx)),
+            Entry::New(partial) => *partial,
+        };
+        let sender = match partial.cached_sender {
+            Some(sender) => sender,
+            None => match partial.tx.sender(&NativeCrypto) {
+                Ok(sender) => sender,
+                Err(e) => return Some(Err(format!("sender recovery: {e}"))),
+            },
+        };
+        let blob_hashes =
+            partial.tx.blob_versioned_hashes().into_iter().map(convert::b256).collect();
+        Some(Ok(Arc::new(DecodedTx {
+            gas_limit: partial.tx.gas_limit(),
+            blob_hashes,
+            hash: partial.hash,
+            sender,
+            tx: partial.tx,
+            encoded: partial.encoded,
+        })))
+    };
+    let recover = entries
+        .iter()
+        .filter(|entry| matches!(entry, Some(Entry::New(p)) if p.cached_sender.is_none()))
+        .count();
+    let decoded: Vec<Option<Result<Arc<DecodedTx>, String>>> = match recover >= PARALLEL_RECOVER {
+        true => RECOVERY_POOL.install(|| entries.into_par_iter().map(finish).collect()),
+        false => entries.into_iter().map(finish).collect(),
+    };
 
     let mut txs = Vec::with_capacity(decoded.len());
     for entry in decoded {
