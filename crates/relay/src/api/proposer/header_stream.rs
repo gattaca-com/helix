@@ -1,4 +1,5 @@
 use std::{
+    net::IpAddr,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -15,6 +16,7 @@ use axum::{
     },
     response::IntoResponse,
 };
+use flux::timing::IngestionTime;
 use helix_common::{
     GET_HEADER_REQUEST_CUTOFF_MS, GetHeaderTrace, RequestTimings,
     api::{HEADER_START_TIME_UNIX_MS, proposer_api::GetHeaderParams},
@@ -32,7 +34,10 @@ use super::{
     error::ProposerApiError,
     get_header::{ValidatedHeaderRequest, resign_builder_bid},
 };
-use crate::api::{Api, router::Terminating};
+use crate::{
+    api::{Api, router::Terminating},
+    spine::messages::GetHeaderServed,
+};
 
 /// Frame layout: `[kind: u8][fork: u8][ssz SignedBuilderBid]`.
 const FRAME_HEADER_LEN: usize = 2;
@@ -59,6 +64,7 @@ impl<A: Api> ProposerApi<A> {
             is_mev_boost,
             timeout_ms,
             preferences,
+            ip_addr,
             ..
         } = proposer_api.validate_header_request(&params, &headers, &terminating)?;
 
@@ -111,6 +117,7 @@ impl<A: Api> ProposerApi<A> {
             fork,
             is_mev_boost,
             user_agent,
+            ip_addr,
             trace,
             start,
             end,
@@ -131,6 +138,7 @@ struct HeaderStream<A: Api> {
     fork: ForkName,
     is_mev_boost: bool,
     user_agent: Option<String>,
+    ip_addr: Option<IpAddr>,
     trace: GetHeaderTrace,
     start: Instant,
     end: Instant,
@@ -225,6 +233,22 @@ impl<A: Api> HeaderStream<A> {
         }
 
         info!(%block_hash, ?value, "streamed bid");
+
+        self.api.header_served.produce_with_ingestion(
+            GetHeaderServed {
+                slot: self.params.slot,
+                receive_ns: trace.receive,
+                best_bid_fetched_ns: trace.best_bid_fetched,
+                block_hash,
+                value,
+                builder_pubkey,
+                proposer_ip: GetHeaderServed::ip_octets(self.ip_addr),
+                is_mev_boost: self.is_mev_boost,
+                streamed: true,
+                _pad: [0; 6],
+            },
+            IngestionTime::now(),
+        );
 
         // TODO: we might want to save these separately with less data?
         self.api.db.save_get_header_call(

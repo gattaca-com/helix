@@ -9,6 +9,7 @@ use std::{
 };
 
 use axum::{Extension, extract::Path, http::HeaderMap, response::IntoResponse};
+use flux::timing::IngestionTime;
 use helix_common::{
     GET_HEADER_REQUEST_CUTOFF_MS, GetHeaderTrace, RequestTimings, ValidatorPreferences,
     api::proposer_api::GetHeaderParams,
@@ -26,10 +27,13 @@ use ssz::Encode;
 use tracing::{Instrument, debug, error, info, trace, warn};
 
 use super::ProposerApi;
-use crate::api::{
-    Api,
-    proposer::{CONSENSUS_VERSION_HEADER, error::ProposerApiError},
-    router::Terminating,
+use crate::{
+    api::{
+        Api,
+        proposer::{CONSENSUS_VERSION_HEADER, error::ProposerApiError},
+        router::Terminating,
+    },
+    spine::messages::GetHeaderServed,
 };
 
 pub(super) struct ValidatedHeaderRequest {
@@ -172,6 +176,22 @@ impl<A: Api> ProposerApi<A> {
         let proposer_fee_recipient = ep.fee_recipient;
         let block_number = ep.block_number;
         let extra_data = ep.extra_data.to_vec();
+
+        proposer_api.header_served.produce_with_ingestion(
+            GetHeaderServed {
+                slot: params.slot,
+                receive_ns: trace.receive,
+                best_bid_fetched_ns: trace.best_bid_fetched,
+                block_hash: bid_block_hash,
+                value,
+                builder_pubkey,
+                proposer_ip: GetHeaderServed::ip_octets(ip_addr),
+                is_mev_boost,
+                streamed: false,
+                _pad: [0; 6],
+            },
+            IngestionTime::now(),
+        );
 
         proposer_api.db.save_get_header_call(
             params,

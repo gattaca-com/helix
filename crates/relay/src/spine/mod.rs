@@ -55,6 +55,10 @@ pub struct HelixSpine {
 
     #[queue(size(2usize.pow(10)), gather)]
     pub sim_previous_slot_drops: SpineQueue<messages::SimPreviousSlotDrops>,
+
+    /// Proposer API → DataGatherer: every header sent to a proposer.
+    #[queue(size(2usize.pow(12)))]
+    pub get_header_served: SpineQueue<messages::GetHeaderServed>,
 }
 
 #[derive(Deserialize)]

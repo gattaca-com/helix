@@ -232,6 +232,8 @@ async fn run(
 
         let bid_producer =
             spine.spine.standalone_dcache_producer_for(TileName::from_str_truncate("Api"));
+        let header_served =
+            spine.spine.standalone_producer_for(TileName::from_str_truncate("ProposerApi"));
 
         start_api_service::<ApiProd>(
             config.clone(),
@@ -249,6 +251,7 @@ async fn run(
             auctioneer_handle.clone(),
             registrations_handle,
             bid_producer,
+            header_served,
             future_results.clone(),
             web_socket_send,
             alert_manager.clone(),

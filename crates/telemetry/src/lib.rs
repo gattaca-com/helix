@@ -3,6 +3,8 @@
 //! Every type's wire name carries the `Helix` app segment, which also names
 //! its persisted slot directory.
 
+use std::net::{IpAddr, Ipv6Addr};
+
 use alloy_primitives::{Address, B256, FixedBytes, U256};
 use bytes::Bytes;
 use flux::{timing::Nanos, type_hash_derive::type_hash_lock};
@@ -175,6 +177,39 @@ impl SimUpdate {
             SimUpdate::TxIncluded(inner) => inner.submission_id,
             SimUpdate::Finished(inner) => inner.submission_id,
         }
+    }
+}
+
+versioned_telemetry!(GetHeaderServed, persist = "Helix.Header.Served" =>
+    /// A header sent to a proposer, from `getHeader` or a header stream.
+    #[derive(Default)]
+    #[type_hash_lock(hash = 9754085527104981848)]
+    GetHeaderServedV1 {
+        pub slot: u64,
+        pub receive_ns: u64,
+        pub best_bid_fetched_ns: u64,
+        pub block_hash: B256,
+        pub value: U256,
+        pub builder_pubkey: BlsPublicKeyBytes,
+        /// IPv4 addresses are stored IPv6-mapped; all zeros when unknown.
+        pub proposer_ip: [u8; 16],
+        pub is_mev_boost: bool,
+        pub streamed: bool,
+        pub _pad: [u8; 6],
+    }
+);
+
+impl GetHeaderServed {
+    pub fn ip_octets(ip: Option<IpAddr>) -> [u8; 16] {
+        match ip {
+            Some(IpAddr::V4(ip)) => ip.to_ipv6_mapped().octets(),
+            Some(IpAddr::V6(ip)) => ip.octets(),
+            None => [0; 16],
+        }
+    }
+
+    pub fn proposer_ip(&self) -> Option<IpAddr> {
+        (self.proposer_ip != [0; 16]).then(|| Ipv6Addr::from(self.proposer_ip).to_canonical())
     }
 }
 
