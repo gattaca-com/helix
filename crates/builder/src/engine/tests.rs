@@ -20,7 +20,6 @@ use crate::{
     engine::{
         EngineEvent, EngineOutput, MergeEngine,
         convert::{aaddr, b256, block_to_payload_v3, eaddr},
-        session::MergeSession,
         types::EngineConfig,
     },
     node::HeadInfo,
@@ -98,19 +97,20 @@ impl Fixture {
         }
     }
 
-    fn engine_config(&self, min_emission_interval: Duration) -> EngineConfig {
+    fn engine_config(&self) -> EngineConfig {
         EngineConfig {
             relay_signer: self.signers[6].clone(),
             max_blocks_per_slot: 64,
             max_orders_per_slot: 1024,
             min_value_increase_wei: U256::ZERO,
-            min_emission_interval,
             max_base_age: Duration::from_secs(5),
-            rebase_recovery_bps: 5_000,
+            warmup: false,
             core: None,
             max_builder_streams: 8,
             speculation_top_k: 0,
             replay_worker_cores: Vec::new(),
+            order_worker_cores: Vec::new(),
+            record: None,
         }
     }
 
@@ -261,35 +261,8 @@ impl Fixture {
         }
     }
 
-    /// Decodes a `MergeableBlockV1` the way ingest does, for tests that drive
-    /// `MergeSession` directly rather than through the engine.
-    fn prepared_block(
-        &self,
-        msg: &MergeableBlockV1,
-        submission_index: u64,
-    ) -> Arc<crate::engine::types::PreparedBlock> {
-        let mut recovery = Default::default();
-        let mut cache = Default::default();
-        let txs = crate::engine::decode_block_txs(msg, &mut recovery, &mut cache)
-            .expect("fixture block must decode");
-        Arc::new(crate::engine::types::PreparedBlock {
-            block_hash: msg.execution_payload.payload_inner.payload_inner.block_hash,
-            builder_pubkey: msg.builder_pubkey,
-            block_value: msg.block_value,
-            allow_appending: msg.allow_appending,
-            payload: msg.execution_payload.clone(),
-            txs: Arc::new(txs),
-            recv_ns: 0,
-            submission_index,
-            ingest_done_ns: 0,
-        })
-    }
-
-    fn direct_engine(
-        &self,
-        min_emission_interval: Duration,
-    ) -> (MergeEngine, crossbeam_channel::Receiver<EngineOutput>) {
-        self.engine_with(self.engine_config(min_emission_interval))
+    fn direct_engine(&self) -> (MergeEngine, crossbeam_channel::Receiver<EngineOutput>) {
+        self.engine_with(self.engine_config())
     }
 
     fn engine_with(
@@ -303,7 +276,6 @@ impl Fixture {
                 config.max_builder_streams,
                 &[],
                 self.store.clone(),
-                self.blockchain.clone(),
                 output_tx.clone(),
             )
         });
@@ -315,6 +287,7 @@ impl Fixture {
             relay_config: None,
             slot: None,
             streams,
+            store: self.store.clone(),
         };
         (engine, output_rx)
     }
@@ -433,7 +406,7 @@ impl Fixture {
     }
 
     fn started_engine(&self) -> (MergeEngine, crossbeam_channel::Receiver<EngineOutput>) {
-        let (mut engine, output_rx) = self.direct_engine(Duration::ZERO);
+        let (mut engine, output_rx) = self.direct_engine();
         engine.handle_event(EngineEvent::RelayConfig(self.relay_config.clone()));
         engine.handle_event(EngineEvent::SlotStart(self.slot_start()));
         (engine, output_rx)
@@ -453,14 +426,11 @@ async fn an_unresolved_reference_still_caches_the_blocks_own_txs() {
         .transactions
         .push(alloy_primitives::Bytes::copy_from_slice(B256::repeat_byte(0xab).as_slice()));
 
-    let mut recovery_cache = rustc_hash::FxHashMap::default();
-    let mut tx_cache = rustc_hash::FxHashMap::default();
-    let err = crate::engine::decode_block_txs(&msg, &mut recovery_cache, &mut tx_cache)
-        .err()
-        .unwrap_or_default();
+    let cache = crate::engine::types::SlotTxs::default();
+    let err = crate::engine::decode_block_txs(&msg, &cache).err().unwrap_or_default();
 
     assert!(err.starts_with("unresolved tx hash reference"), "{err}");
-    assert_eq!(tx_cache.len(), own_txs);
+    assert_eq!(cache.txs.len(), own_txs);
 }
 
 /// `arrival` only documents the order blocks appear in a test; the event is
@@ -471,11 +441,8 @@ fn mergeable_event(msg: &MergeableBlockV1, arrival: u64) -> EngineEvent {
         body: msg.as_ssz_bytes(),
         recv_ns: crate::utils::utcnow_ns(),
         generation: 0,
+        decoded: None,
     }
-}
-
-fn activate_event(block_hash: B256) -> EngineEvent {
-    EngineEvent::ActivateBase { slot: SLOT, block_hash, generation: 0 }
 }
 
 fn expect_merged(
@@ -501,9 +468,8 @@ async fn merges_order_into_activated_base_block() {
     let (event_tx, event_rx) = crossbeam_channel::bounded(1024);
     let (output_tx, output_rx) = crossbeam_channel::bounded(64);
     let _engine = MergeEngine::spawn(
-        fixture.engine_config(Duration::ZERO),
+        fixture.engine_config(),
         fixture.store.clone(),
-        fixture.blockchain.clone(),
         fixture.head(),
         event_tx.clone(),
         event_rx,
@@ -514,7 +480,6 @@ async fn merges_order_into_activated_base_block() {
     event_tx.send(EngineEvent::SlotStart(fixture.slot_start())).unwrap();
     event_tx.send(mergeable_event(&base_msg, 1)).unwrap();
     event_tx.send(mergeable_event(&mergeable_msg, 2)).unwrap();
-    event_tx.send(activate_event(base_block_hash)).unwrap();
 
     let output = output_rx.recv_timeout(Duration::from_secs(60)).expect("engine produced nothing");
     let merged = expect_merged(output);
@@ -555,47 +520,6 @@ async fn merges_order_into_activated_base_block() {
     let _ = aaddr(eaddr(fixture.proposer)); // keep converters exercised both ways
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn checkpoint_hit_reuses_shared_prefix_on_resubmission() {
-    let fixture = Fixture::new().await;
-    let (base_a, hash_a) = fixture.build_base_with_payment(U256::from(ETH), fixture.block_value);
-    let (base_b, hash_b) = fixture
-        .build_base_with_payment(U256::from(ETH), fixture.block_value + U256::from(ETH / 100));
-    assert_ne!(hash_a, hash_b);
-    assert_eq!(
-        base_a.execution_payload.payload_inner.payload_inner.transactions[0],
-        base_b.execution_payload.payload_inner.payload_inner.transactions[0],
-        "the two bases must share a prefix for the checkpoint to be reusable"
-    );
-
-    let ctx = crate::engine::types::SlotState::new(&fixture.slot_start()).ctx.clone();
-    let prepared_a = fixture.prepared_block(&base_a, 0);
-    let prepared_b = fixture.prepared_block(&base_b, 1);
-
-    let (_, checkpoint, hit) = MergeSession::activate(
-        &ctx,
-        &prepared_a,
-        &fixture.store,
-        fixture.blockchain.clone(),
-        &fixture.relay_config,
-        None,
-    )
-    .expect("base a must activate");
-    assert!(!hit, "the first activation has no checkpoint to hit");
-
-    let (session, _, hit) = MergeSession::activate(
-        &ctx,
-        &prepared_b,
-        &fixture.store,
-        fixture.blockchain.clone(),
-        &fixture.relay_config,
-        Some(&checkpoint),
-    )
-    .expect("base b must activate");
-    assert!(hit, "a resubmission sharing the prefix must reuse the checkpoint");
-    assert_eq!(session.base_block_hash, hash_b);
-}
-
 /// Exclusion and pool state now live in the slot shared with the merge
 /// streams, so the tests read them there.
 fn shared_excluded(engine: &MergeEngine, order_hash: &B256) -> bool {
@@ -617,8 +541,8 @@ fn pubkey(byte: u8) -> alloy_rpc_types::beacon::BlsPublicKey {
 #[tokio::test(flavor = "multi_thread")]
 async fn exclusion_holds_across_later_sessions() {
     let fixture = Fixture::new().await;
-    let (base_a, base_a_hash) = fixture.build_base(U256::from(ETH));
-    let (base_b, base_b_hash) = fixture.build_base(U256::from(ETH));
+    let (base_a, _) = fixture.build_base(U256::from(ETH));
+    let (base_b, _) = fixture.build_base(U256::from(ETH));
     let a = pubkey(0xaa);
     let (with_order, hashes) = fixture.mergeable_orders(&base_a, a, &[3], true, 0xd1);
     let (without_order, _) = fixture.mergeable_orders(&base_a, a, &[], true, 0xd2);
@@ -629,10 +553,7 @@ async fn exclusion_holds_across_later_sessions() {
     engine.handle_event(mergeable_event(&with_order, 3));
     engine.handle_event(mergeable_event(&without_order, 4));
 
-    engine.handle_event(activate_event(base_a_hash));
     while output_rx.try_recv().is_ok() {}
-
-    engine.handle_event(activate_event(base_b_hash));
 
     assert!(shared_excluded(&engine, &hashes[0]));
     while let Ok(out) = output_rx.try_recv() {
@@ -648,7 +569,7 @@ async fn exclusion_holds_across_later_sessions() {
 #[tokio::test(flavor = "multi_thread")]
 async fn exclusion_applies_within_the_live_session() {
     let fixture = Fixture::new().await;
-    let (base, base_hash) = fixture.build_base(U256::from(ETH));
+    let (base, _) = fixture.build_base(U256::from(ETH));
     let a = pubkey(0xaa);
     let (with_order, hashes) = fixture.mergeable_orders(&base, a, &[3], true, 0xd1);
     let (without_order, _) = fixture.mergeable_orders(&base, a, &[], true, 0xd2);
@@ -656,7 +577,6 @@ async fn exclusion_applies_within_the_live_session() {
     let (mut engine, output_rx) = fixture.started_engine();
     engine.handle_event(mergeable_event(&base, 1));
     engine.handle_event(mergeable_event(&with_order, 2));
-    engine.handle_event(activate_event(base_hash));
     engine.handle_event(mergeable_event(&without_order, 3));
 
     assert!(shared_excluded(&engine, &hashes[0]));
@@ -769,14 +689,13 @@ async fn unflagged_content_is_never_excluded_by_absence() {
 #[tokio::test(flavor = "multi_thread")]
 async fn silence_is_not_exclusion() {
     let fixture = Fixture::new().await;
-    let (base, base_hash) = fixture.build_base(U256::from(ETH));
+    let (base, _) = fixture.build_base(U256::from(ETH));
     let a = pubkey(0xaa);
     let (with_order, hashes) = fixture.mergeable_orders(&base, a, &[3], true, 0xd1);
 
     let (mut engine, _rx) = fixture.started_engine();
     engine.handle_event(mergeable_event(&base, 1));
     engine.handle_event(mergeable_event(&with_order, 2));
-    engine.handle_event(activate_event(base_hash));
 
     assert!(!shared_excluded(&engine, &hashes[0]));
 }
@@ -880,7 +799,7 @@ async fn a_block_for_another_slot_alters_nothing() {
 #[tokio::test(flavor = "multi_thread")]
 async fn exclusion_does_not_disturb_an_applied_bundle() {
     let fixture = Fixture::new().await;
-    let (base, base_hash) = fixture.build_base(U256::from(ETH));
+    let (base, _) = fixture.build_base(U256::from(ETH));
     let a = pubkey(0xaa);
     let (with_order, order_hash) = fixture.mergeable_bundle(&base, a, &[3, 4], 0xd1);
     let (without_order, _) = fixture.mergeable_orders(&base, a, &[], true, 0xd2);
@@ -890,7 +809,6 @@ async fn exclusion_does_not_disturb_an_applied_bundle() {
     let (mut engine, output_rx) = fixture.started_engine();
     engine.handle_event(mergeable_event(&base, 1));
     engine.handle_event(mergeable_event(&with_order, 2));
-    engine.handle_event(activate_event(base_hash));
 
     // Merging runs on a stream thread now, so wait for it rather than polling.
     let merged = expect_merged(
@@ -917,7 +835,7 @@ async fn exclusion_does_not_disturb_an_applied_bundle() {
 #[tokio::test(flavor = "multi_thread")]
 async fn emitted_block_stays_valid_across_an_exclusion() {
     let fixture = Fixture::new().await;
-    let (base, base_hash) = fixture.build_base(U256::from(ETH));
+    let (base, _) = fixture.build_base(U256::from(ETH));
     let a = pubkey(0xaa);
     let (with_order, _) = fixture.mergeable_orders(&base, a, &[3, 4], true, 0xd1);
     let (partial, _) = fixture.mergeable_orders(&base, a, &[3], true, 0xd2);
@@ -925,7 +843,6 @@ async fn emitted_block_stays_valid_across_an_exclusion() {
     let (mut engine, output_rx) = fixture.started_engine();
     engine.handle_event(mergeable_event(&base, 1));
     engine.handle_event(mergeable_event(&with_order, 2));
-    engine.handle_event(activate_event(base_hash));
     while output_rx.try_recv().is_ok() {}
 
     engine.handle_event(mergeable_event(&partial, 3));
@@ -949,7 +866,7 @@ async fn exclusion_state_is_independent_of_event_interleaving() {
     use rand_xorshift::XorShiftRng;
 
     let fixture = Fixture::new().await;
-    let (base, base_hash) = fixture.build_base(U256::from(ETH));
+    let (base, _) = fixture.build_base(U256::from(ETH));
     let (a, b) = (pubkey(0xaa), pubkey(0xbb));
     let (a_full, a_hashes) = fixture.mergeable_orders(&base, a, &[3, 4, 5], true, 0xd1);
     let (a_partial, _) = fixture.mergeable_orders(&base, a, &[3, 5], true, 0xd2);
@@ -964,9 +881,7 @@ async fn exclusion_state_is_independent_of_event_interleaving() {
         for msg in blocks {
             engine.handle_event(mergeable_event(msg, 1));
             match rng.next_u32() % 3 {
-                0 => {
-                    engine.handle_event(activate_event(base_hash));
-                }
+                0 => {}
                 _ => {}
             }
         }
@@ -987,43 +902,6 @@ async fn exclusion_state_is_independent_of_event_interleaving() {
     assert!(excluded.contains(&a_hashes[1]), "A dropped its second order");
     assert!(excluded.contains(&a_hashes[2]), "A dropped its third order");
     assert!(!excluded.contains(&a_hashes[0]), "A never dropped its first order");
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn every_pooled_order_is_accounted_for() {
-    let fixture = Fixture::new().await;
-    let (base, _) = fixture.build_base(U256::from(ETH));
-    let a = pubkey(0xaa);
-    let (full, _) = fixture.mergeable_orders(&base, a, &[3, 4, 5], true, 0xd1);
-    let (partial, _) = fixture.mergeable_orders(&base, a, &[3], true, 0xd2);
-
-    let (mut engine, _rx) = fixture.started_engine();
-    engine.handle_event(mergeable_event(&base, 1));
-    engine.handle_event(mergeable_event(&full, 2));
-    engine.handle_event(mergeable_event(&partial, 3));
-
-    let shared = Fixture::shared_of(&engine);
-    let inner = shared.inner.read().unwrap();
-    let excluded_in_pool =
-        inner.orders.iter().filter(|o| inner.is_excluded(&o.order_hash)).count() as u64;
-    assert!(excluded_in_pool > 0, "the fixture must produce at least one exclusion");
-
-    let (mut session, _, _) = MergeSession::activate(
-        &shared.ctx,
-        &fixture.prepared_block(&base, 0),
-        &fixture.store,
-        fixture.blockchain.clone(),
-        &shared.relay_config,
-        None,
-    )
-    .expect("base must activate");
-    session.try_extend(&inner.orders, &inner.excluded);
-
-    assert_eq!(
-        session.stats().orders_excluded_skipped,
-        excluded_in_pool,
-        "the skip counter must account for exactly the excluded pool entries"
-    );
 }
 
 /// Builders pay the proposer through a forwarder contract, so the trailing tx
@@ -1047,9 +925,8 @@ async fn a_base_block_paying_through_a_contract_is_merged() {
     let (event_tx, event_rx) = crossbeam_channel::bounded(1024);
     let (output_tx, output_rx) = crossbeam_channel::bounded(64);
     let _engine = MergeEngine::spawn(
-        fixture.engine_config(Duration::ZERO),
+        fixture.engine_config(),
         fixture.store.clone(),
-        fixture.blockchain.clone(),
         fixture.head(),
         event_tx.clone(),
         event_rx,
@@ -1060,7 +937,6 @@ async fn a_base_block_paying_through_a_contract_is_merged() {
     event_tx.send(EngineEvent::SlotStart(fixture.slot_start())).unwrap();
     event_tx.send(mergeable_event(&base_msg, 1)).unwrap();
     event_tx.send(mergeable_event(&mergeable_msg, 2)).unwrap();
-    event_tx.send(activate_event(base_block_hash)).unwrap();
 
     let output = output_rx
         .recv_timeout(Duration::from_secs(60))
@@ -1068,56 +944,6 @@ async fn a_base_block_paying_through_a_contract_is_merged() {
     let merged = expect_merged(output);
     assert_eq!(merged.base_block_hash, base_block_hash);
     assert!(merged.proposer_value > fixture.block_value);
-}
-
-fn submission_stream(samples: &[(u64, u64)]) -> crate::engine::types::SharedInner {
-    let mut inner = crate::engine::types::SharedInner::default();
-    for (value, ms) in samples {
-        inner.record_submission(BUILDER, U256::from(*value), ms * 1_000_000);
-    }
-    inner
-}
-
-const BUILDER: Address = Address::repeat_byte(0x11);
-
-/// The budget is the time until the builder's own stream out-bids our merge:
-/// emit any earlier and we win, any later and we lose.
-#[test]
-fn budget_ends_when_the_builder_outbids_the_merge() {
-    // uplift over the base of 100: +0, +5, +30
-    let inner = submission_stream(&[(100, 0), (105, 10), (130, 25)]);
-    let subs = inner.submissions.get(&BUILDER).unwrap();
-
-    // delta 20 survives the +5 step and dies on the +30 step.
-    let (steps, budget_ms, deadline_seen) = subs.budget(0, U256::from(100), U256::from(20));
-    assert!(deadline_seen, "the out-bidding submission is in the history");
-    assert_eq!(steps, 1, "one submission of headroom");
-    assert_eq!(budget_ms, 25, "we had until the out-bidding submission arrived");
-}
-
-/// A delta the builder never out-bids has no deadline yet, so the budget is a
-/// lower bound rather than an exact figure.
-#[test]
-fn budget_is_a_lower_bound_while_the_merge_still_leads() {
-    let inner = submission_stream(&[(100, 0), (105, 10), (130, 25)]);
-    let subs = inner.submissions.get(&BUILDER).unwrap();
-
-    let (steps, budget_ms, deadline_seen) = subs.budget(0, U256::from(100), U256::from(1_000));
-    assert!(!deadline_seen);
-    assert_eq!(steps, 2);
-    assert_eq!(budget_ms, 25);
-}
-
-/// A merge that is already behind when it is emitted gets no budget at all.
-#[test]
-fn budget_is_zero_when_the_next_submission_already_wins() {
-    let inner = submission_stream(&[(100, 0), (200, 8)]);
-    let subs = inner.submissions.get(&BUILDER).unwrap();
-
-    let (steps, budget_ms, deadline_seen) = subs.budget(0, U256::from(100), U256::from(20));
-    assert!(deadline_seen);
-    assert_eq!(steps, 0, "no headroom: the very next submission beat us");
-    assert_eq!(budget_ms, 8);
 }
 
 fn stream_job(
@@ -1136,22 +962,21 @@ fn stream_job(
             payload: payload.clone(),
             txs: Arc::new(Vec::new()),
             recv_ns: 0,
-            submission_index: 0,
             ingest_done_ns: 0,
         }),
         generation: 0,
-        offered_ns: 0,
     }
 }
 
 fn shared_slot(fixture: &Fixture) -> Arc<crate::engine::types::SharedSlot> {
-    let state = crate::engine::types::SlotState::new(&fixture.slot_start());
+    let state = crate::engine::types::SlotState::new(&fixture.slot_start(), None);
     Arc::new(crate::engine::types::SharedSlot {
         ctx: state.ctx.clone(),
         relay_config: Arc::new(fixture.relay_config.clone()),
-        engine_config: Arc::new(fixture.engine_config(Duration::ZERO)),
+        engine_config: Arc::new(fixture.engine_config()),
         inner: std::sync::RwLock::new(crate::engine::types::SharedInner::default()),
         pool_version: std::sync::atomic::AtomicU64::new(0),
+        state: Default::default(),
     })
 }
 
@@ -1212,66 +1037,6 @@ async fn orders_arriving_after_an_emission_improve_the_same_base() {
     );
 }
 
-/// A stream gives up the base it holds on value, not on age: a waiting block
-/// is only worth taking when the bid it carries gains more than another
-/// improvement pass would. Switching forfeits the accumulated delta, so a
-/// marginally better base is not worth it.
-#[tokio::test]
-async fn a_waiting_base_is_taken_only_when_its_bid_gain_beats_another_pass() {
-    let fixture = Fixture::new().await;
-    let (base, _) = fixture.build_base(U256::from(ETH));
-    let payload = base.execution_payload;
-    let stream = crate::engine::streams::BuilderStream::new();
-
-    assert!(stream.waiting_bid().is_none(), "nothing waiting");
-    stream.offer(stream_job(&fixture, &payload, B256::repeat_byte(0xb1), 500));
-    let waiting = stream.waiting_bid().expect("a block is waiting");
-    assert_eq!(waiting, U256::from(500));
-
-    // The comparison the stream makes: what the waiting bid gains over the base
-    // we hold, against what the last improvement pass added.
-    let held_base_value = U256::from(400);
-    let base_gain = waiting - held_base_value;
-    assert!(base_gain > U256::from(60), "a +100 base beats a +60 pass");
-    assert!(base_gain < U256::from(150), "a +100 base does not beat a +150 pass");
-
-    // Reading the waiting bid must not consume it: decide first, take second.
-    assert!(stream.waiting_bid().is_some(), "the block stays queued");
-    assert!(stream.try_take().is_some());
-    assert!(stream.waiting_bid().is_none());
-}
-
-/// Taking a waiting base forfeits the delta already accumulated on the one we
-/// hold, and only part of it comes back on the first pass. The rule charges
-/// that forfeit against the waiting bid, so a marginally better base is not
-/// worth the switch.
-#[test]
-fn the_rebase_rule_charges_the_delta_a_switch_forfeits() {
-    // Held base at 1000 with 400 of accumulated delta; last pass added 20.
-    let base = U256::from(1000u64);
-    let delta = U256::from(400u64);
-    let last_gain = U256::from(20u64);
-
-    // Half the delta is assumed to survive the switch, so 200 is forfeited.
-    let forfeit = |bps: u64| delta * U256::from(10_000u64 - bps) / U256::from(10_000u64);
-    let threshold = |bps: u64| last_gain + forfeit(bps);
-
-    assert_eq!(forfeit(5_000), U256::from(200u64));
-    assert_eq!(threshold(5_000), U256::from(220u64));
-
-    let rebases = |bid: u64, bps: u64| U256::from(bid) - base > threshold(bps);
-    assert!(!rebases(1_100, 5_000), "a +100 bid does not cover a 220 threshold");
-    assert!(rebases(1_300, 5_000), "a +300 bid does");
-
-    // Full recovery charges nothing, so the rule reduces to the marginal pass.
-    assert_eq!(forfeit(10_000), U256::ZERO);
-    assert!(rebases(1_100, 10_000), "with nothing forfeited, +100 beats a +20 pass");
-
-    // No recovery makes the rule maximally reluctant to give up a base.
-    assert_eq!(threshold(0), U256::from(420u64));
-    assert!(!rebases(1_400, 0));
-}
-
 /// A stream must only re-extend when the pool has actually moved. Re-screening
 /// an unchanged pool yields the same result and holds the read lock that ingest
 /// needs to write, which starves the engine thread.
@@ -1297,4 +1062,674 @@ async fn the_pool_version_moves_only_when_the_pool_does() {
     // The same block again changes nothing, so neither should the version.
     engine.handle_event(mergeable_event(&order, 3));
     assert_eq!(version(), after_order, "a duplicate block must not move the version");
+}
+
+const SAFE: Address = alloy_primitives::address!("5637a7552003411c8953Feba6E38951a32Ab9c49");
+const SAFE_SINGLETON: Address =
+    alloy_primitives::address!("41675c099f32341bf84bfc5382af534df5c7461a");
+const MULTISEND: Address = alloy_primitives::address!("40A2aCCbd92BCA938b02010E17A5b8929b49130D");
+
+/// The mainnet Safe v1.4.1 collateral setup, owned by the fixture's relay signer.
+fn deploy_collateral_safe(genesis: &mut ethrex_common::types::Genesis) {
+    let owner = funded_signers(genesis, 8)[6].address();
+    let word = |value: U256| ethrex_common::U256::from_big_endian(&value.to_be_bytes::<32>());
+    let owner_slot = |key: Address| {
+        let mut preimage = B256::left_padding_from(key.as_slice()).to_vec();
+        preimage.extend_from_slice(B256::from(U256::from(2)).as_slice());
+        word(alloy_primitives::keccak256(preimage).into())
+    };
+    let sentinel = Address::with_last_byte(1);
+    let account = |code: &str, storage, balance| ethrex_common::types::GenesisAccount {
+        code: hex::decode(code).unwrap().into(),
+        storage,
+        balance,
+        nonce: 1,
+    };
+    let storage = [
+        (word(U256::ZERO), word(U256::from_be_slice(SAFE_SINGLETON.as_slice()))),
+        (word(U256::from(3)), word(U256::from(1))),
+        (word(U256::from(4)), word(U256::from(1))),
+        (owner_slot(sentinel), word(U256::from_be_slice(owner.as_slice()))),
+        (owner_slot(owner), word(U256::from_be_slice(sentinel.as_slice()))),
+    ]
+    .into_iter()
+    .collect();
+    genesis.alloc.insert(
+        eaddr(SAFE),
+        account(include_str!("testdata/safe_proxy.hex"), storage, word(U256::from(100 * ETH))),
+    );
+    genesis.alloc.insert(
+        eaddr(SAFE_SINGLETON),
+        account(
+            include_str!("testdata/safe_singleton.hex"),
+            Default::default(),
+            Default::default(),
+        ),
+    );
+    genesis.alloc.insert(
+        eaddr(MULTISEND),
+        account(
+            include_str!("testdata/multisend_call_only.hex"),
+            Default::default(),
+            Default::default(),
+        ),
+    );
+}
+
+/// A base that pays the proposer through the collateral Safe moves the Safe's
+/// nonce, so the distribution must be signed over the post-base nonce.
+#[tokio::test(flavor = "multi_thread")]
+async fn distributes_through_the_collateral_safe_after_a_safe_paid_base() {
+    let mut fixture = Fixture::with_genesis(deploy_collateral_safe).await;
+    fixture.relay_config.multisend_contract = MULTISEND;
+    fixture.relay_config.builder_collaterals[0].collateral_safe = SAFE;
+
+    let payment = crate::engine::payment::encode_multisend_calldata(
+        &[(fixture.proposer, fixture.block_value)].into_iter().collect(),
+        SAFE,
+        U256::from(100 * ETH),
+        0,
+        MULTISEND,
+        U256::from(100_000),
+        fixture.chain_id,
+        &fixture.signers[6],
+    )
+    .unwrap();
+    let payment_tx = {
+        use alloy_consensus::SignableTransaction;
+        use alloy_signer::SignerSync;
+        let tx = alloy_consensus::TxEip1559 {
+            chain_id: fixture.chain_id,
+            nonce: 0,
+            gas_limit: 300_000,
+            max_fee_per_gas: 100 * GWEI,
+            max_priority_fee_per_gas: 0,
+            to: SAFE.into(),
+            value: U256::ZERO,
+            access_list: Default::default(),
+            input: payment.into(),
+        };
+        let signature = fixture.signers[0].sign_hash_sync(&tx.signature_hash()).unwrap();
+        alloy_eips::eip2718::Encodable2718::encoded_2718(&alloy_consensus::TxEnvelope::from(
+            tx.into_signed(signature),
+        ))
+    };
+    let user_tx = signed_transfer(
+        &fixture.signers[1],
+        fixture.chain_id,
+        0,
+        Address::repeat_byte(0x55),
+        U256::from(ETH),
+        100 * GWEI,
+        GWEI,
+    );
+    let (base, _) = fixture.base_from_txs(vec![user_tx, payment_tx], fixture.block_value);
+    let (order, _) = fixture.mergeable_orders(&base, pubkey(1), &[3], false, 0xa1);
+
+    let (mut engine, output_rx) = fixture.started_engine();
+    engine.handle_event(mergeable_event(&order, 0));
+    engine.handle_event(mergeable_event(&base, 1));
+
+    let merged = expect_merged(output_rx.recv_timeout(Duration::from_secs(10)).expect("no merge"));
+    assert_eq!(merged.included_order_ids.len(), 1);
+}
+
+/// A RocksDB store holding the recorded mainnet trie paths and the flat
+/// values the slot read, rooted at the real parent state root.
+async fn seeded_store(
+    path: &std::path::Path,
+    chain_config: &ethrex_common::types::ChainConfig,
+    proofs: &crate::engine::record::TrieProofs,
+    accounts: &std::collections::BTreeMap<
+        ethrex_common::Address,
+        ethrex_common::types::AccountState,
+    >,
+    alloc: &std::collections::BTreeMap<
+        ethrex_common::Address,
+        ethrex_common::types::GenesisAccount,
+    >,
+    state_root: ethrex_common::H256,
+) -> Store {
+    use ethrex_rlp::{decode::RLPDecode, encode::RLPEncode};
+    use ethrex_storage::{
+        EngineType,
+        api::tables::{
+            ACCOUNT_FLATKEYVALUE, ACCOUNT_TRIE_NODES, MISC_VALUES, STORAGE_FLATKEYVALUE,
+            STORAGE_TRIE_NODES,
+        },
+    };
+    use ethrex_trie::{Nibbles, Node, NodeHash, NodeRef};
+    let _ = std::fs::remove_dir_all(path);
+    let mut store = Store::new(path, EngineType::RocksDB).unwrap();
+    store.set_chain_config(chain_config).await.unwrap();
+    let seed = |nodes: &[Vec<u8>],
+                root: ethrex_common::H256,
+                prefix: Option<ethrex_common::H256>,
+                table| {
+        let by_hash: rustc_hash::FxHashMap<ethrex_common::H256, &Vec<u8>> = nodes
+            .iter()
+            .map(|rlp| (ethrex_common::H256::from(ethrex_crypto::keccak::keccak_hash(rlp)), rlp))
+            .collect();
+        let mut stack = vec![(root, Nibbles::default())];
+        while let Some((hash, at)) = stack.pop() {
+            let Some(rlp) = by_hash.get(&hash) else { continue };
+            store
+                .write(
+                    table,
+                    ethrex_storage::apply_prefix(prefix, at.clone()).into_vec(),
+                    (*rlp).clone(),
+                )
+                .unwrap();
+            let child = |child: &NodeRef| match child {
+                NodeRef::Hash(NodeHash::Hashed(hash)) => Some(*hash),
+                _ => None,
+            };
+            match Node::decode(rlp).unwrap() {
+                Node::Branch(branch) => {
+                    for (nibble, choice) in branch.choices.iter().enumerate() {
+                        stack.extend(child(choice).map(|hash| (hash, at.append_new(nibble as u8))));
+                    }
+                }
+                Node::Extension(extension) => {
+                    stack.extend(
+                        child(&extension.child).map(|hash| (hash, at.concat(&extension.prefix))),
+                    );
+                }
+                Node::Leaf(_) => {}
+            }
+        }
+    };
+    seed(&proofs.state, state_root, None, ACCOUNT_TRIE_NODES);
+    for (address, account) in accounts {
+        let hashed = ethrex_common::H256::from_slice(&ethrex_storage::hash_address(address));
+        let key = Nibbles::from_bytes(hashed.as_bytes()).into_vec();
+        store.write(ACCOUNT_FLATKEYVALUE, key, account.encode_to_vec()).unwrap();
+        if let Some(nodes) = proofs.storage.get(&hashed) {
+            seed(nodes, account.storage_root, Some(hashed), STORAGE_TRIE_NODES);
+        }
+    }
+    for (address, genesis_account) in alloc {
+        let hashed = ethrex_common::H256::from_slice(&ethrex_storage::hash_address(address));
+        for (slot, value) in &genesis_account.storage {
+            if value.is_zero() {
+                continue;
+            }
+            let slot = ethrex_common::H256::from(slot.to_big_endian());
+            let key = Nibbles::from_bytes(&ethrex_storage::hash_key(&slot));
+            let key = ethrex_storage::apply_prefix(Some(hashed), key).into_vec();
+            store.write(STORAGE_FLATKEYVALUE, key, value.encode_to_vec()).unwrap();
+        }
+        if !genesis_account.code.is_empty() {
+            let code = ethrex_common::types::Code::from_bytecode(
+                genesis_account.code.clone(),
+                &ethrex_crypto::native::NativeCrypto,
+            );
+            store.add_account_code(code).await.unwrap();
+        }
+    }
+    store.write(MISC_VALUES, b"last_written".to_vec(), vec![0xff]).unwrap();
+    drop(store);
+    let mut store = Store::new(path, EngineType::RocksDB).unwrap();
+    store.set_chain_config(chain_config).await.unwrap();
+    store
+}
+
+/// Replays a slot `record` wrote, against an in-memory store holding the state
+/// it read. The parent header keeps every mainnet field but its state root, so
+/// frames are re-pointed at the stand-in parent.
+async fn replay_slot(
+    dir: &std::path::Path,
+    record_into: Option<&std::path::Path>,
+) -> Vec<(u64, EngineOutput)> {
+    use ethrex_common::types::{BlockHeader, ChainConfig, GenesisAccount};
+    use ethrex_rlp::{decode::RLPDecode, encode::RLPEncode};
+    use helix_tcp_types::merging::relay_to_builder::MergeableBlockV1;
+    use ssz::Decode;
+
+    use crate::engine::record::{
+        KIND_MERGEABLE, KIND_RELAY_CONFIG, KIND_SLOT_END, KIND_SLOT_START, RecordMeta,
+    };
+    let read = |name: &str| std::fs::read(dir.join(name)).unwrap();
+    let meta: RecordMeta = serde_json::from_slice(&read("meta.json")).unwrap();
+    let chain_config: ChainConfig = serde_json::from_slice(&read("chain_config.json")).unwrap();
+    let mut alloc: std::collections::BTreeMap<ethrex_common::Address, GenesisAccount> =
+        serde_json::from_slice(&read("alloc.json")).unwrap();
+    let block_hashes: std::collections::BTreeMap<u64, ethrex_common::H256> =
+        serde_json::from_slice(&read("block_hashes.json")).unwrap();
+    let events = zstd::decode_all(&read("events.bin.zst")[..]).unwrap();
+    let mut frames = Vec::new();
+    let mut at = 0;
+    while at < events.len() {
+        let kind = events[at];
+        let ns = u64::from_le_bytes(events[at + 1..at + 9].try_into().unwrap());
+        let len = u32::from_le_bytes(events[at + 9..at + 13].try_into().unwrap()) as usize;
+        frames.push((kind, ns, events[at + 13..at + 13 + len].to_vec()));
+        at += 13 + len;
+    }
+
+    let signer = crate::engine::record::replay_signer();
+    let word = |address: ethrex_common::Address| {
+        ethrex_common::U256::from_big_endian(B256::left_padding_from(address.as_bytes()).as_slice())
+    };
+    let owner_slot = |owner: ethrex_common::Address| {
+        let slot = crate::engine::record::safe_owner_slot(owner);
+        ethrex_common::U256::from_big_endian(slot.as_bytes())
+    };
+    let relay_config = frames
+        .iter()
+        .find(|(kind, ..)| *kind == KIND_RELAY_CONFIG)
+        .map(|(_, _, body)| RelayConfigV1::from_ssz_bytes(body).unwrap())
+        .expect("recording has a relay config");
+    let (replay_owner, sentinel) =
+        (eaddr(signer.address()), ethrex_common::Address::from_low_u64_be(1));
+    for collateral in &relay_config.builder_collaterals {
+        if let Some(safe) = alloc.get_mut(&eaddr(collateral.collateral_safe)) {
+            safe.storage.insert(owner_slot(sentinel), word(replay_owner));
+            safe.storage.insert(owner_slot(replay_owner), word(meta.relay_signer));
+        }
+    }
+    alloc.entry(replay_owner).or_insert(GenesisAccount {
+        code: Default::default(),
+        storage: Default::default(),
+        balance: ethrex_common::U256::from(100 * ETH),
+        nonce: 0,
+    });
+
+    let trie = dir.join("trie.json.zst");
+    let (store, parent) = if trie.exists() {
+        let proofs: crate::engine::record::TrieProofs =
+            serde_json::from_slice(&zstd::decode_all(&std::fs::read(&trie).unwrap()[..]).unwrap())
+                .unwrap();
+        let mut accounts: std::collections::BTreeMap<
+            ethrex_common::Address,
+            ethrex_common::types::AccountState,
+        > = serde_json::from_slice(&read("accounts.json")).unwrap();
+        accounts.entry(replay_owner).or_insert(ethrex_common::types::AccountState {
+            balance: ethrex_common::U256::from(100 * ETH),
+            ..Default::default()
+        });
+        let parent = BlockHeader::decode(&read("parent_header.rlp")).unwrap();
+        let path = std::env::temp_dir().join(format!("helix-replay-{}", meta.slot));
+        (
+            seeded_store(&path, &chain_config, &proofs, &accounts, &alloc, parent.state_root).await,
+            parent,
+        )
+    } else {
+        let (store, genesis) = dev_genesis_store_with(|genesis| {
+            genesis.config = chain_config;
+            genesis.alloc = alloc;
+        })
+        .await;
+        let mut parent = BlockHeader::decode(&read("parent_header.rlp")).unwrap();
+        parent.state_root = genesis.get_block().header.state_root;
+        (store, BlockHeader::decode(&parent.encode_to_vec()).unwrap())
+    };
+    let parent_hash = parent.hash();
+    store.add_block_header(parent_hash, parent.clone()).await.unwrap();
+    store.add_block_number(parent_hash, parent.number).await.unwrap();
+    let canonical = block_hashes.into_iter().filter(|(n, _)| *n != parent.number);
+    store
+        .forkchoice_update(
+            canonical.chain([(parent.number, parent_hash)]).collect(),
+            parent.number,
+            parent_hash,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    let blockchain: Arc<Blockchain> = Blockchain::new(store.clone(), BlockchainOptions {
+        r#type: BlockchainType::L1,
+        ..Default::default()
+    })
+    .into();
+    let (head_tx, head) = watch::channel(HeadInfo {
+        number: parent.number,
+        hash: parent_hash,
+        timestamp: parent.timestamp,
+        is_synced: true,
+    });
+    let config = EngineConfig {
+        relay_signer: signer,
+        max_blocks_per_slot: 256_000_000,
+        max_orders_per_slot: 8192,
+        min_value_increase_wei: U256::ZERO,
+        max_base_age: Duration::from_millis(
+            std::env::var("REPLAY_MAX_BASE_AGE_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(50),
+        ),
+        warmup: std::env::var_os("REPLAY_NO_WARMUP").is_none(),
+        core: None,
+        max_builder_streams: 16,
+        speculation_top_k: 4,
+        replay_worker_cores: Vec::new(),
+        order_worker_cores: Vec::new(),
+        record: record_into.map(|dir| crate::engine::record::RecordConfig {
+            dir: dir.to_path_buf(),
+            every_n_slots: 1,
+        }),
+    };
+    let (event_tx, event_rx) = crossbeam_channel::bounded(1 << 16);
+    let (output_tx, output_rx) = crossbeam_channel::bounded(1 << 16);
+    let validator = blockchain.clone();
+    let engine = MergeEngine::spawn(config, store, head, event_tx.clone(), event_rx, output_tx);
+    let mut lanes = super::Lanes::spawn(1 << 16, event_tx.clone());
+    let mut beacon_root = B256::ZERO;
+
+    let collector = std::thread::spawn(move || {
+        let mut outputs = Vec::new();
+        while let Ok(output) = output_rx.recv() {
+            outputs.push((crate::utils::utcnow_ns(), output));
+        }
+        outputs
+    });
+    let recorded_start = frames[0].1;
+    let replay_start = std::time::Instant::now();
+    let mut replayed_slot = None;
+    for (kind, ns, body) in frames {
+        let due = Duration::from_nanos(ns.saturating_sub(recorded_start));
+        if let Some(wait) = due.checked_sub(replay_start.elapsed()) {
+            std::thread::sleep(wait);
+        }
+        let event = match kind {
+            KIND_RELAY_CONFIG => {
+                EngineEvent::RelayConfig(RelayConfigV1::from_ssz_bytes(&body).unwrap())
+            }
+            KIND_SLOT_START => {
+                if let Some(slot) = replayed_slot {
+                    std::thread::sleep(Duration::from_millis(600));
+                    event_tx.send(EngineEvent::SlotEnd { slot }).unwrap();
+                    break;
+                }
+                let mut msg = SlotStartV1::from_ssz_bytes(&body).unwrap();
+                replayed_slot = Some(msg.slot);
+                beacon_root = msg.parent_beacon_block_root;
+                msg.parent_hash = b256(parent_hash);
+                EngineEvent::SlotStart(msg)
+            }
+            KIND_MERGEABLE => {
+                let mut msg = MergeableBlockV1::from_ssz_bytes(&body).unwrap();
+                msg.execution_payload.payload_inner.payload_inner.parent_hash = b256(parent_hash);
+                lanes.submit(msg.as_ssz_bytes(), crate::utils::utcnow_ns(), 0).unwrap();
+                continue;
+            }
+            KIND_SLOT_END => {
+                std::thread::sleep(Duration::from_millis(600));
+                EngineEvent::SlotEnd { slot: u64::from_le_bytes(body[..8].try_into().unwrap()) }
+            }
+            _ => continue,
+        };
+        event_tx.send(event).unwrap();
+    }
+    std::thread::sleep(Duration::from_millis(600));
+    drop(lanes);
+    drop(event_tx);
+    engine.join().unwrap();
+    drop(head_tx);
+    let outputs = collector.join().unwrap();
+    // Every `REPLAY_VALIDATE`th merged block, executed in full by ethrex.
+    if let Some(every) = std::env::var("REPLAY_VALIDATE").ok().and_then(|v| v.parse::<usize>().ok())
+    {
+        let (mut ok, mut failed) = (0, std::collections::BTreeMap::<String, usize>::new());
+        let merged = outputs.iter().filter_map(|(_, output)| match output {
+            EngineOutput::Merged { msg, .. } => Some(msg),
+            EngineOutput::Reject { .. } => None,
+        });
+        for msg in merged.step_by(every.max(1)) {
+            let block = crate::engine::convert::payload_v3_to_block(
+                &msg.execution_payload,
+                beacon_root,
+                &msg.execution_requests,
+            )
+            .unwrap();
+            match validator.add_block(block) {
+                Ok(()) => ok += 1,
+                Err(err) => {
+                    let err = err.to_string();
+                    *failed.entry(err.chars().take(120).collect()).or_default() += 1;
+                }
+            }
+        }
+        println!("validated ok={ok} failed={failed:?}");
+    }
+    outputs
+}
+
+/// `REPLAY_DIR=<record dir>/<slot> cargo test --release -p helix-builder replay_recording --
+/// --ignored --nocapture`
+#[tokio::test(flavor = "multi_thread")]
+#[ignore]
+async fn replay_recording() {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(std::env::var("RUST_LOG").unwrap_or_default())
+        .try_init();
+    ethrex_crypto::kzg::warm_up_trusted_setup();
+    if std::env::var_os("REPLAY_PROFILE").is_some() {
+        flux_profiler::enable_profiler("helix-builder");
+    }
+    let dir = std::path::PathBuf::from(std::env::var("REPLAY_DIR").expect("REPLAY_DIR"));
+    let diff_dir =
+        std::env::var_os("REPLAY_DIFF").map(|_| std::env::temp_dir().join("helix-replay-diff"));
+    if let Some(diff_dir) = &diff_dir {
+        let _ = std::fs::remove_dir_all(diff_dir);
+    }
+    let outputs = replay_slot(&dir, diff_dir.as_deref()).await;
+    let mut first: rustc_hash::FxHashMap<
+        B256,
+        helix_tcp_types::merging::builder_to_relay::MergeTraceV1,
+    > = Default::default();
+    let mut rejects: std::collections::BTreeMap<String, usize> = Default::default();
+    let mut merged = 0;
+    for (_, output) in &outputs {
+        match output {
+            EngineOutput::Merged { msg, .. } => {
+                merged += 1;
+                first.entry(msg.base_block_hash).or_insert(msg.trace);
+            }
+            EngineOutput::Reject { msg, .. } => {
+                *rejects.entry(format!("{:?}", msg.code)).or_default() += 1;
+            }
+        }
+    }
+    let ms = |from: u64, to: u64| to.saturating_sub(from) as f64 / 1e6;
+    let mut stages: [Vec<f64>; 4] = Default::default();
+    for t in first.values() {
+        for (sample, value) in stages.iter_mut().zip([
+            ms(t.base_block_recv_ns, t.sim_start_ns),
+            ms(t.sim_start_ns, t.sim_end_ns),
+            ms(t.sim_end_ns, t.finalize_ns),
+            ms(t.base_block_recv_ns, t.finalize_ns),
+        ]) {
+            sample.push(value);
+        }
+    }
+    println!("merged={merged} bases_emitted={} rejects={rejects:?}", first.len());
+    for (stage, sample) in
+        ["recv_to_sim", "sim", "sim_to_finalize", "recv_to_finalize"].iter().zip(stages.iter_mut())
+    {
+        sample.sort_unstable_by(f64::total_cmp);
+        let q = |p: f64| {
+            sample.get(((sample.len().max(1) - 1) as f64 * p) as usize).copied().unwrap_or(f64::NAN)
+        };
+        println!("first emit {stage:<18} p50 {:>8.2}ms  p90 {:>8.2}ms", q(0.5), q(0.9));
+    }
+    if let Some(diff_dir) = &diff_dir {
+        std::thread::sleep(Duration::from_secs(2));
+        type BaseGas = std::collections::BTreeMap<B256, Vec<(B256, u64)>>;
+        let load = |dir: &std::path::Path| -> BaseGas {
+            serde_json::from_slice(&std::fs::read(dir.join("base_gas.json")).unwrap()).unwrap()
+        };
+        let slot = dir.file_name().unwrap();
+        let (live, replayed) = (load(&dir), load(&diff_dir.join(slot)));
+        let mut diverged = 0;
+        for (base, txs) in &replayed {
+            let Some(live_txs) = live.get(base) else { continue };
+            let Some(ix) = txs.iter().zip(live_txs).position(|(a, b)| a != b) else { continue };
+            diverged += 1;
+            let delta = |txs: &[(B256, u64)]| txs[ix].1 - ix.checked_sub(1).map_or(0, |p| txs[p].1);
+            println!(
+                "diverged base={base} tx_ix={ix} tx={} live_gas={} replay_gas={}",
+                txs[ix].0,
+                delta(live_txs),
+                delta(txs)
+            );
+        }
+        let compared = replayed.keys().filter(|base| live.contains_key(*base)).count();
+        println!("bases compared={compared} diverged={diverged}");
+    }
+    let wanted = [
+        "ingest_decode",
+        "replay_full",
+        "replay_txs",
+        "extend",
+        "emit_state_root",
+        "layer_apply",
+        "layer_hash",
+        "layer_wait",
+    ];
+    for family in crate::metrics::BUILDER_METRICS_REGISTRY.gather() {
+        if family.get_name().ends_with("merge_wait_phase_ms") {
+            for metric in family.get_metric() {
+                let phase = metric.get_label().first().map(|l| l.get_value()).unwrap_or("?");
+                let h = metric.get_histogram();
+                println!(
+                    "wait_phase {phase} total={:.0}ms n={}",
+                    h.get_sample_sum(),
+                    h.get_sample_count()
+                );
+            }
+        }
+        if family.get_name().ends_with("merge_tx_reuse_total") ||
+            family.get_name().ends_with("merge_layer_build_total") ||
+            family.get_name().ends_with("merge_wait_dominant_total")
+        {
+            for metric in family.get_metric() {
+                let outcome =
+                    metric.get_label().iter().map(|l| l.get_value()).collect::<Vec<_>>().join("/");
+                println!("{} {outcome} n={}", family.get_name(), metric.get_counter().get_value());
+            }
+        }
+        if family.get_name().ends_with("merge_rejection_total") {
+            for metric in family.get_metric() {
+                let label = |name: &str| {
+                    metric.get_label().iter().find(|l| l.get_name() == name).map(|l| l.get_value())
+                };
+                let count = metric.get_counter().get_value();
+                let (stage, reason) =
+                    (label("stage").unwrap_or("?"), label("reason").unwrap_or("?"));
+                if count > 0.0 {
+                    println!("rejected {stage}/{reason} n={count}");
+                }
+                if stage == "emission" && reason == "internal" && count > 0.0 {
+                    println!(
+                        "WARNING: {count} emits failed internally (usually state this slot never read)"
+                    );
+                }
+            }
+        }
+    }
+    for family in crate::metrics::BUILDER_METRICS_REGISTRY.gather() {
+        for metric in family.get_metric() {
+            let stage = metric.get_label().iter().find(|l| l.get_name() == "stage");
+            let Some(stage) = stage.map(|l| l.get_value()).filter(|s| wanted.contains(s)) else {
+                continue;
+            };
+            let histogram = metric.get_histogram();
+            let count = histogram.get_sample_count().max(1) as f64;
+            println!(
+                "stage {stage:<16} n={:<6} mean {:>8.2}ms",
+                histogram.get_sample_count(),
+                histogram.get_sample_sum() / count / 1e3
+            );
+        }
+    }
+}
+
+/// A droppable tx whose gas limit no longer fits once earlier orders fill the
+/// block must be dropped: consensus checks the limit, not the gas it uses.
+#[tokio::test(flavor = "multi_thread")]
+async fn drops_a_droppable_tx_whose_gas_limit_no_longer_fits() {
+    let burner = Address::repeat_byte(0x66);
+    let fixture = Fixture::with_genesis(|genesis| {
+        genesis.alloc.insert(eaddr(burner), ethrex_common::types::GenesisAccount {
+            code: hex::decode("5b600056").unwrap().into(),
+            storage: Default::default(),
+            balance: ethrex_common::U256::zero(),
+            nonce: 1,
+        });
+    })
+    .await;
+    let tx = |signer: &PrivateKeySigner, nonce: u64, to: Address, value: U256, gas_limit: u64| {
+        use alloy_consensus::SignableTransaction;
+        use alloy_signer::SignerSync;
+        let tx = alloy_consensus::TxEip1559 {
+            chain_id: fixture.chain_id,
+            nonce,
+            gas_limit,
+            max_fee_per_gas: 100 * GWEI,
+            max_priority_fee_per_gas: GWEI,
+            to: to.into(),
+            value,
+            access_list: Default::default(),
+            input: Default::default(),
+        };
+        let signature = signer.sign_hash_sync(&tx.signature_hash()).unwrap();
+        alloy_eips::eip2718::Encodable2718::encoded_2718(&alloy_consensus::TxEnvelope::from(
+            tx.into_signed(signature),
+        ))
+    };
+    let (base, _) = fixture.build_base(U256::from(ETH));
+    let coinbase = fixture.signers[0].address();
+    let bundle = |txs: Vec<Vec<u8>>, reverting: Vec<u16>, dropping: Vec<u16>, byte: u8| {
+        let mut msg = base.clone();
+        msg.builder_pubkey = pubkey(byte);
+        msg.builder_address = fixture.signers[2].address();
+        msg.allow_appending = false;
+        msg.block_value = U256::from(ETH / 10);
+        msg.merge_orders =
+            vec![MergeOrderRef::Bundle(helix_tcp_types::merging::order::BundleOrderRef {
+                txs: (0..txs.len() as u16).collect(),
+                reverting_txs: reverting,
+                dropping_txs: dropping,
+                latest_only: true,
+            })];
+        let payload = &mut msg.execution_payload.payload_inner.payload_inner;
+        payload.transactions = txs.into_iter().map(Into::into).collect();
+        payload.block_hash = B256::repeat_byte(byte);
+        payload.fee_recipient = fixture.signers[2].address();
+        msg
+    };
+    let filler = bundle(
+        vec![
+            tx(&fixture.signers[3], 0, burner, U256::ZERO, 12_300_000),
+            tx(&fixture.signers[3], 1, burner, U256::ZERO, 12_300_000),
+            tx(&fixture.signers[3], 2, coinbase, U256::from(ETH / 5), 21_000),
+        ],
+        vec![0, 1],
+        vec![],
+        0xa1,
+    );
+    let wide_tx = tx(&fixture.signers[5], 0, Address::repeat_byte(0x55), U256::from(1), 400_000);
+    let wide_hash = alloy_primitives::keccak256(&wide_tx);
+    let late = bundle(
+        vec![tx(&fixture.signers[4], 0, coinbase, U256::from(ETH / 10), 21_000), wide_tx],
+        vec![],
+        vec![1],
+        0xb1,
+    );
+
+    let (mut engine, output_rx) = fixture.started_engine();
+    for msg in [&filler, &late, &base] {
+        engine.handle_event(mergeable_event(msg, 0));
+    }
+    let mut best: Option<Box<helix_tcp_types::merging::builder_to_relay::MergedBlockV1>> = None;
+    while let Ok(output) = output_rx.recv_timeout(Duration::from_secs(3)) {
+        let merged = expect_merged(output);
+        if best.as_ref().is_none_or(|b| merged.proposer_value > b.proposer_value) {
+            best = Some(merged);
+        }
+    }
+    let merged = best.expect("merged");
+    assert_eq!(merged.included_order_ids.len(), 2);
+    let txs = &merged.execution_payload.payload_inner.payload_inner.transactions;
+    assert!(txs.iter().all(|tx| alloy_primitives::keccak256(tx) != wide_hash));
 }

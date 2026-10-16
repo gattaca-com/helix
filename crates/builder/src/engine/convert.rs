@@ -64,12 +64,18 @@ pub fn awithdrawal(w: &Withdrawal) -> alloy_eips::eip4895::Withdrawal {
 
 /// Converts a finalized ethrex block into the wire `ExecutionPayloadV3`.
 pub fn block_to_payload_v3(block: &Block) -> ExecutionPayloadV3 {
-    let header = &block.header;
     let transactions =
         block.body.transactions.iter().map(|tx| tx.encode_canonical_to_vec().into()).collect();
-    let withdrawals =
-        block.body.withdrawals.as_deref().unwrap_or_default().iter().map(awithdrawal).collect();
+    payload_v3(&block.header, transactions, block.body.withdrawals.as_deref().unwrap_or_default())
+}
 
+/// The wire `ExecutionPayloadV3` for `header` with txs already encoded.
+pub fn payload_v3(
+    header: &BlockHeader,
+    transactions: Vec<alloy_primitives::Bytes>,
+    withdrawals: &[Withdrawal],
+) -> ExecutionPayloadV3 {
+    let withdrawals = withdrawals.iter().map(awithdrawal).collect();
     ExecutionPayloadV3 {
         payload_inner: ExecutionPayloadV2 {
             payload_inner: ExecutionPayloadV1 {
@@ -85,7 +91,7 @@ pub fn block_to_payload_v3(block: &Block) -> ExecutionPayloadV3 {
                 timestamp: header.timestamp,
                 extra_data: header.extra_data.clone().into(),
                 base_fee_per_gas: AU256::from(header.base_fee_per_gas.unwrap_or_default()),
-                block_hash: b256(block.hash()),
+                block_hash: b256(header.hash()),
                 transactions,
             },
             withdrawals,

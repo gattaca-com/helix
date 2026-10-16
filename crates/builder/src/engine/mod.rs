@@ -3,15 +3,20 @@
 //! session, and streams merged blocks / rejects back. Everything
 //! ethrex-related stays behind this boundary.
 
+mod builder;
 pub mod convert;
 pub mod error;
+pub mod keccak8;
+mod list_root;
 pub mod payment;
-pub mod session;
-pub mod simulate;
+pub mod record;
+pub mod state;
 pub mod streams;
 #[cfg(test)]
 mod tests;
+pub mod trie;
 pub mod types;
+pub mod workers;
 
 use std::sync::{
     Arc, RwLock,
@@ -20,9 +25,9 @@ use std::sync::{
 
 use alloy_primitives::{B256, keccak256};
 use crossbeam_channel::{Receiver, Sender};
-use ethrex_blockchain::Blockchain;
 use ethrex_crypto::native::NativeCrypto;
 use ethrex_storage::Store;
+use flux_profiler::timed;
 use helix_tcp_types::merging::{
     builder_to_relay::{MergedBlockV1, RejectCode, RejectSubject, RejectV1},
     control::RelayConfigV1,
@@ -41,8 +46,8 @@ use crate::{
         error::MergeError,
         streams::{MergeStreams, Offer, StreamJob},
         types::{
-            DecodedTx, EngineConfig, PreparedBlock, PreparedOrder, SharedInner, SharedSlot,
-            SlotState,
+            Decoded, DecodedTx, EngineConfig, PreparedBlock, PreparedOrder, SharedInner,
+            SharedSlot, SlotState, SlotTxs,
         },
     },
     metrics,
@@ -64,17 +69,11 @@ pub enum EngineEvent {
     SlotEnd {
         slot: u64,
     },
-    /// Raw SSZ body of a `MergeableBlockV1` (already decompressed). The engine
-    /// does the SSZ + transaction decoding off the tile thread.
     MergeableBlock {
         body: Vec<u8>,
         recv_ns: u64,
         generation: u64,
-    },
-    ActivateBase {
-        slot: u64,
-        block_hash: B256,
-        generation: u64,
+        decoded: Option<Box<Decoded>>,
     },
 }
 
@@ -119,13 +118,13 @@ pub struct MergeEngine {
     slot: Option<SlotState>,
     /// Per-builder merge streams; `None` when disabled.
     streams: Option<MergeStreams>,
+    store: Store,
 }
 
 impl MergeEngine {
     pub fn spawn(
         config: EngineConfig,
         store: Store,
-        blockchain: Arc<Blockchain>,
         head: watch::Receiver<HeadInfo>,
         event_tx: Sender<EngineEvent>,
         events: Receiver<EngineEvent>,
@@ -139,13 +138,14 @@ impl MergeEngine {
                 {
                     warn!(core, "failed to pin merge engine thread");
                 }
+                trie::preallocate();
+                let _unused = workers::CORES.set(config.order_worker_cores.clone());
                 let config = Arc::new(config);
                 let streams = (config.max_builder_streams > 0).then(|| {
                     MergeStreams::new(
                         config.max_builder_streams,
                         &config.replay_worker_cores,
                         store.clone(),
-                        blockchain.clone(),
                         out.clone(),
                     )
                 });
@@ -158,6 +158,7 @@ impl MergeEngine {
                     relay_config: None,
                     slot: None,
                     streams,
+                    store,
                 };
                 info!("merge engine started");
                 engine.run(events);
@@ -175,11 +176,25 @@ impl MergeEngine {
         }
     }
 
+    #[timed]
     fn teardown_slot(&mut self, reason: &str) {
         if let Some(state) = self.slot.take() {
+            if let Some(recorder) = state.ctx.recorder.clone() {
+                recorder.finish();
+            }
             let (builders, orders, top_rise, top_span) = match &state.shared {
                 Some(shared) => {
                     let inner = shared.inner.read().expect("shared slot poisoned");
+                    for (builder, subs) in &inner.submissions {
+                        info!(
+                            slot = state.slot,
+                            %builder,
+                            blocks = subs.count,
+                            span_ms = subs.span_ms(),
+                            mean_gap_ms = subs.span_ms() / subs.count.saturating_sub(1).max(1),
+                            "merge builder cadence"
+                        );
+                    }
                     let top = inner.top_builders(1).first().and_then(|b| inner.submissions.get(b));
                     (
                         inner.submissions.len(),
@@ -211,6 +226,24 @@ impl MergeEngine {
     /// Applies one event to the engine state; returns whether a merge pass is
     /// warranted afterwards.
     fn handle_event(&mut self, event: EngineEvent) -> bool {
+        let kind = match &event {
+            EngineEvent::ConnectionReset { .. } => "engine_connection_reset",
+            EngineEvent::RelayConfig(_) => "engine_relay_config",
+            EngineEvent::SlotStart(_) => "engine_slot_start",
+            EngineEvent::SlotEnd { .. } => "engine_slot_end",
+            EngineEvent::MergeableBlock { .. } => "engine_mergeable_block",
+        };
+        let start = std::time::Instant::now();
+        let pass = self.apply_event(event);
+        metrics::stage_latency(kind, start.elapsed().as_micros() as u64);
+        pass
+    }
+
+    #[timed]
+    fn apply_event(&mut self, event: EngineEvent) -> bool {
+        if let Some(recorder) = self.slot.as_ref().and_then(|state| state.ctx.recorder.as_ref()) {
+            recorder.event(crate::utils::utcnow_ns(), &event);
+        }
         match event {
             EngineEvent::ConnectionReset { generation } => {
                 debug!(generation, "connection reset, dropping slot state");
@@ -241,7 +274,25 @@ impl MergeEngine {
                 }
                 debug!(slot = msg.slot, parent_hash = %msg.parent_hash, "slot start");
                 self.teardown_slot("slot_start");
-                let mut state = SlotState::new(&msg);
+                let recorder = self
+                    .config
+                    .record
+                    .as_ref()
+                    .filter(|record| msg.slot.is_multiple_of(record.every_n_slots))
+                    .map(|record| {
+                        let recorder = record::SlotRecorder::new(
+                            record,
+                            msg.slot,
+                            convert::eaddr(self.config.relay_signer.address()),
+                        );
+                        let now = crate::utils::utcnow_ns();
+                        if let Some(config) = &self.relay_config {
+                            recorder.event(now, &EngineEvent::RelayConfig((**config).clone()));
+                        }
+                        recorder.event(now, &EngineEvent::SlotStart(msg));
+                        recorder
+                    });
+                let mut state = SlotState::new(&msg, recorder);
                 state.shared = self.relay_config.clone().map(|relay_config| {
                     Arc::new(SharedSlot {
                         ctx: state.ctx.clone(),
@@ -249,6 +300,7 @@ impl MergeEngine {
                         engine_config: self.config.clone(),
                         inner: RwLock::new(SharedInner::default()),
                         pool_version: AtomicU64::new(0),
+                        state: Default::default(),
                     })
                 });
                 self.slot = Some(state);
@@ -261,16 +313,17 @@ impl MergeEngine {
                 }
                 false
             }
-            EngineEvent::MergeableBlock { body, recv_ns, generation } => {
+            EngineEvent::MergeableBlock { body, recv_ns, generation, decoded } => {
                 if generation != self.generation {
                     return false;
                 }
-                match self.ingest_mergeable_block(&body, recv_ns) {
+                match self.ingest_mergeable_block(&body, recv_ns, decoded) {
                     Ok(()) => true,
                     Err((slot, block_hash, err)) => {
                         metrics::rejection("ingest", err.metric_label());
                         warn!(%err, "mergeable block rejected");
                         if let Some((code, subject)) = err.reject(block_hash) {
+                            let send_start = std::time::Instant::now();
                             let _ = self.out.send(EngineOutput::reject(
                                 self.generation,
                                 slot,
@@ -278,38 +331,14 @@ impl MergeEngine {
                                 subject,
                                 err.to_string(),
                             ));
+                            metrics::stage_latency(
+                                "engine_reject_send",
+                                send_start.elapsed().as_micros() as u64,
+                            );
                         }
                         false
                     }
                 }
-            }
-            EngineEvent::ActivateBase { slot, block_hash, generation } => {
-                if generation != self.generation {
-                    return false;
-                }
-                let Some(state) = self.slot.as_mut() else { return false };
-                if state.slot != slot {
-                    let _unused = self.out.send(EngineOutput::reject(
-                        self.generation,
-                        slot,
-                        RejectCode::StaleSlot,
-                        RejectSubject::BlockHash(block_hash),
-                        "activation for a slot that is not current",
-                    ));
-                    return false;
-                }
-                // Advisory only. We cannot know which builder holds the top bid
-                // when get_header is called, so every candidate builder gets a
-                // stream regardless; this just records the relay's current view.
-                match state.blocks.get(&block_hash) {
-                    Some(base) => {
-                        let beneficiary = base.beneficiary();
-                        state.top_builder = Some(beneficiary);
-                        metrics::activation_source("advisory");
-                    }
-                    None => metrics::activation_source("unknown_base_block"),
-                }
-                false
             }
         }
     }
@@ -317,6 +346,7 @@ impl MergeEngine {
     /// Queues a speculative replay for a newly pooled appendable block.
     /// Offers a newly pooled appendable block to its builder's merge stream.
     /// Never blocks: a refusal just means that builder is not merged this round.
+    #[timed]
     fn offer_to_stream(&mut self, base: &Arc<PreparedBlock>) {
         let Some(streams) = self.streams.as_ref() else { return };
         let Some(state) = self.slot.as_mut() else { return };
@@ -329,7 +359,7 @@ impl MergeEngine {
                 let inner = shared.inner.read().expect("shared slot poisoned");
                 inner.top_builders(top_k).contains(&beneficiary)
             };
-            if !in_top_k && state.top_builder != Some(beneficiary) {
+            if !in_top_k {
                 state.stream.skipped_not_top_k += 1;
                 metrics::speculation("skipped_not_top_k");
                 return;
@@ -342,12 +372,7 @@ impl MergeEngine {
             return;
         }
 
-        let job = StreamJob {
-            shared,
-            base: base.clone(),
-            generation: self.generation,
-            offered_ns: crate::utils::utcnow_ns(),
-        };
+        let job = StreamJob { shared, base: base.clone(), generation: self.generation };
         match streams.offer(beneficiary, job) {
             Offer::Accepted => {
                 state.stream.offered += 1;
@@ -369,15 +394,28 @@ impl MergeEngine {
     /// Decodes and pools a forwarded `MergeableBlockV1`.
     #[allow(clippy::type_complexity)]
     #[allow(clippy::result_large_err)]
+    #[timed]
     fn ingest_mergeable_block(
         &mut self,
         body: &[u8],
         recv_ns: u64,
+        decoded: Option<Box<Decoded>>,
     ) -> Result<(), (u64, Option<B256>, MergeError)> {
+        metrics::stage_latency(
+            "ingest_queue",
+            crate::utils::utcnow_ns().saturating_sub(recv_ns) / 1000,
+        );
         let current_slot = self.slot.as_ref().map(|s| s.slot).unwrap_or_default();
-        let msg = MergeableBlockV1::from_ssz_bytes(body).map_err(|e| {
-            (current_slot, None, MergeError::InvalidOrder(format!("undecodable block: {e:?}")))
-        })?;
+        let (msg, txs) = match decoded {
+            Some(decoded) => (decoded.msg, Some(decoded.txs)),
+            None => (
+                MergeableBlockV1::from_ssz_bytes(body).map_err(|e| {
+                    let err = MergeError::InvalidOrder(format!("undecodable block: {e:?}"));
+                    (current_slot, None, err)
+                })?,
+                None,
+            ),
+        };
         let block_hash = msg.execution_payload.payload_inner.payload_inner.block_hash;
         let fail = |err: MergeError| (msg.slot, Some(block_hash), err);
 
@@ -397,8 +435,10 @@ impl MergeEngine {
         let Some(shared) = state.shared.clone() else {
             return Err(fail(MergeError::StaleSlot));
         };
-        let (submission_index, ratchet) = {
+        let ratchet = {
+            let lock_start = std::time::Instant::now();
             let mut inner = shared.inner.write().expect("shared slot poisoned");
+            metrics::stage_latency("ingest_lock_wait", lock_start.elapsed().as_micros() as u64);
             inner.record_submission(msg.builder_address, msg.block_value, recv_ns)
         };
         if let Some((delta, interval_ms, rising)) = ratchet {
@@ -421,8 +461,16 @@ impl MergeEngine {
         // cache (incremental submissions share most txs); resolves any
         // tx-hash references against txs already seen whole this slot. Runs before the
         // order checks so a block rejected for its orders still fills the tx cache.
-        let decoded = decode_block_txs(&msg, &mut state.recovery_cache, &mut state.tx_cache)
-            .map_err(|err| fail(MergeError::InvalidOrder(err)))?;
+        let decoded = match txs {
+            Some(txs) => txs,
+            None => {
+                let decode_start = std::time::Instant::now();
+                let txs = decode_block_txs(&msg, &state.txs);
+                metrics::stage_latency("ingest_decode", decode_start.elapsed().as_micros() as u64);
+                txs
+            }
+        }
+        .map_err(|err| fail(MergeError::InvalidOrder(err)))?;
 
         for order in &msg.merge_orders {
             order
@@ -439,8 +487,11 @@ impl MergeEngine {
 
         // Budget counts distinct pooled orders, as the relay's `orders_sent` does.
         let mut pool_full = false;
+        let mut pooled = Vec::new();
         {
+            let lock_start = std::time::Instant::now();
             let mut inner = shared.inner.write().expect("shared slot poisoned");
+            metrics::stage_latency("ingest_lock_wait", lock_start.elapsed().as_micros() as u64);
             inner.update_latest_only(
                 msg.builder_pubkey,
                 prepared_orders
@@ -456,7 +507,7 @@ impl MergeEngine {
                         // source block.
                         let existing = &inner.orders[existing_ix];
                         if msg.block_value > existing.source_block_value {
-                            inner.orders[existing_ix] = prepared;
+                            inner.orders[existing_ix] = Arc::new(prepared);
                         }
                     }
                     None => {
@@ -466,15 +517,12 @@ impl MergeEngine {
                         }
                         let ix = inner.orders.len();
                         inner.order_ids.insert(prepared.order_id, ix);
+                        let prepared = Arc::new(prepared);
+                        pooled.push(prepared.clone());
                         inner.orders.push(prepared);
                     }
                 }
             }
-        }
-
-        shared.pool_version.fetch_add(1, Ordering::Release);
-        if let Some(streams) = self.streams.as_ref() {
-            streams.wake_all();
         }
 
         debug!(
@@ -496,14 +544,21 @@ impl MergeEngine {
             payload: msg.execution_payload,
             txs,
             recv_ns,
-            submission_index,
             ingest_done_ns: crate::utils::utcnow_ns(),
         });
         state.blocks.insert(block_hash, prepared.clone());
+        if !pooled.is_empty() {
+            builder::learn(shared.clone(), self.store.clone(), prepared.clone(), pooled);
+        }
 
         // Every appendable base goes to its builder's stream.
         if prepared.allow_appending {
+            builder::prefetch(shared.clone(), self.store.clone(), prepared.clone());
             self.offer_to_stream(&prepared);
+        }
+        shared.pool_version.fetch_add(1, Ordering::Release);
+        if let Some(streams) = self.streams.as_ref() {
+            streams.wake_all();
         }
 
         // Dropped orders still leave a usable base candidate, so keep the block.
@@ -523,15 +578,104 @@ impl MergeEngine {
     }
 }
 
+const DECODE_LANES: usize = 8;
+
+type LaneJob = (Vec<u8>, u64, u64, Arc<SlotTxs>);
+
+pub struct Lanes {
+    senders: Vec<Sender<LaneJob>>,
+    by_builder: rustc_hash::FxHashMap<[u8; 48], usize>,
+    scope: (u64, u64),
+    txs: Arc<SlotTxs>,
+}
+
+impl Lanes {
+    pub fn spawn(capacity: usize, engine_tx: Sender<EngineEvent>) -> Self {
+        let senders = (0..DECODE_LANES)
+            .map(|i| {
+                let (tx, rx) = crossbeam_channel::bounded::<LaneJob>(capacity);
+                let engine_tx = engine_tx.clone();
+                std::thread::Builder::new()
+                    .name(format!("b-decode-{i}"))
+                    .spawn(move || {
+                        for (body, recv_ns, generation, txs) in rx {
+                            let start = std::time::Instant::now();
+                            let decoded = MergeableBlockV1::from_ssz_bytes(&body).ok().map(|msg| {
+                                let txs = decode_block_txs(&msg, &txs);
+                                Box::new(Decoded { msg, txs })
+                            });
+                            metrics::stage_latency(
+                                "ingest_decode",
+                                start.elapsed().as_micros() as u64,
+                            );
+                            let event =
+                                EngineEvent::MergeableBlock { body, recv_ns, generation, decoded };
+                            if engine_tx.send(event).is_err() {
+                                break;
+                            }
+                        }
+                    })
+                    .expect("failed to spawn decode lane");
+                tx
+            })
+            .collect();
+        Lanes { senders, by_builder: Default::default(), scope: (0, 0), txs: Default::default() }
+    }
+
+    pub fn submit(&mut self, body: Vec<u8>, recv_ns: u64, generation: u64) -> Result<(), Vec<u8>> {
+        let slot = body.get(..8).and_then(|b| b.try_into().ok()).map(u64::from_le_bytes);
+        let slot = slot.unwrap_or_default();
+        if generation != self.scope.0 || slot > self.scope.1 {
+            self.scope = (generation, slot);
+            self.txs = Default::default();
+        }
+        let word = |bytes: &[u8], at: usize| {
+            bytes.get(at..at + 4).and_then(|b| b.try_into().ok()).map(u32::from_le_bytes)
+        };
+        let payload = word(&body, 165).unwrap_or_default() as usize;
+        let start = word(&body, payload + 504).unwrap_or_default() as usize;
+        let end = word(&body, payload + 508).unwrap_or_default() as usize;
+        let list = body.get(payload + start..payload + end).unwrap_or_default();
+        let count = word(list, 0).unwrap_or_default() as usize / 4;
+        for i in 0..count {
+            let from = word(list, 4 * i).unwrap_or_default() as usize;
+            let to = if i + 1 < count { word(list, 4 * i + 4) } else { Some(list.len() as u32) };
+            let tx = list.get(from..to.unwrap_or_default() as usize).unwrap_or_default();
+            if !tx.is_empty() && !is_tx_hash_ref(tx) {
+                self.txs.raw.insert(keccak256(tx), alloy_primitives::Bytes::copy_from_slice(tx));
+            }
+        }
+        let mut builder = [0; 48];
+        if let Some(pubkey) = body.get(8..56) {
+            builder.copy_from_slice(pubkey);
+        }
+        let next = self.by_builder.len() % DECODE_LANES;
+        let lane = *self.by_builder.entry(builder).or_insert(next);
+        let job = (body, recv_ns, generation, self.txs.clone());
+        self.senders[lane].try_send(job).map_err(|err| err.into_inner().0)
+    }
+}
+
+const PARALLEL_RECOVER: usize = 8;
+
 /// Decodes every tx in the payload and recovers senders (cache-assisted, the
 /// misses in parallel). Entries of `order::TX_HASH_REF_LEN` bytes are
 /// tx-hash references rather than raw txs (see `MergeableBlockV1`'s doc
 /// comment): resolved against `tx_cache`, which holds every tx already sent
 /// whole on this connection this slot.
+/// Kept off the global pool so ingest never waits behind presim or warming.
+static RECOVERY_POOL: std::sync::LazyLock<rayon::ThreadPool> = std::sync::LazyLock::new(|| {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(4)
+        .thread_name(|i| format!("recover-{i}"))
+        .build()
+        .expect("recovery pool")
+});
+
+#[timed]
 fn decode_block_txs(
     msg: &MergeableBlockV1,
-    recovery_cache: &mut rustc_hash::FxHashMap<B256, ethrex_common::Address>,
-    tx_cache: &mut rustc_hash::FxHashMap<B256, Arc<DecodedTx>>,
+    cache: &SlotTxs,
 ) -> Result<Vec<Arc<DecodedTx>>, String> {
     use rayon::prelude::*;
 
@@ -539,6 +683,7 @@ fn decode_block_txs(
 
     struct Partial {
         tx: ethrex_common::types::Transaction,
+        encoded: alloy_primitives::Bytes,
         hash: B256,
         cached_sender: Option<ethrex_common::Address>,
     }
@@ -554,24 +699,25 @@ fn decode_block_txs(
     let entries: Vec<Option<Entry>> = tx_bytes
         .iter()
         .map(|bytes| {
-            let entry = if is_tx_hash_ref(bytes) {
-                let hash = B256::from_slice(bytes);
-                tx_cache
-                    .get(&hash)
-                    .cloned()
-                    .map(Entry::Cached)
-                    .ok_or_else(|| format!("unresolved tx hash reference: {hash}"))
-            } else {
-                ethrex_common::types::Transaction::decode_canonical(bytes)
+            let raw = match is_tx_hash_ref(bytes) {
+                true => {
+                    let hash = B256::from_slice(bytes);
+                    if let Some(tx) = cache.txs.get(&hash) {
+                        return Some(Entry::Cached(tx.clone()));
+                    }
+                    cache.raw.get(&hash).map(|raw| raw.clone())
+                }
+                false => Some(bytes.clone()),
+            };
+            let entry = match raw {
+                None => Err(format!("unresolved tx hash reference: {}", B256::from_slice(bytes))),
+                Some(bytes) => ethrex_common::types::Transaction::decode_canonical(&bytes)
                     .map_err(|e| format!("tx decode: {e}"))
                     .map(|tx| {
-                        let hash = keccak256(bytes);
-                        Entry::New(Box::new(Partial {
-                            tx,
-                            hash,
-                            cached_sender: recovery_cache.get(&hash).copied(),
-                        }))
-                    })
+                        let hash = keccak256(&bytes);
+                        let cached_sender = cache.senders.get(&hash).map(|sender| *sender);
+                        Entry::New(Box::new(Partial { tx, encoded: bytes, hash, cached_sender }))
+                    }),
             };
             match entry {
                 Ok(entry) => Some(entry),
@@ -583,38 +729,44 @@ fn decode_block_txs(
         })
         .collect();
 
-    let decoded: Vec<Option<Result<Arc<DecodedTx>, String>>> = entries
-        .into_par_iter()
-        .map(|entry| {
-            let partial = match entry? {
-                Entry::Cached(tx) => return Some(Ok(tx)),
-                Entry::New(partial) => *partial,
-            };
-            let sender = match partial.cached_sender {
-                Some(sender) => sender,
-                None => match partial.tx.sender(&NativeCrypto) {
-                    Ok(sender) => sender,
-                    Err(e) => return Some(Err(format!("sender recovery: {e}"))),
-                },
-            };
-            let blob_hashes =
-                partial.tx.blob_versioned_hashes().into_iter().map(convert::b256).collect();
-            Some(Ok(Arc::new(DecodedTx {
-                gas_limit: partial.tx.gas_limit(),
-                blob_hashes,
-                hash: partial.hash,
-                sender,
-                tx: partial.tx,
-            })))
-        })
-        .collect();
+    let finish = |entry: Option<Entry>| {
+        let partial = match entry? {
+            Entry::Cached(tx) => return Some(Ok(tx)),
+            Entry::New(partial) => *partial,
+        };
+        let sender = match partial.cached_sender {
+            Some(sender) => sender,
+            None => match partial.tx.sender(&NativeCrypto) {
+                Ok(sender) => sender,
+                Err(e) => return Some(Err(format!("sender recovery: {e}"))),
+            },
+        };
+        let blob_hashes =
+            partial.tx.blob_versioned_hashes().into_iter().map(convert::b256).collect();
+        Some(Ok(Arc::new(DecodedTx {
+            gas_limit: partial.tx.gas_limit(),
+            blob_hashes,
+            hash: partial.hash,
+            sender,
+            tx: partial.tx,
+            encoded: partial.encoded,
+        })))
+    };
+    let recover = entries
+        .iter()
+        .filter(|entry| matches!(entry, Some(Entry::New(p)) if p.cached_sender.is_none()))
+        .count();
+    let decoded: Vec<Option<Result<Arc<DecodedTx>, String>>> = match recover >= PARALLEL_RECOVER {
+        true => RECOVERY_POOL.install(|| entries.into_par_iter().map(finish).collect()),
+        false => entries.into_iter().map(finish).collect(),
+    };
 
     let mut txs = Vec::with_capacity(decoded.len());
     for entry in decoded {
         match entry {
             Some(Ok(tx)) => {
-                recovery_cache.insert(tx.hash, tx.sender);
-                tx_cache.entry(tx.hash).or_insert_with(|| tx.clone());
+                cache.senders.insert(tx.hash, tx.sender);
+                cache.txs.entry(tx.hash).or_insert_with(|| tx.clone());
                 txs.push(tx);
             }
             Some(Err(err)) => {
@@ -630,6 +782,7 @@ fn decode_block_txs(
     }
 }
 
+#[timed]
 fn prepare_order(
     msg: &MergeableBlockV1,
     order_ref: &MergeOrderRef,
@@ -680,7 +833,6 @@ fn prepare_order(
     }
 }
 
-/// Test/scaffolding engine: pools nothing and rejects every activation.
 #[cfg(test)]
 pub struct NoopEngine;
 
@@ -694,17 +846,8 @@ impl NoopEngine {
         std::thread::Builder::new()
             .name("noop-merge-engine".into())
             .spawn(move || {
-                while let Ok(event) = events.recv() {
-                    if let EngineEvent::ActivateBase { slot, block_hash, generation, .. } = event {
-                        let _ = out.send(EngineOutput::reject(
-                            generation,
-                            slot,
-                            RejectCode::UnknownBaseBlock,
-                            RejectSubject::BlockHash(block_hash),
-                            "noop engine",
-                        ));
-                    }
-                }
+                let _out = out;
+                while events.recv().is_ok() {}
             })
             .expect("failed to spawn noop engine thread")
     }
