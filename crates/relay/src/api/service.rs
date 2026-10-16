@@ -6,7 +6,7 @@ use std::{
 
 use axum::serve::ListenerExt;
 use crossbeam_channel::Sender;
-use flux::spine::StandaloneDCacheProducer;
+use flux::spine::{StandaloneDCacheProducer, StandaloneProducer};
 use flux_utils::SharedVector;
 use helix_common::{
     CurrentSlotInfo, RelayConfig, alerts::AlertManager, api::builder_api::TopBidPrecision,
@@ -30,7 +30,7 @@ use crate::{
     },
     gossip::{GossipedMessage, GrpcGossiperClientManager, process_gossip_messages},
     network::api::RelayNetworkApi,
-    spine::messages::NewBidSubmission,
+    spine::messages::{GetHeaderServed, NewBidSubmission},
 };
 
 pub(crate) const API_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
@@ -51,6 +51,7 @@ pub fn start_api_service<A: Api>(
     auctioneer_handle: AuctioneerHandle,
     registrations_handle: RegWorkerHandle,
     bid_producer: StandaloneDCacheProducer<NewBidSubmission>,
+    header_served: StandaloneProducer<GetHeaderServed>,
     future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
     web_socket_connections: Sender<(RawWebSocket, TopBidPrecision)>,
     alert_manager: Arc<AlertManager>,
@@ -74,6 +75,7 @@ pub fn start_api_service<A: Api>(
         auctioneer_handle,
         registrations_handle,
         bid_producer,
+        header_served,
         future_results,
         web_socket_connections,
         alert_manager,
@@ -99,6 +101,7 @@ pub async fn run_api_service<A: Api>(
     auctioneer_handle: AuctioneerHandle,
     registrations_handle: RegWorkerHandle,
     bid_producer: StandaloneDCacheProducer<NewBidSubmission>,
+    header_served: StandaloneProducer<GetHeaderServed>,
     future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
     web_socket_connections: Sender<(RawWebSocket, TopBidPrecision)>,
     alert_manager: Arc<AlertManager>,
@@ -147,6 +150,7 @@ pub async fn run_api_service<A: Api>(
         alert_manager,
         operator_api,
         Arc::default(),
+        header_served,
     ));
 
     tokio::spawn(process_gossip_messages(

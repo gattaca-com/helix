@@ -12,6 +12,7 @@ use std::sync::{Arc, atomic::Ordering};
 
 use axum::{Extension, response::IntoResponse};
 pub use error::*;
+use flux::spine::StandaloneProducer;
 use helix_common::{
     CurrentSlotInfo, RelayConfig, ValidatorPreferences, alerts::AlertManager,
     beacon::MultiBeaconClient, chain_info::ChainInfo, local_cache::LocalCache,
@@ -27,6 +28,7 @@ use crate::{
     auctioneer::AuctioneerHandle,
     gossip::GrpcGossiperClientManager,
     registration::RegWorkerHandle,
+    spine::messages::GetHeaderServed,
 };
 
 #[derive(Clone)]
@@ -49,6 +51,7 @@ pub struct ProposerApi<A: Api> {
     pub ip_tracker: IpTracker,
     pub gloas_builder_identity: Arc<GloasBuilderIdentity>,
     pub gloas_payload_store: Arc<GloasPayloadStore>,
+    pub header_served: Arc<StandaloneProducer<GetHeaderServed>>,
 }
 
 impl<A: Api> ProposerApi<A> {
@@ -68,6 +71,7 @@ impl<A: Api> ProposerApi<A> {
         alert_manager: Arc<AlertManager>,
         operator_api: Option<Arc<OperatorPubSub>>,
         gloas_payload_store: Arc<GloasPayloadStore>,
+        header_served: StandaloneProducer<GetHeaderServed>,
     ) -> Self {
         let gloas_builder_identity = Arc::new(GloasBuilderIdentity {
             builder_index: relay_config.gloas_builder_index,
@@ -91,6 +95,7 @@ impl<A: Api> ProposerApi<A> {
             ip_tracker: IpTracker::default(),
             gloas_builder_identity,
             gloas_payload_store,
+            header_served: Arc::new(header_served),
         }
     }
 }
