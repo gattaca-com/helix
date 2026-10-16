@@ -1,6 +1,6 @@
 mod error;
 mod get_execution_payload_bid;
-mod get_header;
+pub(crate) mod get_header;
 pub(crate) mod get_payload;
 mod header_stream;
 mod ip_tracker;

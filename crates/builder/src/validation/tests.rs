@@ -1737,16 +1737,32 @@ impl Fixture {
         &self,
         built: &Built,
     ) -> helix_common::simulator::SszValidationRequest {
-        let submission: helix_types::SignedBidSubmission =
+        let submission: helix_types::SignedBidSubmissionFulu =
             self.submission(built).try_into().expect("the fixture builds a convertible submission");
         let bal = built.block_access_list.clone().expect("a Gloas request carries a list");
-        let gloas = helix_types::SignedBidSubmissionGloas::join(
-            submission,
-            helix_types::GloasSubmissionData {
-                block_access_list: helix_types::BlockAccessListBytes(bal.into()),
-                ..Default::default()
+        let slot = helix_types::Slot::new(submission.message.slot);
+        let gloas = helix_types::SignedBidSubmissionGloas {
+            execution_payload: std::sync::Arc::new(
+                submission
+                    .execution_payload
+                    .to_lighthouse_gloas_payload(
+                        slot,
+                        &helix_types::BlockAccessListBytes(bal.into()),
+                    )
+                    .expect("the fixture fits the consensus limits"),
+            ),
+            execution_requests: std::sync::Arc::new(helix_types::execution_requests_to_gloas(
+                &submission.execution_requests,
+                &Default::default(),
+                &Default::default(),
+            )),
+            message: helix_types::GloasBidTrace {
+                trace: submission.message,
+                parent_block_root: B256::ZERO,
             },
-        );
+            blobs_bundle: submission.blobs_bundle,
+            signature: submission.signature,
+        };
         helix_common::simulator::SszValidationRequest {
             apply_blacklist: false,
             registered_gas_limit: 0,

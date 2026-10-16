@@ -8,9 +8,11 @@ mod clock;
 mod error;
 mod execution_payload;
 mod fields;
+pub mod gloas;
 mod hydration;
 mod operator;
 mod request_auth;
+pub mod ssz_json;
 mod test_random_compat;
 mod test_utils;
 mod utils;
@@ -28,6 +30,7 @@ pub use clock::*;
 pub use error::*;
 pub use execution_payload::*;
 pub use fields::*;
+pub use gloas::GloasBidSubmission;
 pub use helix_tcp_types::{Compression, MergeType};
 pub use hydration::*;
 pub use lh_kzg::{KzgCommitment, KzgProof};
@@ -87,7 +90,6 @@ pub type BeaconBlockBodyFulu = lh_types::BeaconBlockBodyFulu<MainnetEthSpec>;
 pub type SignedBuilderBid = crate::builder_bid::SignedBuilderBid;
 /// Response object of GET `/eth/v1/builder/header/{slot}/{parent_hash}/{pubkey}`
 pub type GetHeaderResponse = lh_eth2::ForkVersionedResponse<SignedBuilderBid>;
-pub type GetExecutionPayloadBidResponse = lh_eth2::ForkVersionedResponse<SignedExecutionPayloadBid>;
 
 // Get payload
 /// Request object of POST `/eth/v1/builder/blinded_blocks`

@@ -4,7 +4,7 @@ use alloy_primitives::{Address, B256, U256};
 use helix_telemetry::SimError;
 use helix_types::{
     BidTrace, BlobsBundle, BlsSignatureBytes, ExecutionPayload, ExecutionRequests, ForkName,
-    SignedBidSubmission,
+    SignedBidSubmissionFulu,
 };
 use ssz_derive::{Decode, Encode};
 use thiserror::Error;
@@ -18,7 +18,7 @@ use crate::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
 pub enum SubmissionFormat {
-    /// Uncompressed SSZ `SignedBidSubmission` (current default).
+    /// Uncompressed SSZ `SignedBidSubmissionFulu` (current default).
     #[default]
     FullSsz = 0,
     /// Uncompressed SSZ `DehydratedBidSubmission`.
@@ -259,7 +259,7 @@ pub struct SszValidationResponse {
     pub txs: Vec<TxDetail>,
 }
 
-// TODO: refactor this in a SignedBidSubmission + extra fields
+// TODO: refactor this in a SignedBidSubmissionFulu + extra fields
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct JsonValidationRequest {
     #[serde(with = "serde_utils::quoted_u64")]
@@ -278,7 +278,7 @@ pub struct JsonValidationRequest {
 impl JsonValidationRequest {
     pub fn new(
         registered_gas_limit: u64,
-        block: &SignedBidSubmission,
+        block: &SignedBidSubmissionFulu,
         proposer_preferences: ValidatorPreferences,
         parent_beacon_block_root: Option<B256>,
         inclusion_list: Option<InclusionListWithMetadata>,

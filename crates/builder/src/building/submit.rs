@@ -6,8 +6,9 @@ use helix_common::{
     signing::RelaySigningContext,
 };
 use helix_types::{
-    BidTrace, BlobsBundle, BlockAccessListBytes, ForkName, GloasSubmissionData, KzgCommitments,
-    SignedBidSubmission, SignedBidSubmissionGloas, Slot, payload_from_v3,
+    BidTrace, BlobsBundle, BlockAccessListBytes, ForkName, GloasBidTrace, KzgCommitments,
+    SignedBidSubmissionFulu, SignedBidSubmissionGloas, Slot, execution_requests_to_gloas,
+    payload_from_v3,
 };
 use ssz::Encode;
 use thiserror::Error;
@@ -58,7 +59,7 @@ pub enum SubmitError {
 /// block access list, so the choice of shape is the choice of fork.
 #[derive(Debug)]
 pub enum Bid {
-    Fulu(SignedBidSubmission),
+    Fulu(SignedBidSubmissionFulu),
     Gloas(SignedBidSubmissionGloas),
 }
 
@@ -66,7 +67,7 @@ impl Bid {
     pub fn message(&self) -> &BidTrace {
         match self {
             Bid::Fulu(bid) => &bid.message,
-            Bid::Gloas(bid) => &bid.message,
+            Bid::Gloas(bid) => &bid.message.trace,
         }
     }
 
@@ -121,26 +122,33 @@ impl Submitter {
             gas_used: payload.gas_used,
             value: built.value,
         };
-        let signature = self.signing.sign_builder_message(&message);
 
-        let submission = SignedBidSubmission {
-            message,
-            execution_payload: Arc::new(payload),
-            blobs_bundle: Arc::new(blobs),
-            execution_requests: Arc::new(requests),
-            signature: signature.serialize().into(),
-        };
-
-        // The relay decodes by the fork its own clock reports, so the shape has
-        // to be chosen from the same spec rather than from the block.
         let fork = self.signing.chain_info.fork_at_slot(Slot::new(slot.slot));
         match (fork, &built.block_access_list) {
             (ForkName::Gloas, Some(bal)) => {
-                Ok(Bid::Gloas(SignedBidSubmissionGloas::join(submission, GloasSubmissionData {
-                    block_access_list: BlockAccessListBytes(bal.clone().into()),
-                    builder_deposits: decoded.builder_deposits,
-                    builder_exits: decoded.builder_exits,
-                })))
+                let execution_payload = payload
+                    .to_lighthouse_gloas_payload(
+                        Slot::new(slot.slot),
+                        &BlockAccessListBytes(bal.clone().into()),
+                    )
+                    .map_err(|_| SubmitError::OversizedPayload)?;
+                let execution_requests = execution_requests_to_gloas(
+                    &requests,
+                    &decoded.builder_deposits,
+                    &decoded.builder_exits,
+                );
+                let message = GloasBidTrace {
+                    trace: message,
+                    parent_block_root: slot.parent_beacon_block_root,
+                };
+                let signature = self.signing.sign_builder_message(&message);
+                Ok(Bid::Gloas(SignedBidSubmissionGloas {
+                    message,
+                    execution_payload: Arc::new(execution_payload),
+                    blobs_bundle: Arc::new(blobs),
+                    execution_requests: Arc::new(execution_requests),
+                    signature: signature.serialize().into(),
+                }))
             }
             (ForkName::Gloas, None) => Err(SubmitError::MissingBlockAccessList),
             // No pre-Gloas submission shape carries EIP-8282 requests, so sending
@@ -155,7 +163,16 @@ impl Submitter {
             // a header whose hash is not the one signed here. Every bid would
             // die as a hash mismatch, with nothing to point at.
             (fork, Some(_)) => Err(SubmitError::UnsubmittableBlockAccessList(fork)),
-            (_, None) => Ok(Bid::Fulu(submission)),
+            (_, None) => {
+                let signature = self.signing.sign_builder_message(&message);
+                Ok(Bid::Fulu(SignedBidSubmissionFulu {
+                    message,
+                    execution_payload: Arc::new(payload),
+                    blobs_bundle: Arc::new(blobs),
+                    execution_requests: Arc::new(requests),
+                    signature: signature.serialize().into(),
+                }))
+            }
         }
     }
 

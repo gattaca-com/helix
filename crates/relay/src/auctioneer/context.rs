@@ -47,7 +47,9 @@ use crate::{
         bid_sorter::BidSorter,
         block_merger::BlockMerger,
         builder_preferences::BuilderPreferencesStore,
-        types::{PayloadEntry, PendingPayload, SlotData, SubmissionRef, SubmissionRefKind},
+        types::{
+            GloasPayload, PayloadEntry, PendingPayload, SlotData, SubmissionRef, SubmissionRefKind,
+        },
     },
     simulator::{
         MergedSimulationResultInner, MergedValidationRequest, Simulators, ValidationResult,
@@ -65,6 +67,7 @@ pub struct SlotContext {
     pub version: FxHashMap<BlsPublicKeyBytes, SubmissionVersion>,
     pub hydration_cache: HydrationCache,
     pub payloads: PayloadStore,
+    pub gloas_payloads: PayloadStore<GloasPayload>,
     pub block_merger: BlockMerger,
 }
 
@@ -75,13 +78,18 @@ pub struct SlotContext {
 /// proposer redeems its bid part-way through its own slot, so a payload has to
 /// outlive the auction it won. Keeping the previous generation covers the whole
 /// of that slot; anything older is dropped.
-#[derive(Default)]
-pub struct PayloadStore {
-    current: FxHashMap<B256, PayloadEntry>,
-    previous: FxHashMap<B256, PayloadEntry>,
+pub struct PayloadStore<T = PayloadEntry> {
+    current: FxHashMap<B256, T>,
+    previous: FxHashMap<B256, T>,
 }
 
-impl PayloadStore {
+impl<T> Default for PayloadStore<T> {
+    fn default() -> Self {
+        Self { current: FxHashMap::default(), previous: FxHashMap::default() }
+    }
+}
+
+impl<T> PayloadStore<T> {
     fn with_capacity(capacity: usize) -> Self {
         Self {
             current: FxHashMap::with_capacity_and_hasher(capacity, Default::default()),
@@ -89,22 +97,22 @@ impl PayloadStore {
         }
     }
 
-    pub fn insert(&mut self, block_hash: B256, entry: PayloadEntry) {
+    pub fn insert(&mut self, block_hash: B256, entry: T) {
         self.current.insert(block_hash, entry);
     }
 
-    pub fn or_insert(&mut self, block_hash: B256, entry: PayloadEntry) {
+    pub fn or_insert(&mut self, block_hash: B256, entry: T) {
         self.current.entry(block_hash).or_insert(entry);
     }
 
     /// The current auction's payloads only: a bid is served from this slot.
-    pub fn get(&self, block_hash: &B256) -> Option<&PayloadEntry> {
+    pub fn get(&self, block_hash: &B256) -> Option<&T> {
         self.current.get(block_hash)
     }
 
     /// As [`Self::get`], falling back to the previous slot. Redemption arrives
     /// after the relay has moved on, so the bid it names is usually one back.
-    pub fn get_for_redemption(&self, block_hash: &B256) -> Option<&PayloadEntry> {
+    pub fn get_for_redemption(&self, block_hash: &B256) -> Option<&T> {
         self.current.get(block_hash).or_else(|| self.previous.get(block_hash))
     }
 
@@ -119,7 +127,7 @@ impl PayloadStore {
     /// Starts a new auction, returning the generation that is now too old to
     /// redeem so the caller can drop it off the event loop.
     #[must_use]
-    fn rotate(&mut self, capacity: usize) -> FxHashMap<B256, PayloadEntry> {
+    fn rotate(&mut self, capacity: usize) -> FxHashMap<B256, T> {
         let just_finished = std::mem::replace(
             &mut self.current,
             FxHashMap::with_capacity_and_hasher(capacity, Default::default()),
@@ -199,6 +207,7 @@ impl<B: BidAdjustor> Context<B> {
             ),
             hydration_cache: HydrationCache::new(),
             payloads: PayloadStore::with_capacity(EXPECTED_PAYLOADS_PER_SLOT),
+            gloas_payloads: PayloadStore::default(),
             block_merger,
         };
 
@@ -340,7 +349,7 @@ impl<B: BidAdjustor> Context<B> {
         self.auctioneer_handle.clear_inflight_payloads();
         self.decoded.clear();
 
-        if !self.payloads.is_empty() {
+        if !self.payloads.is_empty() || !self.gloas_payloads.is_empty() {
             // here we need to deallocate a lot of data, taking more than 1s on busy slots
             // this is not a big issue since it 's only at the beginning of the slot, but it blocks
             // the full event loop, which is not ideal. An alternative would be to use a
@@ -349,6 +358,7 @@ impl<B: BidAdjustor> Context<B> {
             // payloads received, or risk causing a missed slot
 
             let payloads_to_drop = self.payloads.rotate(EXPECTED_PAYLOADS_PER_SLOT);
+            let gloas_payloads_to_drop = self.gloas_payloads.rotate(EXPECTED_PAYLOADS_PER_SLOT);
             let dealloc_core = self.config.cores.dealloc;
             std::thread::spawn(move || {
                 // Unpinned, this lands on whatever core the OS picks -- including a
@@ -356,9 +366,10 @@ impl<B: BidAdjustor> Context<B> {
                 if let Some(core) = dealloc_core {
                     helix_common::utils::pin_thread_to_core(core);
                 }
-                let to_drop = payloads_to_drop.len();
+                let to_drop = payloads_to_drop.len() + gloas_payloads_to_drop.len();
                 let start = Instant::now();
                 drop(payloads_to_drop);
+                drop(gloas_payloads_to_drop);
                 info!("dropped {} payloads in {:?}", to_drop, start.elapsed())
             });
         }
@@ -588,17 +599,16 @@ pub fn send_submission_result<P>(
 
 #[cfg(test)]
 mod payload_store_tests {
-    use helix_types::{SignedBidSubmission, TestRandomSeed};
+    use helix_types::{SignedBidSubmissionFulu, TestRandomSeed};
 
     use super::*;
 
     fn entry() -> PayloadEntry {
-        let mut submission = SignedBidSubmission::test_random();
+        let mut submission = SignedBidSubmissionFulu::test_random();
         submission.blobs_bundle = Default::default();
         PayloadEntry::new_submission(
             submission,
             B256::ZERO,
-            None,
             None,
             None,
             helix_types::SubmissionVersion::new(0, None),

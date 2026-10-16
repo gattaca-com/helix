@@ -2,7 +2,7 @@ use std::hint::black_box;
 
 use alloy_rpc_types::engine::ExecutionPayloadV3 as AlloyExecutionPayload;
 use criterion::{Criterion, criterion_group, criterion_main};
-use helix_types::{ExecutionPayload, SignedBidSubmission};
+use helix_types::{ExecutionPayload, SignedBidSubmissionFulu};
 use lh_types::MainnetEthSpec;
 use ssz::{Decode, Encode};
 use tree_hash::TreeHash;
@@ -13,7 +13,7 @@ fn benchmark_serde(c: &mut Criterion) {
     let mut group = c.benchmark_group("execution_payload_serde");
 
     let data_json = include_bytes!("../src/testdata/signed-bid-submission-fulu-2.json");
-    let submission: SignedBidSubmission = serde_json::from_slice(data_json).unwrap();
+    let submission: SignedBidSubmissionFulu = serde_json::from_slice(data_json).unwrap();
     let payload = &submission.execution_payload;
     let lh_payload = payload.to_lighthouse_fulu_payload().unwrap();
     let alloy_payload = AlloyExecutionPayload::from_ssz_bytes(&payload.as_ssz_bytes()).unwrap();
@@ -73,7 +73,7 @@ fn benchmark_ssz(c: &mut Criterion) {
     let mut group = c.benchmark_group("execution_payload_ssz");
 
     let data_json = include_bytes!("../src/testdata/signed-bid-submission-fulu-2.json");
-    let submission: SignedBidSubmission = serde_json::from_slice(data_json).unwrap();
+    let submission: SignedBidSubmissionFulu = serde_json::from_slice(data_json).unwrap();
     let payload = &submission.execution_payload;
     let lh_payload = payload.to_lighthouse_fulu_payload().unwrap();
     let alloy_payload = AlloyExecutionPayload::from_ssz_bytes(&payload.as_ssz_bytes()).unwrap();
@@ -128,7 +128,7 @@ fn benchmark_transaction_root(c: &mut Criterion) {
     let mut group = c.benchmark_group("transaction_root");
 
     let data_json = include_bytes!("../src/testdata/signed-bid-submission-fulu-2.json");
-    let submission: SignedBidSubmission = serde_json::from_slice(data_json).unwrap();
+    let submission: SignedBidSubmissionFulu = serde_json::from_slice(data_json).unwrap();
     let payload = &submission.execution_payload;
     let lh_payload = payload.to_lighthouse_fulu_payload().unwrap();
 

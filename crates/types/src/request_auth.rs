@@ -5,13 +5,13 @@
 //! See <https://github.com/ethereum/builder-specs/blob/main/specs/gloas/validator.md#new-containers>.
 
 use alloy_primitives::B256;
-use lh_types::SignedRoot;
 use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
 use ssz_types::typenum::U4096;
+use tree_hash::TreeHash as _;
 use tree_hash_derive::TreeHash;
 
-use crate::{BlsPublicKey, BlsPublicKeyBytes, BlsSignature, BlsSignatureBytes, SigError};
+use crate::{BlsPublicKeyBytes, BlsSignatureBytes, SigError};
 
 crate::ssz_bytes_wrapper! {
     /// ByteList[MAX_DATA_SIZE], MAX_DATA_SIZE = 4096
@@ -30,8 +30,6 @@ pub struct BuilderRequestAuth {
     pub slot: u64,
 }
 
-impl SignedRoot for BuilderRequestAuth {}
-
 #[derive(PartialEq, Debug, Serialize, Deserialize, Clone, Encode, Decode)]
 pub struct SignedBuilderRequestAuth {
     pub message: BuilderRequestAuth,
@@ -46,17 +44,11 @@ impl SignedBuilderRequestAuth {
         pubkey: &BlsPublicKeyBytes,
         domain: B256,
     ) -> Result<(), SigError> {
-        let signature = BlsSignature::deserialize(self.signature.as_slice())
-            .map_err(|_| SigError::InvalidBlsSignatureBytes)?;
-        let pubkey = BlsPublicKey::deserialize(pubkey.as_slice())
-            .map_err(|_| SigError::InvalidBlsPubkeyBytes)?;
-
-        let message = self.message.signing_root(domain);
-        if !signature.verify(&pubkey, message) {
-            return Err(SigError::InvalidBlsSignature);
-        }
-
-        Ok(())
+        crate::gloas::bls_verify(
+            pubkey.as_slice(),
+            self.signature.as_slice(),
+            crate::gloas::signing_root(self.message.tree_hash_root(), domain),
+        )
     }
 }
 
@@ -117,7 +109,10 @@ mod tests {
         let keypair = BlsKeypair::random();
         let domain = B256::repeat_byte(7);
         let message = sample_request_auth();
-        let root = message.signing_root(domain);
+        let root = tree_hash::TreeHash::tree_hash_root(&lh_types::SigningData {
+            object_root: message.tree_hash_root(),
+            domain,
+        });
         let signature = keypair.sk.sign(root);
 
         let signed = SignedBuilderRequestAuth { message, signature: signature.serialize().into() };

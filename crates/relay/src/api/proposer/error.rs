@@ -160,9 +160,6 @@ pub enum ProposerApiError {
 
     #[error("the block is not signed by the proposer this bid was served to")]
     InvalidProposerSignature,
-
-    #[error("the payload held for block {0:?} has no known proposer")]
-    UnknownBidProposer(B256),
 }
 
 impl ProposerApiError {
@@ -231,8 +228,7 @@ impl IntoResponse for ProposerApiError {
                 ProposerApiError::HeldPayloadBlockHashMismatch { .. } |
                 ProposerApiError::BuilderIndexMismatch { .. } |
                 ProposerApiError::ProposerEquivocated { .. } |
-                ProposerApiError::InvalidProposerSignature |
-                ProposerApiError::UnknownBidProposer(_) => StatusCode::BAD_REQUEST,
+                ProposerApiError::InvalidProposerSignature => StatusCode::BAD_REQUEST,
 
                 // All authentication failures, kept indistinguishable by status
                 ProposerApiError::InvalidApiKey |

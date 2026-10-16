@@ -747,9 +747,9 @@ impl State {
             // block-hash-keyed, so a lookup after the slot has moved on just misses.
             (
                 State::Slot { .. } | State::Sorting(_) | State::Broadcasting { .. },
-                Event::TakeHeldGloasPayload { block_hash, slot, res_tx },
+                Event::TakeHeldGloasPayload { block_hash, res_tx },
             ) => {
-                ctx.handle_take_held_gloas_payload(block_hash, slot, res_tx);
+                ctx.handle_take_held_gloas_payload(block_hash, res_tx);
             }
         }
     }

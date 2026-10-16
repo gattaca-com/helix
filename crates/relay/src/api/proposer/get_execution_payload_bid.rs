@@ -9,9 +9,9 @@ use helix_common::{
     decoder::{Encoding, HEADER_SSZ},
     utils::extract_request_id,
 };
-use helix_types::{ForkName, GetExecutionPayloadBidResponse, SignedBuilderRequestAuth};
+use helix_types::{ForkName, SignedBuilderRequestAuth, ssz_json};
 use http::{HeaderValue, header::CONTENT_TYPE};
-use ssz::{Decode, Encode};
+use ssz::Decode;
 use tracing::{info, warn};
 
 use super::{ProposerApi, get_payload::fork_name_from_header};
@@ -85,15 +85,16 @@ impl<A: Api> ProposerApi<A> {
 
         match Encoding::from_accept(&headers) {
             Encoding::Json => {
-                let versioned = GetExecutionPayloadBidResponse {
-                    version: ForkName::Gloas,
-                    metadata: Default::default(),
-                    data: signed_bid,
-                };
-                Ok(axum::Json(serde_json::to_value(&versioned)?).into_response())
+                let data = ssz_json::to_json(&ssz_json::SIGNED_EXECUTION_PAYLOAD_BID, &signed_bid)
+                    .map_err(|err| {
+                        warn!(%err, "could not render the signed bid as json");
+                        ProposerApiError::InternalServerError
+                    })?;
+                Ok(axum::Json(serde_json::json!({ "version": ForkName::Gloas, "data": data }))
+                    .into_response())
             }
             Encoding::Ssz => {
-                let mut response = signed_bid.as_ssz_bytes().into_response();
+                let mut response = signed_bid.into_response();
                 let headers = response.headers_mut();
                 headers.insert(CONTENT_TYPE, HeaderValue::from_str(HEADER_SSZ).unwrap());
                 headers.insert(
@@ -103,29 +104,5 @@ impl<A: Api> ProposerApi<A> {
                 Ok(response)
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use helix_types::{BlsSignature, ExecutionPayloadBid, SignedExecutionPayloadBid};
-
-    use super::*;
-
-    #[test]
-    fn json_bid_carries_the_version_key() {
-        let versioned = GetExecutionPayloadBidResponse {
-            version: ForkName::Gloas,
-            metadata: Default::default(),
-            data: SignedExecutionPayloadBid {
-                message: ExecutionPayloadBid::default(),
-                signature: BlsSignature::empty(),
-            },
-        };
-
-        let json = serde_json::to_value(&versioned).unwrap();
-
-        assert_eq!(json["version"], "gloas");
-        assert!(json["data"]["message"].is_object());
     }
 }

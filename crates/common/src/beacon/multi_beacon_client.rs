@@ -3,11 +3,9 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
+use bytes::Bytes;
 use futures::future::join_all;
-use helix_types::{
-    ForkName, SignedBeaconBlockGloas, SignedExecutionPayloadEnvelopeContents,
-    VersionedSignedProposal,
-};
+use helix_types::{ForkName, VersionedSignedProposal};
 
 use crate::{
     beacon::{beacon_client::BeaconClient, error::BeaconClientError, types::BroadcastValidation},
@@ -90,10 +88,7 @@ impl MultiBeaconClient {
     /// Publishes a Gloas beacon block to all beacon clients; returns on first success.
     /// The proposer already gossips its own block, so a failure here is not fatal: it only
     /// costs us the head start on the block root that the reveal needs.
-    pub async fn publish_gloas_block(
-        &self,
-        block: Arc<SignedBeaconBlockGloas>,
-    ) -> Result<(), BeaconClientError> {
+    pub async fn publish_gloas_block(&self, block: Bytes) -> Result<(), BeaconClientError> {
         let futures =
             self.beacon_clients.iter().map(|client| client.publish_gloas_block(block.clone()));
 
@@ -113,7 +108,7 @@ impl MultiBeaconClient {
     /// `spawn_tracked!`.
     pub async fn publish_execution_payload_envelope(
         &self,
-        envelope: Arc<SignedExecutionPayloadEnvelopeContents>,
+        envelope: Bytes,
         fork: ForkName,
     ) -> Result<(), BeaconClientError> {
         let futures = self
@@ -135,22 +130,14 @@ impl MultiBeaconClient {
 
 #[cfg(test)]
 mod tests {
-    use helix_types::{BlsSignature, ExecutionPayloadEnvelope, SignedExecutionPayloadEnvelope};
     use httpmock::{Method::POST, MockServer};
     use reqwest::Url;
 
     use super::*;
     use crate::BeaconClientConfig;
 
-    fn envelope() -> Arc<SignedExecutionPayloadEnvelopeContents> {
-        Arc::new(SignedExecutionPayloadEnvelopeContents {
-            signed_execution_payload_envelope: SignedExecutionPayloadEnvelope {
-                message: ExecutionPayloadEnvelope::empty(),
-                signature: BlsSignature::empty(),
-            },
-            kzg_proofs: Default::default(),
-            blobs: Default::default(),
-        })
+    fn envelope() -> Bytes {
+        Bytes::from_static(&[0u8; 12])
     }
 
     fn client_for(server: &MockServer) -> Arc<BeaconClient> {

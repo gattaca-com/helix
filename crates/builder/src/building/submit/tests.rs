@@ -52,7 +52,7 @@ fn built_block(bundle: EthrexBlobsBundle) -> BuiltBlock {
 }
 
 /// The pre-Gloas shape, which is what a default `ChainInfo` selects.
-fn fulu(bid: Bid) -> SignedBidSubmission {
+fn fulu(bid: Bid) -> SignedBidSubmissionFulu {
     match bid {
         Bid::Fulu(bid) => bid,
         Bid::Gloas(_) => panic!("a mainnet spec is not on Gloas"),
@@ -156,7 +156,7 @@ fn the_submission_round_trips_through_ssz() {
     let submission = fulu(submitter.sign(&built, &slot_context()).unwrap());
 
     let encoded = ssz::Encode::as_ssz_bytes(&submission);
-    let decoded = SignedBidSubmission::from_ssz_bytes(&encoded).expect("the wire format");
+    let decoded = SignedBidSubmissionFulu::from_ssz_bytes(&encoded).expect("the wire format");
 
     assert_eq!(decoded.message.block_hash, submission.message.block_hash);
     assert_eq!(decoded.message.value, submission.message.value);
@@ -170,7 +170,7 @@ fn a_submission_with_blobs_round_trips() {
 
         let submission = fulu(submitter.sign(&built, &slot_context()).unwrap());
         let encoded = ssz::Encode::as_ssz_bytes(&submission);
-        let decoded = SignedBidSubmission::from_ssz_bytes(&encoded)
+        let decoded = SignedBidSubmissionFulu::from_ssz_bytes(&encoded)
             .expect("a bundle decodes only with 128 proofs per blob");
 
         assert_eq!(decoded.blobs_bundle.blobs.len(), 1);
@@ -273,10 +273,14 @@ fn a_gloas_submission_carries_the_block_access_list() {
     // Decoded the way the relay's own decoder will, rather than by field access.
     let params = helix_common::decoder::SubmissionDecoderParams::plain(ForkName::Gloas);
     let mut buf = Vec::new();
-    let (_, _, _, decoded) = helix_common::decoder::SubmissionDecoder::new(&params)
+    let (decoded, _, _) = helix_common::decoder::SubmissionDecoder::new(&params)
         .decode(&bid.as_ssz_bytes(), &mut buf)
         .expect("the relay must be able to decode what we send");
-    assert_eq!(decoded.expect("Gloas carries a list").block_access_list.to_vec(), bal);
+    let helix_types::Submission::Full(helix_types::SignedBidSubmission::Gloas(decoded)) = decoded
+    else {
+        panic!("Gloas decodes to its own shape");
+    };
+    assert_eq!(decoded.block_access_list(), bal.as_slice());
 }
 
 #[test]
@@ -289,10 +293,10 @@ fn a_fulu_submission_keeps_its_shape() {
     assert!(matches!(bid, Bid::Fulu(_)));
     let params = helix_common::decoder::SubmissionDecoderParams::plain(ForkName::Fulu);
     let mut buf = Vec::new();
-    let (_, _, _, decoded) = helix_common::decoder::SubmissionDecoder::new(&params)
+    let (decoded, _, _) = helix_common::decoder::SubmissionDecoder::new(&params)
         .decode(&bid.as_ssz_bytes(), &mut buf)
         .expect("the Fulu shape must be unchanged");
-    assert!(decoded.is_none(), "only Gloas carries one");
+    assert!(matches!(decoded, helix_types::Submission::Full(_)));
 }
 
 /// Refused rather than sent with an empty list, which the simulator would

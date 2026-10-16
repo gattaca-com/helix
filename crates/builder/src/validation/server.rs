@@ -16,7 +16,7 @@ use helix_common::{
     decoder::{DecoderError, SubmissionDecoder, SubmissionDecoderParams},
     simulator::{SszMergedValidationRequest, SszValidationRequest, SszValidationResponse},
 };
-use helix_types::{ForkName, GloasSubmissionData, Submission};
+use helix_types::{ForkName, SignedBidSubmission, SignedBidSubmissionGloas, Submission};
 use ssz::{Decode, Encode};
 use tokio::{net::TcpListener, sync::Semaphore, time};
 use tracing::{error, info, warn};
@@ -80,8 +80,7 @@ fn unsupported_fork(params: &Option<SubmissionDecoderParams>) -> Response {
     (StatusCode::NOT_IMPLEMENTED, format!("unsupported fork: {fork:?}")).into_response()
 }
 
-/// A decoded submission, with the Gloas-only data a Gloas one carries.
-type Decoded = (SignedBidSubmissionV5, Option<GloasSubmissionData>);
+type Decoded = (SignedBidSubmissionV5, Option<SignedBidSubmissionGloas>);
 
 /// A dehydrated submission needs transactions this simulator does not cache.
 /// The relay answers a 424 by retrying with full SSZ bytes.
@@ -92,10 +91,18 @@ fn decode_submission(
     match params {
         Some(params) => {
             let mut buf = Vec::new();
-            let (submission, _, _, gloas_data) =
-                SubmissionDecoder::new(&params).decode(bytes, &mut buf)?;
+            let (submission, _, _) = SubmissionDecoder::new(&params).decode(bytes, &mut buf)?;
             match submission {
-                Submission::Full(submission) => Ok(Some((submission.into(), gloas_data))),
+                Submission::Full(SignedBidSubmission::Fulu(submission)) => {
+                    Ok(Some((submission.into(), None)))
+                }
+                Submission::Full(SignedBidSubmission::Gloas(gloas)) => {
+                    let gloas = SignedBidSubmissionGloas::from_ssz_bytes(gloas.as_bytes())?;
+                    let v5 = SignedBidSubmissionV5::try_from(&gloas).map_err(|err| {
+                        DecoderError::SszDecode(ssz::DecodeError::BytesInvalid(format!("{err:?}")))
+                    })?;
+                    Ok(Some((v5, Some(gloas))))
+                }
                 Submission::Dehydrated(_) => Ok(None),
             }
         }
@@ -120,7 +127,7 @@ async fn validate(State(state): State<ServerState>, body: axum::body::Bytes) -> 
         );
     }
     let t = metrics::sim_lap("decode_request", start);
-    let (submission, gloas_data) =
+    let (submission, gloas) =
         match decode_submission(request.decoder_params, &request.signed_bid_submission) {
             Ok(Some(decoded)) => decoded,
             Ok(None) => {
@@ -145,22 +152,20 @@ async fn validate(State(state): State<ServerState>, body: axum::body::Bytes) -> 
             &submission.execution_requests,
             &eblobs(&submission.blobs_bundle),
             request.apply_blacklist,
-            amsterdam(gloas_data.as_ref(), submission.message.slot),
+            gloas.as_ref().map(amsterdam),
         )
     })
     .await
 }
 
-/// Gloas data marks the submission as Amsterdam, and the slot number the header
-/// needs is the one the trace already carries. The builder request lists go in
-/// too: the `requests_hash` the block hash commits to covers them.
-fn amsterdam(gloas_data: Option<&GloasSubmissionData>, slot: u64) -> Option<Amsterdam<'_>> {
-    gloas_data.map(|data| Amsterdam {
-        block_access_list: &data.block_access_list.0,
-        slot,
-        builder_deposits: Some(&data.builder_deposits),
-        builder_exits: Some(&data.builder_exits),
-    })
+/// The builder request lists go in too: the `requests_hash` the block hash commits to covers them.
+fn amsterdam(gloas: &SignedBidSubmissionGloas) -> Amsterdam<'_> {
+    Amsterdam {
+        block_access_list: &gloas.execution_payload.block_access_list,
+        slot: gloas.message.trace.slot,
+        builder_deposits: Some(&gloas.execution_requests.builder_deposits),
+        builder_exits: Some(&gloas.execution_requests.builder_exits),
+    }
 }
 
 async fn validate_merged(State(state): State<ServerState>, body: axum::body::Bytes) -> Response {

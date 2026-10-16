@@ -12,7 +12,7 @@ use tree_hash::TreeHash;
 
 use crate::{
     BidTrace, Blob, BlobsBundle, BlockMergingData, BlockValidationError, BlsPublicKeyBytes,
-    BlsSignatureBytes, ExecutionPayload, SignedBidSubmission, TestRandom,
+    BlsSignatureBytes, ExecutionPayload, SignedBidSubmissionFulu, TestRandom,
     bid_adjustment_data::{BidAdjData, BidAdjustmentData, BidAdjustmentDataV1},
     bid_submission,
     fields::{ExecutionRequests, KzgCommitment, KzgProof, Transaction, Transactions, Withdrawals},
@@ -26,8 +26,6 @@ pub enum DehydratedBidSubmission {
 }
 
 impl ForkVersionDecode for DehydratedBidSubmission {
-    /// Gloas uses the same bounded-list wire shape as Fulu here -- this is helix's own
-    /// builder<->relay representation, not the real Gloas consensus shape.
     fn from_ssz_bytes_by_fork(bytes: &[u8], fork: ForkName) -> Result<Self, DecodeError> {
         match fork {
             ForkName::Base |
@@ -37,16 +35,16 @@ impl ForkVersionDecode for DehydratedBidSubmission {
             ForkName::Deneb |
             ForkName::Electra |
             ForkName::Heze => Err(DecodeError::NoMatchingVariant),
-            ForkName::Fulu | ForkName::Gloas => {
-                DehydratedBidSubmissionFuluV1::from_ssz_bytes(bytes)
-                    .map(|v1| DehydratedBidSubmission::Fulu(v1.into()))
-            }
+            // TODO: dehydrated Gloas submissions
+            ForkName::Gloas => Err(DecodeError::NoMatchingVariant),
+            ForkName::Fulu => DehydratedBidSubmissionFuluV1::from_ssz_bytes(bytes)
+                .map(|v1| DehydratedBidSubmission::Fulu(v1.into())),
         }
     }
 }
 
 pub struct HydratedData {
-    pub submission: bid_submission::SignedBidSubmission,
+    pub submission: bid_submission::SignedBidSubmissionFulu,
     pub tx_cache_hits: usize,
     pub blob_cache_hits: usize,
     pub tx_root: Option<B256>,
@@ -620,7 +618,7 @@ impl DehydratedBidSubmissionFulu {
 
         blob_cache_hits = blob_cache_hits.saturating_sub(new_blobs);
 
-        let submission = SignedBidSubmission {
+        let submission = SignedBidSubmissionFulu {
             message: self.message,
             execution_payload: Arc::new(self.execution_payload),
             blobs_bundle: Arc::new(sidecar),
@@ -901,18 +899,5 @@ mod tests {
 
         assert_eq!(decoded.message, submission.message);
         assert_eq!(decoded.merging_data, submission.merging_data);
-    }
-
-    #[test]
-    fn dehydrated_bid_submission_decodes_under_gloas_fork() {
-        let v1 = DehydratedBidSubmissionFuluV1::random_for_test(&mut rand::rng());
-        let bytes = v1.as_ssz_bytes();
-        let dehydrated = DehydratedBidSubmission::Fulu(v1.into());
-
-        let decoded = DehydratedBidSubmission::from_ssz_bytes_by_fork(&bytes, ForkName::Gloas)
-            .expect("Gloas should decode via the same shape as Fulu");
-
-        assert!(matches!(decoded, DehydratedBidSubmission::Fulu(_)));
-        assert_eq!(decoded.bid_trace(), dehydrated.bid_trace());
     }
 }

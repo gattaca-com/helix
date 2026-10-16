@@ -1,8 +1,9 @@
 use alloy_primitives::B256;
 use flux_profiler::timed;
-use helix_common::{BuilderInfo, PayloadAttributesUpdate, is_local_dev};
+use helix_common::{BuilderInfo, ForkKey, PayloadAttributesUpdate, is_local_dev};
 use helix_types::{
-    BlockValidationError, BlsPublicKeyBytes, ForkName, Submission, SubmissionVersion,
+    BlockValidationError, BlsPublicKeyBytes, ForkName, SignedBidSubmission, Submission,
+    SubmissionVersion,
 };
 
 use crate::auctioneer::{
@@ -28,9 +29,16 @@ impl<B: BidAdjustor> Context<B> {
             });
         }
 
-        let Some(payload_attributes) =
-            slot_data.attrs_for_submission(submission.parent_hash(), submission.prev_randao())
-        else {
+        let payload_attributes = match submission {
+            Submission::Full(SignedBidSubmission::Gloas(gloas)) => {
+                slot_data.payload_attributes_map.get(&ForkKey {
+                    parent_hash: *submission.parent_hash(),
+                    parent_root: gloas.message.parent_block_root,
+                })
+            }
+            _ => slot_data.attrs_for_submission(submission.parent_hash(), submission.prev_randao()),
+        };
+        let Some(payload_attributes) = payload_attributes else {
             return Err(BlockValidationError::UknnownParentHash {
                 submission: *submission.parent_hash(),
                 have: slot_data.parent_hashes(),

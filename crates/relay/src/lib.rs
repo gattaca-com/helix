@@ -22,9 +22,13 @@ pub use helix_database::{
 };
 use tokio::time::Instant;
 
-// Gated re-export for `benches/unbundling.rs`; not part of the normal public API.
+// Gated re-exports for the relay benches; not part of the normal public API.
 #[cfg(feature = "bench-internals")]
-pub use crate::block_merging::{OrderTxs, find_unbundled_txs};
+pub use crate::{
+    api::proposer::get_header::resign_builder_bid,
+    auctioneer::types::GloasPayload,
+    block_merging::{OrderTxs, find_unbundled_txs},
+};
 pub use crate::{
     api::{
         Api, BidAdjustor, DefaultBidAdjustor, FutureBidSubmissionResult, builder::TopBidTile,

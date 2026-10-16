@@ -2436,9 +2436,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "byte-stable"
+version = "0.6.0"
+source = "git+https://github.com/gattaca-com/flux?rev=c6442a90862ca66f2f85f453a80153fac5dcf12d#c6442a90862ca66f2f85f453a80153fac5dcf12d"
+
+[[package]]
 name = "byte-stable-derive"
 version = "0.5.0"
 source = "git+https://github.com/gattaca-com/flux?rev=54d514ea0042a5590b0196eb62a69be75abd4a95#54d514ea0042a5590b0196eb62a69be75abd4a95"
+dependencies = [
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "byte-stable-derive"
+version = "0.6.0"
+source = "git+https://github.com/gattaca-com/flux?rev=c6442a90862ca66f2f85f453a80153fac5dcf12d#c6442a90862ca66f2f85f453a80153fac5dcf12d"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -4309,8 +4325,8 @@ dependencies = [
 
 [[package]]
 name = "ethrex-blockchain"
-version = "28.0.0"
-source = "git+https://github.com/gattaca-com/ethrex?rev=6bf5a3ee8e20d7dca242f862fd944cddcfb59055#6bf5a3ee8e20d7dca242f862fd944cddcfb59055"
+version = "29.0.1"
+source = "git+https://github.com/gattaca-com/ethrex?rev=b70bba1684331e57749a4148352c6210cce43c7d#b70bba1684331e57749a4148352c6210cce43c7d"
 dependencies = [
  "bytes",
  "crossbeam",
@@ -4334,8 +4350,8 @@ dependencies = [
 
 [[package]]
 name = "ethrex-common"
-version = "28.0.0"
-source = "git+https://github.com/gattaca-com/ethrex?rev=6bf5a3ee8e20d7dca242f862fd944cddcfb59055#6bf5a3ee8e20d7dca242f862fd944cddcfb59055"
+version = "29.0.1"
+source = "git+https://github.com/gattaca-com/ethrex?rev=b70bba1684331e57749a4148352c6210cce43c7d#b70bba1684331e57749a4148352c6210cce43c7d"
 dependencies = [
  "bytes",
  "crc32fast",
@@ -4368,8 +4384,8 @@ dependencies = [
 
 [[package]]
 name = "ethrex-config"
-version = "28.0.0"
-source = "git+https://github.com/gattaca-com/ethrex?rev=6bf5a3ee8e20d7dca242f862fd944cddcfb59055#6bf5a3ee8e20d7dca242f862fd944cddcfb59055"
+version = "29.0.1"
+source = "git+https://github.com/gattaca-com/ethrex?rev=b70bba1684331e57749a4148352c6210cce43c7d#b70bba1684331e57749a4148352c6210cce43c7d"
 dependencies = [
  "ethrex-common",
  "ethrex-p2p",
@@ -4380,7 +4396,7 @@ dependencies = [
 
 [[package]]
 name = "ethrex-crypto"
-version = "28.0.0"
+version = "29.0.1"
 dependencies = [
  "ark-bn254",
  "ark-ec",
@@ -4403,8 +4419,8 @@ dependencies = [
 
 [[package]]
 name = "ethrex-guest-program"
-version = "28.0.0"
-source = "git+https://github.com/gattaca-com/ethrex?rev=6bf5a3ee8e20d7dca242f862fd944cddcfb59055#6bf5a3ee8e20d7dca242f862fd944cddcfb59055"
+version = "29.0.1"
+source = "git+https://github.com/gattaca-com/ethrex?rev=b70bba1684331e57749a4148352c6210cce43c7d#b70bba1684331e57749a4148352c6210cce43c7d"
 dependencies = [
  "bytes",
  "ethereum-types",
@@ -4426,8 +4442,8 @@ dependencies = [
 
 [[package]]
 name = "ethrex-l2-common"
-version = "28.0.0"
-source = "git+https://github.com/gattaca-com/ethrex?rev=6bf5a3ee8e20d7dca242f862fd944cddcfb59055#6bf5a3ee8e20d7dca242f862fd944cddcfb59055"
+version = "29.0.1"
+source = "git+https://github.com/gattaca-com/ethrex?rev=b70bba1684331e57749a4148352c6210cce43c7d#b70bba1684331e57749a4148352c6210cce43c7d"
 dependencies = [
  "bytes",
  "ethereum-types",
@@ -4444,14 +4460,15 @@ dependencies = [
 
 [[package]]
 name = "ethrex-levm"
-version = "28.0.0"
-source = "git+https://github.com/gattaca-com/ethrex?rev=6bf5a3ee8e20d7dca242f862fd944cddcfb59055#6bf5a3ee8e20d7dca242f862fd944cddcfb59055"
+version = "29.0.1"
+source = "git+https://github.com/gattaca-com/ethrex?rev=b70bba1684331e57749a4148352c6210cce43c7d#b70bba1684331e57749a4148352c6210cce43c7d"
 dependencies = [
  "bytes",
  "derive_more 1.0.0",
  "ethrex-common",
  "ethrex-crypto",
  "ethrex-rlp",
+ "foldhash 0.2.0",
  "libssz",
  "malachite",
  "rayon",
@@ -4463,8 +4480,8 @@ dependencies = [
 
 [[package]]
 name = "ethrex-metrics"
-version = "28.0.0"
-source = "git+https://github.com/gattaca-com/ethrex?rev=6bf5a3ee8e20d7dca242f862fd944cddcfb59055#6bf5a3ee8e20d7dca242f862fd944cddcfb59055"
+version = "29.0.1"
+source = "git+https://github.com/gattaca-com/ethrex?rev=b70bba1684331e57749a4148352c6210cce43c7d#b70bba1684331e57749a4148352c6210cce43c7d"
 dependencies = [
  "axum 0.8.9",
  "ethrex-common",
@@ -4479,8 +4496,8 @@ dependencies = [
 
 [[package]]
 name = "ethrex-p2p"
-version = "28.0.0"
-source = "git+https://github.com/gattaca-com/ethrex?rev=6bf5a3ee8e20d7dca242f862fd944cddcfb59055#6bf5a3ee8e20d7dca242f862fd944cddcfb59055"
+version = "29.0.1"
+source = "git+https://github.com/gattaca-com/ethrex?rev=b70bba1684331e57749a4148352c6210cce43c7d#b70bba1684331e57749a4148352c6210cce43c7d"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -4523,8 +4540,8 @@ dependencies = [
 
 [[package]]
 name = "ethrex-rlp"
-version = "28.0.0"
-source = "git+https://github.com/gattaca-com/ethrex?rev=6bf5a3ee8e20d7dca242f862fd944cddcfb59055#6bf5a3ee8e20d7dca242f862fd944cddcfb59055"
+version = "29.0.1"
+source = "git+https://github.com/gattaca-com/ethrex?rev=b70bba1684331e57749a4148352c6210cce43c7d#b70bba1684331e57749a4148352c6210cce43c7d"
 dependencies = [
  "bytes",
  "ethereum-types",
@@ -4533,8 +4550,8 @@ dependencies = [
 
 [[package]]
 name = "ethrex-rpc"
-version = "28.0.0"
-source = "git+https://github.com/gattaca-com/ethrex?rev=6bf5a3ee8e20d7dca242f862fd944cddcfb59055#6bf5a3ee8e20d7dca242f862fd944cddcfb59055"
+version = "29.0.1"
+source = "git+https://github.com/gattaca-com/ethrex?rev=b70bba1684331e57749a4148352c6210cce43c7d#b70bba1684331e57749a4148352c6210cce43c7d"
 dependencies = [
  "axum 0.8.9",
  "axum-extra",
@@ -4573,8 +4590,8 @@ dependencies = [
 
 [[package]]
 name = "ethrex-storage"
-version = "28.0.0"
-source = "git+https://github.com/gattaca-com/ethrex?rev=6bf5a3ee8e20d7dca242f862fd944cddcfb59055#6bf5a3ee8e20d7dca242f862fd944cddcfb59055"
+version = "29.0.1"
+source = "git+https://github.com/gattaca-com/ethrex?rev=b70bba1684331e57749a4148352c6210cce43c7d#b70bba1684331e57749a4148352c6210cce43c7d"
 dependencies = [
  "anyhow",
  "bytes",
@@ -4583,6 +4600,7 @@ dependencies = [
  "ethrex-rlp",
  "ethrex-trie",
  "fastbloom 0.14.1",
+ "indexmap 2.14.0",
  "lru 0.16.4",
  "rayon",
  "rocksdb",
@@ -4596,8 +4614,8 @@ dependencies = [
 
 [[package]]
 name = "ethrex-trie"
-version = "28.0.0"
-source = "git+https://github.com/gattaca-com/ethrex?rev=6bf5a3ee8e20d7dca242f862fd944cddcfb59055#6bf5a3ee8e20d7dca242f862fd944cddcfb59055"
+version = "29.0.1"
+source = "git+https://github.com/gattaca-com/ethrex?rev=b70bba1684331e57749a4148352c6210cce43c7d#b70bba1684331e57749a4148352c6210cce43c7d"
 dependencies = [
  "anyhow",
  "bytes",
@@ -4616,8 +4634,8 @@ dependencies = [
 
 [[package]]
 name = "ethrex-vm"
-version = "28.0.0"
-source = "git+https://github.com/gattaca-com/ethrex?rev=6bf5a3ee8e20d7dca242f862fd944cddcfb59055#6bf5a3ee8e20d7dca242f862fd944cddcfb59055"
+version = "29.0.1"
+source = "git+https://github.com/gattaca-com/ethrex?rev=b70bba1684331e57749a4148352c6210cce43c7d#b70bba1684331e57749a4148352c6210cce43c7d"
 dependencies = [
  "bytes",
  "derive_more 1.0.0",
@@ -4885,19 +4903,41 @@ version = "0.5.0"
 source = "git+https://github.com/gattaca-com/flux?rev=54d514ea0042a5590b0196eb62a69be75abd4a95#54d514ea0042a5590b0196eb62a69be75abd4a95"
 dependencies = [
  "bitcode",
- "byte-stable",
- "byte-stable-derive",
+ "byte-stable 0.5.0",
+ "byte-stable-derive 0.5.0",
  "core_affinity",
- "flux-communication",
- "flux-timing",
- "flux-utils",
+ "flux-communication 0.5.0",
+ "flux-timing 0.5.0",
+ "flux-utils 0.5.0",
  "libc",
  "serde",
  "signal-hook",
- "spine-derive",
+ "spine-derive 0.5.0",
  "tracing",
- "type-hash",
- "type-hash-derive",
+ "type-hash 0.5.0",
+ "type-hash-derive 0.5.0",
+ "zstd",
+]
+
+[[package]]
+name = "flux"
+version = "0.6.0"
+source = "git+https://github.com/gattaca-com/flux?rev=c6442a90862ca66f2f85f453a80153fac5dcf12d#c6442a90862ca66f2f85f453a80153fac5dcf12d"
+dependencies = [
+ "bitcode",
+ "byte-stable 0.6.0",
+ "byte-stable-derive 0.6.0",
+ "core_affinity",
+ "flux-communication 0.6.0",
+ "flux-timing 0.6.0",
+ "flux-utils 0.6.0",
+ "libc",
+ "serde",
+ "signal-hook",
+ "spine-derive 0.6.0",
+ "tracing",
+ "type-hash 0.6.0",
+ "type-hash-derive 0.6.0",
  "zstd",
 ]
 
@@ -4918,8 +4958,23 @@ version = "0.5.0"
 source = "git+https://github.com/gattaca-com/flux?rev=54d514ea0042a5590b0196eb62a69be75abd4a95#54d514ea0042a5590b0196eb62a69be75abd4a95"
 dependencies = [
  "directories",
- "flux-timing",
- "flux-utils",
+ "flux-timing 0.5.0",
+ "flux-utils 0.5.0",
+ "libc",
+ "rand 0.9.5",
+ "shared_memory",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
+name = "flux-communication"
+version = "0.6.0"
+source = "git+https://github.com/gattaca-com/flux?rev=c6442a90862ca66f2f85f453a80153fac5dcf12d#c6442a90862ca66f2f85f453a80153fac5dcf12d"
+dependencies = [
+ "directories",
+ "flux-timing 0.6.0",
+ "flux-utils 0.6.0",
  "libc",
  "rand 0.9.5",
  "shared_memory",
@@ -4932,8 +4987,8 @@ name = "flux-disk"
 version = "0.5.0"
 source = "git+https://github.com/gattaca-com/flux?rev=54d514ea0042a5590b0196eb62a69be75abd4a95#54d514ea0042a5590b0196eb62a69be75abd4a95"
 dependencies = [
- "flux-timing",
- "flux-utils",
+ "flux-timing 0.5.0",
+ "flux-utils 0.5.0",
  "io-uring",
  "libc",
  "tracing",
@@ -4944,10 +4999,10 @@ name = "flux-gather"
 version = "0.5.0"
 source = "git+https://github.com/gattaca-com/flux?rev=54d514ea0042a5590b0196eb62a69be75abd4a95#54d514ea0042a5590b0196eb62a69be75abd4a95"
 dependencies = [
- "flux",
+ "flux 0.5.0",
  "flux-disk",
  "flux-network",
- "flux-timing",
+ "flux-timing 0.5.0",
  "flux-versioned-types",
  "mio",
  "tracing",
@@ -4958,11 +5013,11 @@ name = "flux-network"
 version = "0.5.0"
 source = "git+https://github.com/gattaca-com/flux?rev=54d514ea0042a5590b0196eb62a69be75abd4a95#54d514ea0042a5590b0196eb62a69be75abd4a95"
 dependencies = [
- "byte-stable",
- "flux",
- "flux-communication",
- "flux-timing",
- "flux-utils",
+ "byte-stable 0.5.0",
+ "flux 0.5.0",
+ "flux-communication 0.5.0",
+ "flux-timing 0.5.0",
+ "flux-utils 0.5.0",
  "httparse",
  "libc",
  "mio",
@@ -4979,10 +5034,29 @@ source = "git+https://github.com/gattaca-com/flux?rev=54d514ea0042a5590b0196eb62
 dependencies = [
  "bytesize",
  "clap",
- "flux-communication",
- "flux-profiler-macros",
- "flux-timing",
- "flux-utils",
+ "flux-communication 0.5.0",
+ "flux-profiler-macros 0.5.0",
+ "flux-timing 0.5.0",
+ "flux-utils 0.5.0",
+ "humantime",
+ "libc",
+ "rustc-hash",
+ "serde",
+ "tracing",
+ "tracing-subscriber 0.3.23",
+]
+
+[[package]]
+name = "flux-profiler"
+version = "0.6.0"
+source = "git+https://github.com/gattaca-com/flux?rev=c6442a90862ca66f2f85f453a80153fac5dcf12d#c6442a90862ca66f2f85f453a80153fac5dcf12d"
+dependencies = [
+ "bytesize",
+ "clap",
+ "flux-communication 0.6.0",
+ "flux-profiler-macros 0.6.0",
+ "flux-timing 0.6.0",
+ "flux-utils 0.6.0",
  "humantime",
  "libc",
  "rustc-hash",
@@ -4995,6 +5069,15 @@ dependencies = [
 name = "flux-profiler-macros"
 version = "0.5.0"
 source = "git+https://github.com/gattaca-com/flux?rev=54d514ea0042a5590b0196eb62a69be75abd4a95#54d514ea0042a5590b0196eb62a69be75abd4a95"
+dependencies = [
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "flux-profiler-macros"
+version = "0.6.0"
+source = "git+https://github.com/gattaca-com/flux?rev=c6442a90862ca66f2f85f453a80153fac5dcf12d#c6442a90862ca66f2f85f453a80153fac5dcf12d"
 dependencies = [
  "quote",
  "syn 2.0.119",
@@ -5017,8 +5100,8 @@ version = "0.5.0"
 source = "git+https://github.com/gattaca-com/flux?rev=54d514ea0042a5590b0196eb62a69be75abd4a95#54d514ea0042a5590b0196eb62a69be75abd4a95"
 dependencies = [
  "bitcode",
- "byte-stable",
- "byte-stable-derive",
+ "byte-stable 0.5.0",
+ "byte-stable-derive 0.5.0",
  "chrono",
  "governor 0.6.3",
  "humantime",
@@ -5026,8 +5109,27 @@ dependencies = [
  "serde",
  "serde_json",
  "tracing",
- "type-hash",
- "type-hash-derive",
+ "type-hash 0.5.0",
+ "type-hash-derive 0.5.0",
+]
+
+[[package]]
+name = "flux-timing"
+version = "0.6.0"
+source = "git+https://github.com/gattaca-com/flux?rev=c6442a90862ca66f2f85f453a80153fac5dcf12d#c6442a90862ca66f2f85f453a80153fac5dcf12d"
+dependencies = [
+ "bitcode",
+ "byte-stable 0.6.0",
+ "byte-stable-derive 0.6.0",
+ "chrono",
+ "governor 0.6.3",
+ "humantime",
+ "quanta",
+ "serde",
+ "serde_json",
+ "tracing",
+ "type-hash 0.6.0",
+ "type-hash-derive 0.6.0",
 ]
 
 [[package]]
@@ -5035,17 +5137,35 @@ name = "flux-utils"
 version = "0.5.0"
 source = "git+https://github.com/gattaca-com/flux?rev=54d514ea0042a5590b0196eb62a69be75abd4a95#54d514ea0042a5590b0196eb62a69be75abd4a95"
 dependencies = [
- "byte-stable",
+ "byte-stable 0.5.0",
  "core_affinity",
  "directories",
- "flux-timing",
+ "flux-timing 0.5.0",
  "libc",
  "rand 0.9.5",
  "serde",
  "spin 0.10.1",
  "thiserror 1.0.69",
  "tracing",
- "type-hash",
+ "type-hash 0.5.0",
+]
+
+[[package]]
+name = "flux-utils"
+version = "0.6.0"
+source = "git+https://github.com/gattaca-com/flux?rev=c6442a90862ca66f2f85f453a80153fac5dcf12d#c6442a90862ca66f2f85f453a80153fac5dcf12d"
+dependencies = [
+ "byte-stable 0.6.0",
+ "core_affinity",
+ "directories",
+ "flux-timing 0.6.0",
+ "libc",
+ "rand 0.9.5",
+ "serde",
+ "spin 0.10.1",
+ "thiserror 1.0.69",
+ "tracing",
+ "type-hash 0.6.0",
 ]
 
 [[package]]
@@ -5055,14 +5175,14 @@ source = "git+https://github.com/gattaca-com/flux?rev=54d514ea0042a5590b0196eb62
 dependencies = [
  "alloy-primitives",
  "bincode",
- "byte-stable",
- "byte-stable-derive",
- "flux-timing",
- "flux-utils",
+ "byte-stable 0.5.0",
+ "byte-stable-derive 0.5.0",
+ "flux-timing 0.5.0",
+ "flux-utils 0.5.0",
  "flux-versioned-types-macros",
  "serde",
  "tracing",
- "type-hash",
+ "type-hash 0.5.0",
  "uuid",
  "zstd",
 ]
@@ -5661,6 +5781,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "hashtree-rs"
+version = "0.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "961ec71c1266cb0ee170a5b26c1446073adbf8066734a392a94d6e88ea6eedf2"
+dependencies = [
+ "cc",
+ "libc",
+]
+
+[[package]]
 name = "hdrhistogram"
 version = "7.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5765,9 +5895,9 @@ dependencies = [
  "ethrex-storage",
  "ethrex-vm",
  "eyre",
- "flux",
+ "flux 0.5.0",
  "flux-network",
- "flux-utils",
+ "flux-utils 0.5.0",
  "flux-versioned-types",
  "futures",
  "helix-common",
@@ -5820,9 +5950,9 @@ dependencies = [
  "eventsource-stream",
  "eyre",
  "flate2",
- "flux",
- "flux-profiler",
- "flux-utils",
+ "flux 0.5.0",
+ "flux-profiler 0.5.0",
+ "flux-utils 0.5.0",
  "flux-versioned-types",
  "futures",
  "helix-telemetry",
@@ -5861,7 +5991,7 @@ dependencies = [
  "tracing-subscriber 0.3.23",
  "tree_hash",
  "tree_hash_derive",
- "type-hash-derive",
+ "type-hash-derive 0.5.0",
  "url",
  "uuid",
  "webpki-roots 0.26.11",
@@ -5898,12 +6028,12 @@ name = "helix-data-gatherer"
 version = "0.0.1"
 dependencies = [
  "alloy-primitives",
- "flux",
+ "flux 0.5.0",
  "flux-clickhouse",
  "flux-gather",
  "flux-network",
  "flux-s3",
- "flux-utils",
+ "flux-utils 0.5.0",
  "helix-common",
  "helix-relay",
  "helix-telemetry",
@@ -5984,11 +6114,11 @@ dependencies = [
  "ethereum_ssz_derive",
  "eyre",
  "flate2",
- "flux",
+ "flux 0.5.0",
  "flux-gather",
  "flux-network",
- "flux-profiler",
- "flux-utils",
+ "flux-profiler 0.5.0",
+ "flux-utils 0.5.0",
  "flux-versioned-types",
  "futures",
  "helix-common",
@@ -6102,8 +6232,8 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
- "type-hash",
- "type-hash-derive",
+ "type-hash 0.5.0",
+ "type-hash-derive 0.5.0",
  "uuid",
 ]
 
@@ -6114,12 +6244,12 @@ dependencies = [
  "alloy-primitives",
  "bytes",
  "ethereum_ssz",
- "flux",
- "flux-utils",
+ "flux 0.5.0",
+ "flux-utils 0.5.0",
  "flux-versioned-types",
  "serde",
  "strum 0.27.2",
- "type-hash-derive",
+ "type-hash-derive 0.5.0",
  "uuid",
 ]
 
@@ -6158,12 +6288,13 @@ dependencies = [
  "bitflags 2.13.1",
  "bls",
  "blst",
+ "bytes",
  "criterion",
  "eth2",
  "ethereum_serde_utils",
  "ethereum_ssz",
  "ethereum_ssz_derive",
- "flux-profiler",
+ "flux-profiler 0.5.0",
  "helix-tcp-types",
  "hex",
  "kzg",
@@ -6173,6 +6304,7 @@ dependencies = [
  "rustc-hash",
  "serde",
  "serde_json",
+ "silver_ssz",
  "slot_clock",
  "smallvec",
  "ssz_types",
@@ -15005,6 +15137,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "sha2-const-stable"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5f179d4e11094a893b82fff208f74d448a7512f99f5a0acbd5c679b705f83ed9"
+
+[[package]]
 name = "sha3"
 version = "0.10.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -15116,6 +15254,19 @@ checksum = "77549399552de45a898a580c1b41d445bf730df867cc44e6c0233bbc4b8329de"
 dependencies = [
  "digest 0.10.7",
  "rand_core 0.6.4",
+]
+
+[[package]]
+name = "silver_ssz"
+version = "0.1.0-alpha.1"
+source = "git+https://github.com/gattaca-com/silver?rev=69d91092#69d91092e7e009346d3cb7e1f0e440280f26a76a"
+dependencies = [
+ "flux 0.6.0",
+ "flux-profiler 0.6.0",
+ "hashtree-rs",
+ "sha2 0.10.9",
+ "sha2-const-stable",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -15435,6 +15586,16 @@ dependencies = [
 name = "spine-derive"
 version = "0.5.0"
 source = "git+https://github.com/gattaca-com/flux?rev=54d514ea0042a5590b0196eb62a69be75abd4a95#54d514ea0042a5590b0196eb62a69be75abd4a95"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "spine-derive"
+version = "0.6.0"
+source = "git+https://github.com/gattaca-com/flux?rev=c6442a90862ca66f2f85f453a80153fac5dcf12d#c6442a90862ca66f2f85f453a80153fac5dcf12d"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -16856,9 +17017,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "type-hash"
+version = "0.6.0"
+source = "git+https://github.com/gattaca-com/flux?rev=c6442a90862ca66f2f85f453a80153fac5dcf12d#c6442a90862ca66f2f85f453a80153fac5dcf12d"
+
+[[package]]
 name = "type-hash-derive"
 version = "0.5.0"
 source = "git+https://github.com/gattaca-com/flux?rev=54d514ea0042a5590b0196eb62a69be75abd4a95#54d514ea0042a5590b0196eb62a69be75abd4a95"
+dependencies = [
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "type-hash-derive"
+version = "0.6.0"
+source = "git+https://github.com/gattaca-com/flux?rev=c6442a90862ca66f2f85f453a80153fac5dcf12d#c6442a90862ca66f2f85f453a80153fac5dcf12d"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",

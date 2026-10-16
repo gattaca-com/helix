@@ -2,10 +2,7 @@ use std::{sync::Arc, task::Poll, time::Duration};
 
 use ::ssz::Encode;
 use alloy_primitives::B256;
-use helix_types::{
-    ForkName, LhConfig, SignedBeaconBlockGloas, SignedExecutionPayloadEnvelopeContents,
-    VersionedSignedProposal, spec_from_config,
-};
+use helix_types::{ForkName, LhConfig, VersionedSignedProposal, spec_from_config};
 use http::{Request, header::CONTENT_TYPE};
 use http_body_util::Full;
 use hyper::body::Bytes;
@@ -120,12 +117,9 @@ impl BeaconClient {
     /// Publishes a Gloas `SignedBeaconBlock` SSZ-encoded. Post-Gloas the block carries no
     /// blob sidecars, so the body is the bare block rather than `SignedBlockContents`.
     /// Sending it here gives our own node the block root before the reveal needs it.
-    pub async fn publish_gloas_block(
-        &self,
-        block: Arc<SignedBeaconBlockGloas>,
-    ) -> Result<u16, BeaconClientError> {
+    pub async fn publish_gloas_block(&self, block: Bytes) -> Result<u16, BeaconClientError> {
         let target = self.config.url.join("eth/v2/beacon/blocks")?;
-        let body_bytes = Bytes::from(block.as_ssz_bytes());
+        let body_bytes = block;
         let req = Request::builder()
             .method("POST")
             .uri(target.as_str())
@@ -157,7 +151,7 @@ impl BeaconClient {
     /// <https://github.com/ethereum/beacon-APIs/blob/master/apis/beacon/execution_payload/envelope_post.yaml>
     pub async fn publish_execution_payload_envelope(
         &self,
-        envelope: Arc<SignedExecutionPayloadEnvelopeContents>,
+        envelope: Bytes,
         fork: ForkName,
     ) -> Result<u16, BeaconClientError> {
         let mut target = self.config.url.join("eth/v1/beacon/execution_payload_envelopes")?;
@@ -167,7 +161,7 @@ impl BeaconClient {
             "broadcast_validation",
             &BroadcastValidation::ConsensusAndEquivocation.to_string(),
         );
-        let body_bytes = Bytes::from(envelope.as_ssz_bytes());
+        let body_bytes = envelope;
         let req = Request::builder()
             .method("POST")
             .uri(target.as_str())
@@ -221,7 +215,6 @@ impl BeaconClient {
 
 #[cfg(test)]
 mod tests {
-    use helix_types::{BlsSignature, ExecutionPayloadEnvelope, SignedExecutionPayloadEnvelope};
     use httpmock::{Method::POST, MockServer};
     use reqwest::Url;
 
@@ -232,15 +225,8 @@ mod tests {
         BeaconClient::new(BeaconClientConfig { url })
     }
 
-    fn empty_envelope() -> Arc<SignedExecutionPayloadEnvelopeContents> {
-        Arc::new(SignedExecutionPayloadEnvelopeContents {
-            signed_execution_payload_envelope: SignedExecutionPayloadEnvelope {
-                message: ExecutionPayloadEnvelope::empty(),
-                signature: BlsSignature::empty(),
-            },
-            kzg_proofs: Default::default(),
-            blobs: Default::default(),
-        })
+    fn empty_envelope() -> Bytes {
+        Bytes::from_static(&[0u8; 12])
     }
 
     #[tokio::test]

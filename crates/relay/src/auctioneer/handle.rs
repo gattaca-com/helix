@@ -11,7 +11,7 @@ use helix_common::{
 };
 use helix_types::{
     BlsPublicKey, BlsPublicKeyBytes, ExecPayload, GetPayloadResponse, SigError,
-    SignedBlindedBeaconBlock, Slot,
+    SignedBlindedBeaconBlock,
 };
 use tokio::sync::oneshot::{self, Receiver};
 use tracing::trace;
@@ -112,12 +112,11 @@ impl AuctioneerHandle {
     pub fn take_held_gloas_payload(
         &self,
         block_hash: B256,
-        slot: Slot,
     ) -> Result<oneshot::Receiver<Option<HeldGloasPayload>>, ChannelFull> {
         let (tx, rx) = oneshot::channel();
         trace!("sending to auctioneer");
         self.auctioneer
-            .try_send(Event::TakeHeldGloasPayload { block_hash, slot, res_tx: tx })
+            .try_send(Event::TakeHeldGloasPayload { block_hash, res_tx: tx })
             .map_err(|_| ChannelFull)?;
         Ok(rx)
     }

@@ -1,6 +1,6 @@
 use std::{ops::Deref, sync::Arc, time::Instant};
 
-use alloy_primitives::{B256, U256};
+use alloy_primitives::{Address, B256, U256};
 use flux::type_hash_derive::type_hash_lock;
 use flux_utils::ArrayStr;
 use flux_versioned_types::{versioned_enum, versioned_struct};
@@ -16,10 +16,9 @@ use helix_common::{
 use helix_tcp_types::{BidSubmissionFlags, BidSubmissionHeader};
 use helix_types::{
     BidAdjustmentData, BlockMergingDataV2, BlsPublicKeyBytes, BuilderBid, Compression,
-    ExecutionPayload, ForkName, GetPayloadResponse, GloasSubmissionData, MergeType,
-    PayloadAndBlobs, PayloadBidData, PayloadBidDataRef, SignedBidSubmission,
-    SignedBlindedBeaconBlock, SignedExecutionPayloadBid, Slot, Submission, SubmissionVersion,
-    VersionedSignedProposal, mock_public_key_bytes,
+    ExecutionPayload, ForkName, GetPayloadResponse, GloasBidSubmission, MergeType, PayloadAndBlobs,
+    PayloadBidData, PayloadBidDataRef, SignedBidSubmissionFulu, SignedBlindedBeaconBlock, Slot,
+    Submission, SubmissionVersion, VersionedSignedProposal, mock_public_key_bytes,
 };
 use http::{
     HeaderMap, HeaderValue,
@@ -29,6 +28,8 @@ use rustc_hash::FxHashMap;
 use tokio::sync::oneshot;
 use tracing::debug;
 use uuid::Uuid;
+
+const WEI_PER_GWEI: u64 = 1_000_000_000;
 
 use crate::{
     SubmissionDataWithSpan,
@@ -77,7 +78,7 @@ impl SubmissionRef {
 
 pub type GetHeaderResult = Result<PayloadEntry, ProposerApiError>;
 pub type GetPayloadResult = Result<GetPayloadResultData, ProposerApiError>;
-pub type GetExecutionPayloadBidResult = Result<SignedExecutionPayloadBid, ProposerApiError>;
+pub type GetExecutionPayloadBidResult = Result<Vec<u8>, ProposerApiError>;
 pub type SubmitBuilderPreferencesResult = Result<(), ProposerApiError>;
 
 versioned_struct!(InternalBidSubmissionHeader =>
@@ -249,7 +250,6 @@ pub struct SubmissionData {
     pub submission: Submission,
     pub merging_data: Option<BlockMergingDataV2>,
     pub bid_adjustment_data: Option<BidAdjustmentData>,
-    pub gloas_data: Option<GloasSubmissionData>,
     pub version: SubmissionVersion,
     pub withdrawals_root: B256,
     pub trace: SubmissionTrace,
@@ -273,17 +273,33 @@ pub struct GossipPayload {
 
 #[derive(Clone)]
 pub struct SubmissionPayload {
-    pub signed_bid_submission: SignedBidSubmission,
+    pub signed_bid_submission: SignedBidSubmissionFulu,
     pub withdrawals_root: B256,
     pub tx_root: Option<B256>,
     pub bid_adjustment_data: Option<BidAdjustmentData>,
-    /// The builder's EIP-7928 list and EIP-8282 builder requests, present only
-    /// for Gloas submissions.
-    pub gloas_data: Option<GloasSubmissionData>,
     pub is_adjusted: bool,
     pub submission_version: SubmissionVersion,
     pub submission_trace: SubmissionTrace,
     pub parent_beacon_block_root: Option<B256>,
+}
+
+#[derive(Clone)]
+pub struct GloasPayload {
+    pub submission: GloasBidSubmission,
+    pub bid: Vec<u8>,
+}
+
+impl GloasPayload {
+    pub fn new(submission: GloasBidSubmission, fee_recipient: Address) -> Self {
+        // The proposer is paid in-block, so the enshrined `value` stays 0.
+        let execution_payment =
+            (submission.bid_trace().value / U256::from(WEI_PER_GWEI)).saturating_to::<u64>();
+        // The proposer's, not the payload's: the builder keeps the coinbase and pays
+        // the proposer in-block, and consensus pays any enshrined amount to whatever
+        // this names. Announcing the coinbase names the builder.
+        let bid = submission.unsigned_bid(fee_recipient, execution_payment);
+        Self { submission, bid }
+    }
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -296,17 +312,15 @@ pub enum PayloadEntry {
 impl PayloadEntry {
     #[allow(clippy::too_many_arguments)]
     pub fn new_submission(
-        signed_bid_submission: SignedBidSubmission,
+        signed_bid_submission: SignedBidSubmissionFulu,
         withdrawals_root: B256,
         tx_root: Option<B256>,
         bid_adjustment_data: Option<BidAdjustmentData>,
-        gloas_data: Option<GloasSubmissionData>,
         submission_version: SubmissionVersion,
         submission_trace: SubmissionTrace,
         parent_beacon_block_root: Option<B256>,
     ) -> Self {
         Self::Submission(SubmissionPayload {
-            gloas_data,
             signed_bid_submission,
             withdrawals_root,
             tx_root,
@@ -377,17 +391,6 @@ impl PayloadEntry {
         match self {
             Self::Submission(bid) => bid.signed_bid_submission.execution_payload_ref(),
             Self::Gossip(bid) => &bid.payload_and_blobs.execution_payload,
-        }
-    }
-
-    /// The submitted Gloas sidecar: the EIP-7928 list and the EIP-8282 builder
-    /// requests. Empty when the fork does not carry one, in which case a Gloas
-    /// conversion would produce an invalid payload -- the caller is expected to
-    /// only reach this on a Gloas submission.
-    pub fn gloas_data(&self) -> GloasSubmissionData {
-        match self {
-            Self::Submission(bid) => bid.gloas_data.clone().unwrap_or_default(),
-            Self::Gossip(_) => GloasSubmissionData::default(),
         }
     }
 
@@ -533,7 +536,6 @@ pub enum Event {
     /// `submitSignedBeaconBlock` can build the envelope fulfilling a proposer's committed bid.
     TakeHeldGloasPayload {
         block_hash: B256,
-        slot: Slot,
         res_tx: oneshot::Sender<Option<HeldGloasPayload>>,
     },
     // Receive multiple of these potentially, assume some light validation

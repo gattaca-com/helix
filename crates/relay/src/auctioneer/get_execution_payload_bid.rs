@@ -1,22 +1,15 @@
 use helix_common::{
     ForkKey, api::proposer_api::GetExecutionPayloadBidParams, chain_info::ChainInfo,
 };
-use helix_types::{
-    ExecutionBlockHash, ExecutionPayloadBid, SignedExecutionPayloadBid, Slot,
-    convert_kzg_commitments_to_progressive, execution_requests_to_gloas,
-};
 use tokio::sync::oneshot;
 use tracing::warn;
-use tree_hash::TreeHash;
-
-const WEI_PER_GWEI: u64 = 1_000_000_000;
 
 use crate::{
     api::proposer::{GloasBuilderIdentity, ProposerApiError},
     auctioneer::{
         bid_adjustor::BidAdjustor,
         context::Context,
-        types::{GetExecutionPayloadBidResult, PayloadEntry, SlotData},
+        types::{GetExecutionPayloadBidResult, GloasPayload, SlotData},
     },
 };
 
@@ -32,14 +25,8 @@ impl<B: BidAdjustor> Context<B> {
             let best_block_hash =
                 self.bid_sorter.get_header(&fork).ok_or(ProposerApiError::NoBidPrepared)?;
             let entry =
-                self.payloads.get(&best_block_hash).ok_or(ProposerApiError::NoBidPrepared)?;
-            build_signed_bid(
-                entry,
-                &params,
-                &self.gloas_builder_identity,
-                &self.chain_info,
-                slot_data,
-            )
+                self.gloas_payloads.get(&best_block_hash).ok_or(ProposerApiError::NoBidPrepared)?;
+            build_signed_bid(entry, &self.gloas_builder_identity, &self.chain_info)
         });
         let _ = res_tx.send(result);
     }
@@ -78,64 +65,21 @@ pub(super) fn check_execution_payload_bid_liveness(
     Ok(())
 }
 
-/// Builds and signs the `SignedExecutionPayloadBid` for the winning submission held in `entry`,
-/// under helix's own configured Gloas builder identity.
 pub(super) fn build_signed_bid(
-    entry: &PayloadEntry,
-    params: &GetExecutionPayloadBidParams,
+    entry: &GloasPayload,
     identity: &GloasBuilderIdentity,
     chain_info: &ChainInfo,
-    slot_data: &SlotData,
-) -> Result<SignedExecutionPayloadBid, ProposerApiError> {
-    let builder_index = identity.builder_index().ok_or(ProposerApiError::NoBidPrepared)?;
-    let slot = Slot::new(params.slot);
-
-    let gloas_data = entry.gloas_data();
-    let payload = entry.execution_payload().to_lighthouse_gloas_payload(slot, &gloas_data.block_access_list).map_err(|err| {
-        warn!(%err, block_hash =% entry.block_hash(), "failed to convert held payload to Gloas shape for bid");
-        ProposerApiError::InternalServerError
-    })?;
-
-    let execution_requests = execution_requests_to_gloas(
-        entry.bid_data_ref().execution_requests,
-        &gloas_data.builder_deposits,
-        &gloas_data.builder_exits,
-    );
-    let execution_requests_root = execution_requests.tree_hash_root();
-
-    // The proposer is paid in-block, so the enshrined `value` stays 0.
-    let execution_payment =
-        (entry.value() / alloy_primitives::U256::from(WEI_PER_GWEI)).saturating_to::<u64>();
-
-    let bid = ExecutionPayloadBid {
-        parent_block_hash: ExecutionBlockHash(params.parent_hash),
-        parent_block_root: params.parent_root,
-        block_hash: ExecutionBlockHash(*entry.block_hash()),
-        prev_randao: payload.prev_randao,
-        // The proposer's, not the payload's: the builder keeps the coinbase and pays
-        // the proposer in-block, and consensus pays any enshrined amount to whatever
-        // this names. Announcing the coinbase names the builder.
-        fee_recipient: slot_data.registration_data.entry.registration.message.fee_recipient,
-        gas_limit: payload.gas_limit,
-        builder_index,
-        slot,
-        value: 0,
-        execution_payment,
-        blob_kzg_commitments: convert_kzg_commitments_to_progressive(
-            &entry.payload_and_blobs().blobs_bundle.commitments,
-        ),
-        execution_requests_root,
-        _phantom: std::marker::PhantomData,
-    };
-
-    Ok(identity.sign_bid(bid, chain_info))
+) -> Result<Vec<u8>, ProposerApiError> {
+    identity.sign_bid(&entry.bid, chain_info)
 }
 
 #[cfg(test)]
 mod tests {
     use alloy_primitives::B256;
     use helix_common::PayloadAttributesUpdate;
-    use helix_types::{BlsPublicKeyBytes, Domain, EthSpec, ForkName, SignedRoot, TestRandomSeed};
+    use helix_types::{
+        BlsPublicKeyBytes, Domain, EthSpec, ForkName, SignedRoot, Slot, TestRandomSeed,
+    };
 
     use super::*;
 
@@ -241,30 +185,6 @@ mod tests {
         }
     }
 
-    fn payload_entry(block_hash: B256, value: u64) -> PayloadEntry {
-        use std::sync::Arc;
-
-        use alloy_primitives::U256;
-        use helix_types::{BlobsBundle, ExecutionPayload, ExecutionRequests, PayloadAndBlobs};
-
-        let mut payload = ExecutionPayload::test_random();
-        payload.block_hash = block_hash;
-
-        PayloadEntry::new_gossip(
-            PayloadAndBlobs {
-                execution_payload: Arc::new(payload),
-                blobs_bundle: Arc::new(BlobsBundle::default()),
-            },
-            helix_types::PayloadBidData {
-                withdrawals_root: B256::ZERO,
-                tx_root: None,
-                execution_requests: Arc::new(ExecutionRequests::default()),
-                value: U256::from(value),
-                builder_pubkey: Default::default(),
-            },
-        )
-    }
-
     fn bid_identity(builder_index: u64) -> GloasBuilderIdentity {
         helix_common::utils::install_default_crypto_provider();
         let identity = GloasBuilderIdentity::new(helix_types::BlsKeypair::random());
@@ -272,54 +192,40 @@ mod tests {
         identity
     }
 
-    /// A submission entry carrying a block access list, as Gloas requires.
-    fn gloas_submission_entry(block_access_list: Vec<u8>) -> PayloadEntry {
+    fn gloas_payload(
+        block_hash: B256,
+        parent_hash: B256,
+        parent_root: B256,
+        value: u64,
+        fee_recipient: alloy_primitives::Address,
+    ) -> GloasPayload {
+        use std::sync::Arc;
+
         use helix_types::{
-            BlockAccessListBytes, GloasSubmissionData, SignedBidSubmission, TestRandomSeed,
+            BidTrace, ExecutionBlockHash, ExecutionPayloadGloas, GloasBidTrace,
+            SignedBidSubmissionGloas,
         };
 
-        let mut submission = SignedBidSubmission::test_random();
-        submission.blobs_bundle = Default::default();
-
-        PayloadEntry::new_submission(
-            submission,
-            B256::ZERO,
-            None,
-            None,
-            Some(GloasSubmissionData {
-                block_access_list: BlockAccessListBytes(block_access_list.into()),
-                ..Default::default()
-            }),
-            helix_types::SubmissionVersion::new(0, None),
-            Default::default(),
-            None,
+        let mut payload = ExecutionPayloadGloas::default();
+        payload.block_hash = ExecutionBlockHash(block_hash);
+        payload.parent_hash = ExecutionBlockHash(parent_hash);
+        payload.slot_number = Slot::new(BID_SLOT);
+        let mut trace = BidTrace::test_random();
+        trace.value = alloy_primitives::U256::from(value);
+        let submission = SignedBidSubmissionGloas {
+            message: GloasBidTrace { trace, parent_block_root: parent_root },
+            execution_payload: Arc::new(payload),
+            blobs_bundle: Default::default(),
+            execution_requests: Default::default(),
+            signature: Default::default(),
+        };
+        GloasPayload::new(
+            helix_types::GloasBidSubmission::from_ssz_bytes(
+                ssz::Encode::as_ssz_bytes(&submission).into(),
+            )
+            .unwrap(),
+            fee_recipient,
         )
-    }
-
-    #[test]
-    fn the_stored_payload_keeps_the_block_access_list_for_the_bid() {
-        let entry = gloas_submission_entry(vec![5u8; 96]);
-
-        let bal = entry.gloas_data().block_access_list;
-
-        assert_eq!(bal.to_vec(), vec![5u8; 96], "the bid's payload would be invalid without it");
-
-        // And it reaches the converted Gloas payload.
-        let payload = entry
-            .execution_payload()
-            .to_lighthouse_gloas_payload(Slot::new(1), &bal)
-            .expect("conversion must succeed");
-        assert_eq!(payload.block_access_list.len(), 96);
-    }
-
-    #[test]
-    fn a_gossip_entry_has_no_block_access_list() {
-        let entry = payload_entry(B256::repeat_byte(0x11), 1);
-
-        assert!(
-            entry.gloas_data().block_access_list.is_empty(),
-            "a gossiped payload carries none, so Gloas cannot be served from one",
-        );
     }
 
     #[test]
@@ -328,12 +234,15 @@ mod tests {
         let block_hash = B256::repeat_byte(0x99);
         let parent_hash = B256::repeat_byte(0x11);
         let parent_root = B256::repeat_byte(0x22);
-        let entry = payload_entry(block_hash, 42 * WEI_PER_GWEI);
+        let fee_recipient = alloy_primitives::Address::repeat_byte(0x44);
+        let entry =
+            gloas_payload(block_hash, parent_hash, parent_root, 42_000_000_000, fee_recipient);
         let identity = bid_identity(7);
-        let params = params(parent_hash, parent_root);
-        let data = live_slot_data(parent_hash, parent_root);
 
-        let signed_bid = build_signed_bid(&entry, &params, &identity, &chain_info, &data).unwrap();
+        let signed_bid = <helix_types::SignedExecutionPayloadBid as ssz::Decode>::from_ssz_bytes(
+            &build_signed_bid(&entry, &identity, &chain_info).unwrap(),
+        )
+        .expect("the signed bid decodes as the consensus type");
 
         assert_eq!(signed_bid.message.block_hash.0, block_hash);
         assert_eq!(signed_bid.message.parent_block_hash.0, parent_hash);
@@ -342,8 +251,7 @@ mod tests {
         assert_eq!(signed_bid.message.value, 0, "the proposer is paid in-block");
         assert_eq!(signed_bid.message.execution_payment, 42, "wei converts to gwei");
         assert_eq!(
-            signed_bid.message.fee_recipient,
-            data.registration_data.entry.registration.message.fee_recipient,
+            signed_bid.message.fee_recipient, fee_recipient,
             "consensus pays any enshrined amount here, so it must be the proposer's",
         );
 

@@ -19,8 +19,8 @@ use helix_common::{
     utils::utcnow_ns,
 };
 use helix_types::{
-    BidAdjustmentData, BlockMergingDataV2, BlsPublicKeyBytes, GloasSubmissionData, MergeType,
-    SignedBidSubmission, Submission, SubmissionVersion,
+    BidAdjustmentData, BlockMergingDataV2, BlsPublicKeyBytes, MergeType, SignedBidSubmission,
+    Submission, SubmissionVersion,
 };
 use rustc_hash::FxHashMap;
 use tracing::{info, trace, warn};
@@ -268,7 +268,6 @@ impl DecoderTile {
             version,
             merging_data,
             bid_adjustment_data,
-            gloas_data,
             decoder_params,
         ) = Self::try_handle_block_submission(
             cache,
@@ -296,6 +295,7 @@ impl DecoderTile {
         // resolves tx bytes and caches blob sidecars itself when forwarding to the merge
         // builder — no need to do that work here on the submission hot path.
         let merging_data = if config.block_merging_config.is_enabled &&
+            !matches!(submission, Submission::Full(SignedBidSubmission::Gloas(_))) &&
             header.merge_type != MergeType::Pause &&
             !merge_data_denied
         {
@@ -317,7 +317,6 @@ impl DecoderTile {
             version,
             merging_data,
             bid_adjustment_data,
-            gloas_data,
             withdrawals_root,
             trace,
             decoder_params,
@@ -345,7 +344,6 @@ impl DecoderTile {
             SubmissionVersion,
             Option<BlockMergingDataV2>,
             Option<BidAdjustmentData>,
-            Option<GloasSubmissionData>,
             SubmissionDecoderParams,
         ),
         BuilderApiError,
@@ -370,7 +368,7 @@ impl DecoderTile {
         };
 
         let mut decoder = SubmissionDecoder::new(&decoder_params);
-        let (mut submission, merging_data, bid_adjustment_data, gloas_data) =
+        let (submission, merging_data, bid_adjustment_data) =
             decoder.decode_at(payload, buffer, chain_info)?;
         decoder_params.fork_name = decoder.fork_name();
 
@@ -389,7 +387,7 @@ impl DecoderTile {
         };
 
         match submission {
-            Submission::Full(ref mut signed_bid_submission) => {
+            Submission::Full(ref signed_bid_submission) => {
                 verify_and_validate(signed_bid_submission, skip_sigverify, chain_info)?;
             }
             Submission::Dehydrated { .. } => {
@@ -418,7 +416,6 @@ impl DecoderTile {
             version,
             merging_data,
             bid_adjustment_data,
-            gloas_data,
             decoder_params,
         ))
     }
@@ -463,7 +460,7 @@ impl DecoderTile {
 
 #[timed]
 fn verify_and_validate(
-    submission: &mut SignedBidSubmission,
+    submission: &SignedBidSubmission,
     skip_sigverify: bool,
     chain_info: &ChainInfo,
 ) -> Result<(), BuilderApiError> {
@@ -474,6 +471,6 @@ fn verify_and_validate(
         trace!("signature ok");
         record_submission_step("signature", start_sig.elapsed());
     }
-    submission.validate_payload_ssz_lengths(chain_info.max_blobs_per_block())?;
+    submission.validate_lengths(chain_info.max_blobs_per_block())?;
     Ok(())
 }

@@ -968,17 +968,18 @@ impl PostgresDatabaseService {
 
             let mut structured_blocks: Vec<BlockParams> = Vec::with_capacity(chunk.len());
             for item in chunk {
+                let trace = item.submission.bid_trace();
                 structured_blocks.push(BlockParams {
                     block_number: item.submission.block_number() as i32,
-                    slot_number: item.submission.slot().as_u64() as i32,
-                    parent_hash: item.submission.parent_hash().as_slice(),
-                    block_hash: item.submission.block_hash().as_slice(),
-                    builder_pubkey: item.submission.builder_public_key().as_slice(),
-                    proposer_pubkey: item.submission.proposer_public_key().as_slice(),
-                    proposer_fee_recipient: item.submission.proposer_fee_recipient().as_slice(),
-                    gas_limit: item.submission.gas_limit() as i32,
-                    gas_used: item.submission.gas_used() as i32,
-                    value: PostgresNumeric::from(*item.submission.value()),
+                    slot_number: trace.slot as i32,
+                    parent_hash: trace.parent_hash.as_slice(),
+                    block_hash: trace.block_hash.as_slice(),
+                    builder_pubkey: trace.builder_pubkey.as_slice(),
+                    proposer_pubkey: trace.proposer_pubkey.as_slice(),
+                    proposer_fee_recipient: trace.proposer_fee_recipient.as_slice(),
+                    gas_limit: trace.gas_limit as i32,
+                    gas_used: trace.gas_used as i32,
+                    value: PostgresNumeric::from(trace.value),
                     num_txs: item.submission.num_txs() as i32,
                     timestamp: item.submission.timestamp() as i64,
                     first_seen: item.trace.receive_ns.0 as i64,
@@ -1036,10 +1037,11 @@ impl PostgresDatabaseService {
         let mut new_rows: Vec<(i32, Vec<u8>)> = Vec::with_capacity(batch.len());
         let mut tmp_last_processed_slot = *last_processed_slot;
         for item in batch {
-            let slot = item.submission.slot().as_u64() as i32;
+            let trace = item.submission.bid_trace();
+            let slot = trace.slot as i32;
             if slot > tmp_last_processed_slot {
                 tmp_last_processed_slot = slot;
-                new_rows.push((slot, item.submission.proposer_public_key().as_slice().to_vec()));
+                new_rows.push((slot, trace.proposer_pubkey.as_slice().to_vec()));
             }
         }
         if !new_rows.is_empty() {
