@@ -1,6 +1,7 @@
 use std::time::{Duration, Instant};
 
 use alloy_primitives::{Address, B256, U256};
+use flux::timing::Nanos;
 use flux_profiler::timed;
 use helix_common::{
     RelayConfig,
@@ -15,7 +16,10 @@ use helix_types::{BlsPublicKeyBytes, MergedBlock, PayloadAndBlobs, PayloadBidDat
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use tracing::{debug, error, info, trace, warn};
 
-use crate::auctioneer::{BlockMergeResponse, types::PayloadEntry};
+use crate::{
+    auctioneer::{BlockMergeResponse, types::PayloadEntry},
+    block_merging::observe_pipe,
+};
 
 type BlockHash = B256;
 
@@ -204,6 +208,7 @@ impl BlockMerger {
             );
         }
 
+        let (base_read_ns, accept_ns) = (response.base_read_ns, response.accept_ns);
         let block_hash = response.execution_payload.block_hash;
         let response_value = response.proposer_value;
         let base_block_time_ms = response.trace.request_time_ns / 1_000_000;
@@ -267,6 +272,9 @@ impl BlockMerger {
             .insert(coinbase, BestMergedBlock { base_block_time_ms, bid: new_bid.clone() });
 
         MERGE_STORE.with_label_values(&["stored"]).inc();
+        let stored_ns = Nanos::now().0;
+        observe_pipe("accept_to_store", accept_ns, stored_ns);
+        observe_pipe("read_to_first_store", base_read_ns, stored_ns);
         MERGE_STORE_DELTA.observe(gwei(response_value.saturating_sub(original_value)));
 
         record_step("prepare_merged_payload_for_storage", start_time.elapsed());
