@@ -21,7 +21,7 @@ use helix_tcp_types::{
 };
 use helix_types::{
     BidTrace, BlobsBundle, BlsPublicKeyBytes, BlsSecretKey, ChainSpec, ExecutionPayload,
-    ExecutionRequests, SignedBidSubmission, SignedRoot, TestRandom, Transaction, Transactions,
+    ExecutionRequests, SignedBidSubmissionFulu, SignedRoot, TestRandom, Transaction, Transactions,
 };
 use rand::{RngCore, SeedableRng, rngs::SmallRng};
 use ssz::{Decode, Encode};
@@ -151,7 +151,7 @@ fn submission(t: &Template, ctx: &SlotCtx, builder: &Builder, value: u128) -> Ve
     let block_hash = B256::random();
     let mut payload = t.payload.clone();
     payload.block_hash = block_hash;
-    let mut sub = SignedBidSubmission {
+    let mut sub = SignedBidSubmissionFulu {
         message: BidTrace {
             slot: ctx.slot,
             parent_hash: ctx.parent_hash,

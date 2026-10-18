@@ -10,24 +10,29 @@ use flux::{
 };
 use flux_utils::SharedVector;
 use helix_common::{
-    CurrentSlotInfo, InclusionListConfig, PayloadAttributesUpdate, PrimevConfig, ProposerDuty,
-    RelayConfig, SlotDuties, ValidatorSummary,
+    CurrentSlotInfo, ForkKey, InclusionListConfig, PayloadAttributesUpdate, PrimevConfig,
+    ProposerDuty, RelayConfig, SlotDuties, ValidatorPreferences, ValidatorSummary,
     api::builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
     beacon::{
         MultiBeaconClient,
-        types::{BeaconResponse, HeadEventData, PayloadAttributesEvent, SyncStatus},
+        types::{
+            BeaconResponse, BuilderStatus, BuilderSummary, HeadEventData, PayloadAttributesEvent,
+            ProposerPreferencesEvent, SyncStatus,
+        },
     },
     chain_info::ChainInfo,
     http::client::{HttpClient, PendingResponse, SseStream},
     local_cache::LocalCache,
     metrics::{DUTIES_AGE_SECONDS, DUTIES_FETCH, DUTIES_LOOKAHEAD_SLOTS},
+    utils::utcnow_dur,
 };
-use helix_types::Slot;
+use helix_types::{ForkName, Slot, gloas::GloasBlock};
 use rustc_hash::FxHashMap;
 use tracing::{debug, error, info, warn};
 
 use crate::{
     DbHandle, HelixSpine,
+    auctioneer::{AuctioneerHandle, Event, GloasBuilderIdentity, SeenBlock},
     housekeeper::{
         chain_head::ChainHead,
         duties::{DutiesFetchState, RequestedRegistrations, merge_partial_duties, process_duties},
@@ -36,6 +41,10 @@ use crate::{
         primev_service::{
             PRIMEV_BUILDER_ID, PrimevBuildersFetch, PrimevValidatorsFetch,
             build_primev_builder_configs,
+        },
+        proposer_prefs::{
+            ProposerPreferencesStore, merge_duty_feed, synthesize_duty_feed,
+            synthesize_registration,
         },
     },
     network::RelayNetworkManager,
@@ -47,6 +56,9 @@ const SYNC_STATUS_CHECK_INTERVAL: Duration = Duration::from_secs(4);
 /// Warn once a slot when the duty list is older than this.
 const DUTIES_STALE_AFTER: Duration = Duration::from_secs(60);
 const SYNC_STATUS_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
+const HEAD_BLOCK_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
+const BUILDER_INDEX_RETRY_INTERVAL: Duration = Duration::from_secs(1);
+const BUILDER_INDEX_MISSING_RETRY_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Slot event stored in SharedVector and broadcast via spine.
 #[derive(Clone, Debug)]
@@ -66,6 +78,8 @@ struct HousekeeperStats {
     head_sse_events: u32,
     head_sse_parse_errors: u32,
     payload_attr_sse_events: u32,
+    proposer_prefs_sse_events: u32,
+    proposer_prefs_parse_errors: u32,
     payload_attr_parse_errors: u32,
     duties_fetch_ok: u32,
     duties_fetch_empty: u32,
@@ -95,7 +109,10 @@ pub struct HousekeeperTile {
     beacon_client: Arc<MultiBeaconClient>,
     head_sse: Vec<SseStream>,
     payload_attr_sse: Vec<SseStream>,
+    proposer_prefs_sse: Vec<SseStream>,
+    proposer_prefs: ProposerPreferencesStore,
     primev_config: Option<PrimevConfig>,
+    validator_preferences: ValidatorPreferences,
     il_config: Option<InclusionListConfig>,
 
     // Output
@@ -105,7 +122,7 @@ pub struct HousekeeperTile {
     relay_network_api: Arc<RelayNetworkManager>,
     db: DbHandle,
 
-    known_payload_attributes: FxHashMap<(B256, Slot), PayloadAttributesUpdate>,
+    known_payload_attributes: FxHashMap<(ForkKey, Slot), PayloadAttributesUpdate>,
     duties: Vec<ProposerDuty>,
     requested_registrations: RequestedRegistrations,
     last_dependent_root: Option<B256>,
@@ -130,6 +147,19 @@ pub struct HousekeeperTile {
     sync_check_next: Instant,
     sync_best: Option<(usize, u64)>,
 
+    gloas_builder_identity: Arc<GloasBuilderIdentity>,
+    builder_index_fetch: Option<PendingResponse>,
+    builder_index_next: Instant,
+    builder_status: Option<BuilderStatus>,
+
+    /// Gloas head blocks being fetched for the auctioneer's reveal, keyed by root.
+    head_block_fetches: Vec<(B256, PendingResponse)>,
+    /// Latest head across our beacon nodes, sent with the attestation deadline.
+    head: (Slot, B256),
+    /// Last slot whose attestation deadline was sent to the auctioneer.
+    deadline_slot: Slot,
+    auctioneer: AuctioneerHandle,
+
     stats: HousekeeperStats,
 }
 
@@ -143,6 +173,8 @@ impl HousekeeperTile {
         chain_info: Arc<ChainInfo>,
         slot_events: Arc<SharedVector<SlotUpdate>>,
         relay_network_api: Arc<RelayNetworkManager>,
+        gloas_builder_identity: Arc<GloasBuilderIdentity>,
+        auctioneer: AuctioneerHandle,
     ) -> (Self, CurrentSlotInfo) {
         let curr_slot_info = CurrentSlotInfo::new();
 
@@ -168,13 +200,26 @@ impl HousekeeperTile {
             })
             .collect();
 
+        let proposer_prefs_sse = beacon_client
+            .beacon_clients
+            .iter()
+            .map(|c| {
+                let mut url = c.config.url.join("/eth/v1/events").unwrap();
+                url.set_query(Some("topics=proposer_preferences"));
+                http_client.sse_stream(url)
+            })
+            .collect();
+
         let tile = Self {
             chain_head,
             http_client,
             beacon_client,
             head_sse,
             payload_attr_sse,
+            proposer_prefs_sse,
+            proposer_prefs: ProposerPreferencesStore::default(),
             primev_config: config.primev_config.clone(),
+            validator_preferences: config.validator_preferences.clone(),
             il_config: config.inclusion_list.clone(),
             slot_events,
             local_cache,
@@ -198,9 +243,41 @@ impl HousekeeperTile {
             sync_check_pending: Vec::new(),
             sync_check_next: Instant::now(),
             sync_best: None,
+            gloas_builder_identity,
+            builder_index_fetch: None,
+            builder_index_next: Instant::now(),
+            builder_status: None,
+            head_block_fetches: Vec::with_capacity(4),
+            head: (Slot::new(0), B256::ZERO),
+            deadline_slot: Slot::new(0),
+            auctioneer,
             stats: HousekeeperStats::default(),
         };
         (tile, curr_slot_info)
+    }
+
+    /// Gloas proposers never register, so the feed builders poll is filled from the beacon
+    /// duties and the gossiped preferences, without displacing a real registration.
+    fn refresh_gloas_duty_feed(&mut self) {
+        let from_slot = self.chain_head.head() + 1;
+        if self.chain_head.chain_info().fork_at_slot(from_slot) != ForkName::Gloas {
+            return;
+        }
+
+        let chain_info = self.chain_head.chain_info();
+        let synthesized = synthesize_duty_feed(
+            &self.duties,
+            &mut self.proposer_prefs,
+            from_slot,
+            &self.validator_preferences,
+            chain_info,
+        );
+        if synthesized.is_empty() {
+            return;
+        }
+
+        let feed = merge_duty_feed(self.local_cache.get_proposer_duties(), synthesized);
+        self.local_cache.update_proposer_duties(feed);
     }
 
     fn on_new_slot(&mut self) {
@@ -208,6 +285,9 @@ impl HousekeeperTile {
         info!(%slot, "new slot started");
 
         self.duties_fetch_attempt = 0;
+        self.proposer_prefs.on_new_slot(slot + 1);
+        self.refresh_gloas_duty_feed();
+
         self.fetch_duties();
         self.maybe_fetch_il();
         self.report_duties_age();
@@ -296,11 +376,29 @@ impl Tile<HelixSpine> for HousekeeperTile {
         // Poll head SSE. on_new_slot() needs &mut self, so we can't call it inside
         // the loop (iterator holds &mut self.head_sse). Track a bool and call after.
         let mut new_slot_from_sse = false;
-        for stream in &mut self.head_sse {
+        for (idx, stream) in self.head_sse.iter_mut().enumerate() {
             if let Poll::Ready(ev) = stream.poll() {
                 self.stats.head_sse_events += 1;
                 match serde_json::from_str::<HeadEventData>(&ev.data) {
                     Ok(data) => {
+                        // Our beacon node imported this block, so the auctioneer can reveal
+                        // for it even if the proposer never sends it to us.
+                        let chain_info = self.chain_head.chain_info();
+                        if data.block != self.head.1 &&
+                            data.slot == chain_info.current_slot() &&
+                            chain_info.fork_at_slot(data.slot) == ForkName::Gloas &&
+                            let Ok(url) = self.beacon_client.beacon_clients[idx]
+                                .config
+                                .url
+                                .join(&format!("eth/v2/beacon/blocks/{}", data.block)) &&
+                            let Ok(req) = self.http_client.get_ssz(&url)
+                        {
+                            self.head_block_fetches
+                                .push((data.block, req.with_timeout(HEAD_BLOCK_REQUEST_TIMEOUT)));
+                        }
+                        if data.slot >= self.head.0 {
+                            self.head = (data.slot, data.block);
+                        }
                         if self.chain_head.update(data) {
                             new_slot_from_sse = true;
                             break;
@@ -318,6 +416,19 @@ impl Tile<HelixSpine> for HousekeeperTile {
             // or same iteration). is_new_slot() returned false for this slot.
             self.on_new_slot();
         }
+        for stream in &mut self.proposer_prefs_sse {
+            if let Poll::Ready(ev) = stream.poll() {
+                self.stats.proposer_prefs_sse_events += 1;
+                match serde_json::from_str::<ProposerPreferencesEvent>(&ev.data) {
+                    Ok(data) => self.proposer_prefs.process(self.chain_head.head(), data),
+                    Err(e) => {
+                        self.stats.proposer_prefs_parse_errors += 1;
+                        error!(err = %e, "proposer_preferences SSE parse error");
+                    }
+                }
+            }
+        }
+
         for stream in &mut self.payload_attr_sse {
             if let Poll::Ready(ev) = stream.poll() {
                 self.stats.payload_attr_sse_events += 1;
@@ -373,6 +484,8 @@ impl Tile<HelixSpine> for HousekeeperTile {
                         self.chain_head.epoch().as_u64(),
                     );
                     self.duties = duties;
+                    self.local_cache.update_proposer_schedule(self.duties.clone());
+                    self.refresh_gloas_duty_feed();
                     self.chain_head.mark_duties_done();
                     if root_changed {
                         self.stats.duties_dependent_root_changed += 1;
@@ -547,6 +660,87 @@ impl Tile<HelixSpine> for HousekeeperTile {
             self.sync_check_next = Instant::now() + SYNC_STATUS_CHECK_INTERVAL;
         }
 
+        self.head_block_fetches.retain_mut(|(block_root, req)| {
+            let Poll::Ready(result) = req.poll_bytes() else { return true };
+            match result {
+                Ok((200, block)) => match GloasBlock::new(&block) {
+                    Some(view) => {
+                        let event = Event::GloasBlock {
+                            slot: Slot::new(view.slot()),
+                            seen: SeenBlock::new(&view, *block_root),
+                        };
+                        if self.auctioneer.send_event(event).is_err() {
+                            error!(%block_root, "auctioneer channel full, dropping head block");
+                        }
+                    }
+                    None => warn!(%block_root, "head block has an invalid layout"),
+                },
+                Ok((status, _)) => warn!(%block_root, status, "head block fetch failed"),
+                Err(err) => warn!(%block_root, %err, "head block fetch failed"),
+            }
+            false
+        });
+
+        // Waits on in-flight head block fetches: their blocks must reach the auctioneer
+        // before it decides the slot. The fetch timeout bounds the wait.
+        let chain_info = self.chain_head.chain_info();
+        let slot = chain_info.current_slot();
+        if slot > self.deadline_slot &&
+            self.head_block_fetches.is_empty() &&
+            chain_info.fork_at_slot(slot) == ForkName::Gloas &&
+            utcnow_dur() >= chain_info.gloas_attestation_due(slot)
+        {
+            self.deadline_slot = slot;
+            let event = Event::AttestationDeadline { slot, head_root: self.head.1 };
+            if self.auctioneer.send_event(event).is_err() {
+                error!(%slot, "auctioneer channel full, dropping attestation deadline");
+            }
+        }
+
+        if let Some(req) = &mut self.builder_index_fetch &&
+            let Poll::Ready(result) = req.poll_json::<BeaconResponse<Vec<BuilderSummary>>>()
+        {
+            self.builder_index_fetch = None;
+            match result.map(|resp| resp.data.into_iter().next()) {
+                Ok(Some(builder)) => {
+                    if self.builder_status != Some(builder.status) {
+                        info!(
+                            builder_index = builder.index,
+                            status = ?builder.status,
+                            "found the relay's key in the Gloas builder registry"
+                        );
+                    }
+                    self.builder_status = Some(builder.status);
+                    self.gloas_builder_identity.set_builder_index(
+                        (builder.status == BuilderStatus::Active).then_some(builder.index),
+                    );
+                }
+                Ok(None) => {
+                    warn!("relay key is not in the Gloas builder registry");
+                    self.builder_status = None;
+                    self.gloas_builder_identity.set_builder_index(None);
+                    self.builder_index_next = Instant::now() + BUILDER_INDEX_MISSING_RETRY_INTERVAL;
+                }
+                Err(err) => warn!(%err, "failed to look up the relay's Gloas builder index"),
+            }
+        }
+        if self.builder_index_fetch.is_none() &&
+            self.builder_status != Some(BuilderStatus::Active) &&
+            Instant::now() >= self.builder_index_next &&
+            self.chain_head.chain_info().fork_at_slot(self.chain_head.head()) == ForkName::Gloas &&
+            let Some(c) = self.beacon_client.beacon_clients_by_last_response().next() &&
+            let Ok(url) = c.config.url.join("eth/v1/beacon/states/head/builders") &&
+            let Ok(req) = self.http_client.post(
+                &url,
+                serde_json::json!({ "ids": [self.gloas_builder_identity.keypair.pk.to_string()] })
+                    .to_string()
+                    .into(),
+            )
+        {
+            self.builder_index_fetch = Some(req.with_timeout(SYNC_STATUS_REQUEST_TIMEOUT));
+            self.builder_index_next = Instant::now() + BUILDER_INDEX_RETRY_INTERVAL;
+        }
+
         // Poll for consensus IL result from multi-relay service.
         if let Some(rx) = &mut self.il_consensus_rx {
             match rx.try_recv() {
@@ -583,6 +777,9 @@ impl Tile<HelixSpine> for HousekeeperTile {
                 &self.curr_slot_info,
                 &self.slot_events,
                 &self.known_payload_attributes,
+                &mut self.proposer_prefs,
+                &self.duties,
+                &self.validator_preferences,
                 self.pending_il.take(),
                 std::mem::take(&mut self.stats),
             );
@@ -601,7 +798,10 @@ fn send_slot_event(
     local_cache: &LocalCache,
     curr_slot_info: &CurrentSlotInfo,
     slot_events: &SharedVector<SlotUpdate>,
-    known_payload_attributes: &FxHashMap<(B256, Slot), PayloadAttributesUpdate>,
+    known_payload_attributes: &FxHashMap<(ForkKey, Slot), PayloadAttributesUpdate>,
+    proposer_prefs: &mut ProposerPreferencesStore,
+    beacon_duties: &[ProposerDuty],
+    validator_preferences: &ValidatorPreferences,
     il: Option<InclusionListWithMetadata>,
     stats: HousekeeperStats,
 ) {
@@ -620,7 +820,16 @@ fn send_slot_event(
         }
     }
 
-    let next_duty = new_duties.iter().find(|d| d.slot.as_u64() == bid_slot.as_u64()).cloned();
+    let mut next_duty = new_duties.iter().find(|d| d.slot.as_u64() == bid_slot.as_u64()).cloned();
+
+    // Gloas drops `registerValidator`, so the entry comes from the duty and the gossiped prefs.
+    if next_duty.is_none() && chain_head.chain_info().fork_at_slot(bid_slot) == ForkName::Gloas {
+        next_duty = beacon_duties.iter().find(|d| d.slot == bid_slot).and_then(|duty| {
+            proposer_prefs
+                .for_duty(duty, chain_head.chain_info())
+                .map(|prefs| synthesize_registration(duty, prefs, validator_preferences))
+        });
+    }
     let next_payload_attributes: Vec<PayloadAttributesUpdate> = known_payload_attributes
         .iter()
         .filter_map(
@@ -633,10 +842,13 @@ fn send_slot_event(
         duties_available = !new_duties.is_empty(),
         has_next_duty = next_duty.is_some(),
         has_payload_attrs = !next_payload_attributes.is_empty(),
+        has_proposer_prefs = proposer_prefs.get(bid_slot).is_some(),
         head_sse_events = stats.head_sse_events,
         head_sse_parse_errors = stats.head_sse_parse_errors,
         payload_attr_sse_events = stats.payload_attr_sse_events,
         payload_attr_parse_errors = stats.payload_attr_parse_errors,
+        proposer_prefs_sse_events = stats.proposer_prefs_sse_events,
+        proposer_prefs_parse_errors = stats.proposer_prefs_parse_errors,
         duties_fetch_ok = stats.duties_fetch_ok,
         duties_fetch_empty = stats.duties_fetch_empty,
         duties_fetch_err = stats.duties_fetch_err,

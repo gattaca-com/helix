@@ -30,7 +30,10 @@ use helix_tcp_types::merging::{
     order::MergeOrderRef,
     relay_to_builder::{MergeableBlockV1, SlotStartV1},
 };
-use helix_types::{BlobWithMetadata, BlsPublicKeyBytes, HydrationCache, Submission, payload_to_v3};
+use helix_types::{
+    BlobWithMetadata, BlsPublicKeyBytes, HydrationCache, SignedBidSubmission, Submission,
+    payload_to_v3,
+};
 use rustc_hash::{FxHashMap, FxHashSet};
 use ssz::Decode;
 use tracing::{debug, error, info, trace, warn};
@@ -850,7 +853,8 @@ impl BlockMergingTile {
 
         let hydrated;
         let signed = match &sub.submission {
-            Submission::Full(signed) => {
+            Submission::Full(SignedBidSubmission::Gloas(_)) => return,
+            Submission::Full(SignedBidSubmission::Fulu(signed)) => {
                 if !is_replay {
                     self.stats.forwarded_full += 1;
                 }
@@ -1033,9 +1037,9 @@ mod tests {
     };
     use helix_tcp_types::{MergeType, merging::builder_to_relay::MergeTraceV1};
     use helix_types::{
-        BlockMergingDataV2, BuilderInclusionResult, Compression, ForkName, SignedBidSubmission,
-        SubmissionVersion, TestRandomSeed, dehydrated_submission_with_txs_for_test,
-        full_tx_for_test,
+        BlockMergingDataV2, BlsPublicKeyBytes, BuilderInclusionResult, Compression, ForkName,
+        SignedBidSubmissionFulu, SubmissionVersion, TestRandomSeed,
+        dehydrated_submission_with_txs_for_test, full_tx_for_test,
     };
 
     use super::*;
@@ -1133,7 +1137,7 @@ mod tests {
         block_hash: B256,
         allow_appending: bool,
     ) -> SubmissionDataWithSpan {
-        let mut signed = SignedBidSubmission::test_random();
+        let mut signed = SignedBidSubmissionFulu::test_random();
         signed.message.slot = bid_slot;
         signed.message.block_hash = block_hash;
         // `TestRandom` for `BlobsBundle` doesn't respect the
@@ -1144,7 +1148,7 @@ mod tests {
         let submission_data = SubmissionData {
             submission_id: Uuid::nil(),
             submission_ref: SubmissionRef::default(),
-            submission: Submission::Full(signed),
+            submission: Submission::Full(SignedBidSubmission::Fulu(signed)),
             merging_data: Some(BlockMergingDataV2 {
                 allow_appending,
                 builder_address: Address::ZERO,

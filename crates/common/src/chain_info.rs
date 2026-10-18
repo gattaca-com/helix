@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use alloy_primitives::B256;
 use helix_types::{
-    ChainSpec, EthSpec, ForkName, MAINNET_GENESIS_TIME, MainnetEthSpec, Slot, SlotClock,
+    ChainSpec, Domain, EthSpec, ForkName, MAINNET_GENESIS_TIME, MainnetEthSpec, Slot, SlotClock,
     SlotClockTrait, duration_into_slot, new_slot_clock,
 };
 
@@ -10,6 +10,10 @@ pub(crate) const MAINNET_GENESIS_VALIDATOR_ROOT: [u8; 32] = [
     75, 54, 61, 185, 78, 40, 97, 32, 215, 110, 185, 5, 52, 15, 221, 78, 84, 191, 233, 240, 107,
     243, 63, 246, 207, 90, 210, 127, 81, 27, 254, 149,
 ];
+
+/// `ATTESTATION_DUE_BPS_GLOAS` from the Gloas preset: attestations are due a quarter
+/// of the way into the slot.
+const ATTESTATION_DUE_BPS_GLOAS: u32 = 2500;
 
 /// Runtime config with all chain specific information
 #[derive(Clone)]
@@ -75,6 +79,23 @@ impl ChainInfo {
         self.clock.now().unwrap_or(Slot::new(0))
     }
 
+    /// Unix time at which `slot` starts.
+    pub fn slot_start(&self, slot: Slot) -> Duration {
+        Duration::from_secs(self.genesis_time_in_secs + slot.as_u64() * self.seconds_per_slot())
+    }
+
+    /// Unix time of `slot`'s Gloas attestation deadline.
+    pub fn gloas_attestation_due(&self, slot: Slot) -> Duration {
+        self.slot_start(slot) + self.spec.get_slot_duration() * ATTESTATION_DUE_BPS_GLOAS / 10_000
+    }
+
+    /// Signing domain for `domain` under the fork active at `slot`.
+    pub fn domain_at(&self, domain: Domain, slot: Slot) -> B256 {
+        let epoch = slot.epoch(self.slots_per_epoch());
+        let fork = self.spec.fork_at_epoch(epoch);
+        self.spec.get_domain(epoch, domain, &fork, self.genesis_validators_root)
+    }
+
     pub fn max_blobs_per_block(&self) -> usize {
         let epoch = self.current_slot().epoch(self.slots_per_epoch());
         self.spec.max_blobs_per_block(epoch) as usize
@@ -85,5 +106,20 @@ impl Default for ChainInfo {
     fn default() -> Self {
         let spec = ChainSpec::mainnet();
         Self::new(spec, MAINNET_GENESIS_VALIDATOR_ROOT.into(), MAINNET_GENESIS_TIME)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_gloas_attestation_deadline_is_a_quarter_of_the_slot() {
+        let info = ChainInfo::default();
+        let slot = Slot::new(1_000);
+        assert_eq!(
+            info.gloas_attestation_due(slot) - info.slot_start(slot),
+            Duration::from_secs(3)
+        );
     }
 }

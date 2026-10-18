@@ -10,6 +10,7 @@ use helix_common::{
     SimulatorConfig, SubmissionTrace,
     api::builder_api::InclusionListWithMetadata,
     bid_submission::OptimisticVersion,
+    decoder::SubmissionDecoderParams,
     metrics::SimulatorMetrics,
     record_submission_step,
     simulator::{
@@ -23,7 +24,8 @@ use helix_common::{
 use helix_tcp_types::merging::builder_to_relay::UnmergedTx;
 use helix_types::{
     BidTrace, BlobsBundle, BlsPublicKeyBytes, BlsSignatureBytes, BuilderInclusionResult,
-    ExecutionPayload, ExecutionRequests, MergedBlockTrace, SignedBidSubmission, SubmissionVersion,
+    ExecutionPayload, ExecutionRequests, ForkName, MergedBlockTrace, SignedBidSubmission,
+    SignedBidSubmissionFulu, SubmissionVersion,
 };
 use rustc_hash::FxHashMap;
 use ssz::Encode as _;
@@ -398,7 +400,7 @@ impl Simulators {
                 Some(SimulationResultInner {
                     submission_ref: req.submission_ref,
                     optimistic_version: req.optimistic_version(),
-                    bid: Some(Bid::new(req.version, &req.submission)),
+                    bid: Some(Bid::new(req.version, &req.submission, req.parent_beacon_block_root)),
                     result: result.map(|()| req.trace),
                     submission_id: req.submission_id,
                     // Never dispatched: zero skips sim telemetry in `emit_sim_outcome`.
@@ -460,14 +462,14 @@ impl Simulators {
         mut req: crate::simulator::ValidationRequest,
         fast_track: bool,
     ) -> Option<SimStarted> {
-        let builder_pubkey = req.submission.message.builder_pubkey;
+        let builder_pubkey = req.submission.bid_trace().builder_pubkey;
         let queue_key =
-            QueueKey { parent_hash: req.submission.message.parent_hash, builder_pubkey };
+            QueueKey { parent_hash: req.submission.bid_trace().parent_hash, builder_pubkey };
         let version = req.version;
-        debug_assert_eq!(req.submission.message.slot, self.last_bid_slot);
-        if req.submission.message.slot != self.last_bid_slot {
+        debug_assert_eq!(req.submission.bid_trace().slot, self.last_bid_slot);
+        if req.submission.bid_trace().slot != self.last_bid_slot {
             error!(
-                slot = req.submission.message.slot,
+                slot = req.submission.bid_trace().slot,
                 last_bid_slot = self.last_bid_slot,
                 "sim request for unexpected slot"
             );
@@ -602,45 +604,47 @@ impl Simulators {
             .or_insert_with(|| SeenBlock::InFlight(Vec::new()));
 
         let sim = &mut self.simulators[id];
-        let dispatch = if let Some(url) = &sim.client.ssz_url {
-            SimDispatch::Ssz {
-                to_send: sim.client.client.post(format!("{url}/validate")),
+        let fork = submission.fork_name();
+        let dispatch = match &sim.client.ssz_url {
+            Some(url) => sim.client.ssz_request_builder(fork).map(|to_send| SimDispatch::Ssz {
+                to_send,
                 ssz_url: url.clone(),
                 http: sim.client.client.clone(),
-            }
-        } else {
-            let fork = submission.fork_name();
-            let Some((builder, method)) = sim.client.sim_request_builder(fork) else {
-                warn!(%fork, "no validation RPC method for fork, dropping submission");
-                sim.pending += 1;
-                let result = SimResult::Validate((
-                    id,
-                    Some(SimulationResultInner {
-                        submission_ref: req.submission_ref,
-                        optimistic_version: req.optimistic_version(),
-                        bid: None,
-                        result: Err(BlockSimError::UnsupportedFork(fork)),
-                        submission_id: req.submission_id,
-                        block_hash: *submission.block_hash(),
-                        txs: Vec::new(),
-                        retried: false,
-                    }),
-                ));
-                let started = sim_started_event(
-                    req.submission_id,
-                    *submission.block_hash(),
-                    false,
-                    req.is_top_bid,
-                );
-                let _ = self.task_tx.send(SimulatorsEvent::TaskDone {
-                    id,
-                    error: None,
-                    result: Box::new(result),
-                    elapsed: None,
-                });
-                return (*submission.block_hash() != B256::ZERO).then_some(started);
-            };
-            SimDispatch::Json { to_send: builder, method: method.to_owned() }
+            }),
+            None => sim
+                .client
+                .sim_request_builder(fork)
+                .map(|(to_send, method)| SimDispatch::Json { to_send, method: method.to_owned() }),
+        };
+        let Some(dispatch) = dispatch else {
+            warn!(%fork, "no validation method for fork, dropping submission");
+            sim.pending += 1;
+            let result = SimResult::Validate((
+                id,
+                Some(SimulationResultInner {
+                    submission_ref: req.submission_ref,
+                    optimistic_version: req.optimistic_version(),
+                    bid: None,
+                    result: Err(BlockSimError::UnsupportedFork(fork)),
+                    submission_id: req.submission_id,
+                    block_hash: *submission.block_hash(),
+                    txs: Vec::new(),
+                    retried: false,
+                }),
+            ));
+            let started = sim_started_event(
+                req.submission_id,
+                *submission.block_hash(),
+                false,
+                req.is_top_bid,
+            );
+            let _ = self.task_tx.send(SimulatorsEvent::TaskDone {
+                id,
+                error: None,
+                result: Box::new(result),
+                elapsed: None,
+            });
+            return (*submission.block_hash() != B256::ZERO).then_some(started);
         };
         sim.pending += 1;
 
@@ -669,25 +673,33 @@ impl Simulators {
                     .await;
                     (res, Some((request, ssz_url, http)))
                 }
-                SimDispatch::Json { to_send, method } => {
-                    let filtering =
-                        if req.apply_blacklist { Filtering::Regional } else { Filtering::Global };
-                    let json_req = JsonValidationRequest::new(
-                        req.registered_gas_limit,
-                        &submission,
-                        ValidatorPreferences { filtering, ..Default::default() },
-                        Some(req.parent_beacon_block_root),
-                        Some(req.inclusion_list.clone()),
-                    );
-                    let res = SimulatorClient::do_json_sim_request(
-                        &json_req,
-                        req.is_top_bid,
-                        &method,
-                        to_send,
-                    )
-                    .await;
-                    (res.map(|()| Vec::new()), None)
-                }
+                SimDispatch::Json { to_send, method } => match &submission {
+                    SignedBidSubmission::Fulu(submission) => {
+                        let filtering = if req.apply_blacklist {
+                            Filtering::Regional
+                        } else {
+                            Filtering::Global
+                        };
+                        let json_req = JsonValidationRequest::new(
+                            req.registered_gas_limit,
+                            submission,
+                            ValidatorPreferences { filtering, ..Default::default() },
+                            Some(req.parent_beacon_block_root),
+                            Some(req.inclusion_list.clone()),
+                        );
+                        let res = SimulatorClient::do_json_sim_request(
+                            &json_req,
+                            req.is_top_bid,
+                            &method,
+                            to_send,
+                        )
+                        .await;
+                        (res.map(|()| Vec::new()), None)
+                    }
+                    SignedBidSubmission::Gloas(_) => {
+                        (Err(BlockSimError::UnsupportedFork(ForkName::Gloas)), None)
+                    }
+                },
             };
 
             // On cache miss, retry with full uncompressed SSZ so the simulator
@@ -718,7 +730,7 @@ impl Simulators {
 
             SimulatorMetrics::sim_status(res.is_ok());
 
-            if let Some(got) = tx_root {
+            if let (Some(got), SignedBidSubmission::Fulu(submission)) = (tx_root, &submission) {
                 let expected = submission.transactions_root();
                 if expected != got {
                     res = Err(BlockSimError::InvalidTxRoot { got, expected })
@@ -728,7 +740,7 @@ impl Simulators {
             record_submission_step("simulation", start_sim.elapsed());
 
             let error = res.as_ref().err().cloned();
-            let bid = Bid::new(version, &submission);
+            let bid = Bid::new(version, &submission, req.parent_beacon_block_root);
             SimulatorMetrics::sim_builder_outcome(
                 &bid.builder_pubkey.to_string(),
                 req.priority.label(),
@@ -1376,14 +1388,14 @@ fn sim_outcome(error: Option<&BlockSimError>) -> &'static str {
     }
 }
 
-/// Converts a merged block into a synthetic `SignedBidSubmission` so it can be simulated
+/// Converts a merged block into a synthetic `SignedBidSubmissionFulu` so it can be simulated
 /// through the same SSZ/JSON dispatch the simulator already exposes for bid submissions.
 /// `builder_pubkey`/`proposer_pubkey`/`signature` are zeroed: the simulator never checks the
 /// BLS signature, and these fields are otherwise cosmetic (only `tx_sink` logging reads them).
 fn merged_block_to_submission(
     response: &BlockMergeResponse,
     req: &MergedValidationRequest,
-) -> Result<SignedBidSubmission, BlockSimError> {
+) -> Result<SignedBidSubmissionFulu, BlockSimError> {
     let payload = &response.execution_payload;
     let message = BidTrace {
         slot: req.slot,
@@ -1396,7 +1408,7 @@ fn merged_block_to_submission(
         gas_used: payload.gas_used,
         value: response.proposer_value,
     };
-    Ok(SignedBidSubmission {
+    Ok(SignedBidSubmissionFulu {
         message,
         execution_payload: payload.clone(),
         blobs_bundle: response.blobs_bundle.clone(),
@@ -1480,12 +1492,16 @@ fn ssz_request(
     inclusion_list: InclusionListWithMetadata,
     submission: &SignedBidSubmission,
 ) -> SszValidationRequest {
+    let decoder_params = match submission {
+        SignedBidSubmission::Fulu(_) => None,
+        SignedBidSubmission::Gloas(_) => Some(SubmissionDecoderParams::plain(ForkName::Gloas)),
+    };
     SszValidationRequest {
         apply_blacklist,
         registered_gas_limit,
         parent_beacon_block_root,
         inclusion_list,
-        decoder_params: None,
+        decoder_params,
         signed_bid_submission: submission.as_ssz_bytes(),
     }
 }
@@ -1496,7 +1512,7 @@ fn ssz_merged_request(
     registered_gas_limit: u64,
     parent_beacon_block_root: B256,
     inclusion_list: InclusionListWithMetadata,
-    submission: &SignedBidSubmission,
+    submission: &SignedBidSubmissionFulu,
     base_payment_tx_index: u64,
 ) -> SszMergedValidationRequest {
     SszMergedValidationRequest {
@@ -1507,5 +1523,30 @@ fn ssz_merged_request(
         decoder_params: None,
         signed_bid_submission: submission.as_ssz_bytes(),
         base_payment_tx_index,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use helix_types::TestRandomSeed;
+
+    use super::*;
+
+    /// Every other fork keeps the bare shape, so no simulator sees a new one.
+    #[test]
+    fn a_non_gloas_ssz_request_is_unchanged() {
+        let mut submission = SignedBidSubmissionFulu::test_random();
+        submission.blobs_bundle = Default::default();
+
+        let request = ssz_request(
+            false,
+            0,
+            B256::ZERO,
+            Default::default(),
+            &SignedBidSubmission::Fulu(submission.clone()),
+        );
+
+        assert!(request.decoder_params.is_none());
+        assert_eq!(request.signed_bid_submission, submission.as_ssz_bytes());
     }
 }

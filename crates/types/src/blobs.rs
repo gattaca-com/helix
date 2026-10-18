@@ -8,8 +8,7 @@ use ssz::DecodeError;
 use ssz_derive::{Decode, Encode};
 
 use crate::{
-    BlobsError, BlockValidationError, ExecutionPayload, SignedBeaconBlock,
-    SignedExecutionPayloadEnvelope, TestRandom,
+    BlobsError, BlockValidationError, ExecutionPayload, SignedBeaconBlock, TestRandom,
     fields::{KzgCommitment, KzgCommitments, KzgProof, KzgProofs},
 };
 
@@ -201,13 +200,6 @@ pub struct SignedBlockContents {
     pub blobs: Blobs,
 }
 
-#[derive(Debug, Clone, Encode)]
-pub struct SignedExecutionPayloadEnvelopeContents {
-    pub signed_execution_payload_envelope: SignedExecutionPayloadEnvelope,
-    pub kzg_proofs: KzgProofs,
-    pub blobs: Blobs,
-}
-
 #[cfg(test)]
 mod tests {
     use lh_eth2::types::BlobsBundle as LhBlobsBundle;
@@ -217,7 +209,7 @@ mod tests {
     use ssz::Encode;
 
     use super::*;
-    use crate::{SignedBidSubmission, TestRandom, test_encode_decode_json};
+    use crate::{SignedBidSubmissionFulu, TestRandom, test_encode_decode_json};
 
     #[test]
     fn test_blobs_bundle_() {
@@ -247,7 +239,7 @@ mod tests {
     #[ignore = "known bug: stale fixture doesn't satisfy BlobsBundle's 256-proofs-per-blob validation, see gattaca-com/helix#485"]
     fn test_payload_and_blobs_equivalence() {
         let data_json = include_str!("testdata/signed-bid-submission-fulu.json");
-        let signed_bid = test_encode_decode_json::<SignedBidSubmission>(data_json);
+        let signed_bid = test_encode_decode_json::<SignedBidSubmissionFulu>(data_json);
         let ex = signed_bid.payload_and_blobs();
 
         let data_ssz = ex.as_ssz_bytes();

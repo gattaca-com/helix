@@ -12,10 +12,11 @@ use helix_types::{
     DehydratedBidSubmissionFulu, DehydratedBidSubmissionFuluV1,
     DehydratedBidSubmissionFuluWithAdjustments,
     DehydratedBidSubmissionFuluWithAdjustmentsAndMergingData,
-    DehydratedBidSubmissionFuluWithMergingData, ForkName, ForkVersionDecode, MergeType,
-    SignedBidSubmission, SignedBidSubmissionWithAdjustments,
-    SignedBidSubmissionWithAdjustmentsAndMergingData, SignedBidSubmissionWithMergingData,
-    Submission, WithAdjustments, WithAdjustmentsAndMergingData, WithMergingData,
+    DehydratedBidSubmissionFuluWithMergingData, ForkName, ForkVersionDecode, GloasBidSubmission,
+    MergeType, SignedBidSubmission, SignedBidSubmissionFulu, SignedBidSubmissionGloas,
+    SignedBidSubmissionWithAdjustments, SignedBidSubmissionWithAdjustmentsAndMergingData,
+    SignedBidSubmissionWithMergingData, Submission, WithAdjustments, WithAdjustmentsAndMergingData,
+    WithMergingData,
 };
 use http::{
     HeaderMap, HeaderValue, StatusCode,
@@ -34,12 +35,17 @@ use zstd::{
 
 use crate::{
     api::builder_api::MAX_PAYLOAD_LENGTH,
+    chain_info::ChainInfo,
     metrics::{
         BID_DECODING_LATENCY, BID_DECOMPRESS_SIZEHINT_REL_ERROR, DECOMPRESSION_LATENCY,
         SUBMISSION_BY_COMPRESSION, SUBMISSION_BY_ENCODING, SUBMISSION_COMPRESSED_BYTES,
         SUBMISSION_DECOMPRESSED_BYTES,
     },
 };
+
+/// What one submission decodes into: the submission itself plus the sidecars
+/// only some forks and headers carry.
+pub type DecodedParts = (Submission, Option<BlockMergingDataV2>, Option<BidAdjustmentData>);
 
 #[derive(Debug, thiserror::Error)]
 pub enum DecoderError {
@@ -57,6 +63,9 @@ pub enum DecoderError {
 
     #[error("v2 shapes are SSZ over TCP; merging v2 requires Mergeable")]
     V2Unsupported,
+
+    #[error("unsupported combination: {0}")]
+    UnsupportedCombination(&'static str),
 }
 
 impl IntoResponse for DecoderError {
@@ -84,7 +93,8 @@ impl DecoderError {
             DecoderError::SszDecode(_) |
             DecoderError::IOError(_) |
             DecoderError::PayloadDecode |
-            DecoderError::V2Unsupported => StatusCode::BAD_REQUEST,
+            DecoderError::V2Unsupported |
+            DecoderError::UnsupportedCombination(_) => StatusCode::BAD_REQUEST,
         }
     }
 }
@@ -185,6 +195,25 @@ pub struct SubmissionDecoderParams {
     pub fork_name: ForkName,
 }
 
+impl SubmissionDecoderParams {
+    /// Uncompressed SSZ bytes of the fork's plain submission shape, with no
+    /// sidecars. This is what the relay re-encodes for an SSZ simulator.
+    pub fn plain(fork_name: ForkName) -> Self {
+        Self {
+            compression: Compression::None,
+            encoding: Encoding::Ssz,
+            merge_type: MergeType::None,
+            is_dehydrated: false,
+            with_mergeable_data: false,
+            with_adjustments: false,
+            mark_all_txs_mergeable: false,
+            dehydrated_v2: false,
+            merging_v2: false,
+            fork_name,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct SubmissionDecoder {
     compression: Compression,
@@ -275,14 +304,74 @@ impl SubmissionDecoder {
         &mut self,
         payload: &[u8],
         buf: &mut Vec<u8>,
-    ) -> Result<(Submission, Option<BlockMergingDataV2>, Option<BidAdjustmentData>), DecoderError>
-    {
+    ) -> Result<DecodedParts, DecoderError> {
         let body: &[u8] = match self.decompress(payload, buf) {
             None => payload,
             Some(Ok(())) => buf,
             Some(Err(e)) => return Err(e),
         };
+        self.decode_body(body)
+    }
 
+    #[timed]
+    pub fn decode_at(
+        &mut self,
+        payload: &[u8],
+        buf: &mut Vec<u8>,
+        chain_info: &ChainInfo,
+    ) -> Result<DecodedParts, DecoderError> {
+        let body: &[u8] = match self.decompress(payload, buf) {
+            None => payload,
+            Some(Ok(())) => buf,
+            Some(Err(e)) => return Err(e),
+        };
+        self.fork_name = chain_info.fork_at_slot(self.submission_slot(body)?.into());
+        self.decode_body(body)
+    }
+
+    pub fn fork_name(&self) -> ForkName {
+        self.fork_name
+    }
+
+    fn submission_slot(&self, body: &[u8]) -> Result<u64, DecoderError> {
+        match self.encoding {
+            Encoding::Ssz => {
+                body.get(..8).and_then(|slot| slot.try_into().ok()).map(u64::from_le_bytes).ok_or(
+                    DecoderError::SszDecode(ssz::DecodeError::InvalidByteLength {
+                        len: body.len(),
+                        expected: 8,
+                    }),
+                )
+            }
+            Encoding::Json => {
+                // Borrows only the slot; every other field is skipped without allocating.
+                #[derive(serde::Deserialize)]
+                struct Body<'a> {
+                    #[serde(borrow)]
+                    message: Message<'a>,
+                }
+                #[derive(serde::Deserialize)]
+                struct Message<'a> {
+                    slot: Option<&'a str>,
+                    #[serde(borrow)]
+                    trace: Option<Trace<'a>>,
+                }
+                #[derive(serde::Deserialize)]
+                struct Trace<'a> {
+                    slot: &'a str,
+                }
+                let message = serde_json::from_slice::<Body>(body)?.message;
+                message
+                    .slot
+                    .or(message.trace.map(|t| t.slot))
+                    .and_then(|slot| slot.parse().ok())
+                    .ok_or_else(|| serde::de::Error::custom("missing message slot"))
+                    .map_err(DecoderError::JsonDecodeError)
+            }
+        }
+    }
+
+    fn decode_body(&mut self, body: &[u8]) -> Result<DecodedParts, DecoderError> {
         if self.dehydrated_v2 || self.merging_v2 {
             self.decode_v2(body)
         } else if self.is_dehydrated {
@@ -298,11 +387,7 @@ impl SubmissionDecoder {
     /// header flags. `dehydrated_v2` selects the v2 submission shape,
     /// `merging_v2` the v2 merging shape; each pairs with the other's v1.
     #[timed]
-    fn decode_v2(
-        &mut self,
-        body: &[u8],
-    ) -> Result<(Submission, Option<BlockMergingDataV2>, Option<BidAdjustmentData>), DecoderError>
-    {
+    fn decode_v2(&mut self, body: &[u8]) -> Result<DecodedParts, DecoderError> {
         let mergeable = self.merge_type == MergeType::Mergeable;
         if !matches!(self.encoding, Encoding::Ssz) ||
             self.fork_name != ForkName::Fulu ||
@@ -321,8 +406,8 @@ impl SubmissionDecoder {
                 (Submission::Dehydrated(DehydratedBidSubmission::Fulu(s.into())), a, m)
             }
             (false, false) => {
-                let (s, a, m) = self.v2_parts::<SignedBidSubmission>(body)?;
-                (Submission::Full(s), a, m)
+                let (s, a, m) = self.v2_parts::<SignedBidSubmissionFulu>(body)?;
+                (Submission::Full(SignedBidSubmission::Fulu(s)), a, m)
             }
         };
 
@@ -379,11 +464,13 @@ impl SubmissionDecoder {
     }
 
     #[timed]
-    fn decode_dehydrated(
-        &mut self,
-        body: &[u8],
-    ) -> Result<(Submission, Option<BlockMergingDataV2>, Option<BidAdjustmentData>), DecoderError>
-    {
+    fn decode_dehydrated(&mut self, body: &[u8]) -> Result<DecodedParts, DecoderError> {
+        // Every shape below is Fulu's, which has no block access list. Decoding
+        // a Gloas submission into one would drop it and simulate a block the
+        // builder never committed to.
+        if self.fork_name == ForkName::Gloas {
+            return Err(DecoderError::UnsupportedCombination("dehydrated Gloas"));
+        }
         if self.merge_type == MergeType::Mergeable {
             if self.with_adjustments {
                 let sub: DehydratedBidSubmissionFuluWithAdjustmentsAndMergingData =
@@ -438,11 +525,12 @@ impl SubmissionDecoder {
     }
 
     #[timed]
-    fn decode_merge(
-        &mut self,
-        body: &[u8],
-    ) -> Result<(Submission, Option<BlockMergingDataV2>, Option<BidAdjustmentData>), DecoderError>
-    {
+    fn decode_merge(&mut self, body: &[u8]) -> Result<DecodedParts, DecoderError> {
+        // Gloas merging data comes with the merge builder's own step; until then
+        // these Fulu shapes would drop the block access list.
+        if self.fork_name == ForkName::Gloas {
+            return Err(DecoderError::UnsupportedCombination("Gloas with merging data"));
+        }
         let decoded = if self.with_adjustments {
             self._decode::<SignedBidSubmissionWithAdjustmentsAndMergingData>(body).map(|sub| {
                 let (submission, adjustment_data, merging_data) = sub.split();
@@ -474,22 +562,42 @@ impl SubmissionDecoder {
             MergeType::None => Some(merging_data),
             MergeType::Pause => None,
         };
-        Ok((Submission::Full(submission), merging_data.map(Into::into), bid_adjustment))
+        Ok((
+            Submission::Full(SignedBidSubmission::Fulu(submission)),
+            merging_data.map(Into::into),
+            bid_adjustment,
+        ))
     }
 
     #[timed]
-    fn decode_default(
-        &mut self,
-        body: &[u8],
-    ) -> Result<(Submission, Option<BlockMergingDataV2>, Option<BidAdjustmentData>), DecoderError>
-    {
+    fn decode_default(&mut self, body: &[u8]) -> Result<DecodedParts, DecoderError> {
+        if self.fork_name == ForkName::Gloas {
+            // Refused rather than decoded into the wrong shape. Adjustments
+            // are a BuilderNet feature and Gloas does not need them yet.
+            if self.with_adjustments {
+                return Err(DecoderError::UnsupportedCombination("Gloas with bid adjustments"));
+            }
+            let start = Instant::now();
+            let bytes = match self.encoding {
+                Encoding::Ssz => bytes::Bytes::copy_from_slice(body),
+                Encoding::Json => ssz::Encode::as_ssz_bytes(&serde_json::from_slice::<
+                    SignedBidSubmissionGloas,
+                >(body)?)
+                .into(),
+            };
+            let submission =
+                GloasBidSubmission::from_ssz_bytes(bytes).map_err(DecoderError::SszDecode)?;
+            self.decode_latency = start.elapsed().saturating_sub(self.decompress_latency);
+            self.record_metrics();
+            return Ok((Submission::Full(SignedBidSubmission::Gloas(submission)), None, None));
+        }
         let (submission, bid_adjustment) = if self.with_adjustments {
             let sub_with_adjustment: SignedBidSubmissionWithAdjustments = self._decode(body)?;
             let (sub, adjustment_data) = sub_with_adjustment.split();
 
             (sub, Some(adjustment_data))
         } else {
-            let submission: SignedBidSubmission = self._decode(body)?;
+            let submission: SignedBidSubmissionFulu = self._decode(body)?;
 
             (submission, None)
         };
@@ -515,7 +623,7 @@ impl SubmissionDecoder {
             }
             MergeType::Pause => None,
         };
-        Ok((Submission::Full(submission), merging_data, bid_adjustment))
+        Ok((Submission::Full(SignedBidSubmission::Fulu(submission)), merging_data, bid_adjustment))
     }
 
     // TODO: pass a buffer pool to avoid allocations
@@ -620,8 +728,9 @@ mod tests {
     use helix_types::{
         BidAdjData, BidAdjustmentDataV1, BlobsBundle, BundleOrder, DehydratedBidSubmissionFuluV1,
         DehydratedBidSubmissionFuluWithAdjustmentsAndMergingData,
-        DehydratedBidSubmissionFuluWithMergingData, MergeType, Order,
-        SignedBidSubmissionWithAdjustmentsAndMergingData, TestRandom,
+        DehydratedBidSubmissionFuluWithMergingData, GloasBidTrace, MergeType, Order,
+        SignedBidSubmissionGloas, SignedBidSubmissionWithAdjustmentsAndMergingData, TestRandom,
+        TestRandomSeed,
     };
     use ssz::Encode;
 
@@ -654,6 +763,100 @@ mod tests {
     fn test_merge_type_serialization() {
         assert_eq!(MergeType::Mergeable.as_ref(), "mergeable");
         assert_eq!(MergeType::AppendOnly.as_ref(), "append_only");
+    }
+
+    fn gloas_body() -> Vec<u8> {
+        SignedBidSubmissionGloas {
+            message: GloasBidTrace {
+                trace: helix_types::BidTrace::test_random(),
+                parent_block_root: Default::default(),
+            },
+            execution_payload: Default::default(),
+            blobs_bundle: Default::default(),
+            execution_requests: Default::default(),
+            signature: helix_types::BlsSignatureBytes::random(),
+        }
+        .as_ssz_bytes()
+    }
+
+    #[test]
+    fn the_json_slot_is_read_from_either_message_shape() {
+        let mut params = SubmissionDecoderParams::plain(ForkName::Fulu);
+        params.encoding = Encoding::Json;
+        let decoder = SubmissionDecoder::new(&params);
+
+        let fulu = br#"{"message":{"slot":"7","value":"1"},"execution_payload":{"transactions":["0x00"]}}"#;
+        let gloas = br#"{"message":{"trace":{"slot":"9"},"parent_block_root":"0x00"}}"#;
+
+        assert_eq!(decoder.submission_slot(fulu).unwrap(), 7);
+        assert_eq!(decoder.submission_slot(gloas).unwrap(), 9);
+        assert!(decoder.submission_slot(br#"{"message":{}}"#).is_err());
+    }
+
+    #[test]
+    fn the_decoder_selects_the_gloas_shape_by_fork() {
+        let params = SubmissionDecoderParams::plain(ForkName::Gloas);
+        let mut buf = Vec::new();
+        let (submission, _, _) = SubmissionDecoder::new(&params)
+            .decode(&gloas_body(), &mut buf)
+            .expect("a Gloas submission must decode");
+
+        assert!(matches!(submission, Submission::Full(SignedBidSubmission::Gloas(_))));
+    }
+
+    #[test]
+    fn the_decoder_keeps_the_fulu_shape_for_fulu() {
+        let mut submission = SignedBidSubmissionFulu::test_random();
+        submission.blobs_bundle = Default::default();
+        let body = submission.as_ssz_bytes();
+
+        let params = SubmissionDecoderParams::plain(ForkName::Fulu);
+        let mut buf = Vec::new();
+        let (submission, _, _) = SubmissionDecoder::new(&params)
+            .decode(&body, &mut buf)
+            .expect("the Fulu shape must be unchanged");
+
+        assert!(matches!(submission, Submission::Full(_)));
+    }
+
+    #[test]
+    fn gloas_with_adjustments_is_refused() {
+        let body = gloas_body();
+
+        let mut params = SubmissionDecoderParams::plain(ForkName::Gloas);
+        params.with_adjustments = true;
+        let mut buf = Vec::new();
+        let err = SubmissionDecoder::new(&params)
+            .decode(&body, &mut buf)
+            .expect_err("the combination has no wire shape");
+
+        assert!(
+            matches!(err, DecoderError::UnsupportedCombination(_)),
+            "refused explicitly, not decoded into the wrong shape: {err}",
+        );
+    }
+
+    /// Both wire shapes below are Fulu's, with no room for a block access list.
+    #[test]
+    fn gloas_with_the_other_submission_types_is_refused() {
+        let body = gloas_body();
+
+        for adjust in [
+            |params: &mut SubmissionDecoderParams| params.is_dehydrated = true,
+            |params: &mut SubmissionDecoderParams| params.with_mergeable_data = true,
+        ] {
+            let mut params = SubmissionDecoderParams::plain(ForkName::Gloas);
+            adjust(&mut params);
+            let mut buf = Vec::new();
+            let err = SubmissionDecoder::new(&params)
+                .decode(&body, &mut buf)
+                .expect_err("the combination has no wire shape");
+
+            assert!(
+                matches!(err, DecoderError::UnsupportedCombination(_)),
+                "refused explicitly, not decoded into a shape that drops the list: {err}",
+            );
+        }
     }
 
     #[test]
@@ -715,7 +918,7 @@ mod tests {
 
     #[test]
     fn decode_default_pause_never_carries_merge_data() {
-        let mut submission = SignedBidSubmission::random_for_test(&mut rand::rng());
+        let mut submission = SignedBidSubmissionFulu::random_for_test(&mut rand::rng());
         // Random blobs bundles don't satisfy the Fulu cell-proof count on decode; irrelevant
         // to what this test is proving, so keep it empty to avoid unrelated flakiness.
         submission.blobs_bundle = BlobsBundle::default().into();
@@ -773,9 +976,9 @@ mod tests {
 
     #[test]
     fn decode_default_with_adjustments_carries_adjustment_data() {
-        let mut submission = SignedBidSubmission::random_for_test(&mut rand::rng());
+        let mut submission = SignedBidSubmissionFulu::random_for_test(&mut rand::rng());
         submission.blobs_bundle = BlobsBundle::default().into();
-        let SignedBidSubmission {
+        let SignedBidSubmissionFulu {
             message,
             execution_payload,
             blobs_bundle,
@@ -818,7 +1021,7 @@ mod tests {
 
     #[test]
     fn decode_merge_mergeable_carries_merging_data() {
-        let mut submission = SignedBidSubmission::random_for_test(&mut rand::rng());
+        let mut submission = SignedBidSubmissionFulu::random_for_test(&mut rand::rng());
         submission.blobs_bundle = BlobsBundle::default().into();
         let merging_data = BlockMergingData::random_for_test(&mut rand::rng());
         let with_merging =
@@ -858,7 +1061,7 @@ mod tests {
         // every builder — which only ever encodes the original 3-field, 12-byte shape — got its
         // entire merge submission rejected with `OffsetIntoFixedPortion(12)` the moment it
         // included so much as one plain (non-V2) bundle order.
-        let mut submission = SignedBidSubmission::random_for_test(&mut rand::rng());
+        let mut submission = SignedBidSubmissionFulu::random_for_test(&mut rand::rng());
         submission.blobs_bundle = BlobsBundle::default().into();
         let merging_data = BlockMergingData {
             allow_appending: true,
@@ -899,7 +1102,7 @@ mod tests {
 
     #[test]
     fn decode_merge_append_only_accepts_a_body_without_merging_data() {
-        let mut submission = SignedBidSubmission::random_for_test(&mut rand::rng());
+        let mut submission = SignedBidSubmissionFulu::random_for_test(&mut rand::rng());
         submission.blobs_bundle = BlobsBundle::default().into();
         let fee_recipient = submission.fee_recipient();
         let body = submission.as_ssz_bytes();
@@ -931,7 +1134,7 @@ mod tests {
         // actively clears them rather than happening to pass through an already-empty vec.
         let (body, expected_allow_appending, expected_builder_address) = (0..100)
             .find_map(|_| {
-                let mut submission = SignedBidSubmission::random_for_test(&mut rand::rng());
+                let mut submission = SignedBidSubmissionFulu::random_for_test(&mut rand::rng());
                 submission.blobs_bundle = BlobsBundle::default().into();
                 let merging_data = BlockMergingData::random_for_test(&mut rand::rng());
                 if merging_data.merge_orders.is_empty() {
@@ -1012,7 +1215,7 @@ mod tests {
 
     #[test]
     fn decode_default_json_round_trip() {
-        let mut submission = SignedBidSubmission::random_for_test(&mut rand::rng());
+        let mut submission = SignedBidSubmissionFulu::random_for_test(&mut rand::rng());
         submission.blobs_bundle = BlobsBundle::default().into();
         let body = serde_json::to_vec(&submission).expect("serialize");
 
@@ -1127,7 +1330,7 @@ mod tests {
             decoder.decode(&body, &mut buf).expect("decode should succeed");
 
         match decoded_submission {
-            Submission::Full(s) => assert_eq!(s.message.block_hash, expected_block_hash),
+            Submission::Full(s) => assert_eq!(s.block_hash(), &expected_block_hash),
             Submission::Dehydrated(_) => panic!("expected full submission"),
         }
         assert_eq!(

@@ -291,6 +291,7 @@ impl DecoderTile {
         // resolves tx bytes and caches blob sidecars itself when forwarding to the merge
         // builder — no need to do that work here on the submission hot path.
         let merging_data = if config.block_merging_config.is_enabled &&
+            !matches!(submission, Submission::Full(SignedBidSubmission::Gloas(_))) &&
             header.merge_type != MergeType::Pause &&
             !merge_data_denied
         {
@@ -350,7 +351,7 @@ impl DecoderTile {
         let dehydrated_v2 = header.flags.dehydrated_v2();
         let merging_v2 = header.flags.merging_v2();
 
-        let decoder_params = SubmissionDecoderParams {
+        let mut decoder_params = SubmissionDecoderParams {
             compression: header.compression,
             encoding: header.encoding,
             is_dehydrated,
@@ -384,8 +385,9 @@ impl DecoderTile {
         }
 
         let mut decoder = SubmissionDecoder::new(&decoder_params);
-        let (mut submission, merging_data, bid_adjustment_data) =
-            decoder.decode(payload, buffer)?;
+        let (submission, merging_data, bid_adjustment_data) =
+            decoder.decode_at(payload, buffer, chain_info)?;
+        decoder_params.fork_name = decoder.fork_name();
 
         trace.decoded_ns = Nanos::now();
         record_submission_step_ns("recv_decoded", trace.receive_ns.0, trace.decoded_ns.0);
@@ -402,7 +404,7 @@ impl DecoderTile {
         };
 
         match submission {
-            Submission::Full(ref mut signed_bid_submission) => {
+            Submission::Full(ref signed_bid_submission) => {
                 verify_and_validate(signed_bid_submission, skip_sigverify, chain_info)?;
             }
             Submission::Dehydrated { .. } => {
@@ -473,7 +475,7 @@ impl DecoderTile {
 
 #[timed]
 fn verify_and_validate(
-    submission: &mut SignedBidSubmission,
+    submission: &SignedBidSubmission,
     skip_sigverify: bool,
     chain_info: &ChainInfo,
 ) -> Result<(), BuilderApiError> {
@@ -484,6 +486,6 @@ fn verify_and_validate(
         trace!("signature ok");
         record_submission_step("signature", start_sig.elapsed());
     }
-    submission.validate_payload_ssz_lengths(chain_info.max_blobs_per_block())?;
+    submission.validate_lengths(chain_info.max_blobs_per_block())?;
     Ok(())
 }

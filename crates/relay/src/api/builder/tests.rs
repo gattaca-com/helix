@@ -26,7 +26,7 @@ use helix_datastore::MockAuctioneer;
 use helix_common::{CurrentSlotInfo, PayloadAttributesUpdate, SlotDuties};
 use helix_types::{
     get_fixed_pubkey, get_fixed_secret, BlsPublicKey, BlsSignature, ChainSpec, ExecutionPayloadRef,
-    ForkName, SignedBidSubmission, SignedRoot,
+    ForkName, SignedBidSubmissionFulu, SignedRoot,
     SignedValidatorRegistration, TestRandomSeed, ValidatorRegistration,
 };
 use reqwest::{Client, Response};
@@ -156,9 +156,9 @@ async fn send_dummy_payload_attributes_update(
     tokio::time::sleep(Duration::from_millis(100)).await;
 }
 
-fn load_bid_submission() -> SignedBidSubmission {
+fn load_bid_submission() -> SignedBidSubmissionFulu {
     let bytes = include_bytes!("../../test_data/signed-bid-submission-deneb-2.json");
-    let mut signed_bid_submission: SignedBidSubmission = serde_json::from_slice(bytes).unwrap();
+    let mut signed_bid_submission: SignedBidSubmissionFulu = serde_json::from_slice(bytes).unwrap();
 
     // set the slot and timestamp
     signed_bid_submission.message_mut().slot = SUBMISSION_SLOT;
@@ -169,7 +169,7 @@ fn load_bid_submission() -> SignedBidSubmission {
     signed_bid_submission
 }
 
-fn resign_bid_submission(bid: &mut SignedBidSubmission) {
+fn resign_bid_submission(bid: &mut SignedBidSubmissionFulu) {
     let kp = get_fixed_secret(0);
 
     assert_eq!(&kp.public_key(), bid.builder_public_key());
@@ -360,7 +360,7 @@ async fn test_submit_block_invalid_signature() {
         if cancellations_enabled { "?cancellations=1" } else { "" }
     );
 
-    let mut signed_bid_submission: SignedBidSubmission = load_bid_submission();
+    let mut signed_bid_submission: SignedBidSubmissionFulu = load_bid_submission();
     signed_bid_submission.message_mut().proposer_pubkey =
         get_valid_payload_register_validator(None).entry.registration.message.pubkey;
 
@@ -419,7 +419,7 @@ async fn test_submit_block_fee_recipient_mismatch() {
         if cancellations_enabled { "?cancellations=1" } else { "" }
     );
 
-    let mut signed_bid_submission: SignedBidSubmission = load_bid_submission();
+    let mut signed_bid_submission: SignedBidSubmissionFulu = load_bid_submission();
 
     // Set incorrect fee recipient
     signed_bid_submission.message_mut().proposer_fee_recipient =
@@ -455,7 +455,7 @@ async fn test_submit_block_submission_for_past_slot() {
     // Prepare the request
     let req_url = format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
-    let signed_bid_submission: SignedBidSubmission = load_bid_submission();
+    let signed_bid_submission: SignedBidSubmissionFulu = load_bid_submission();
 
     // Send JSON encoded request
     let resp = reqwest::Client::new()
@@ -490,7 +490,7 @@ async fn test_submit_block_unknown_proposer_duty() {
     // Prepare the request
     let req_url = format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
-    let mut signed_bid_submission: SignedBidSubmission = load_bid_submission();
+    let mut signed_bid_submission: SignedBidSubmissionFulu = load_bid_submission();
     signed_bid_submission.message_mut().slot = 31;
     resign_bid_submission(&mut signed_bid_submission);
 
@@ -527,7 +527,7 @@ async fn test_submit_block_incorrect_timestamp() {
     // Prepare the request
     let req_url = format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
-    let mut signed_bid_submission: SignedBidSubmission = load_bid_submission();
+    let mut signed_bid_submission: SignedBidSubmissionFulu = load_bid_submission();
     *signed_bid_submission.execution_payload_mut().timestamp_mut() = 1;
 
     // Send JSON encoded request
@@ -560,7 +560,7 @@ async fn test_submit_block_slot_mismatch() {
     // Prepare the request
     let req_url = format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
-    let signed_bid_submission: SignedBidSubmission = load_bid_submission();
+    let signed_bid_submission: SignedBidSubmissionFulu = load_bid_submission();
 
     // Send JSON encoded request
     let resp = reqwest::Client::new()
@@ -592,7 +592,7 @@ async fn test_submit_prev_randao_mismatch() {
     // Prepare the request
     let req_url = format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
-    let mut signed_bid_submission: SignedBidSubmission = load_bid_submission();
+    let mut signed_bid_submission: SignedBidSubmissionFulu = load_bid_submission();
     *signed_bid_submission.execution_payload_mut().prev_randao_mut() =
         b256!("9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5");
 
@@ -639,7 +639,7 @@ async fn test_submit_prev_randao_mismatch() {
 //     // Prepare the request
 //     let req_url = format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
-//     let mut signed_bid_submission: SignedBidSubmission = load_bid_submission_from_file(
+//     let mut signed_bid_submission: SignedBidSubmissionFulu = load_bid_submission_from_file(
 //         "submitBlockPayloadCapella_Goerli_incorrect_withdrawal_root.json",
 //         Some(CAPELLA_FORK_EPOCH * SLOTS_PER_EPOCH + 1),
 //         Some(1681338467),
@@ -704,7 +704,7 @@ async fn test_submit_block_zero_value_block() {
     // Prepare the request
     let req_url = format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
-    let mut signed_bid_submission: SignedBidSubmission = load_bid_submission();
+    let mut signed_bid_submission: SignedBidSubmissionFulu = load_bid_submission();
     signed_bid_submission.message_mut().value = U256::ZERO;
     resign_bid_submission(&mut signed_bid_submission);
 
@@ -738,7 +738,7 @@ async fn test_submit_block_zero_value() {
     // Prepare the request
     let req_url = format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
-    let mut signed_bid_submission: SignedBidSubmission = load_bid_submission();
+    let mut signed_bid_submission: SignedBidSubmissionFulu = load_bid_submission();
 
     signed_bid_submission.execution_payload_mut().transactions = Default::default();
     signed_bid_submission.message.value = U256::ZERO;
@@ -776,7 +776,7 @@ async fn test_submit_block_incorrect_block_hash() {
     // Prepare the request
     let req_url = format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
-    let mut signed_bid_submission: SignedBidSubmission = load_bid_submission();
+    let mut signed_bid_submission: SignedBidSubmissionFulu = load_bid_submission();
     signed_bid_submission.message_mut().block_hash = B256::ZERO;
     resign_bid_submission(&mut signed_bid_submission);
 
@@ -810,7 +810,7 @@ async fn test_submit_block_incorrect_parent_hash() {
     // Prepare the request
     let req_url = format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
-    let mut signed_bid_submission: SignedBidSubmission = load_bid_submission();
+    let mut signed_bid_submission: SignedBidSubmissionFulu = load_bid_submission();
     signed_bid_submission.message_mut().parent_hash = B256::ZERO;
     resign_bid_submission(&mut signed_bid_submission);
 
@@ -860,7 +860,7 @@ async fn test_housekeep() {
 
     // Test payload attributes is updated
     let req_url = format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
-    let mut signed_bid_submission: SignedBidSubmission = load_bid_submission();
+    let mut signed_bid_submission: SignedBidSubmissionFulu = load_bid_submission();
     *signed_bid_submission.execution_payload_mut().prev_randao_mut() =
         b256!("9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5");
 

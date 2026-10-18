@@ -5,7 +5,7 @@ use std::sync::{
 };
 
 use crossbeam_channel::Receiver;
-use ethrex_blockchain::Blockchain;
+use ethrex_blockchain::{Blockchain, BlockchainOptions};
 use ethrex_common::types::AccountUpdate;
 use ethrex_storage::Store;
 use ethrex_vm::Evm;
@@ -22,10 +22,9 @@ impl MerklePools {
     pub fn new(store: &Store, count: usize) -> Self {
         let idle = crossbeam_channel::bounded(count);
         for _ in 0..count {
-            let _ = idle.0.try_send(Arc::new(Blockchain::default_with_store_and_pool(
-                store.clone(),
-                Blockchain::build_merkle_pool(),
-            )));
+            let _ = idle
+                .0
+                .try_send(Arc::new(Blockchain::new(store.clone(), BlockchainOptions::default())));
         }
         Self { idle }
     }

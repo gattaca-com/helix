@@ -273,7 +273,7 @@ mod tests {
     //     let bid_trace =
     //         BidTrace { proposer_pubkey: pubkey.serialize().into(), ..BidTrace::test_random() };
 
-    //     let signed_bid_submission = SignedBidSubmission {
+    //     let signed_bid_submission = SignedBidSubmissionFulu {
     //         message: bid_trace.clone(),
     //         execution_payload: ExecutionPayload::test_random().into(),
     //         blobs_bundle: Arc::new(BlobsBundle::V1(Default::default())),

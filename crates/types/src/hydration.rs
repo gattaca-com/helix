@@ -13,7 +13,7 @@ use tree_hash::TreeHash;
 
 use crate::{
     BidTrace, Blob, BlobsBundle, BlockMergingData, BlockValidationError, BlsPublicKeyBytes,
-    BlsSignatureBytes, ExecutionPayload, SignedBidSubmission, TestRandom,
+    BlsSignatureBytes, ExecutionPayload, SignedBidSubmissionFulu, TestRandom,
     bid_adjustment_data::{BidAdjData, BidAdjustmentData, BidAdjustmentDataV1},
     bid_submission,
     fields::{ExecutionRequests, KzgCommitment, KzgProof, Transaction, Transactions, Withdrawals},
@@ -35,8 +35,9 @@ impl ForkVersionDecode for DehydratedBidSubmission {
             ForkName::Capella |
             ForkName::Deneb |
             ForkName::Electra |
-            ForkName::Gloas |
             ForkName::Heze => Err(DecodeError::NoMatchingVariant),
+            // TODO: dehydrated Gloas submissions
+            ForkName::Gloas => Err(DecodeError::NoMatchingVariant),
             ForkName::Fulu => DehydratedBidSubmissionFuluV1::from_ssz_bytes(bytes)
                 .map(|v1| DehydratedBidSubmission::Fulu(v1.into())),
         }
@@ -44,7 +45,7 @@ impl ForkVersionDecode for DehydratedBidSubmission {
 }
 
 pub struct HydratedData {
-    pub submission: bid_submission::SignedBidSubmission,
+    pub submission: bid_submission::SignedBidSubmissionFulu,
     pub tx_cache_hits: usize,
     pub blob_cache_hits: usize,
     pub tx_root: Option<B256>,
@@ -284,10 +285,11 @@ impl ForkVersionDecode for DehydratedBidSubmissionFuluWithAdjustments {
             ForkName::Bellatrix |
             ForkName::Capella |
             ForkName::Deneb |
-            ForkName::Gloas |
             ForkName::Heze |
             ForkName::Electra => Err(DecodeError::NoMatchingVariant),
-            ForkName::Fulu => DehydratedBidSubmissionFuluWithAdjustments::from_ssz_bytes(bytes),
+            ForkName::Fulu | ForkName::Gloas => {
+                DehydratedBidSubmissionFuluWithAdjustments::from_ssz_bytes(bytes)
+            }
         }
     }
 }
@@ -330,10 +332,11 @@ impl ForkVersionDecode for DehydratedBidSubmissionFuluWithMergingData {
             ForkName::Bellatrix |
             ForkName::Capella |
             ForkName::Deneb |
-            ForkName::Gloas |
             ForkName::Heze |
             ForkName::Electra => Err(DecodeError::NoMatchingVariant),
-            ForkName::Fulu => DehydratedBidSubmissionFuluWithMergingData::from_ssz_bytes(bytes),
+            ForkName::Fulu | ForkName::Gloas => {
+                DehydratedBidSubmissionFuluWithMergingData::from_ssz_bytes(bytes)
+            }
         }
     }
 }
@@ -627,7 +630,7 @@ impl DehydratedBidSubmissionFulu {
 
         blob_cache_hits = blob_cache_hits.saturating_sub(new_blobs);
 
-        let submission = SignedBidSubmission {
+        let submission = SignedBidSubmissionFulu {
             message: self.message,
             execution_payload: Arc::new(self.execution_payload),
             blobs_bundle: Arc::new(sidecar),
@@ -896,5 +899,21 @@ mod tests {
 
         assert_eq!(split_merging_data, expected_merging_data);
         assert!(matches!(dehydrated, DehydratedBidSubmission::Fulu(_)));
+    }
+
+    #[test]
+    fn dehydrated_with_merging_data_decodes_under_gloas_fork() {
+        let submission =
+            DehydratedBidSubmissionFuluWithMergingData::random_for_test(&mut rand::rng());
+        let bytes = submission.as_ssz_bytes();
+
+        let decoded = DehydratedBidSubmissionFuluWithMergingData::from_ssz_bytes_by_fork(
+            &bytes,
+            ForkName::Gloas,
+        )
+        .expect("Gloas should decode via the same shape as Fulu");
+
+        assert_eq!(decoded.message, submission.message);
+        assert_eq!(decoded.merging_data, submission.merging_data);
     }
 }
