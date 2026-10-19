@@ -575,22 +575,6 @@ lazy_static! {
     )
     .unwrap();
 
-    pub static ref MERGE_ACTIVATION: IntCounterVec = register_int_counter_vec_with_registry!(
-        "block_merge_activation_total",
-        "ActivateBaseBlockV1 decisions on a top bid update, by outcome",
-        &["outcome"],
-        &RELAY_METRICS_REGISTRY
-    )
-    .unwrap();
-
-    pub static ref MERGE_TOP_BID_GAP: Histogram = register_histogram_with_registry!(
-        "block_merge_top_bid_gap_ms",
-        "Gap between consecutive top bid updates reaching the merging tile",
-        vec![1., 2., 5., 10., 25., 50., 100., 200., 400., 800., 1_600., 3_200.],
-        &RELAY_METRICS_REGISTRY
-    )
-    .unwrap();
-
     pub static ref MERGE_REJECT: IntCounterVec = register_int_counter_vec_with_registry!(
         "block_merge_reject_total",
         "RejectV1 frames received from the merge builder, by code",
@@ -609,9 +593,18 @@ lazy_static! {
 
     pub static ref MERGE_ROUND_TRIP: HistogramVec = register_histogram_vec_with_registry!(
         "block_merge_round_trip_ms",
-        "Relay clock time from forwarding or activating a base block to a merged block for it",
+        "Relay clock time from forwarding a base block to a merged block for it",
         &["stage"],
         vec![10., 25., 50., 75., 100., 150., 200., 250., 300., 400., 600., 800., 1_200., 2_000., 4_000.],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    pub static ref MERGE_PIPE: HistogramVec = register_histogram_vec_with_registry!(
+        "block_merge_pipe_us",
+        "Relay-side merge pipe stages, from a base submission fully read to its merged block stored for get_header",
+        &["stage"],
+        vec![50., 100., 200., 300., 500., 750., 1_000., 1_500., 2_000., 3_000., 5_000., 7_500., 10_000., 15_000., 20_000., 30_000., 50_000., 75_000., 100_000., 200_000., 500_000., 1_000_000.],
         &RELAY_METRICS_REGISTRY
     )
     .unwrap();

@@ -11,6 +11,7 @@ use std::sync::Arc;
 use alloy_consensus::{Bytes48, Transaction as _, TxEnvelope};
 use alloy_primitives::{Address, B256};
 use alloy_rlp::Decodable;
+use helix_common::metrics::MERGE_PIPE;
 use helix_tcp_types::merging::{
     MergingFrameHeader, MergingMsgId,
     builder_to_relay::MergedBlockV1,
@@ -28,6 +29,12 @@ pub use tile::BlockMergingTile;
 pub use unbundling::{OrderTxs, find_unbundled_txs};
 
 use crate::simulator::BlockMergeResponse;
+
+pub fn observe_pipe(stage: &str, from_ns: u64, to_ns: u64) {
+    if from_ns > 0 && to_ns >= from_ns {
+        MERGE_PIPE.with_label_values(&[stage]).observe((to_ns - from_ns) as f64 / 1e3);
+    }
+}
 
 /// Appends `[1B msg_type][1B flags][SSZ body]`; the outer
 /// `[u32 len][u64 send-ts]` frame is written by the flux stream.
@@ -168,6 +175,8 @@ fn merged_block_to_response(
         },
         unmerged_txs: Arc::new(m.unmerged_txs),
         tx_builders: Arc::default(),
+        base_read_ns: 0,
+        accept_ns: 0,
     })
 }
 

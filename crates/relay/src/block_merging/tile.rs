@@ -13,23 +13,22 @@ use flux_network::{Event, Group, Network, ReplayPolicy, TcpGroupConfig, Token};
 use flux_utils::SharedVector;
 use helix_common::{
     BlockMergingTcpConfig,
-    api::builder_api::TopBidUpdate,
     chain_info::ChainInfo,
     metrics::{
-        MERGE_ACTIVATION, MERGE_BUILDER_LATENCY, MERGE_CONNECTED, MERGE_ENABLED, MERGE_FORWARD,
+        MERGE_BUILDER_LATENCY, MERGE_CONNECTED, MERGE_ENABLED, MERGE_FORWARD,
         MERGE_ORDERS_FORWARDED, MERGE_RECEIVED, MERGE_REJECT, MERGE_ROUND_TRIP,
-        MERGE_SLOT_APPENDABLE, MERGE_TOP_BID_GAP, MERGE_TXS_SENT,
+        MERGE_SLOT_APPENDABLE, MERGE_TXS_SENT,
     },
 };
 use helix_tcp_types::merging::{
     MERGING_HEADER_SIZE, MERGING_PROTOCOL_VERSION, MergingFrameHeader, MergingHeaderError,
     MergingMsgId,
-    builder_to_relay::{FatalV1, MergedBlockV1, RejectCode, RejectSubject, RejectV1},
+    builder_to_relay::{FatalV1, MergedBlockV1, RejectCode, RejectV1},
     control::{
         BuilderCollateral, MergerAckV1, MergerRegistrationV1, PingV1, PongV1, RelayConfigV1,
     },
     order::MergeOrderRef,
-    relay_to_builder::{ActivateBaseBlockV1, MergeableBlockV1, SlotStartV1},
+    relay_to_builder::{MergeableBlockV1, SlotStartV1},
 };
 use helix_types::{BlobWithMetadata, BlsPublicKeyBytes, HydrationCache, Submission, payload_to_v3};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -40,8 +39,8 @@ use uuid::Uuid;
 use crate::{
     HelixSpine, SubmissionDataWithSpan,
     block_merging::{
-        append_frame, appended_tx_hashes, merged_block_to_response, order_ref_hash, order_to_ref,
-        submission_blob_sidecars,
+        append_frame, appended_tx_hashes, merged_block_to_response, observe_pipe, order_ref_hash,
+        order_to_ref, submission_blob_sidecars,
         unbundling::{OrderTxs, find_unbundled_txs},
     },
     housekeeper::SlotUpdate,
@@ -70,9 +69,6 @@ struct Conn {
     /// budget on that repetition alone rather than genuinely distinct
     /// orders.
     orders_sent: FxHashSet<B256>,
-    /// Appendable block hashes forwarded on this connection this slot.
-    forwarded: FxHashSet<B256>,
-    activated: Option<B256>,
     /// Builder's head is past our bid slot, so it refuses everything until we catch up.
     builder_ahead: bool,
     /// Tx hashes already sent whole on this connection this slot; a repeat
@@ -91,8 +87,6 @@ impl Conn {
 
     fn reset_slot(&mut self) {
         self.orders_sent.clear();
-        self.forwarded.clear();
-        self.activated = None;
         self.sent_txs.clear();
         self.builder_ahead = false;
     }
@@ -110,8 +104,7 @@ struct SlotState {
     attrs: FxHashMap<B256, B256>,
     /// Appendable block hashes forwarded this slot.
     appendable: FxHashSet<B256>,
-    forwarded_ns: FxHashMap<B256, u64>,
-    activated_ns: FxHashMap<B256, u64>,
+    forwarded_ns: FxHashMap<B256, (u64, u64)>,
     merged_seen: FxHashSet<B256>,
     /// Events replayed on re-handshake.
     replay_log: Vec<ReplayEvent>,
@@ -154,14 +147,6 @@ struct SlotStats {
     merged_blob_missing: usize,
     /// Merged blocks dropped because the builder broke an order's atomicity.
     merged_unbundled: usize,
-    /// TopBidUpdate messages received for the current bid slot.
-    top_bid_updates: usize,
-    /// ActivateBaseBlockV1 frames sent.
-    activations_sent: usize,
-    /// Gaps between consecutive top bid updates, from bid sorter send
-    /// timestamps.
-    top_bid_gaps_ns: Vec<u64>,
-    last_top_bid_ns: u64,
     /// Txs sent as full bytes: new to this connection this slot.
     tx_bytes_sent: usize,
     /// Txs sent as a hash reference: already sent whole earlier this slot.
@@ -197,11 +182,6 @@ pub struct BlockMergingTile {
     decoded: Arc<SharedVector<SubmissionDataWithSpan>>,
     slot_events: Arc<SharedVector<SlotUpdate>>,
     merged_blocks: Arc<SharedVector<BlockMergeResponse>>,
-    /// Admin-toggled kill switch. The connection itself (dial, handshake,
-    /// ping/pong) is unaffected — only an admin can set this back to `true`
-    /// (never automatic). While `false`, the tile stops forwarding
-    /// mergeable blocks and top-bid activations, and silently drops any
-    /// merged blocks it receives.
     block_merging_enabled: Arc<AtomicBool>,
 
     // Buffered during `poll_with` (the connector is exclusively borrowed
@@ -236,7 +216,6 @@ impl Tile<HelixSpine> for BlockMergingTile {
         adapter.consume(|msg: DecodedSubmission, _| {
             self.forward_decoded(msg.decoded_submission_id, None)
         });
-        adapter.consume(|top_bid: TopBidUpdate, _| self.on_top_bid(top_bid));
     }
 
     fn try_init(&mut self, _adapter: &mut flux::spine::SpineAdapter<HelixSpine>) -> bool {
@@ -272,6 +251,7 @@ fn handle_merged_block(
     unbundled_scratch_covered: &mut Vec<bool>,
     max_blobs_per_block: usize,
 ) -> Option<BlockMergeResponse> {
+    let accept_ns = Nanos::now().0;
     if !enabled {
         MERGE_RECEIVED.with_label_values(&["disabled"]).inc();
         return None;
@@ -326,6 +306,17 @@ fn handle_merged_block(
     }
     stats.merged_blocks += 1;
     MERGE_RECEIVED.with_label_values(&["accepted"]).inc();
+    response.accept_ns = accept_ns;
+    if let Some(&(read_ns, forwarded_ns)) = slot.forwarded_ns.get(&base_block_hash) {
+        if !slot.merged_seen.contains(&base_block_hash) {
+            response.base_read_ns = read_ns;
+        }
+        let builder_ns =
+            response.trace.finalize_time_ns.checked_sub(response.trace.request_time_ns);
+        if let Some(builder_ns) = builder_ns.filter(|_| response.trace.request_time_ns > 0) {
+            observe_pipe("network", forwarded_ns + builder_ns, accept_ns);
+        }
+    }
     record_round_trip(slot, base_block_hash);
     response.tx_builders = Arc::new(
         response
@@ -358,18 +349,11 @@ fn record_builder_latency(trace: &helix_tcp_types::merging::builder_to_relay::Me
 fn record_round_trip(slot: &mut SlotState, base_block_hash: B256) {
     let now = Nanos::now().0;
     let elapsed_ms = |then: Option<&u64>| then.map(|&then| now.saturating_sub(then) as f64 / 1e6);
-    let activated = elapsed_ms(slot.activated_ns.get(&base_block_hash));
-    if let Some(ms) = activated {
-        MERGE_ROUND_TRIP.with_label_values(&["activate_to_merge"]).observe(ms);
-    }
     if !slot.merged_seen.insert(base_block_hash) {
         return;
     }
-    if let Some(ms) = elapsed_ms(slot.forwarded_ns.get(&base_block_hash)) {
+    if let Some(ms) = elapsed_ms(slot.forwarded_ns.get(&base_block_hash).map(|(_, f)| f)) {
         MERGE_ROUND_TRIP.with_label_values(&["forward_to_first_merge"]).observe(ms);
-    }
-    if let Some(ms) = activated {
-        MERGE_ROUND_TRIP.with_label_values(&["activate_to_first_merge"]).observe(ms);
     }
 }
 
@@ -688,10 +672,6 @@ impl BlockMergingTile {
         if matches!(reject.code, RejectCode::StaleSlot) || reject.slot > self.slot.bid_slot {
             self.conn.builder_ahead = true;
         }
-        // A named block is one the builder does not hold, so it must not be activated.
-        if let RejectSubject::BlockHash(hash) = reject.subject {
-            self.conn.forwarded.remove(&hash);
-        }
     }
 
     fn on_slot_msg(&mut self, msg: SlotMsg) {
@@ -754,15 +734,12 @@ impl BlockMergingTile {
     }
 
     fn report_slot_stats(&mut self) {
-        let mut stats = std::mem::take(&mut self.stats);
+        let stats = std::mem::take(&mut self.stats);
         if self.slot.bid_slot == 0 {
             return;
         }
         info!(
             bid_slot = self.slot.bid_slot,
-            top_bid_updates = stats.top_bid_updates,
-            top_bid_median_gap_ms = Self::median(&mut stats.top_bid_gaps_ns) as f64 / 1e6,
-            activations_sent = stats.activations_sent,
             forwarded_full = stats.forwarded_full,
             forwarded_hydrated = stats.forwarded_hydrated,
             hydration_failed = stats.hydration_failed,
@@ -841,6 +818,8 @@ impl BlockMergingTile {
         }
         let Some(data) = self.decoded.get(decoded_submission_id) else { return };
         let sub = &data.submission_data;
+        let read_ns = sub.trace.read_body_ns.0.max(sub.trace.receive_ns.0);
+        let decoded_ns = sub.trace.decoded_ns.0;
 
         if self.slot.slot_start.is_none() {
             self.stats.skipped_no_slot_start += 1;
@@ -1017,76 +996,14 @@ impl BlockMergingTile {
             .order_txs
             .extend(msg.merge_orders.iter().map(|o| OrderTxs::from_ref(o, &tx_hashes)));
         if msg.allow_appending {
-            self.conn.forwarded.insert(block_hash);
-            self.slot.forwarded_ns.entry(block_hash).or_insert_with(|| Nanos::now().0);
+            let now = Nanos::now().0;
+            self.slot.forwarded_ns.entry(block_hash).or_insert((read_ns, now));
+            if !is_replay {
+                observe_pipe("read_to_forward", read_ns, now);
+                observe_pipe("decode_to_forward", decoded_ns, now);
+            }
         }
         self.connector.send_with(token, |buf| buf.extend_from_slice(frame));
-    }
-
-    fn on_top_bid(&mut self, top_bid: TopBidUpdate) {
-        if top_bid.slot != self.slot.bid_slot {
-            MERGE_ACTIVATION.with_label_values(&["wrong_slot"]).inc();
-            return;
-        }
-        self.stats.top_bid_updates += 1;
-        if self.stats.last_top_bid_ns > 0 {
-            let gap = top_bid.timestamp.saturating_sub(self.stats.last_top_bid_ns);
-            self.stats.top_bid_gaps_ns.push(gap);
-            MERGE_TOP_BID_GAP.observe(gap as f64 / 1e6);
-        }
-        self.stats.last_top_bid_ns = top_bid.timestamp;
-
-        if !self.block_merging_enabled.load(Ordering::Relaxed) {
-            MERGE_ACTIVATION.with_label_values(&["disabled"]).inc();
-            return;
-        }
-        if !self.slot.appendable.contains(&top_bid.block_hash) {
-            MERGE_ACTIVATION.with_label_values(&["not_appendable"]).inc();
-            return;
-        }
-        // Activating past our slot is what produces the builder's `UnknownBaseBlock`.
-        if self.conn.builder_ahead {
-            MERGE_ACTIVATION.with_label_values(&["builder_ahead"]).inc();
-            return;
-        }
-        let Some(token) = self.token else {
-            MERGE_ACTIVATION.with_label_values(&["no_connection"]).inc();
-            return;
-        };
-        if !self.conn.active {
-            MERGE_ACTIVATION.with_label_values(&["no_connection"]).inc();
-            return;
-        }
-        if !self.conn.forwarded.contains(&top_bid.block_hash) {
-            MERGE_ACTIVATION.with_label_values(&["not_forwarded"]).inc();
-            return;
-        }
-        if self.conn.activated == Some(top_bid.block_hash) {
-            MERGE_ACTIVATION.with_label_values(&["duplicate"]).inc();
-            return;
-        }
-        self.conn.activated = Some(top_bid.block_hash);
-        self.slot.activated_ns.entry(top_bid.block_hash).or_insert_with(|| Nanos::now().0);
-        self.stats.activations_sent += 1;
-        MERGE_ACTIVATION.with_label_values(&["sent"]).inc();
-        let msg = ActivateBaseBlockV1 { slot: top_bid.slot, block_hash: top_bid.block_hash };
-        self.encode_buf.clear();
-        append_frame(&mut self.encode_buf, MergingMsgId::ActivateBaseBlockV1, &msg);
-        self.connector.send_with(token, |buf| buf.extend_from_slice(&self.encode_buf));
-    }
-
-    /// Median of unsorted samples; 0 if empty.
-    fn median(samples: &mut [u64]) -> u64 {
-        if samples.is_empty() {
-            return 0;
-        }
-        samples.sort_unstable();
-        let mid = samples.len() / 2;
-        if samples.len().is_multiple_of(2) {
-            (samples[mid - 1] + samples[mid]) / 2
-        } else {
-            samples[mid]
-        }
     }
 
     fn send_pings(&mut self) {
@@ -1116,9 +1033,9 @@ mod tests {
     };
     use helix_tcp_types::{MergeType, merging::builder_to_relay::MergeTraceV1};
     use helix_types::{
-        BlockMergingDataV2, BlsPublicKeyBytes, BuilderInclusionResult, Compression, ForkName,
-        SignedBidSubmission, SubmissionVersion, TestRandomSeed,
-        dehydrated_submission_with_txs_for_test, full_tx_for_test,
+        BlockMergingDataV2, BuilderInclusionResult, Compression, ForkName, SignedBidSubmission,
+        SubmissionVersion, TestRandomSeed, dehydrated_submission_with_txs_for_test,
+        full_tx_for_test,
     };
 
     use super::*;
@@ -1295,53 +1212,14 @@ mod tests {
         assert_eq!(tile.slot.replay_log.len(), 1);
     }
 
-    #[test]
-    fn on_top_bid_skips_activation_when_disabled() {
-        let mut tile = test_tile(false);
-        let block_hash = B256::repeat_byte(3);
-        tile.slot.bid_slot = 5;
-        tile.slot.appendable.insert(block_hash);
-        tile.conn.forwarded.insert(block_hash);
-        tile.conn.active = true;
-        // Never touched: the disabled gate returns before the connector is reached.
-        tile.token = Some(Token(0));
-
-        tile.on_top_bid(TopBidUpdate {
-            timestamp: 1,
-            slot: 5,
-            block_number: 0,
-            block_hash,
-            parent_hash: B256::ZERO,
-            builder_pubkey: BlsPublicKeyBytes::default(),
-            fee_recipient: Address::ZERO,
-            value: U256::ZERO,
-            ..Default::default()
-        });
-
-        assert!(tile.conn.activated.is_none());
-        assert_eq!(tile.stats.activations_sent, 0);
-    }
-
     fn reject(slot: u64, code: RejectCode) -> RejectV1 {
         RejectV1 {
             slot,
             code,
-            subject: RejectSubject::BlockHash(B256::repeat_byte(7)),
+            subject: helix_tcp_types::merging::builder_to_relay::RejectSubject::BlockHash(
+                B256::repeat_byte(7),
+            ),
             msg: b"test".to_vec(),
-        }
-    }
-
-    fn top_bid(slot: u64, block_hash: B256) -> TopBidUpdate {
-        TopBidUpdate {
-            timestamp: 1,
-            slot,
-            block_number: 0,
-            block_hash,
-            parent_hash: B256::ZERO,
-            builder_pubkey: BlsPublicKeyBytes::default(),
-            fee_recipient: Address::ZERO,
-            value: U256::ZERO,
-            ..Default::default()
         }
     }
 
@@ -1428,22 +1306,6 @@ mod tests {
         assert_eq!(tile.stats.skipped_builder_ahead, 0);
     }
 
-    /// Activating a base block while the builder is past our slot is what produces
-    /// the `UnknownBaseBlock` rejects downstream, so it must stop too.
-    #[test]
-    fn stale_slot_reject_stops_activation() {
-        let mut tile = tile_in_slot(5);
-        let block_hash = B256::repeat_byte(5);
-        tile.slot.appendable.insert(block_hash);
-        tile.conn.forwarded.insert(block_hash);
-
-        tile.on_reject(Token(0), reject(5, RejectCode::StaleSlot));
-        tile.on_top_bid(top_bid(5, block_hash));
-
-        assert!(tile.conn.activated.is_none());
-        assert_eq!(tile.stats.activations_sent, 0);
-    }
-
     /// A skipped forward must still feed the hydration cache, exactly as the
     /// neighbouring `skipped_no_slot_start` and `skipped_wrong_slot` guards do:
     /// dropping the frame must not cost later submissions their tx references.
@@ -1478,111 +1340,6 @@ mod tests {
         conn.reset_slot();
 
         assert!(!conn.builder_ahead);
-    }
-
-    fn reject_with(slot: u64, code: RejectCode, subject: RejectSubject) -> RejectV1 {
-        RejectV1 { slot, code, subject, msg: b"test".to_vec() }
-    }
-
-    /// gattaca-com/helix#538: `conn.forwarded` records what we sent, not what the
-    /// builder accepted, so a rejected block stayed activatable and the activation
-    /// came back as `UnknownBaseBlock`.
-    #[test]
-    fn reject_naming_a_block_hash_stops_it_being_activated() {
-        let mut tile = tile_in_slot(5);
-        let block_hash = B256::repeat_byte(1);
-        tile.slot.appendable.insert(block_hash);
-        tile.conn.forwarded.insert(block_hash);
-
-        // Not StaleSlot: this must work while the builder is still on our slot,
-        // where the `builder_ahead` guard does not apply.
-        tile.on_reject(
-            Token(0),
-            reject_with(5, RejectCode::InvalidBaseBlock, RejectSubject::BlockHash(block_hash)),
-        );
-        tile.on_top_bid(top_bid(5, block_hash));
-
-        assert!(!tile.conn.builder_ahead, "this reject says nothing about the builder's head");
-        assert!(tile.conn.activated.is_none());
-        assert_eq!(tile.stats.activations_sent, 0);
-    }
-
-    /// A reject naming a block means the builder does not hold it, whatever the
-    /// code says, so it must leave `forwarded`.
-    #[test]
-    fn reject_naming_a_block_hash_drops_only_that_block() {
-        let mut tile = tile_in_slot(5);
-        let rejected = B256::repeat_byte(2);
-        let kept = B256::repeat_byte(3);
-        tile.conn.forwarded.insert(rejected);
-        tile.conn.forwarded.insert(kept);
-
-        tile.on_reject(
-            Token(0),
-            reject_with(5, RejectCode::InvalidOrder, RejectSubject::BlockHash(rejected)),
-        );
-
-        assert!(!tile.conn.forwarded.contains(&rejected));
-        assert!(tile.conn.forwarded.contains(&kept));
-    }
-
-    /// `NotSynced` is documented as resendable, and a resend re-inserts the hash
-    /// when it is forwarded again.
-    #[test]
-    fn a_block_dropped_by_a_reject_is_restored_by_forwarding_it_again() {
-        let mut tile = tile_in_slot(5);
-        tile.conn.max_frame_bytes = u32::MAX;
-        tile.conn.max_orders_per_slot = u32::MAX;
-        let block_hash = B256::repeat_byte(4);
-
-        let decoded_submission_id = tile.decoded.push(test_submission(5, block_hash, true));
-        tile.forward_decoded(decoded_submission_id, None);
-        assert!(tile.conn.forwarded.contains(&block_hash));
-
-        tile.on_reject(
-            Token(0),
-            reject_with(5, RejectCode::NotSynced, RejectSubject::BlockHash(block_hash)),
-        );
-        assert!(!tile.conn.forwarded.contains(&block_hash));
-
-        tile.forward_decoded(decoded_submission_id, None);
-        assert!(tile.conn.forwarded.contains(&block_hash));
-    }
-
-    /// An order-level reject is not about the base block, and a subjectless one
-    /// names nothing, so neither may touch `forwarded`.
-    #[test]
-    fn rejects_without_a_block_subject_leave_forwarded_alone() {
-        let mut tile = tile_in_slot(5);
-        let block_hash = B256::repeat_byte(5);
-        tile.conn.forwarded.insert(block_hash);
-
-        tile.on_reject(
-            Token(0),
-            reject_with(
-                5,
-                RejectCode::InvalidOrder,
-                RejectSubject::OrderHash(B256::repeat_byte(9)),
-            ),
-        );
-        tile.on_reject(Token(0), reject_with(5, RejectCode::Busy, RejectSubject::None(0)));
-
-        assert!(tile.conn.forwarded.contains(&block_hash));
-    }
-
-    /// State for our connection must not be edited by another connection's reject.
-    #[test]
-    fn reject_from_another_token_leaves_forwarded_alone() {
-        let mut tile = tile_in_slot(5);
-        let block_hash = B256::repeat_byte(6);
-        tile.conn.forwarded.insert(block_hash);
-
-        tile.on_reject(
-            Token(1),
-            reject_with(5, RejectCode::InvalidBaseBlock, RejectSubject::BlockHash(block_hash)),
-        );
-
-        assert!(tile.conn.forwarded.contains(&block_hash));
     }
 
     fn raw_plain_tx() -> Bytes {
