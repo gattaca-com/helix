@@ -3,15 +3,48 @@
 //! ethrex: cloning `Evm` copies only the touched-account cache, so a clone per
 //! candidate order gives the same isolation revm's `CacheDB` wrapper did.
 
-use ethrex_common::types::BlockHeader;
+use std::sync::Arc;
+
+use alloy_primitives::Address;
+use dashmap::DashSet;
+use ethrex_common::types::{BlockHeader, TxKind};
+use ethrex_levm::db::gen_db::GeneralizedDatabase;
 use ethrex_vm::Evm;
 use rustc_hash::FxHashSet;
 
 use crate::engine::{
-    convert::au256,
+    convert::{aaddr, au256, eaddr},
     error::SimulationError,
-    types::{PreparedOrder, SimulatedOrder},
+    types::{DecodedTx, PreparedOrder, SimulatedOrder},
 };
+
+/// First listed address `txs` interact with: addressed by a tx, or left with a state change.
+pub fn blacklisted_touch(
+    db: &GeneralizedDatabase,
+    txs: &[Arc<DecodedTx>],
+    disallow: &DashSet<Address>,
+) -> Option<Address> {
+    if disallow.is_empty() {
+        return None;
+    }
+    let addressed = txs
+        .iter()
+        .filter_map(|tx| match tx.tx.to() {
+            TxKind::Call(to) => Some(aaddr(to)),
+            TxKind::Create => None,
+        })
+        .find(|to| disallow.contains(to));
+    addressed.or_else(|| {
+        disallow
+            .iter()
+            .find(|address| {
+                db.current_accounts_state
+                    .get(&eaddr(**address))
+                    .is_some_and(|account| !account.is_unmodified())
+            })
+            .map(|address| *address)
+    })
+}
 
 /// Cheap pre-checks shared by presim and live re-sim: duplicate txs and
 /// aggregate gas/blob headroom.
@@ -60,6 +93,7 @@ pub fn gate_order(
 ///
 /// The clone accumulates state as txs apply, so bundle-internal dependencies
 /// resolve exactly as they would on the live state.
+#[allow(clippy::too_many_arguments)]
 pub fn simulate_order(
     vm: &mut Evm,
     header: &BlockHeader,
@@ -68,6 +102,7 @@ pub fn simulate_order(
     available_gas: u64,
     available_blobs: u64,
     beneficiary: ethrex_common::Address,
+    disallow: Option<&DashSet<Address>>,
 ) -> Result<SimulatedOrder, SimulationError> {
     let initial_balance = balance_of(vm, beneficiary)?;
 
@@ -125,6 +160,13 @@ pub fn simulate_order(
             }
             Err(_) => return Err(SimulationError::DropNotAllowed(i)),
         }
+    }
+
+    // The base was screened at activation, so a modified listed account is this order's doing.
+    if let Some(disallow) = disallow &&
+        let Some(address) = blacklisted_touch(&vm.db, &order.txs, disallow)
+    {
+        return Err(SimulationError::Blacklist(address));
     }
 
     let final_balance = balance_of(vm, beneficiary)?;

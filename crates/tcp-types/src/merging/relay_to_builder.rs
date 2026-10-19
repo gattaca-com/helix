@@ -14,6 +14,8 @@ pub struct SlotStartV1 {
     pub parent_hash: B256,
     pub proposer_fee_recipient: Address,
     pub parent_beacon_block_root: B256,
+    /// Proposer filters this slot: nothing touching the relay's blacklist may be merged.
+    pub apply_blacklist: bool,
 }
 
 /// A forwarded builder submission carrying merging data. The builder derives

@@ -75,8 +75,16 @@ fn main() -> eyre::Result<()> {
         runtime.spawn(metrics::serve(port));
     }
 
+    let disallow = std::sync::Arc::new(dashmap::DashSet::new());
+    let blacklist_endpoint = roles
+        .simulation()
+        .map(|config| config.blacklist_endpoint.clone())
+        .or_else(|| roles.merging().map(|config| config.blacklist_endpoint.clone()));
+    if let Some(endpoint) = blacklist_endpoint {
+        runtime.spawn(validation_server::refresh_blacklist(endpoint, disallow.clone()));
+    }
+
     if let Some(simulation_config) = roles.simulation() {
-        let disallow = std::sync::Arc::new(dashmap::DashSet::new());
         let validator = BlockValidator::new(
             node.store.clone(),
             node.head.clone(),
@@ -92,10 +100,6 @@ fn main() -> eyre::Result<()> {
                 ))
             }),
         );
-        runtime.spawn(validation_server::refresh_blacklist(
-            simulation_config.blacklist_endpoint.clone(),
-            disallow,
-        ));
         runtime.spawn(validation_server::run(
             validator,
             simulation_config.ssz_addr,
@@ -160,6 +164,7 @@ fn main() -> eyre::Result<()> {
             ),
             rebase_recovery_bps: merging_config.speculation.rebase_recovery_bps,
             replay_worker_cores: merging_config.cores.replay_workers.clone(),
+            disallow,
         };
         let _engine = MergeEngine::spawn(
             engine_config,

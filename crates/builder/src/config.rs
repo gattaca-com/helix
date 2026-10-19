@@ -48,6 +48,9 @@ pub struct MergingConfig {
     /// Port for the merging-role prometheus endpoint; omit to disable.
     #[serde(default = "default_metrics_port")]
     pub metrics_port: Option<u16>,
+    /// Blacklist applied to pooled orders on slots the proposer filters.
+    #[serde(default = "default_blacklist_endpoint")]
+    pub blacklist_endpoint: String,
 }
 
 fn default_metrics_port() -> Option<u16> {

@@ -241,7 +241,7 @@ impl MergeEngine {
                 }
                 debug!(slot = msg.slot, parent_hash = %msg.parent_hash, "slot start");
                 self.teardown_slot("slot_start");
-                let mut state = SlotState::new(&msg);
+                let mut state = SlotState::new(&msg, &self.config.disallow);
                 state.shared = self.relay_config.clone().map(|relay_config| {
                     Arc::new(SharedSlot {
                         ctx: state.ctx.clone(),
