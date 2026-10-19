@@ -44,10 +44,7 @@ use helix_common::{
 use tokio::sync::watch;
 
 use crate::{
-    engine::{
-        convert::{Amsterdam, aaddr, au256, b256, eaddr, eu256, h256, payload_v3_to_block},
-        simulate::balance_of,
-    },
+    engine::convert::{Amsterdam, aaddr, au256, b256, eaddr, eu256, h256, payload_v3_to_block},
     metrics,
     node::HeadInfo,
     validation::{
@@ -453,7 +450,10 @@ impl BlockValidator {
         let t = metrics::sim_lap("sender_recovery", t);
 
         let coinbase_balance = |vm: &mut Evm| {
-            balance_of(vm, header.coinbase).map_err(|e| ValidationError::Execution(e.to_string()))
+            vm.db
+                .get_account(header.coinbase)
+                .map(|account| account.info.balance)
+                .map_err(|e| ValidationError::Execution(e.to_string()))
         };
         let mut balance = coinbase_balance(vm)?;
         let mut receipts = Vec::with_capacity(transactions.len());

@@ -20,7 +20,7 @@ use helix_tcp_types::{
         MERGING_HEADER_SIZE, MergingFrameHeader, MergingHeaderError, MergingMsgId,
         builder_to_relay::{FatalV1, RejectCode, RejectSubject, RejectV1},
         control::{MergerAckV1, MergerRegistrationV1, PingV1, PongV1, RelayConfigV1},
-        relay_to_builder::{ActivateBaseBlockV1, SlotEndV1, SlotStartV1},
+        relay_to_builder::{SlotEndV1, SlotStartV1},
     },
 };
 use rustc_hash::FxHashMap;
@@ -30,7 +30,7 @@ use tracing::{debug, error, info, trace, warn};
 
 use crate::{
     config::MergingConfig,
-    engine::{EngineEvent, EngineOutput},
+    engine::{EngineEvent, EngineOutput, Lanes},
     metrics,
     spine::BuilderSpine,
     utils::utcnow_ns,
@@ -65,6 +65,7 @@ pub struct MergingServerTile {
 
     engine_tx: Sender<EngineEvent>,
     engine_rx: Receiver<EngineOutput>,
+    lanes: Lanes,
 
     ping: Repeater,
     ping_nonce: u64,
@@ -105,6 +106,7 @@ impl MergingServerTile {
             sessions: FxHashMap::default(),
             active: None,
             generation: 0,
+            lanes: Lanes::spawn(config.event_queue_capacity, engine_tx.clone()),
             engine_tx,
             engine_rx,
             ping: Repeater::every(flux::timing::Duration::from_secs(PING_INTERVAL_S)),
@@ -167,6 +169,7 @@ impl MergingServerTile {
             active,
             generation,
             engine_tx,
+            lanes,
             replies,
             to_disconnect,
             ..
@@ -226,6 +229,7 @@ impl MergingServerTile {
                         *max_frame_bytes,
                         *generation,
                         engine_tx,
+                        lanes,
                         replies,
                         to_disconnect,
                     ),
@@ -452,6 +456,7 @@ fn handle_active_message(
     max_frame_bytes: u32,
     generation: u64,
     engine_tx: &Sender<EngineEvent>,
+    lanes: &mut Lanes,
     replies: &mut Vec<(Token, Reply)>,
     to_disconnect: &mut Vec<Token>,
 ) {
@@ -544,29 +549,10 @@ fn handle_active_message(
             metrics::ingest("slot_end");
             send_control(engine_tx, EngineEvent::SlotEnd { slot: msg.slot });
         }
-        MergingMsgId::ActivateBaseBlockV1 => {
-            let Ok(msg) = ActivateBaseBlockV1::from_ssz_bytes(body) else {
-                fatal(replies, to_disconnect, RejectCode::InvalidOrder, "undecodable activation");
-                return;
-            };
-            debug!(slot = msg.slot, block_hash = %msg.block_hash, "activate base block");
-            metrics::ingest("activate_base");
-            send_control(engine_tx, EngineEvent::ActivateBase {
-                slot: msg.slot,
-                block_hash: msg.block_hash,
-                generation,
-            });
-        }
+        MergingMsgId::ActivateBaseBlockV1 => {}
         MergingMsgId::MergeableBlockV1 => {
-            // Not decoded here: the engine does SSZ + tx decoding off the tile
-            // thread. Only the slot for a possible Busy reject is peeked.
-            let event = EngineEvent::MergeableBlock {
-                body: body.to_vec(),
-                recv_ns: utcnow_ns(),
-                generation,
-            };
             metrics::ingest("mergeable_block");
-            if let Err(TrySendError::Full(_)) = engine_tx.try_send(event) {
+            if lanes.submit(body.to_vec(), utcnow_ns(), generation).is_err() {
                 metrics::queue_drop("engine_mergeable");
                 let slot = peek_slot(body).unwrap_or_default();
                 debug!(?token, slot, "engine busy, rejecting mergeable block");

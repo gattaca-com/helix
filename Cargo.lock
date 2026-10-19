@@ -4326,7 +4326,7 @@ dependencies = [
 [[package]]
 name = "ethrex-blockchain"
 version = "29.0.1"
-source = "git+https://github.com/gattaca-com/ethrex?rev=b70bba1684331e57749a4148352c6210cce43c7d#b70bba1684331e57749a4148352c6210cce43c7d"
+source = "git+https://github.com/gattaca-com/ethrex?rev=9891452d471188c7fa3f916c69ecfaf5cfc203ee#9891452d471188c7fa3f916c69ecfaf5cfc203ee"
 dependencies = [
  "bytes",
  "crossbeam",
@@ -4351,7 +4351,7 @@ dependencies = [
 [[package]]
 name = "ethrex-common"
 version = "29.0.1"
-source = "git+https://github.com/gattaca-com/ethrex?rev=b70bba1684331e57749a4148352c6210cce43c7d#b70bba1684331e57749a4148352c6210cce43c7d"
+source = "git+https://github.com/gattaca-com/ethrex?rev=9891452d471188c7fa3f916c69ecfaf5cfc203ee#9891452d471188c7fa3f916c69ecfaf5cfc203ee"
 dependencies = [
  "bytes",
  "crc32fast",
@@ -4385,7 +4385,7 @@ dependencies = [
 [[package]]
 name = "ethrex-config"
 version = "29.0.1"
-source = "git+https://github.com/gattaca-com/ethrex?rev=b70bba1684331e57749a4148352c6210cce43c7d#b70bba1684331e57749a4148352c6210cce43c7d"
+source = "git+https://github.com/gattaca-com/ethrex?rev=9891452d471188c7fa3f916c69ecfaf5cfc203ee#9891452d471188c7fa3f916c69ecfaf5cfc203ee"
 dependencies = [
  "ethrex-common",
  "ethrex-p2p",
@@ -4397,6 +4397,7 @@ dependencies = [
 [[package]]
 name = "ethrex-crypto"
 version = "29.0.1"
+source = "git+https://github.com/gattaca-com/ethrex?rev=9891452d471188c7fa3f916c69ecfaf5cfc203ee#9891452d471188c7fa3f916c69ecfaf5cfc203ee"
 dependencies = [
  "ark-bn254",
  "ark-ec",
@@ -4420,7 +4421,7 @@ dependencies = [
 [[package]]
 name = "ethrex-guest-program"
 version = "29.0.1"
-source = "git+https://github.com/gattaca-com/ethrex?rev=b70bba1684331e57749a4148352c6210cce43c7d#b70bba1684331e57749a4148352c6210cce43c7d"
+source = "git+https://github.com/gattaca-com/ethrex?rev=9891452d471188c7fa3f916c69ecfaf5cfc203ee#9891452d471188c7fa3f916c69ecfaf5cfc203ee"
 dependencies = [
  "bytes",
  "ethereum-types",
@@ -4443,7 +4444,7 @@ dependencies = [
 [[package]]
 name = "ethrex-l2-common"
 version = "29.0.1"
-source = "git+https://github.com/gattaca-com/ethrex?rev=b70bba1684331e57749a4148352c6210cce43c7d#b70bba1684331e57749a4148352c6210cce43c7d"
+source = "git+https://github.com/gattaca-com/ethrex?rev=9891452d471188c7fa3f916c69ecfaf5cfc203ee#9891452d471188c7fa3f916c69ecfaf5cfc203ee"
 dependencies = [
  "bytes",
  "ethereum-types",
@@ -4461,7 +4462,7 @@ dependencies = [
 [[package]]
 name = "ethrex-levm"
 version = "29.0.1"
-source = "git+https://github.com/gattaca-com/ethrex?rev=b70bba1684331e57749a4148352c6210cce43c7d#b70bba1684331e57749a4148352c6210cce43c7d"
+source = "git+https://github.com/gattaca-com/ethrex?rev=9891452d471188c7fa3f916c69ecfaf5cfc203ee#9891452d471188c7fa3f916c69ecfaf5cfc203ee"
 dependencies = [
  "bytes",
  "derive_more 1.0.0",
@@ -4481,7 +4482,7 @@ dependencies = [
 [[package]]
 name = "ethrex-metrics"
 version = "29.0.1"
-source = "git+https://github.com/gattaca-com/ethrex?rev=b70bba1684331e57749a4148352c6210cce43c7d#b70bba1684331e57749a4148352c6210cce43c7d"
+source = "git+https://github.com/gattaca-com/ethrex?rev=9891452d471188c7fa3f916c69ecfaf5cfc203ee#9891452d471188c7fa3f916c69ecfaf5cfc203ee"
 dependencies = [
  "axum 0.8.9",
  "ethrex-common",
@@ -4497,7 +4498,7 @@ dependencies = [
 [[package]]
 name = "ethrex-p2p"
 version = "29.0.1"
-source = "git+https://github.com/gattaca-com/ethrex?rev=b70bba1684331e57749a4148352c6210cce43c7d#b70bba1684331e57749a4148352c6210cce43c7d"
+source = "git+https://github.com/gattaca-com/ethrex?rev=9891452d471188c7fa3f916c69ecfaf5cfc203ee#9891452d471188c7fa3f916c69ecfaf5cfc203ee"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -4541,7 +4542,7 @@ dependencies = [
 [[package]]
 name = "ethrex-rlp"
 version = "29.0.1"
-source = "git+https://github.com/gattaca-com/ethrex?rev=b70bba1684331e57749a4148352c6210cce43c7d#b70bba1684331e57749a4148352c6210cce43c7d"
+source = "git+https://github.com/gattaca-com/ethrex?rev=9891452d471188c7fa3f916c69ecfaf5cfc203ee#9891452d471188c7fa3f916c69ecfaf5cfc203ee"
 dependencies = [
  "bytes",
  "ethereum-types",
@@ -4551,7 +4552,7 @@ dependencies = [
 [[package]]
 name = "ethrex-rpc"
 version = "29.0.1"
-source = "git+https://github.com/gattaca-com/ethrex?rev=b70bba1684331e57749a4148352c6210cce43c7d#b70bba1684331e57749a4148352c6210cce43c7d"
+source = "git+https://github.com/gattaca-com/ethrex?rev=9891452d471188c7fa3f916c69ecfaf5cfc203ee#9891452d471188c7fa3f916c69ecfaf5cfc203ee"
 dependencies = [
  "axum 0.8.9",
  "axum-extra",
@@ -4591,7 +4592,7 @@ dependencies = [
 [[package]]
 name = "ethrex-storage"
 version = "29.0.1"
-source = "git+https://github.com/gattaca-com/ethrex?rev=b70bba1684331e57749a4148352c6210cce43c7d#b70bba1684331e57749a4148352c6210cce43c7d"
+source = "git+https://github.com/gattaca-com/ethrex?rev=9891452d471188c7fa3f916c69ecfaf5cfc203ee#9891452d471188c7fa3f916c69ecfaf5cfc203ee"
 dependencies = [
  "anyhow",
  "bytes",
@@ -4615,7 +4616,7 @@ dependencies = [
 [[package]]
 name = "ethrex-trie"
 version = "29.0.1"
-source = "git+https://github.com/gattaca-com/ethrex?rev=b70bba1684331e57749a4148352c6210cce43c7d#b70bba1684331e57749a4148352c6210cce43c7d"
+source = "git+https://github.com/gattaca-com/ethrex?rev=9891452d471188c7fa3f916c69ecfaf5cfc203ee#9891452d471188c7fa3f916c69ecfaf5cfc203ee"
 dependencies = [
  "anyhow",
  "bytes",
@@ -4635,7 +4636,7 @@ dependencies = [
 [[package]]
 name = "ethrex-vm"
 version = "29.0.1"
-source = "git+https://github.com/gattaca-com/ethrex?rev=b70bba1684331e57749a4148352c6210cce43c7d#b70bba1684331e57749a4148352c6210cce43c7d"
+source = "git+https://github.com/gattaca-com/ethrex?rev=9891452d471188c7fa3f916c69ecfaf5cfc203ee#9891452d471188c7fa3f916c69ecfaf5cfc203ee"
 dependencies = [
  "bytes",
  "derive_more 1.0.0",
@@ -5898,10 +5899,12 @@ dependencies = [
  "ethrex-rlp",
  "ethrex-rpc",
  "ethrex-storage",
+ "ethrex-trie",
  "ethrex-vm",
  "eyre",
  "flux 0.7.4",
  "flux-network",
+ "flux-profiler 0.7.4",
  "flux-utils 0.7.4",
  "flux-versioned-types",
  "futures",

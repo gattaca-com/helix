@@ -5,8 +5,6 @@ use helix_tcp_types::merging::builder_to_relay::{RejectCode, RejectSubject, Unme
 /// conditions that silently skip an emission.
 #[derive(Debug, thiserror::Error)]
 pub enum MergeError {
-    #[error("builder is not synced to the base block's parent")]
-    NotSynced,
     #[error("base block parent does not match the builder's head")]
     HeadMismatch,
     #[error("last tx is not a proposer payment of the declared value")]
@@ -27,8 +25,6 @@ pub enum MergeError {
     NoBalanceInBuilderSafe { address: Address, current: U256, required: U256 },
     #[error("revenue distribution transaction reverted")]
     RevenueAllocationReverted,
-    #[error("builder balance delta mismatch: revenues {revenues}, delta {delta}")]
-    BalanceDeltaMismatch { revenues: U256, delta: U256 },
     #[error("internal: {0}")]
     Internal(String),
 }
@@ -37,7 +33,6 @@ impl MergeError {
     /// Bounded label for metrics; never carries the variable payload.
     pub fn metric_label(&self) -> &'static str {
         match self {
-            MergeError::NotSynced => "not_synced",
             MergeError::HeadMismatch => "head_mismatch",
             MergeError::InvalidPayment => "invalid_payment",
             MergeError::UnknownCollateral(_) => "unknown_collateral",
@@ -47,7 +42,6 @@ impl MergeError {
             MergeError::InvalidBaseBlock(_) => "invalid_base_block",
             MergeError::NoBalanceInBuilderSafe { .. } => "safe_balance",
             MergeError::RevenueAllocationReverted => "distribution_reverted",
-            MergeError::BalanceDeltaMismatch { .. } => "balance_delta_mismatch",
             MergeError::Internal(_) => "internal",
         }
     }
@@ -57,7 +51,6 @@ impl MergeError {
     pub fn reject(&self, block_hash: Option<B256>) -> Option<(RejectCode, RejectSubject)> {
         let subject = block_hash.map(RejectSubject::BlockHash).unwrap_or(RejectSubject::None(0));
         let code = match self {
-            MergeError::NotSynced => RejectCode::NotSynced,
             MergeError::HeadMismatch => RejectCode::HeadMismatch,
             MergeError::InvalidPayment => RejectCode::InvalidPayment,
             MergeError::UnknownCollateral(_) => RejectCode::UnknownCollateral,
@@ -67,7 +60,6 @@ impl MergeError {
             MergeError::InvalidBaseBlock(_) => RejectCode::InvalidBaseBlock,
             MergeError::NoBalanceInBuilderSafe { .. } |
             MergeError::RevenueAllocationReverted |
-            MergeError::BalanceDeltaMismatch { .. } |
             MergeError::Internal(_) => return None,
         };
         Some((code, subject))
@@ -90,8 +82,6 @@ pub enum SimulationError {
     RevertNotAllowed(usize),
     #[error("transaction {_0} is invalid and can't be dropped")]
     DropNotAllowed(usize),
-    #[error("execution error: {_0}")]
-    Execution(String),
     #[error("touches blacklisted address {_0}")]
     Blacklist(Address),
 }
@@ -106,7 +96,6 @@ impl SimulationError {
             SimulationError::DuplicateTransaction => UnmergedReason::Duplicate,
             SimulationError::RevertNotAllowed(_) |
             SimulationError::DropNotAllowed(_) |
-            SimulationError::Execution(_) |
             SimulationError::Blacklist(_) => UnmergedReason::Invalid,
         }
     }
