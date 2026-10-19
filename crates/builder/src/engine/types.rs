@@ -7,6 +7,7 @@ use std::{
 use alloy_primitives::{Address, B256, U256};
 use alloy_rpc_types::beacon::BlsPublicKey;
 use alloy_signer_local::PrivateKeySigner;
+use dashmap::DashSet;
 use helix_tcp_types::merging::control::RelayConfigV1;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -38,6 +39,8 @@ pub struct EngineConfig {
     pub speculation_top_k: usize,
     /// One core per merge stream, in creation order; empty leaves them unpinned.
     pub replay_worker_cores: Vec<usize>,
+    /// Relay blacklist, shared with the simulation role's refresh loop.
+    pub disallow: Arc<DashSet<Address>>,
 }
 
 impl EngineConfig {
@@ -133,6 +136,8 @@ pub struct SlotContext {
     pub parent_hash: B256,
     pub proposer_fee_recipient: Address,
     pub parent_beacon_block_root: B256,
+    /// Set on slots the proposer filters; `None` leaves orders unscreened.
+    pub blacklist: Option<Arc<DashSet<Address>>>,
 }
 
 /// Slot state shared with the per-builder merge streams. The engine thread
@@ -359,12 +364,16 @@ impl BuilderSubmissions {
 }
 
 impl SlotState {
-    pub fn new(msg: &helix_tcp_types::merging::relay_to_builder::SlotStartV1) -> Self {
+    pub fn new(
+        msg: &helix_tcp_types::merging::relay_to_builder::SlotStartV1,
+        disallow: &Arc<DashSet<Address>>,
+    ) -> Self {
         let ctx = Arc::new(SlotContext {
             slot: msg.slot,
             parent_hash: msg.parent_hash,
             proposer_fee_recipient: msg.proposer_fee_recipient,
             parent_beacon_block_root: msg.parent_beacon_block_root,
+            blacklist: msg.apply_blacklist.then(|| disallow.clone()),
         });
         Self {
             slot: ctx.slot,

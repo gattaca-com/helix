@@ -9,6 +9,7 @@ use std::{collections::hash_map::Entry, sync::Arc, time::Instant};
 
 use alloy_primitives::{Address, B256, U256};
 use alloy_rpc_types::beacon::BlsPublicKey;
+use dashmap::DashSet;
 use ethrex_blockchain::{
     Blockchain,
     payload::{BuildPayloadArgs, HeadTransaction, PayloadBuildContext, create_payload},
@@ -57,6 +58,7 @@ fn sim_error_label(err: &SimulationError) -> &'static str {
         SimulationError::RevertNotAllowed(_) => "revert_not_allowed",
         SimulationError::DropNotAllowed(_) => "drop_not_allowed",
         SimulationError::Execution(_) => "execution_error",
+        SimulationError::Blacklist(_) => "blacklist",
     }
 }
 
@@ -90,6 +92,7 @@ pub struct MergeStats {
     pub presim_revert_not_allowed: u64,
     pub presim_drop_not_allowed: u64,
     pub presim_execution_error: u64,
+    pub presim_blacklist: u64,
     pub orders_applied: u64,
     pub apply_rollbacks: u64,
     pub emissions: u64,
@@ -109,6 +112,7 @@ impl MergeStats {
             SimulationError::RevertNotAllowed(_) => self.presim_revert_not_allowed += 1,
             SimulationError::DropNotAllowed(_) => self.presim_drop_not_allowed += 1,
             SimulationError::Execution(_) => self.presim_execution_error += 1,
+            SimulationError::Blacklist(_) => self.presim_blacklist += 1,
         }
     }
 }
@@ -173,6 +177,8 @@ pub struct MergeSession {
     /// finalizes a clone), so the session stays extendable.
     ctx: PayloadBuildContext,
     blockchain: Arc<Blockchain>,
+    /// Disallow list in force this slot, if the proposer filters.
+    blacklist: Option<Arc<DashSet<Address>>>,
     /// Block gas limit minus the reserved distribution gas.
     gas_soft_limit: u64,
     max_blobs: u64,
@@ -444,6 +450,13 @@ impl MergeSession {
         if paid < base.block_value {
             return Err(MergeError::InvalidPayment);
         }
+        if let Some(disallow) = &slot.blacklist &&
+            let Some(address) = simulate::blacklisted_touch(&ctx.vm.db, &base.txs, disallow)
+        {
+            return Err(MergeError::InvalidBaseBlock(format!(
+                "touches blacklisted address {address}"
+            )));
+        }
 
         // Merged revenue is measured as the beneficiary balance delta from
         // this point on (after the base replay, matching the simulator).
@@ -459,6 +472,7 @@ impl MergeSession {
             builder_safe,
             ctx,
             blockchain,
+            blacklist: slot.blacklist.clone(),
             gas_soft_limit,
             max_blobs,
             blob_count: base_blob_count,
@@ -545,6 +559,7 @@ impl MergeSession {
         let available_blobs = self.available_blobs();
         let vm = &self.ctx.vm;
         let beneficiary = self.beneficiary;
+        let blacklist = self.blacklist.as_deref();
         let presim_start = Instant::now();
         let results: Vec<Result<SimulatedOrder, SimulationError>> = {
             use rayon::prelude::*;
@@ -560,6 +575,7 @@ impl MergeSession {
                         available_gas,
                         available_blobs,
                         beneficiary,
+                        blacklist,
                     )
                 })
                 .collect()
@@ -683,6 +699,7 @@ impl MergeSession {
             self.available_gas(),
             self.available_blobs(),
             self.beneficiary,
+            self.blacklist.as_deref(),
         ) {
             Ok(simulated) => simulated,
             Err(_) => return Ok(false),
@@ -1051,6 +1068,7 @@ impl MergeSession {
             revert_not_allowed = self.stats.presim_revert_not_allowed,
             drop_not_allowed = self.stats.presim_drop_not_allowed,
             execution_error = self.stats.presim_execution_error,
+            blacklist = self.stats.presim_blacklist,
             emissions = self.stats.emissions,
             emit_not_improved = self.stats.emit_not_improved,
             emit_no_revenue = self.stats.emit_no_revenue,

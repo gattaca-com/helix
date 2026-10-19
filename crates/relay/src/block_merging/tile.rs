@@ -105,6 +105,7 @@ struct SlotState {
     /// went out; cached for handshake replay.
     slot_start: Option<SlotStartV1>,
     fee_recipient: Option<alloy_primitives::Address>,
+    apply_blacklist: bool,
     /// parent_hash -> parent_beacon_block_root.
     attrs: FxHashMap<B256, B256>,
     /// Appendable block hashes forwarded this slot.
@@ -713,6 +714,7 @@ impl BlockMergingTile {
         // housekeeper sends incremental updates for the same slot
         if let Some(reg) = &ev.registration_data {
             self.slot.fee_recipient = Some(reg.entry.registration.message.fee_recipient);
+            self.slot.apply_blacklist = reg.entry.preferences.filtering.is_regional();
         }
         for attr in &ev.payload_attributes {
             self.slot
@@ -737,6 +739,7 @@ impl BlockMergingTile {
             parent_hash,
             proposer_fee_recipient: fee_recipient,
             parent_beacon_block_root,
+            apply_blacklist: self.slot.apply_blacklist,
         };
         debug!(slot = self.slot.bid_slot, "merging slot start");
 
@@ -1261,6 +1264,7 @@ mod tests {
             parent_hash: B256::ZERO,
             proposer_fee_recipient: Address::ZERO,
             parent_beacon_block_root: B256::ZERO,
+            apply_blacklist: false,
         });
         let block_hash = B256::repeat_byte(7);
         let decoded_submission_id = tile.decoded.push(test_submission(5, block_hash, true));
@@ -1280,6 +1284,7 @@ mod tests {
             parent_hash: B256::ZERO,
             proposer_fee_recipient: Address::ZERO,
             parent_beacon_block_root: B256::ZERO,
+            apply_blacklist: false,
         });
         let block_hash = B256::repeat_byte(7);
         let decoded_submission_id = tile.decoded.push(test_submission(5, block_hash, true));
@@ -1349,6 +1354,7 @@ mod tests {
             parent_hash: B256::ZERO,
             proposer_fee_recipient: Address::ZERO,
             parent_beacon_block_root: B256::ZERO,
+            apply_blacklist: false,
         });
         tile.token = Some(Token(0));
         tile.conn.active = true;

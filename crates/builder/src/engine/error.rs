@@ -92,6 +92,8 @@ pub enum SimulationError {
     DropNotAllowed(usize),
     #[error("execution error: {_0}")]
     Execution(String),
+    #[error("touches blacklisted address {_0}")]
+    Blacklist(Address),
 }
 
 impl SimulationError {
@@ -104,7 +106,8 @@ impl SimulationError {
             SimulationError::DuplicateTransaction => UnmergedReason::Duplicate,
             SimulationError::RevertNotAllowed(_) |
             SimulationError::DropNotAllowed(_) |
-            SimulationError::Execution(_) => UnmergedReason::Invalid,
+            SimulationError::Execution(_) |
+            SimulationError::Blacklist(_) => UnmergedReason::Invalid,
         }
     }
 }

@@ -119,6 +119,7 @@ async fn main() -> std::io::Result<()> {
         parent_hash,
         proposer_fee_recipient,
         parent_beacon_block_root,
+        apply_blacklist: false,
     })
     .await?;
 
