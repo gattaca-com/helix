@@ -18,3 +18,18 @@ pub struct BeaconResponse<T: Serialize + DeserializeOwned> {
     #[serde(flatten)]
     pub meta: FxHashMap<String, serde_json::Value>,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct BuilderSummary {
+    #[serde(with = "serde_utils::quoted_u64")]
+    pub index: u64,
+    pub status: BuilderStatus,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BuilderStatus {
+    Pending,
+    Active,
+    Exited,
+}

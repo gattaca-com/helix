@@ -100,6 +100,17 @@ impl HttpClient {
         self.send(url, req)
     }
 
+    /// `get` asking for an SSZ body, as the beacon API serves on `Accept:
+    /// application/octet-stream`.
+    pub fn get_ssz(&self, url: &Url) -> Result<PendingResponse, HttpClientError> {
+        let host = url.host_str().unwrap_or_default().to_string();
+        let req = Request::get(url.path())
+            .header("host", &host)
+            .header("accept", "application/octet-stream")
+            .body(Full::new(Bytes::new()))?;
+        self.send(url, req)
+    }
+
     pub fn post(&self, url: &Url, body: Bytes) -> Result<PendingResponse, HttpClientError> {
         self.send(url, Self::post_request(url, body)?)
     }

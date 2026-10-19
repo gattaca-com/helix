@@ -149,7 +149,6 @@ pub async fn run_api_service<A: Api>(
         registrations_handle,
         alert_manager,
         operator_api,
-        Arc::default(),
         header_served,
     ));
 

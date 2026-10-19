@@ -37,9 +37,12 @@ impl<A: Api> ProposerApi<A> {
             .verify_signature(&params.proposer_pubkey, proposer_api.chain_info.request_auth_domain)
             .map_err(|_| ProposerApiError::InvalidRequestAuthSignature)?;
 
+        let (auth_slot, auth_data_len, auth_data) = super::auth_summary(&request.auth);
         info!(
             proposer_pubkey = ?params.proposer_pubkey,
-            slot = request.auth.message.slot,
+            slot = auth_slot,
+            auth_data_len,
+            %auth_data,
             max_execution_payment = request.preferences.max_execution_payment,
             "validated submitBuilderPreferences request"
         );

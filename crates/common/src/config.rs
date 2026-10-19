@@ -95,10 +95,6 @@ pub struct RelayConfig {
     #[serde(default)]
     pub operator_config: Option<OperatorConfig>,
     pub blacklist_provider: Option<Url>,
-    /// This relay's on-chain Gloas (ePBS) builder_index. Placeholder until helix has a real
-    /// on-chain builder registration; signs under the relay's own key in the meantime.
-    #[serde(default)]
-    pub gloas_builder_index: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
@@ -184,7 +180,6 @@ impl RelayConfig {
             enable_flux_profiler: false,
             operator_config: None,
             blacklist_provider: None,
-            gloas_builder_index: 0,
         }
     }
 }
@@ -1082,5 +1077,27 @@ mod tests {
         config.serve_merged_headers = true;
         assert!(!config.treat_as_append_only(coinbase));
         assert!(!config.treat_as_append_only(other));
+    }
+
+    /// A config the relay cannot parse crash-loops it on start, so the exact YAML
+    /// shape the deployed file uses has to be pinned here.
+    #[test]
+    fn the_file_logging_shape_parses() {
+        let yaml = "
+type: File
+dir_path: /app/logs
+file_name: titan_relay.log
+otlp_server: null
+";
+        let parsed: LoggingConfig = serde_yaml::from_str(yaml).expect("deployed shape must parse");
+
+        match parsed {
+            LoggingConfig::File { dir_path, file_name, otlp_server } => {
+                assert_eq!(dir_path, PathBuf::from("/app/logs"));
+                assert_eq!(file_name, "titan_relay.log");
+                assert!(otlp_server.is_none());
+            }
+            LoggingConfig::Console => panic!("parsed as Console"),
+        }
     }
 }

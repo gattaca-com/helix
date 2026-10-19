@@ -8,9 +8,11 @@ mod clock;
 mod error;
 mod execution_payload;
 mod fields;
+pub mod gloas;
 mod hydration;
 mod operator;
 mod request_auth;
+pub mod ssz_json;
 mod test_random_compat;
 mod test_utils;
 mod utils;
@@ -28,12 +30,13 @@ pub use clock::*;
 pub use error::*;
 pub use execution_payload::*;
 pub use fields::*;
+pub use gloas::GloasBidSubmission;
 pub use helix_tcp_types::{Compression, MergeType};
 pub use hydration::*;
 pub use lh_kzg::{KzgCommitment, KzgProof};
 pub use lh_types::{
     Config as LhConfig, EmptyBlock, EthSpec, ExecPayload, ExecutionBlockHash, ForkName,
-    ForkVersionDecode, MainnetEthSpec, SignedRoot,
+    ForkVersionDecode, MainnetEthSpec, SignedRoot, SigningData,
 };
 pub use operator::*;
 pub use request_auth::*;
@@ -55,6 +58,8 @@ pub type BlsSignature = lh_bls::Signature;
 pub type BlsSignatureBytes = alloy_rpc_types::beacon::BlsSignature;
 pub type BlsSecretKey = lh_bls::SecretKey;
 pub type BlsKeypair = lh_bls::Keypair;
+pub type BlsPublicKeyBytesLh = lh_bls::PublicKeyBytes;
+pub type BlsSignatureBytesLh = lh_bls::SignatureBytes;
 
 // Blobs
 // pub type BlobsBundle = lh_eth2::types::BlobsBundle<MainnetEthSpec>;
@@ -71,6 +76,7 @@ pub type BeaconBlockGloas = lh_types::BeaconBlockGloas<MainnetEthSpec>;
 pub type BeaconBlockRef<'a> = lh_types::BeaconBlockRef<'a, MainnetEthSpec>;
 pub type ExecutionPayloadGloas = lh_types::ExecutionPayloadGloas<MainnetEthSpec>;
 pub type ExecutionRequestsGloas = lh_types::ExecutionRequestsGloas<MainnetEthSpec>;
+pub use lh_types::{BuilderDepositRequest, BuilderExitRequest, RequestType};
 pub type ExecutionPayloadEnvelope = lh_types::ExecutionPayloadEnvelope<MainnetEthSpec>;
 pub type SignedExecutionPayloadEnvelope = lh_types::SignedExecutionPayloadEnvelope<MainnetEthSpec>;
 pub type ExecutionPayloadBid = lh_types::ExecutionPayloadBid<MainnetEthSpec>;

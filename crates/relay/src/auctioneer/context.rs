@@ -19,6 +19,7 @@ use flux_utils::SharedVector;
 use helix_common::{
     BuilderInfo, RelayConfig,
     alerts::{AlertManager, format_demotion_alert},
+    beacon::MultiBeaconClient,
     chain_info::ChainInfo,
     http::client::{HttpClient, PendingResponse},
     is_local_dev,
@@ -38,12 +39,15 @@ use crate::{
     SubmissionDataWithSpan,
     api::{FutureBidSubmissionResult, builder::error::BuilderApiError},
     auctioneer::{
-        AuctioneerHandle, BlockMergeResponse,
+        AuctioneerHandle, BlockMergeResponse, GloasBuilderIdentity,
         bid_adjustor::BidAdjustor,
         bid_sorter::BidSorter,
         block_merger::BlockMerger,
         builder_preferences::BuilderPreferencesStore,
-        types::{PayloadEntry, PendingPayload, SlotData, SubmissionRef, SubmissionRefKind},
+        seen_blocks::SeenBlocks,
+        types::{
+            GloasPayload, PayloadEntry, PendingPayload, SlotData, SubmissionRef, SubmissionRefKind,
+        },
     },
     simulator::{
         MergedSimulationResultInner, MergedValidationRequest, Simulators, ValidationResult,
@@ -59,7 +63,57 @@ pub struct SlotContext {
     pub bid_sorter: BidSorter,
     pub hydration_cache: HydrationCache,
     pub payloads: FxHashMap<B256, PayloadEntry>,
+    pub gloas_payloads: PayloadStore<GloasPayload>,
     pub block_merger: BlockMerger,
+}
+
+/// Gloas payloads, kept one slot longer than the auction that made them.
+///
+/// The relay moves to the next bid slot shortly after a slot begins, but a Gloas
+/// payload is revealed at the attestation deadline of its own slot, so it has to
+/// outlive the auction it won. Anything older than the previous generation is dropped.
+pub struct PayloadStore<T> {
+    current: FxHashMap<B256, T>,
+    previous: FxHashMap<B256, T>,
+}
+
+impl<T> PayloadStore<T> {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            current: FxHashMap::with_capacity_and_hasher(capacity, Default::default()),
+            previous: FxHashMap::default(),
+        }
+    }
+
+    pub fn insert(&mut self, block_hash: B256, entry: T) {
+        self.current.insert(block_hash, entry);
+    }
+
+    /// The current auction's payloads only: a bid is served from this slot.
+    pub fn get(&self, block_hash: &B256) -> Option<&T> {
+        self.current.get(block_hash)
+    }
+
+    /// As [`Self::get`], falling back to the previous slot. The block naming our bid
+    /// arrives after the relay has moved on, so the bid is usually one back.
+    pub fn get_for_reveal(&self, block_hash: &B256) -> Option<&T> {
+        self.current.get(block_hash).or_else(|| self.previous.get(block_hash))
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.current.is_empty() && self.previous.is_empty()
+    }
+
+    /// Starts a new auction, returning the generation that is now too old to
+    /// reveal so the caller can drop it off the event loop.
+    #[must_use]
+    fn rotate(&mut self, capacity: usize) -> FxHashMap<B256, T> {
+        let just_finished = std::mem::replace(
+            &mut self.current,
+            FxHashMap::with_capacity_and_hasher(capacity, Default::default()),
+        );
+        std::mem::replace(&mut self.previous, just_finished)
+    }
 }
 
 pub struct Context<B: BidAdjustor> {
@@ -84,6 +138,9 @@ pub struct Context<B: BidAdjustor> {
     discord_addr: Option<SocketAddr>,
     discord_alert: Option<PendingResponse>,
     pub builder_preferences: BuilderPreferencesStore,
+    pub gloas_builder_identity: Arc<GloasBuilderIdentity>,
+    pub beacon_client: Arc<MultiBeaconClient>,
+    pub seen_blocks: SeenBlocks,
 }
 
 const EXPECTED_PAYLOADS_PER_SLOT: usize = 5000;
@@ -106,6 +163,8 @@ impl<B: BidAdjustor> Context<B> {
         auctioneer_handle: AuctioneerHandle,
         alert_manager: Arc<AlertManager>,
         operator_api: Option<Arc<OperatorPubSub>>,
+        gloas_builder_identity: Arc<GloasBuilderIdentity>,
+        beacon_client: Arc<MultiBeaconClient>,
     ) -> Self {
         // Local dev builders have random keys, so none is ever in config.
         let local_dev = is_local_dev();
@@ -129,6 +188,7 @@ impl<B: BidAdjustor> Context<B> {
                 EXPECTED_PAYLOADS_PER_SLOT,
                 Default::default(),
             ),
+            gloas_payloads: PayloadStore::with_capacity(EXPECTED_PAYLOADS_PER_SLOT),
             block_merger,
         };
 
@@ -157,6 +217,9 @@ impl<B: BidAdjustor> Context<B> {
             }),
             discord_alert: None,
             builder_preferences: BuilderPreferencesStore::default(),
+            gloas_builder_identity,
+            beacon_client,
+            seen_blocks: SeenBlocks::default(),
         }
     }
 
@@ -274,7 +337,7 @@ impl<B: BidAdjustor> Context<B> {
         self.auctioneer_handle.clear_inflight_payloads();
         self.decoded.clear();
 
-        if !self.payloads.is_empty() {
+        if !self.payloads.is_empty() || !self.gloas_payloads.is_empty() {
             // here we need to deallocate a lot of data, taking more than 1s on busy slots
             // this is not a big issue since it 's only at the beginning of the slot, but it blocks
             // the full event loop, which is not ideal. An alternative would be to use a
@@ -286,6 +349,7 @@ impl<B: BidAdjustor> Context<B> {
                 &mut self.payloads,
                 FxHashMap::with_capacity_and_hasher(EXPECTED_PAYLOADS_PER_SLOT, Default::default()),
             );
+            let gloas_payloads_to_drop = self.gloas_payloads.rotate(EXPECTED_PAYLOADS_PER_SLOT);
             let dealloc_core = self.config.cores.dealloc;
             std::thread::spawn(move || {
                 // Unpinned, this lands on whatever core the OS picks -- including a
@@ -293,9 +357,10 @@ impl<B: BidAdjustor> Context<B> {
                 if let Some(core) = dealloc_core {
                     helix_common::utils::pin_thread_to_core(core);
                 }
-                let to_drop = payloads_to_drop.len();
+                let to_drop = payloads_to_drop.len() + gloas_payloads_to_drop.len();
                 let start = Instant::now();
                 drop(payloads_to_drop);
+                drop(gloas_payloads_to_drop);
                 info!("dropped {} payloads in {:?}", to_drop, start.elapsed())
             });
         }
@@ -389,12 +454,12 @@ pub(crate) fn merged_validation_request(
     response: &BlockMergeResponse,
     slot_data: &SlotData,
 ) -> Option<MergedValidationRequest> {
-    let parent_hash = response.execution_payload.parent_hash;
     let parent_beacon_block_root = slot_data
-        .payload_attributes_map
-        .get(&parent_hash)?
-        .parent_beacon_block_root
-        .unwrap_or_default();
+        .attrs_for_submission(
+            &response.execution_payload.parent_hash,
+            &response.execution_payload.prev_randao,
+        )?
+        .parent_root();
     Some(MergedValidationRequest {
         submission_id: Uuid::new_v4(),
         base_block_hash: response.base_block_hash,
@@ -530,5 +595,38 @@ pub fn send_submission_result<P>(
         }
         SubmissionRefKind::Tcp => producers.produce(result),
         SubmissionRefKind::Internal => {}
+    }
+}
+
+#[cfg(test)]
+mod payload_store_tests {
+    use super::*;
+
+    /// The relay moves to the next bid slot moments after a slot starts, but the
+    /// block naming our bid arrives part-way through that slot. Dropping the payload
+    /// at the auction boundary would leave nothing to reveal.
+    #[test]
+    fn a_served_bid_is_revealable_after_the_auction_moves_on() {
+        let hash = B256::repeat_byte(0x11);
+        let mut store = PayloadStore::with_capacity(4);
+        store.insert(hash, 1u32);
+
+        let _stale = store.rotate(4);
+
+        assert!(store.get(&hash).is_none(), "the new auction starts clean");
+        assert!(store.get_for_reveal(&hash).is_some());
+    }
+
+    #[test]
+    fn a_payload_is_dropped_after_two_auctions() {
+        let hash = B256::repeat_byte(0x11);
+        let mut store = PayloadStore::with_capacity(4);
+        store.insert(hash, 1u32);
+
+        let _ = store.rotate(4);
+        let stale = store.rotate(4);
+
+        assert!(store.get_for_reveal(&hash).is_none());
+        assert!(stale.contains_key(&hash), "handed back to be dropped off-thread");
     }
 }

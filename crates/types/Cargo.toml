@@ -7,6 +7,8 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+silver_ssz.workspace = true
+bytes.workspace = true
 alloy-consensus.workspace = true
 alloy-eips.workspace = true
 alloy-primitives.workspace = true
@@ -55,3 +57,6 @@ name = "execution_payload"
 harness = false
 name = "signed_bid_submission"
 
+[[bench]]
+harness = false
+name = "submission_hot_path"

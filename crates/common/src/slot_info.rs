@@ -21,6 +21,22 @@ pub struct PayloadAttributesUpdate {
     pub payload_attributes: PayloadAttributes,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct ForkKey {
+    pub parent_hash: B256,
+    pub parent_root: B256,
+}
+
+impl PayloadAttributesUpdate {
+    pub fn parent_root(&self) -> B256 {
+        self.payload_attributes.parent_beacon_block_root.unwrap_or_default()
+    }
+
+    pub fn fork(&self) -> ForkKey {
+        ForkKey { parent_hash: self.parent_hash, parent_root: self.parent_root() }
+    }
+}
+
 impl Deref for PayloadAttributesUpdate {
     type Target = PayloadAttributes;
 

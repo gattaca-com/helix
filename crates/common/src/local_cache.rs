@@ -11,14 +11,14 @@ use axum::{
 use dashmap::{DashMap, DashSet};
 use helix_types::{
     BlockValidationError, BlsPublicKeyBytes, CryptoError, MergedBlock, SignedValidatorRegistration,
-    SubmissionVersion,
+    Slot, SubmissionVersion,
 };
 use parking_lot::RwLock;
 use rustc_hash::{FxHashMap, FxHashSet};
 use uuid::Uuid;
 
 use crate::{
-    BuilderConfig, BuilderInfo, PromotionMode, SignedValidatorRegistrationEntry,
+    BuilderConfig, BuilderInfo, PromotionMode, ProposerDuty, SignedValidatorRegistrationEntry,
     api::{
         builder_api::{
             BuilderGetValidatorsResponseEntry, InclusionListWithKey, InclusionListWithMetadata,
@@ -143,6 +143,9 @@ pub struct LocalCache {
     /// toggled live via the admin API, same as `kill_switch`.
     serve_merged_headers: Arc<AtomicBool>,
     proposer_duties: Arc<RwLock<Vec<BuilderGetValidatorsResponseEntry>>>,
+    /// Every scheduled proposer, registered or not; `proposer_duties` holds only those
+    /// with a registration.
+    proposer_schedule: Arc<RwLock<Vec<ProposerDuty>>>,
     merged_blocks: Arc<DashMap<B256, MergedBlock>>,
     pub validator_registration_cache:
         Arc<DashMap<BlsPublicKeyBytes, SignedValidatorRegistrationEntry>>,
@@ -186,6 +189,7 @@ impl LocalCache {
             kill_switch,
             serve_merged_headers,
             proposer_duties,
+            proposer_schedule: Arc::new(RwLock::new(Vec::with_capacity(64))),
             merged_blocks,
             validator_registration_cache,
             pending_validator_registrations,
@@ -427,6 +431,14 @@ impl LocalCache {
 
     pub fn get_proposer_duties(&self) -> Vec<BuilderGetValidatorsResponseEntry> {
         self.proposer_duties.read().clone()
+    }
+
+    pub fn update_proposer_schedule(&self, duties: Vec<ProposerDuty>) {
+        *self.proposer_schedule.write() = duties;
+    }
+
+    pub fn proposer_pubkey(&self, slot: Slot) -> Option<BlsPublicKeyBytes> {
+        self.proposer_schedule.read().iter().find(|duty| duty.slot == slot).map(|duty| duty.pubkey)
     }
 
     pub fn save_merged_block(&self, merged_block: MergedBlock) {

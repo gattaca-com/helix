@@ -4,7 +4,7 @@ use alloy_primitives::{B256, U256};
 use flux::{spine::SpineProducers, timing::Nanos};
 use flux_profiler::timed;
 use helix_common::{
-    self, BuilderInfo,
+    self, BuilderInfo, SubmissionTrace,
     bid_submission::OptimisticVersion,
     metrics::{BID_ADJUSTMENT_LATENCY, HYDRATION_CACHE_HITS, SUBMISSION_REJECTS},
     record_submission_step,
@@ -18,7 +18,7 @@ use crate::{
         bid_adjustor::BidAdjustor,
         bid_sorter::Bid,
         context::{Context, send_submission_result},
-        types::{PayloadEntry, SlotData, SubmissionData},
+        types::{GloasPayload, PayloadEntry, SlotData, SubmissionData},
     },
     simulator::{SimPriority, ValidationRequest, ValidationResult},
     spine::{
@@ -73,7 +73,7 @@ impl<B: BidAdjustor> Context<B> {
         let is_pessimistic = submission_data.is_pessimistic;
         let bid_adjustment_data = submission_data.bid_adjustment_data.clone();
         let mut trace = submission_data.trace;
-        let bid = Bid::from_submission_data(submission_data);
+        let bid = Bid::from_submission_data(submission_data, payload_attributes.parent_root());
 
         // Sorted before hydrating so the top bid update does not wait on the
         // payload: `validate_submission` already checked it can be hydrated.
@@ -88,8 +88,10 @@ impl<B: BidAdjustor> Context<B> {
             let is_top_bid = self.bid_sorter.sort(bid, &mut trace, true, producers);
             (OptimisticVersion::V1, is_top_bid)
         } else {
-            let beats_top_bid =
-                self.bid_sorter.top_bid_value(&bid.parent_hash).is_none_or(|top| bid.value > top);
+            let beats_top_bid = self
+                .bid_sorter
+                .top_bid_value(&payload_attributes.fork())
+                .is_none_or(|top| bid.value > top);
             (OptimisticVersion::NotOptimistic, beats_top_bid)
         };
         let is_optimistic = optimistic_version.is_optimistic();
@@ -140,9 +142,12 @@ impl<B: BidAdjustor> Context<B> {
         // waits until the top bid and the builder's response are out.
         let span = tracing::Span::current();
         span.record("id", tracing::field::display(submission_id));
-        span.record("slot", submission.message.slot);
-        span.record("block_hash", tracing::field::display(submission.message.block_hash));
-        span.record("builder_pubkey", tracing::field::display(submission.message.builder_pubkey));
+        span.record("slot", submission.bid_trace().slot);
+        span.record("block_hash", tracing::field::display(submission.bid_trace().block_hash));
+        span.record(
+            "builder_pubkey",
+            tracing::field::display(submission.bid_trace().builder_pubkey),
+        );
         span.record("builder_id", tracing::field::display(builder_info.builder_id()));
 
         let req = ValidationRequest {
@@ -152,9 +157,7 @@ impl<B: BidAdjustor> Context<B> {
             is_optimistic,
             apply_blacklist: slot_data.registration_data.entry.preferences.filtering.is_regional(),
             registered_gas_limit: slot_data.registration_data.entry.registration.message.gas_limit,
-            parent_beacon_block_root: payload_attributes
-                .parent_beacon_block_root
-                .unwrap_or_default(),
+            parent_beacon_block_root: payload_attributes.parent_root(),
             inclusion_list: slot_data.il.clone().unwrap_or_default(),
             submission: submission.clone(),
             tx_root: maybe_tx_root,
@@ -166,18 +169,36 @@ impl<B: BidAdjustor> Context<B> {
 
         self.send_to_sim(req, false, producers);
 
-        let entry = PayloadEntry::new_submission(
-            submission,
-            payload_attributes.withdrawals_root,
-            maybe_tx_root,
-            bid_adjustment_data,
-            version,
-            trace,
-            payload_attributes.parent_beacon_block_root,
-        );
+        match submission {
+            SignedBidSubmission::Fulu(submission) => {
+                let entry = PayloadEntry::new_submission(
+                    submission,
+                    payload_attributes.withdrawals_root,
+                    maybe_tx_root,
+                    bid_adjustment_data,
+                    version,
+                    trace,
+                    payload_attributes.parent_beacon_block_root,
+                );
 
-        self.try_adjustments_dry_run(&entry, slot_data, producers);
-        self.store_data(entry, is_optimistic, submission_id, producers);
+                self.try_adjustments_dry_run(&entry, slot_data, producers);
+                self.store_data(entry, is_optimistic, submission_id, producers);
+            }
+            SignedBidSubmission::Gloas(submission) => {
+                let fee_recipient =
+                    slot_data.registration_data.entry.registration.message.fee_recipient;
+                let entry = GloasPayload::new(submission, fee_recipient);
+                self.record_submission(
+                    SignedBidSubmission::Gloas(entry.submission.clone()),
+                    trace,
+                    is_optimistic,
+                    false,
+                    submission_id,
+                    producers,
+                );
+                self.gloas_payloads.insert(entry.submission.bid_trace().block_hash, entry);
+            }
+        }
     }
 
     #[timed]
@@ -284,32 +305,41 @@ impl<B: BidAdjustor> Context<B> {
         producers: &mut HelixSpineProducers,
     ) {
         let block_hash = *entry.block_hash();
-        let is_adjusted = entry.is_adjusted();
 
         if let PayloadEntry::Submission(s) = &entry {
-            let opt_version = if is_optimistic {
-                OptimisticVersion::V1
-            } else {
-                OptimisticVersion::NotOptimistic
-            };
-            // For optimistic submissions the bid is live as soon as it is stored.
-            // For non-optimistic, live_ts is updated when the simulation result arrives.
-            let live_ts = if is_optimistic {
-                producers.produce(BidUpdate { submission_id, block_hash });
-                Some(Nanos::now().0)
-            } else {
-                None
-            };
-            self.db.store_block_submission(
-                s.signed_bid_submission.clone(),
+            self.record_submission(
+                SignedBidSubmission::Fulu(s.signed_bid_submission.clone()),
                 s.submission_trace,
-                opt_version,
-                is_adjusted,
-                live_ts,
+                is_optimistic,
+                entry.is_adjusted(),
+                submission_id,
+                producers,
             );
         }
 
         self.payloads.insert(block_hash, entry);
+    }
+
+    fn record_submission(
+        &mut self,
+        submission: SignedBidSubmission,
+        trace: SubmissionTrace,
+        is_optimistic: bool,
+        is_adjusted: bool,
+        submission_id: uuid::Uuid,
+        producers: &mut HelixSpineProducers,
+    ) {
+        let opt_version =
+            if is_optimistic { OptimisticVersion::V1 } else { OptimisticVersion::NotOptimistic };
+        // For optimistic submissions the bid is live as soon as it is stored.
+        // For non-optimistic, live_ts is updated when the simulation result arrives.
+        let live_ts = if is_optimistic {
+            producers.produce(BidUpdate { submission_id, block_hash: *submission.block_hash() });
+            Some(Nanos::now().0)
+        } else {
+            None
+        };
+        self.db.store_block_submission(submission, trace, opt_version, is_adjusted, live_ts);
     }
 
     pub fn send_to_sim(
@@ -368,7 +398,7 @@ impl<B: BidAdjustor> Context<B> {
 
                 hydrated.submission.validate_payload_ssz_lengths(max_blobs_per_block)?;
 
-                Ok((hydrated.submission, hydrated.tx_root))
+                Ok((SignedBidSubmission::Fulu(hydrated.submission), hydrated.tx_root))
             }
         }
     }

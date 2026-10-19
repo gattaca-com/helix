@@ -2,7 +2,7 @@ use std::hint::black_box;
 
 use alloy_rpc_types::engine::BlobsBundleV1;
 use criterion::{Criterion, criterion_group, criterion_main};
-use helix_types::{BlobsBundle, SignedBidSubmission};
+use helix_types::{BlobsBundle, SignedBidSubmissionFulu};
 use lh_types::MainnetEthSpec;
 use ssz::{Decode, Encode};
 
@@ -10,7 +10,7 @@ fn benchmark_blob_bundle_conversion(c: &mut Criterion) {
     let mut group = c.benchmark_group("blob_bundle_conversion");
 
     let data_json = include_bytes!("../src/testdata/signed-bid-submission-fulu-2.json");
-    let submission: SignedBidSubmission = serde_json::from_slice(data_json).unwrap();
+    let submission: SignedBidSubmissionFulu = serde_json::from_slice(data_json).unwrap();
     let blobs_bundle = submission.blobs_bundle().as_ssz_bytes();
 
     group.bench_function("lighthouse", |b| {

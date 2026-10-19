@@ -10,7 +10,7 @@ use helix_common::{
     decoder::{DecoderError, SubmissionDecoder},
     simulator::{SszMergedValidationRequest, SszValidationRequest},
 };
-use helix_types::Submission;
+use helix_types::{SignedBidSubmission, Submission};
 use ssz::Decode;
 use tokio::net::TcpListener;
 use tracing::error;
@@ -50,7 +50,10 @@ fn decode_submission(
             let mut decoder = SubmissionDecoder::new(&decode_params);
             let (submission, _, _) = decoder.decode(signed_bid_submission, &mut buf)?;
             match submission {
-                Submission::Full(s) => Ok(s.into()),
+                Submission::Full(SignedBidSubmission::Fulu(s)) => Ok(s.into()),
+                Submission::Full(SignedBidSubmission::Gloas(_)) => {
+                    Err(StatusCode::NOT_IMPLEMENTED.into_response())
+                }
                 Submission::Dehydrated(_) => {
                     // Simulator-side hydration cache not yet implemented.
                     // Return 424 so the relay retries with full SSZ bytes.

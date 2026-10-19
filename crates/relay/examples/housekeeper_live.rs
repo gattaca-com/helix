@@ -24,7 +24,8 @@ use helix_common::{
 };
 use helix_database::postgres::postgres_db_service::{DbRequest, PendingBlockSubmissionValue};
 use helix_relay::{
-    DbHandle, HelixSpine, HousekeeperTile, RelayNetworkManager, SlotMsg, SlotUpdate,
+    AuctioneerHandle, DbHandle, GloasBuilderIdentity, HelixSpine, HousekeeperTile,
+    RelayNetworkManager, SlotMsg, SlotUpdate,
 };
 use helix_types::{BlsKeypair, BlsSecretKey};
 use url::Url;
@@ -87,6 +88,7 @@ fn main() {
     )
     .expect("valid test secret key");
     let keypair = BlsKeypair::from_components(sk.public_key(), sk);
+    let gloas_builder_identity = Arc::new(GloasBuilderIdentity::new(keypair.clone()));
     let signing_context = Arc::new(RelaySigningContext::new(keypair, chain_info.clone()));
     let relay_network_api = RelayNetworkManager::new(config.relay_network.clone(), signing_context);
 
@@ -97,6 +99,10 @@ fn main() {
     std::thread::spawn(move || for _ in db_rx {});
     std::thread::spawn(move || for _ in db_batch_rx {});
     let db = DbHandle::new(db_tx, db_batch_tx);
+
+    // Noop auctioneer — drain head blocks in background.
+    let (event_tx, event_rx) = crossbeam_channel::bounded(1024);
+    std::thread::spawn(move || for _ in event_rx {});
 
     let local_cache = Arc::new(LocalCache::new());
     let slot_events = Arc::new(SharedVector::<SlotUpdate>::with_capacity(64));
@@ -109,6 +115,8 @@ fn main() {
         chain_info,
         slot_events.clone(),
         relay_network_api,
+        gloas_builder_identity,
+        AuctioneerHandle::new(event_tx),
     );
 
     let printer = SlotEventPrinter { slot_events };

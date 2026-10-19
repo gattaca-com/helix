@@ -11,13 +11,13 @@ use ssz::{Decode, Encode};
 use ssz_derive::{Decode, Encode};
 
 use crate::{
-    Blob, BlsPublicKeyBytes, SignedBidSubmission, TestRandom,
+    Blob, BlsPublicKeyBytes, SignedBidSubmissionFulu, TestRandom,
     fields::{KzgCommitment, KzgProof},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
 pub struct SignedBidSubmissionWithMergingData {
-    pub submission: SignedBidSubmission,
+    pub submission: SignedBidSubmissionFulu,
     pub merging_data: BlockMergingData,
 }
 

@@ -27,8 +27,8 @@ use helix_operator::spawn_operator_connection;
 use helix_relay::{
     Api, Auctioneer, AuctioneerHandle, BidSorter, BidSubmissionTcpListener, BlockMergeResponse,
     BlockMergingTile, BroadcastPayloadParams, DbHandle, DecoderTile, DefaultBidAdjustor,
-    FutureBidSubmissionResult, GossipedMessage, HelixSpine, HelixSpineConfig, HousekeeperTile,
-    Lane, NewTcpBidSubmission, RegWorkerHandle, RegistrationTile, RelayConfigExt,
+    FutureBidSubmissionResult, GloasBuilderIdentity, GossipedMessage, HelixSpine, HelixSpineConfig,
+    HousekeeperTile, Lane, NewTcpBidSubmission, RegWorkerHandle, RegistrationTile, RelayConfigExt,
     RelayNetworkManager, Simulators, SlotUpdate, SubmissionDataWithSpan, TopBidTile, UdpTopBidTile,
     spawn_tokio_monitoring, spine_epoch_path, start_admin_service, start_api_service,
     start_db_service,
@@ -139,6 +139,8 @@ async fn run(
     .await?;
     let db_handle = DbHandle::new(db_request_sender, db_batch_request_sender);
     let relay_signing_context = Arc::new(RelaySigningContext::new(keypair, chain_info.clone()));
+    let gloas_builder_identity =
+        Arc::new(GloasBuilderIdentity::new(relay_signing_context.keypair.clone()));
 
     let relay_network_api =
         RelayNetworkManager::new(config.relay_network.clone(), relay_signing_context.clone());
@@ -150,6 +152,7 @@ async fn run(
     let (event_tx, event_rx) = crossbeam_channel::bounded(10_000);
 
     let slot_events = Arc::new(SharedVector::<SlotUpdate>::with_capacity(64));
+    let auctioneer_handle = AuctioneerHandle::new(event_tx.clone());
 
     let (housekeeper_tile, current_slot_info) = HousekeeperTile::new(
         db_handle.clone(),
@@ -159,6 +162,8 @@ async fn run(
         chain_info.clone(),
         slot_events.clone(),
         relay_network_api.clone(),
+        gloas_builder_identity.clone(),
+        auctioneer_handle.clone(),
     );
 
     let terminating = Arc::new(AtomicBool::default());
@@ -218,7 +223,6 @@ async fn run(
             block_merging_enabled.clone(),
         );
 
-        let auctioneer_handle = AuctioneerHandle::new(event_tx.clone());
         let registrations_handle = RegWorkerHandle::new(reg_worker_tx);
 
         let (web_socket_send, web_socket_recv) = crossbeam_channel::bounded(1024);
@@ -241,8 +245,8 @@ async fn run(
             local_cache.clone(),
             current_slot_info,
             chain_info.clone(),
-            relay_signing_context,
-            beacon_client,
+            relay_signing_context.clone(),
+            beacon_client.clone(),
             Arc::new(DefaultApiProvider {}),
             known_validators_loaded,
             terminating.clone(),
@@ -375,6 +379,8 @@ async fn run(
                 merged_blocks,
                 alert_manager.clone(),
                 operator_api.clone(),
+                gloas_builder_identity,
+                beacon_client,
             );
             attach_tile(auctioneer, spine, auctioneer_tile);
         }

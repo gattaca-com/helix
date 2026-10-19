@@ -1,12 +1,15 @@
 mod bid_adjustor;
 mod bid_sorter;
 mod block_merger;
+mod builder_identity;
 mod builder_preferences;
 mod context;
 mod get_execution_payload_bid;
 mod get_header;
 mod get_payload;
+mod gloas_payload;
 mod handle;
+mod seen_blocks;
 mod submit_block;
 pub(crate) mod types;
 mod validation;
@@ -18,14 +21,16 @@ use std::{
 };
 
 use alloy_primitives::B256;
+pub use builder_identity::GloasBuilderIdentity;
 use flux::{spine::SpineProducers as _, tile::Tile};
 use flux_profiler::timed;
 use flux_utils::SharedVector;
 pub use handle::{AuctioneerHandle, GetPayloadKind};
 use helix_common::{
-    PayloadAttributesUpdate, RelayConfig,
+    ForkKey, PayloadAttributesUpdate, RelayConfig,
     alerts::AlertManager,
     api::builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
+    beacon::MultiBeaconClient,
     chain_info::ChainInfo,
     local_cache::LocalCache,
     metrics::{
@@ -40,7 +45,7 @@ use helix_types::Slot;
 use rustc_hash::FxHashMap;
 use tracing::{debug, error, info, trace, warn};
 pub use types::{
-    Event, GetPayloadResultData, InternalBidSubmissionHeader, PayloadEntry, SlotData,
+    Event, GetPayloadResultData, InternalBidSubmissionHeader, PayloadEntry, SeenBlock, SlotData,
     SubmissionData, SubmissionPayload,
 };
 
@@ -95,6 +100,8 @@ impl<B: BidAdjustor> Auctioneer<B> {
         merged_blocks: Arc<SharedVector<BlockMergeResponse>>,
         alert_manager: Arc<AlertManager>,
         operator_api: Option<Arc<OperatorPubSub>>,
+        gloas_builder_identity: Arc<GloasBuilderIdentity>,
+        beacon_client: Arc<MultiBeaconClient>,
     ) -> Self {
         let ctx = Context::new(
             chain_info,
@@ -111,6 +118,8 @@ impl<B: BidAdjustor> Auctioneer<B> {
             auctioneer_handle,
             alert_manager,
             operator_api,
+            gloas_builder_identity,
+            beacon_client,
         );
         Self {
             ctx,
@@ -228,7 +237,7 @@ enum State {
     Slot {
         bid_slot: Slot,
         registration_data: Option<BuilderGetValidatorsResponseEntry>,
-        payload_attributes_map: FxHashMap<B256, PayloadAttributesUpdate>,
+        payload_attributes_map: FxHashMap<ForkKey, PayloadAttributesUpdate>,
         il: Option<InclusionListWithMetadata>,
     },
 
@@ -342,14 +351,14 @@ impl State {
                     // check fork
                     let new_forks: Vec<_> = payload_attributes
                         .into_iter()
-                        .filter(|u| !slot_data.payload_attributes_map.contains_key(&u.parent_hash))
+                        .filter(|u| !slot_data.payload_attributes_map.contains_key(&u.fork()))
                         .collect();
                     if !new_forks.is_empty() {
                         // ugly clone but should be relatively rare
                         let mut slot_data = slot_data.clone();
                         for update in new_forks {
-                            info!(bid_slot =% slot_data.bid_slot, received =? update.parent_hash, sorting =? slot_data.payload_attributes_map.keys(), "sorting for an additional fork");
-                            slot_data.payload_attributes_map.insert(update.parent_hash, update);
+                            info!(bid_slot =% slot_data.bid_slot, received =? update.fork(), sorting =? slot_data.payload_attributes_map.keys(), "sorting for an additional fork");
+                            slot_data.payload_attributes_map.insert(update.fork(), update);
                         }
                         *self = State::Sorting(slot_data);
                     } else if slot_data.il.is_none() && il.is_some() {
@@ -460,7 +469,7 @@ impl State {
                         request_slot: params.slot,
                         bid_slot: slot_data.bid_slot.into(),
                     }));
-                } else if !slot_data.payload_attributes_map.contains_key(&params.parent_hash) {
+                } else if slot_data.fork_for_parent_hash(&params.parent_hash).is_none() {
                     // proposer is on a different fork
                     warn!(req =% params.parent_hash, have =? slot_data.payload_attributes_map.keys(), "get header for unknown parent hash");
                     let _ = res_tx.send(Err(ProposerApiError::NoBidPrepared));
@@ -742,20 +751,36 @@ impl State {
                     let _ = res_tx.send(Ok(()));
                 }
             }
+
+            // Gloas block, valid regardless of state: it names a bid from an auction the
+            // relay has usually already moved past.
+            (
+                State::Slot { .. } | State::Sorting(_) | State::Broadcasting { .. },
+                Event::GloasBlock { slot, seen },
+            ) => {
+                ctx.handle_gloas_block(slot, seen);
+            }
+
+            (
+                State::Slot { .. } | State::Sorting(_) | State::Broadcasting { .. },
+                Event::AttestationDeadline { slot, head_root },
+            ) => {
+                ctx.handle_attestation_deadline(slot, head_root);
+            }
         }
     }
 
     #[timed]
     fn process_slot_data<B: BidAdjustor>(
         bid_slot: Slot,
-        mut payload_attributes_map: FxHashMap<B256, PayloadAttributesUpdate>,
+        mut payload_attributes_map: FxHashMap<ForkKey, PayloadAttributesUpdate>,
         registration_data: Option<BuilderGetValidatorsResponseEntry>,
         payload_attributes: Vec<PayloadAttributesUpdate>,
         il: Option<InclusionListWithMetadata>,
         ctx: &mut Context<B>,
     ) -> Self {
         for update in payload_attributes {
-            payload_attributes_map.insert(update.parent_hash, update);
+            payload_attributes_map.insert(update.fork(), update);
         }
 
         match (registration_data, payload_attributes_map.is_empty()) {

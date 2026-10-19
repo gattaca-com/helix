@@ -1,11 +1,11 @@
 use std::{ops::Deref, sync::Arc, time::Instant};
 
-use alloy_primitives::{B256, U256};
+use alloy_primitives::{Address, B256, U256};
 use flux::type_hash_derive::type_hash_lock;
 use flux_utils::ArrayStr;
 use flux_versioned_types::{versioned_enum, versioned_struct};
 use helix_common::{
-    GetPayloadTrace, PayloadAttributesUpdate, SubmissionTrace,
+    ForkKey, GetPayloadTrace, PayloadAttributesUpdate, SubmissionTrace,
     api::{
         builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
         proposer_api::{GetExecutionPayloadBidParams, GetHeaderParams},
@@ -16,9 +16,10 @@ use helix_common::{
 use helix_tcp_types::{BidSubmissionFlags, BidSubmissionHeader};
 use helix_types::{
     BidAdjustmentData, BlockMergingDataV2, BlsPublicKeyBytes, BuilderBid, Compression,
-    ExecutionPayload, ForkName, GetPayloadResponse, MergeType, PayloadAndBlobs, PayloadBidData,
-    PayloadBidDataRef, SignedBidSubmission, SignedBlindedBeaconBlock, SignedExecutionPayloadBid,
-    Slot, Submission, SubmissionVersion, VersionedSignedProposal, mock_public_key_bytes,
+    ExecutionPayload, ForkName, GetPayloadResponse, GloasBidSubmission, MergeType, PayloadAndBlobs,
+    PayloadBidData, PayloadBidDataRef, SignedBidSubmissionFulu, SignedBlindedBeaconBlock, Slot,
+    Submission, SubmissionVersion, VersionedSignedProposal, gloas::GloasBlock,
+    mock_public_key_bytes,
 };
 use http::{
     HeaderMap, HeaderValue,
@@ -75,7 +76,7 @@ impl SubmissionRef {
 
 pub type GetHeaderResult = Result<PayloadEntry, ProposerApiError>;
 pub type GetPayloadResult = Result<GetPayloadResultData, ProposerApiError>;
-pub type GetExecutionPayloadBidResult = Result<SignedExecutionPayloadBid, ProposerApiError>;
+pub type GetExecutionPayloadBidResult = Result<Vec<u8>, ProposerApiError>;
 pub type SubmitBuilderPreferencesResult = Result<(), ProposerApiError>;
 
 versioned_struct!(InternalBidSubmissionHeader =>
@@ -289,7 +290,7 @@ pub struct GossipPayload {
 
 #[derive(Clone)]
 pub struct SubmissionPayload {
-    pub signed_bid_submission: SignedBidSubmission,
+    pub signed_bid_submission: SignedBidSubmissionFulu,
     pub withdrawals_root: B256,
     pub tx_root: Option<B256>,
     pub bid_adjustment_data: Option<BidAdjustmentData>,
@@ -297,6 +298,47 @@ pub struct SubmissionPayload {
     pub submission_version: SubmissionVersion,
     pub submission_trace: SubmissionTrace,
     pub parent_beacon_block_root: Option<B256>,
+}
+
+const WEI_PER_GWEI: u64 = 1_000_000_000;
+
+/// The fields of a Gloas block the reveal decision and envelope need.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SeenBlock {
+    pub block_root: B256,
+    pub parent_root: B256,
+    pub bid_builder_index: u64,
+    pub bid_block_hash: B256,
+}
+
+impl SeenBlock {
+    pub fn new(block: &GloasBlock<'_>, block_root: B256) -> Self {
+        Self {
+            block_root,
+            parent_root: block.parent_root(),
+            bid_builder_index: block.bid_builder_index(),
+            bid_block_hash: block.bid_block_hash(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct GloasPayload {
+    pub submission: GloasBidSubmission,
+    pub bid: Vec<u8>,
+}
+
+impl GloasPayload {
+    pub fn new(submission: GloasBidSubmission, fee_recipient: Address) -> Self {
+        // The proposer is paid in-block, so the enshrined `value` stays 0.
+        let execution_payment =
+            (submission.bid_trace().value / U256::from(WEI_PER_GWEI)).saturating_to::<u64>();
+        // The proposer's, not the payload's: the builder keeps the coinbase and pays
+        // the proposer in-block, and consensus pays any enshrined amount to whatever
+        // this names. Announcing the coinbase names the builder.
+        let bid = submission.unsigned_bid(fee_recipient, execution_payment);
+        Self { submission, bid }
+    }
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -307,8 +349,9 @@ pub enum PayloadEntry {
 }
 
 impl PayloadEntry {
+    #[allow(clippy::too_many_arguments)]
     pub fn new_submission(
-        signed_bid_submission: SignedBidSubmission,
+        signed_bid_submission: SignedBidSubmissionFulu,
         withdrawals_root: B256,
         tx_root: Option<B256>,
         bid_adjustment_data: Option<BidAdjustmentData>,
@@ -434,8 +477,8 @@ pub struct SlotData {
     pub bid_slot: Slot,
     /// Data about the validator registration
     pub registration_data: BuilderGetValidatorsResponseEntry,
-    /// Parent hash -> payload attributes for the incoming blocks
-    pub payload_attributes_map: FxHashMap<B256, PayloadAttributesUpdate>,
+    /// Fork -> payload attributes for the incoming blocks
+    pub payload_attributes_map: FxHashMap<ForkKey, PayloadAttributesUpdate>,
     /// Current fork
     pub current_fork: ForkName,
     /// Inclusion list
@@ -456,6 +499,24 @@ pub struct PendingPayload {
 impl SlotData {
     pub fn proposer_pubkey(&self) -> &BlsPublicKeyBytes {
         &self.registration_data.entry.registration.message.pubkey
+    }
+
+    pub fn fork_for_parent_hash(&self, parent_hash: &B256) -> Option<ForkKey> {
+        self.payload_attributes_map.keys().find(|k| k.parent_hash == *parent_hash).copied()
+    }
+
+    pub fn attrs_for_submission(
+        &self,
+        parent_hash: &B256,
+        prev_randao: &B256,
+    ) -> Option<&PayloadAttributesUpdate> {
+        let mut candidates =
+            self.payload_attributes_map.values().filter(|a| a.parent_hash == *parent_hash);
+        let first = candidates.next()?;
+        if first.prev_randao == *prev_randao {
+            return Some(first);
+        }
+        candidates.find(|a| a.prev_randao == *prev_randao).or(Some(first))
     }
 }
 
@@ -497,6 +558,18 @@ pub enum Event {
         max_execution_payment: u64,
         res_tx: oneshot::Sender<SubmitBuilderPreferencesResult>,
     },
+    /// A Gloas block signed by its slot's proposer, from the proposer API or our beacon
+    /// node's head. Sent whichever builder it names, so equivocation is visible.
+    GloasBlock {
+        slot: Slot,
+        seen: SeenBlock,
+    },
+    /// A Gloas slot's attestation deadline has passed; `head_root` is our beacon node's
+    /// head at that point. Decides the slot's reveal.
+    AttestationDeadline {
+        slot: Slot,
+        head_root: B256,
+    },
     // Receive multiple of these potentially, assume some light validation
     GetPayload {
         block_hash: B256,
@@ -526,11 +599,46 @@ impl Event {
             Event::GetHeader { .. } => "GetHeader",
             Event::GetExecutionPayloadBid { .. } => "GetExecutionPayloadBid",
             Event::SubmitBuilderPreferences { .. } => "SubmitBuilderPreferences",
+            Event::GloasBlock { .. } => "GloasBlock",
+            Event::AttestationDeadline { .. } => "AttestationDeadline",
             Event::GetPayload { .. } => "GetPayload",
             Event::GossipPayload(_) => "GossipPayload",
             Event::SimResult(_) => "SimResult",
             Event::MergeResult(_) => "MergeResult",
             Event::BuilderDemotion { .. } => "BuilderDemotion",
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn attrs(parent_hash: B256, parent_root: B256, prev_randao: B256) -> PayloadAttributesUpdate {
+        let mut update = PayloadAttributesUpdate { parent_hash, ..Default::default() };
+        update.payload_attributes.parent_beacon_block_root = Some(parent_root);
+        update.payload_attributes.prev_randao = prev_randao;
+        update
+    }
+
+    #[test]
+    fn a_submission_gets_the_fork_whose_prev_randao_it_matches() {
+        let parent_hash = B256::repeat_byte(1);
+        let forks = [
+            attrs(parent_hash, B256::repeat_byte(2), B256::repeat_byte(3)),
+            attrs(parent_hash, B256::repeat_byte(4), B256::repeat_byte(5)),
+        ];
+        let slot_data = SlotData {
+            bid_slot: Default::default(),
+            registration_data: Default::default(),
+            payload_attributes_map: forks.iter().map(|a| (a.fork(), a.clone())).collect(),
+            current_fork: ForkName::Gloas,
+            il: None,
+        };
+
+        for fork in &forks {
+            let got = slot_data.attrs_for_submission(&parent_hash, &fork.prev_randao).unwrap();
+            assert_eq!(got.parent_root(), fork.parent_root());
         }
     }
 }

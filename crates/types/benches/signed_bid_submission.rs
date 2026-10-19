@@ -2,14 +2,14 @@ use std::hint::black_box;
 
 use alloy_rpc_types::beacon::relay::SignedBidSubmissionV5 as AlloySignedBidSubmission;
 use criterion::{Criterion, criterion_group, criterion_main};
-use helix_types::SignedBidSubmission;
+use helix_types::SignedBidSubmissionFulu;
 use ssz::{Decode, Encode};
 
 fn benchmark_signed_bid_submission_ssz(c: &mut Criterion) {
     let mut group = c.benchmark_group("signed_bid_submission ssz");
 
     let data_json = include_bytes!("../src/testdata/signed-bid-submission-fulu-2.json");
-    let custom_submission: SignedBidSubmission = serde_json::from_slice(data_json).unwrap();
+    let custom_submission: SignedBidSubmissionFulu = serde_json::from_slice(data_json).unwrap();
     let ssz_bytes = custom_submission.as_ssz_bytes();
 
     let alloy_submission = AlloySignedBidSubmission::from_ssz_bytes(&ssz_bytes).unwrap();
@@ -36,7 +36,7 @@ fn benchmark_signed_bid_submission_ssz(c: &mut Criterion) {
 
     group.bench_function("custom ssz decode", |b| {
         b.iter(|| {
-            let r = SignedBidSubmission::from_ssz_bytes(&ssz_bytes).unwrap();
+            let r = SignedBidSubmissionFulu::from_ssz_bytes(&ssz_bytes).unwrap();
             black_box(r);
         });
     });
@@ -48,7 +48,7 @@ fn benchmark_signed_bid_submission_serde(c: &mut Criterion) {
     let mut group = c.benchmark_group("signed_bid_submission");
 
     let data_json = include_bytes!("../src/testdata/signed-bid-submission-fulu-2.json");
-    let custom_submission: SignedBidSubmission = serde_json::from_slice(data_json).unwrap();
+    let custom_submission: SignedBidSubmissionFulu = serde_json::from_slice(data_json).unwrap();
     let ssz_bytes = custom_submission.as_ssz_bytes();
     let alloy_submission = AlloySignedBidSubmission::from_ssz_bytes(&ssz_bytes).unwrap();
 
@@ -62,7 +62,7 @@ fn benchmark_signed_bid_submission_serde(c: &mut Criterion) {
 
     group.bench_function("custom serde deserialize", |b| {
         b.iter(|| {
-            let r: SignedBidSubmission = serde_json::from_slice(&json).unwrap();
+            let r: SignedBidSubmissionFulu = serde_json::from_slice(&json).unwrap();
             black_box(r);
         });
     });

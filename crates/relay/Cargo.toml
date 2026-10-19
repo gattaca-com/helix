@@ -94,3 +94,8 @@ tonic-build.workspace = true
 harness = false
 name = "unbundling"
 required-features = ["bench-internals"]
+
+[[bench]]
+harness = false
+name = "header_hot_path"
+required-features = ["bench-internals"]

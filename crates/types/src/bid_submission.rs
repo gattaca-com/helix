@@ -16,8 +16,9 @@ use tree_hash_derive::TreeHash;
 
 use crate::{
     BlobsBundle, BlobsError, BlockMergingData, Bloom, BlsPublicKey, BlsPublicKeyBytes,
-    BlsSignature, BlsSignatureBytes, DehydratedBidSubmission, ExecutionPayload, ExtraData,
-    PayloadAndBlobs, SszError, TestRandom,
+    BlsSignature, BlsSignatureBytes, DehydratedBidSubmission, ExecutionPayload,
+    ExecutionPayloadGloas, ExecutionRequestsGloas, ExtraData, GloasBidSubmission, PayloadAndBlobs,
+    SszError, TestRandom,
     bid_adjustment_data::{BidAdjData, BidAdjustmentData, BidAdjustmentDataV1},
     error::SigError,
     fields::ExecutionRequests,
@@ -85,24 +86,15 @@ pub enum Submission {
 
 impl Submission {
     pub fn bid_slot(&self) -> u64 {
-        match self {
-            Submission::Full(s) => s.slot().as_u64(),
-            Submission::Dehydrated(s) => s.slot(),
-        }
+        self.bid_trace().slot
     }
 
     pub fn builder_pubkey(&self) -> &BlsPublicKeyBytes {
-        match self {
-            Submission::Full(s) => &s.message().builder_pubkey,
-            Submission::Dehydrated(s) => s.builder_pubkey(),
-        }
+        &self.bid_trace().builder_pubkey
     }
 
     pub fn block_hash(&self) -> &B256 {
-        match self {
-            Submission::Full(s) => &s.message().block_hash,
-            Submission::Dehydrated(s) => s.block_hash(),
-        }
+        &self.bid_trace().block_hash
     }
 
     pub fn withdrawal_root(&self) -> B256 {
@@ -113,17 +105,11 @@ impl Submission {
     }
 
     pub fn parent_hash(&self) -> &B256 {
-        match self {
-            Submission::Full(s) => s.parent_hash(),
-            Submission::Dehydrated(s) => s.parent_hash(),
-        }
+        &self.bid_trace().parent_hash
     }
 
     pub fn slot(&self) -> Slot {
-        match self {
-            Submission::Full(s) => s.slot(),
-            Submission::Dehydrated(s) => Slot::from(s.slot()),
-        }
+        Slot::from(self.bid_slot())
     }
 
     pub fn fork_name(&self) -> ForkName {
@@ -148,10 +134,7 @@ impl Submission {
     }
 
     pub fn proposer_fee_recipient(&self) -> &Address {
-        match self {
-            Submission::Full(s) => s.proposer_fee_recipient(),
-            Submission::Dehydrated(s) => s.proposer_fee_recipient(),
-        }
+        &self.bid_trace().proposer_fee_recipient
     }
 
     pub fn block_number(&self) -> u64 {
@@ -185,7 +168,7 @@ impl Submission {
 
 #[derive(Debug, Clone, Serialize, Encode)]
 #[serde(deny_unknown_fields)]
-pub struct SignedBidSubmission {
+pub struct SignedBidSubmissionFulu {
     pub message: BidTrace,
     pub execution_payload: Arc<ExecutionPayload>,
     pub blobs_bundle: Arc<BlobsBundle>,
@@ -193,7 +176,7 @@ pub struct SignedBidSubmission {
     pub signature: BlsSignatureBytes,
 }
 
-impl TestRandom for SignedBidSubmission {
+impl TestRandom for SignedBidSubmissionFulu {
     fn random_for_test(rng: &mut impl rand::RngCore) -> Self {
         Self {
             message: BidTrace::random_for_test(rng),
@@ -380,16 +363,16 @@ pub fn requests_to_v4(er: &ExecutionRequests) -> ExecutionRequestsV4 {
     }
 }
 
-impl TryFrom<SignedBidSubmissionV5> for SignedBidSubmission {
+impl TryFrom<SignedBidSubmissionV5> for SignedBidSubmissionFulu {
     /// Set (and logged) when `v` carries more of some list than the spec allows.
     type Error = ();
 
-    fn try_from(v: SignedBidSubmissionV5) -> Result<SignedBidSubmission, Self::Error> {
+    fn try_from(v: SignedBidSubmissionV5) -> Result<SignedBidSubmissionFulu, Self::Error> {
         let m = v.message;
         let num_commitments = v.blobs_bundle.commitments.len();
         let commitments = ssz_types::VariableList::new(v.blobs_bundle.commitments)
             .map_err(|_| error!(num_commitments, "commitments exceed spec limit"))?;
-        Ok(SignedBidSubmission {
+        Ok(SignedBidSubmissionFulu {
             message: BidTrace {
                 slot: m.slot,
                 parent_hash: m.parent_hash,
@@ -413,8 +396,8 @@ impl TryFrom<SignedBidSubmissionV5> for SignedBidSubmission {
     }
 }
 
-impl From<SignedBidSubmission> for SignedBidSubmissionV5 {
-    fn from(s: SignedBidSubmission) -> SignedBidSubmissionV5 {
+impl From<SignedBidSubmissionFulu> for SignedBidSubmissionV5 {
+    fn from(s: SignedBidSubmissionFulu) -> SignedBidSubmissionV5 {
         // alloy re-exports this as the same type but with a different struct name
         use alloy_rpc_types::{beacon::relay::BidTrace as AlloyBidTrace, engine::BlobsBundleV2};
         let bb = &*s.blobs_bundle;
@@ -443,7 +426,80 @@ impl From<SignedBidSubmission> for SignedBidSubmissionV5 {
     }
 }
 
-impl<'de> Deserialize<'de> for SignedBidSubmission {
+impl TryFrom<&SignedBidSubmissionGloas> for SignedBidSubmissionV5 {
+    type Error = ssz_types::Error;
+
+    fn try_from(s: &SignedBidSubmissionGloas) -> Result<Self, Self::Error> {
+        use alloy_eips::eip4895::Withdrawal as AlloyWithdrawal;
+        use alloy_rpc_types::{
+            beacon::relay::BidTrace as AlloyBidTrace,
+            engine::{BlobsBundleV2, ExecutionPayloadV1, ExecutionPayloadV2},
+        };
+        let ep = &s.execution_payload;
+        let er = &s.execution_requests;
+        let bb = &*s.blobs_bundle;
+        let m = &s.message.trace;
+        let requests = ExecutionRequests {
+            deposits: ssz_types::VariableList::new(er.deposits.to_vec())?,
+            withdrawals: ssz_types::VariableList::new(er.withdrawals.to_vec())?,
+            consolidations: ssz_types::VariableList::new(er.consolidations.to_vec())?,
+        };
+        Ok(SignedBidSubmissionV5 {
+            message: AlloyBidTrace {
+                slot: m.slot,
+                parent_hash: m.parent_hash,
+                block_hash: m.block_hash,
+                builder_pubkey: m.builder_pubkey,
+                proposer_pubkey: m.proposer_pubkey,
+                proposer_fee_recipient: m.proposer_fee_recipient,
+                gas_limit: m.gas_limit,
+                gas_used: m.gas_used,
+                value: m.value,
+            },
+            execution_payload: ExecutionPayloadV3 {
+                payload_inner: ExecutionPayloadV2 {
+                    payload_inner: ExecutionPayloadV1 {
+                        parent_hash: ep.parent_hash.0,
+                        fee_recipient: ep.fee_recipient,
+                        state_root: ep.state_root,
+                        receipts_root: ep.receipts_root,
+                        logs_bloom: alloy_primitives::Bloom::from_slice(&ep.logs_bloom),
+                        prev_randao: ep.prev_randao,
+                        block_number: ep.block_number,
+                        gas_limit: ep.gas_limit,
+                        gas_used: ep.gas_used,
+                        timestamp: ep.timestamp,
+                        extra_data: ep.extra_data.to_vec().into(),
+                        base_fee_per_gas: ep.base_fee_per_gas,
+                        block_hash: ep.block_hash.0,
+                        transactions: ep.transactions.iter().map(|t| t.to_vec().into()).collect(),
+                    },
+                    withdrawals: ep
+                        .withdrawals
+                        .iter()
+                        .map(|w| AlloyWithdrawal {
+                            index: w.index,
+                            validator_index: w.validator_index,
+                            address: w.address,
+                            amount: w.amount,
+                        })
+                        .collect(),
+                },
+                blob_gas_used: ep.blob_gas_used,
+                excess_blob_gas: ep.excess_blob_gas,
+            },
+            blobs_bundle: BlobsBundleV2 {
+                commitments: bb.commitments.iter().cloned().collect(),
+                proofs: bb.proofs.clone(),
+                blobs: bb.blobs.iter().map(|b| **b).collect(),
+            },
+            execution_requests: requests_to_v4(&requests),
+            signature: s.signature,
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for SignedBidSubmissionFulu {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -468,7 +524,7 @@ impl<'de> Deserialize<'de> for SignedBidSubmission {
     }
 }
 
-impl Decode for SignedBidSubmission {
+impl Decode for SignedBidSubmissionFulu {
     fn is_ssz_fixed_len() -> bool {
         false
     }
@@ -501,7 +557,7 @@ impl Decode for SignedBidSubmission {
     }
 }
 
-impl SignedBidSubmission {
+impl SignedBidSubmissionFulu {
     pub fn validate_payload_ssz_lengths(
         &self,
         max_blobs_per_block: usize,
@@ -570,7 +626,7 @@ impl SignedBidSubmission {
     }
 }
 
-impl SignedBidSubmission {
+impl SignedBidSubmissionFulu {
     pub fn bid_trace(&self) -> &BidTrace {
         &self.message
     }
@@ -722,9 +778,9 @@ pub struct SignedBidSubmissionWithAdjustments {
 }
 
 impl SignedBidSubmissionWithAdjustments {
-    pub fn split(self) -> (SignedBidSubmission, BidAdjustmentData) {
+    pub fn split(self) -> (SignedBidSubmissionFulu, BidAdjustmentData) {
         (
-            SignedBidSubmission {
+            SignedBidSubmissionFulu {
                 message: self.message,
                 execution_payload: self.execution_payload,
                 blobs_bundle: self.blobs_bundle,
@@ -734,6 +790,120 @@ impl SignedBidSubmissionWithAdjustments {
             self.bid_adjustment_data,
         )
     }
+}
+
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Clone)]
+pub enum SignedBidSubmission {
+    Fulu(SignedBidSubmissionFulu),
+    Gloas(GloasBidSubmission),
+}
+
+impl SignedBidSubmission {
+    pub fn bid_trace(&self) -> &BidTrace {
+        match self {
+            Self::Fulu(s) => s.bid_trace(),
+            Self::Gloas(s) => s.bid_trace(),
+        }
+    }
+
+    pub fn block_hash(&self) -> &B256 {
+        &self.bid_trace().block_hash
+    }
+
+    pub fn fork_name(&self) -> ForkName {
+        match self {
+            Self::Fulu(s) => s.fork_name(),
+            Self::Gloas(_) => ForkName::Gloas,
+        }
+    }
+
+    pub fn block_number(&self) -> u64 {
+        match self {
+            Self::Fulu(s) => s.block_number(),
+            Self::Gloas(s) => s.block_number(),
+        }
+    }
+
+    pub fn fee_recipient(&self) -> Address {
+        match self {
+            Self::Fulu(s) => s.fee_recipient(),
+            Self::Gloas(s) => s.fee_recipient(),
+        }
+    }
+
+    pub fn timestamp(&self) -> u64 {
+        match self {
+            Self::Fulu(s) => s.timestamp(),
+            Self::Gloas(s) => s.timestamp(),
+        }
+    }
+
+    pub fn prev_randao(&self) -> &B256 {
+        match self {
+            Self::Fulu(s) => s.prev_randao(),
+            Self::Gloas(s) => s.prev_randao(),
+        }
+    }
+
+    pub fn withdrawals_root(&self) -> B256 {
+        match self {
+            Self::Fulu(s) => s.withdrawals_root(),
+            Self::Gloas(s) => s.withdrawals_root(),
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), BlockValidationError> {
+        match self {
+            Self::Fulu(s) => s.validate(),
+            Self::Gloas(s) => s.validate(),
+        }
+    }
+
+    pub fn verify_signature(&self, builder_domain: B256) -> Result<(), SigError> {
+        match self {
+            Self::Fulu(s) => s.verify_signature(builder_domain),
+            Self::Gloas(s) => s.verify_signature(builder_domain),
+        }
+    }
+
+    pub fn validate_lengths(&self, max_blobs_per_block: usize) -> Result<(), BlockValidationError> {
+        match self {
+            Self::Fulu(s) => s.validate_payload_ssz_lengths(max_blobs_per_block),
+            Self::Gloas(s) => s.validate_lengths(max_blobs_per_block),
+        }
+    }
+
+    pub fn num_txs(&self) -> usize {
+        match self {
+            Self::Fulu(s) => s.num_txs(),
+            Self::Gloas(s) => s.num_txs(),
+        }
+    }
+
+    pub fn as_ssz_bytes(&self) -> Vec<u8> {
+        match self {
+            Self::Fulu(s) => ssz::Encode::as_ssz_bytes(s),
+            Self::Gloas(s) => s.as_bytes().to_vec(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, TreeHash)]
+pub struct GloasBidTrace {
+    pub trace: BidTrace,
+    pub parent_block_root: B256,
+}
+
+impl SignedRoot for GloasBidTrace {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
+pub struct SignedBidSubmissionGloas {
+    pub message: GloasBidTrace,
+    pub execution_payload: Arc<ExecutionPayloadGloas>,
+    pub blobs_bundle: Arc<BlobsBundle>,
+    pub execution_requests: Arc<ExecutionRequestsGloas>,
+    pub signature: BlsSignatureBytes,
 }
 
 /// Flat combination of [`SignedBidSubmissionWithAdjustments`] and merging data:
@@ -750,9 +920,9 @@ pub struct SignedBidSubmissionWithAdjustmentsAndMergingData {
 }
 
 impl SignedBidSubmissionWithAdjustmentsAndMergingData {
-    pub fn split(self) -> (SignedBidSubmission, BidAdjustmentData, BlockMergingData) {
+    pub fn split(self) -> (SignedBidSubmissionFulu, BidAdjustmentData, BlockMergingData) {
         (
-            SignedBidSubmission {
+            SignedBidSubmissionFulu {
                 message: self.message,
                 execution_payload: self.execution_payload,
                 blobs_bundle: self.blobs_bundle,
@@ -901,15 +1071,15 @@ mod tests {
     #[ignore = "known bug: stale fixture doesn't satisfy BlobsBundle's 256-proofs-per-blob validation, see gattaca-com/helix#485"]
     fn fulu_bid_submission() {
         let data_json = include_str!("testdata/signed-bid-submission-fulu.json");
-        let s = test_encode_decode_json::<SignedBidSubmission>(data_json);
+        let s = test_encode_decode_json::<SignedBidSubmissionFulu>(data_json);
         assert_eq!(s.fork_name(), ForkName::Fulu);
     }
 
     #[test]
     #[ignore = "known bug: BlobsBundle::random_for_test under-generates proofs, see gattaca-com/helix#485"]
     fn fulu_bid_submission_ssz() {
-        let data_ssz = SignedBidSubmission::random_for_test(&mut rand::rng()).as_ssz_bytes();
-        let s = test_encode_decode_ssz::<SignedBidSubmission>(&data_ssz);
+        let data_ssz = SignedBidSubmissionFulu::random_for_test(&mut rand::rng()).as_ssz_bytes();
+        let s = test_encode_decode_ssz::<SignedBidSubmissionFulu>(&data_ssz);
         assert_eq!(data_ssz, s.as_ssz_bytes().as_slice());
         assert_eq!(s.fork_name(), ForkName::Fulu);
     }
@@ -935,5 +1105,72 @@ mod tests {
         let mut tail = combined.bid_adjustment_data.as_ssz_bytes();
         tail.extend(combined.merging_data.as_ssz_bytes());
         assert!(bytes.ends_with(&tail));
+    }
+}
+
+#[cfg(test)]
+mod gloas_submission_tests {
+    use ssz::{Decode, Encode};
+
+    use super::*;
+    use crate::TestRandomSeed;
+
+    fn decodable_gloas_submission() -> SignedBidSubmissionGloas {
+        let mut execution_payload = ExecutionPayloadGloas::default();
+        execution_payload.block_access_list = vec![7u8; 64].into();
+        let mut execution_requests = ExecutionRequestsGloas::default();
+        execution_requests.builder_deposits = vec![lh_types::BuilderDepositRequest {
+            pubkey: lh_bls::PublicKeyBytes::empty(),
+            withdrawal_credentials: B256::repeat_byte(0x11),
+            amount: 32_000_000_000,
+            signature: lh_bls::SignatureBytes::empty(),
+        }]
+        .into();
+        execution_requests.builder_exits = vec![lh_types::BuilderExitRequest {
+            source_address: alloy_primitives::Address::repeat_byte(0x22),
+            pubkey: lh_bls::PublicKeyBytes::empty(),
+        }]
+        .into();
+        SignedBidSubmissionGloas {
+            message: GloasBidTrace {
+                trace: BidTrace::test_random(),
+                parent_block_root: B256::repeat_byte(0x33),
+            },
+            execution_payload: Arc::new(execution_payload),
+            blobs_bundle: Default::default(),
+            execution_requests: Arc::new(execution_requests),
+            signature: BlsSignatureBytes::random(),
+        }
+    }
+
+    #[test]
+    fn a_gloas_submission_round_trips_through_ssz() {
+        let submission = decodable_gloas_submission();
+
+        let bytes = submission.as_ssz_bytes();
+        let decoded = SignedBidSubmissionGloas::from_ssz_bytes(&bytes).unwrap();
+
+        assert_eq!(decoded.message, submission.message);
+        assert_eq!(decoded.execution_payload, submission.execution_payload);
+        assert_eq!(decoded.execution_requests, submission.execution_requests);
+        assert_eq!(bytes, decoded.as_ssz_bytes());
+    }
+
+    #[test]
+    fn the_gloas_shape_is_distinct_from_fulu() {
+        assert!(
+            SignedBidSubmissionFulu::from_ssz_bytes(&decodable_gloas_submission().as_ssz_bytes())
+                .is_err(),
+            "a Gloas submission must not decode as Fulu",
+        );
+        assert!(
+            SignedBidSubmissionGloas::from_ssz_bytes(&{
+                let mut fulu = SignedBidSubmissionFulu::test_random();
+                fulu.blobs_bundle = Default::default();
+                fulu.as_ssz_bytes()
+            })
+            .is_err(),
+            "a Fulu submission must not decode as Gloas",
+        );
     }
 }

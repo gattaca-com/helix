@@ -3,8 +3,9 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
+use bytes::Bytes;
 use futures::future::join_all;
-use helix_types::{ForkName, SignedExecutionPayloadEnvelopeContents, VersionedSignedProposal};
+use helix_types::{ForkName, VersionedSignedProposal};
 
 use crate::{
     beacon::{beacon_client::BeaconClient, error::BeaconClientError, types::BroadcastValidation},
@@ -84,49 +85,56 @@ impl MultiBeaconClient {
         Err(last_error.unwrap_or(BeaconClientError::BeaconNodeUnavailable))
     }
 
+    /// Publishes a Gloas beacon block to all beacon clients; returns on first success.
+    /// The proposer already gossips its own block, so a failure here is not fatal: it only
+    /// costs us the head start on the block root that the reveal needs.
+    pub async fn publish_gloas_block(&self, block: Bytes) -> Result<(), BeaconClientError> {
+        first_success(
+            self.beacon_clients.iter().map(|client| client.publish_gloas_block(block.clone())),
+        )
+        .await
+    }
+
     /// Publishes the signed execution payload envelope to all beacon clients; returns on first
     /// success. Unlike `publish_block`, fans out via plain concurrent futures, not
     /// `spawn_tracked!`.
     pub async fn publish_execution_payload_envelope(
         &self,
-        envelope: Arc<SignedExecutionPayloadEnvelopeContents>,
+        envelope: Bytes,
         fork: ForkName,
     ) -> Result<(), BeaconClientError> {
-        let futures = self
-            .beacon_clients
-            .iter()
-            .map(|client| client.publish_execution_payload_envelope(envelope.clone(), fork));
-
-        let mut last_error: Option<BeaconClientError> = None;
-        for res in join_all(futures).await {
-            match res {
-                Ok(_) => return Ok(()),
-                Err(err) => last_error = Some(err),
-            }
-        }
-
-        Err(last_error.unwrap_or(BeaconClientError::BeaconNodeUnavailable))
+        first_success(
+            self.beacon_clients
+                .iter()
+                .map(|client| client.publish_execution_payload_envelope(envelope.clone(), fork)),
+        )
+        .await
     }
+}
+
+async fn first_success(
+    futures: impl Iterator<Item = impl Future<Output = Result<u16, BeaconClientError>>>,
+) -> Result<(), BeaconClientError> {
+    let mut last_error = None;
+    for res in join_all(futures).await {
+        match res {
+            Ok(_) => return Ok(()),
+            Err(err) => last_error = Some(err),
+        }
+    }
+    Err(last_error.unwrap_or(BeaconClientError::BeaconNodeUnavailable))
 }
 
 #[cfg(test)]
 mod tests {
-    use helix_types::{BlsSignature, ExecutionPayloadEnvelope, SignedExecutionPayloadEnvelope};
     use httpmock::{Method::POST, MockServer};
     use reqwest::Url;
 
     use super::*;
     use crate::BeaconClientConfig;
 
-    fn envelope() -> Arc<SignedExecutionPayloadEnvelopeContents> {
-        Arc::new(SignedExecutionPayloadEnvelopeContents {
-            signed_execution_payload_envelope: SignedExecutionPayloadEnvelope {
-                message: ExecutionPayloadEnvelope::empty(),
-                signature: BlsSignature::empty(),
-            },
-            kzg_proofs: Default::default(),
-            blobs: Default::default(),
-        })
+    fn envelope() -> Bytes {
+        Bytes::from_static(&[0u8; 12])
     }
 
     fn client_for(server: &MockServer) -> Arc<BeaconClient> {
