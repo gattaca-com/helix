@@ -27,9 +27,16 @@ type ReportKey = (BlsPublicKeyBytes, u64, alloy_primitives::B256);
 #[derive(Debug)]
 pub(crate) enum PoolError {
     /// A pubkey may never change pool.
-    BindingConflict { pubkey: BlsPublicKeyBytes, existing: CollateralId, proposed: CollateralId },
+    BindingConflict {
+        pubkey: BlsPublicKeyBytes,
+        existing: CollateralId,
+        proposed: CollateralId,
+    },
     /// A newer member set omitted a bound pubkey.
     /// Bound exceeded; the message is dropped.
+    UnknownPool {
+        collateral_id: CollateralId,
+    },
     Capacity,
 }
 
@@ -41,6 +48,11 @@ impl std::fmt::Display for PoolError {
                 "pubkey {pubkey} is bound to pool {} and may not move to {}",
                 String::from_utf8_lossy(existing),
                 String::from_utf8_lossy(proposed),
+            ),
+            Self::UnknownPool { collateral_id } => write!(
+                f,
+                "collateral for pool {} with no known membership",
+                String::from_utf8_lossy(collateral_id),
             ),
             Self::Capacity => f.write_str("pool state at capacity"),
         }
@@ -192,12 +204,18 @@ impl PoolState {
         group: OperatorGroup,
         collateral: &BuilderCollateral,
     ) -> Result<bool, PoolError> {
-        if self.pools.len() >= MAX_UNBOUND_POOLS &&
-            !self.pools.contains_key(&collateral.collateral_id)
-        {
-            return Err(PoolError::Capacity);
-        }
-        let pool = self.pool_mut(&collateral.collateral_id);
+        // Only membership makes a pool id real, so collateral for an id with no members is
+        // either corrupt or ahead of the membership that defines it. Rejecting it keeps a
+        // malformed id from taking a slot against MAX_UNBOUND_POOLS; the owner republishes
+        // collateral on its resync, so a message that merely arrived early is not lost.
+        let pool = match self.pools.get_mut(&collateral.collateral_id) {
+            Some(pool) if !pool.members.is_empty() => pool,
+            _ => {
+                return Err(PoolError::UnknownPool {
+                    collateral_id: collateral.collateral_id.clone(),
+                });
+            }
+        };
         match pool.collateral.get(&group) {
             Some((_, ts_ms)) if collateral.ts_ms <= *ts_ms => Ok(false),
             _ => {
@@ -647,10 +665,13 @@ mod tests {
 
         let mut replay = source.replay();
         assert_eq!(replay.len(), 6);
-        replay.reverse();
+        // Membership defines the pool id, so it leads; collateral is screened against it. The
+        // rest is reversed: promotion and reports stay order-independent.
+        let (membership, rest) = replay.split_at_mut(1);
+        rest.reverse();
 
         let mut target = state();
-        for msg in &replay {
+        for msg in membership.iter().chain(rest.iter()) {
             apply(&mut target, msg).unwrap();
         }
 
@@ -659,5 +680,22 @@ mod tests {
         assert_eq!(target.pools[C1].reports.len(), source.pools[C1].reports.len());
         assert_eq!(target.is_optimistic(&k1), source.is_optimistic(&k1));
         assert_eq!(target.is_optimistic(&k2), source.is_optimistic(&k2));
+    }
+
+    /// A malformed id decodes as a byte string and would otherwise take a slot against
+    /// MAX_UNBOUND_POOLS. Rejection creates no pool; the owner's resync re-delivers a message
+    /// that merely preceded its membership.
+    #[test]
+    fn collateral_for_an_unknown_pool_is_rejected_and_creates_no_pool() {
+        let k1 = BlsPublicKeyBytes::random();
+        let mut state = state();
+
+        let early = apply(&mut state, &backing(1, C1, eth(10)));
+        assert!(matches!(early, Err(PoolError::UnknownPool { .. })));
+        assert!(state.pools.is_empty(), "a rejected id must not take a pool slot");
+
+        apply(&mut state, &members(2, C1, &[k1])).unwrap();
+        assert!(apply(&mut state, &backing(3, C1, eth(10))).unwrap());
+        assert_eq!(state.gross(C1), U256::from(eth(10)));
     }
 }

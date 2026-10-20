@@ -265,6 +265,13 @@ pub(super) async fn run_operator_connection(
                                             tracing::warn!(operator = operator.name, "pool state at capacity, message dropped");
                                             false
                                         }
+                                        // Benign and self-healing when collateral merely outran
+                                        // its membership: the sender republishes on its resync.
+                                        // Persistent means a corrupt id, so keep it below error.
+                                        Err(e @ PoolError::UnknownPool { .. }) => {
+                                            tracing::warn!(%e, operator = operator.name, "collateral dropped");
+                                            false
+                                        }
                                         Err(e) => {
                                             tracing::error!(%e, operator = operator.name, "operator message rejected by pool state");
                                             false
