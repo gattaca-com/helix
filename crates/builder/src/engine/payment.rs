@@ -9,6 +9,7 @@ use alloy_primitives::{Address, B256, U256, U512, keccak256};
 use alloy_signer::SignerSync;
 use alloy_signer_local::PrivateKeySigner;
 use alloy_sol_types::{SolCall, SolValue, sol};
+use flux_profiler::timed;
 use helix_tcp_types::merging::control::RelayConfigV1;
 use rustc_hash::FxHashMap;
 
@@ -60,6 +61,7 @@ impl DistributionConfig {
 /// participants after subtracting the estimated payment cost. Returns a map
 /// from address to the value the distribution tx sends there; the block
 /// beneficiary (winning builder) is excluded — it keeps the remainder.
+#[timed]
 pub fn prepare_revenues(
     distribution_config: &DistributionConfig,
     revenues: &FxHashMap<Address, OriginRevenue>,
@@ -125,23 +127,21 @@ pub struct PaymentInputs {
 /// Builds and signs the relay-signed EIP-1559 transaction that calls the
 /// collateral Safe's `execTransaction` -> `multiSend` delegatecall. Returns
 /// the canonical (2718) encoding.
+#[timed]
 pub fn build_payment_tx(
     signer: &PrivateKeySigner,
     inputs: &PaymentInputs,
     updated_revenues: &FxHashMap<Address, U256>,
 ) -> Result<Vec<u8>, MergeError> {
-    // The safeTxGas parameter tells the Safe contract how much gas the internal
-    // transaction should have; 80% of the tx gas limit leaves margin for the
-    // Safe's own overhead (signature verification etc).
-    let safe_tx_gas = inputs.gas_limit.saturating_mul(80) / 100;
-
     let calldata = encode_multisend_calldata(
         updated_revenues,
         inputs.safe,
         inputs.safe_balance,
         inputs.safe_nonce,
         inputs.multisend_contract,
-        U256::from(safe_tx_gas),
+        // Zero forwards all remaining gas and reverts the Safe call if the
+        // multisend fails; a fixed share of a 140k limit trips GS010.
+        U256::ZERO,
         inputs.chain_id,
         signer,
     )?;

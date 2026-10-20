@@ -44,17 +44,14 @@ speculation:
   # MUST match the relay's max_merged_bid_age_ms. The relay does not send it
   # over the wire, so it is duplicated here. Set it lower and we stop improving
   # bases the relay would still serve; set it higher and we emit bids it drops.
-  max_base_age_ms: 600
-  # How much of a base's delta the first pass on a new base is assumed to
-  # recover, in basis points. Switching forfeits the rest, and a waiting bid has
-  # to beat that forfeit before it is worth taking. Lower holds a base longer.
-  rebase_recovery_bps: 5000
+  max_base_age_ms: 50
 
 # Prometheus endpoint for the merging role; omit to disable.
 metrics_port: 9600
 
+# Publish #[timed] frames for the flux-profiler CLI.
+enable_flux_profiler: false
+
 emission:
   # Only emit when proposer value improves by more than this many wei.
   min_value_increase_wei: 0
-  # Minimum spacing between emissions for the same base block.
-  min_interval_ms: 25

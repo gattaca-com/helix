@@ -13,9 +13,7 @@ use std::{
 use flux_network::{Event, Network, TcpGroupConfig, Token};
 use helix_tcp_types::merging::{
     MERGING_HEADER_SIZE, MERGING_PROTOCOL_VERSION, MergingFrameHeader, MergingMsgId,
-    builder_to_relay::{RejectCode, RejectV1},
     control::{MergerAckV1, MergerRegistrationV1, PingV1, PongV1},
-    relay_to_builder::ActivateBaseBlockV1,
 };
 use ssz::Decode;
 
@@ -166,16 +164,6 @@ fn handshake_ping_and_reject_flow() {
 
     // Extension ids (>= 0x80) must be ignored.
     client.send_raw(&[0x80, 0, 1, 2, 3]);
-
-    // The noop engine rejects every activation with UnknownBaseBlock.
-    let activate =
-        ActivateBaseBlockV1 { slot: 7, block_hash: alloy_primitives::B256::repeat_byte(0xaa) };
-    client.send(MergingMsgId::ActivateBaseBlockV1, &activate);
-    let (msg_id, body) = client.recv(Duration::from_secs(5)).expect("no reject");
-    assert_eq!(msg_id, MergingMsgId::RejectV1);
-    let reject = RejectV1::from_ssz_bytes(&body).unwrap();
-    assert_eq!(reject.slot, 7);
-    assert_eq!(reject.code, RejectCode::UnknownBaseBlock);
 }
 
 #[test]

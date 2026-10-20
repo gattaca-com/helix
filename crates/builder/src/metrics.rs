@@ -26,8 +26,9 @@ fn value_buckets() -> Vec<f64> {
 
 fn micros_buckets() -> Vec<f64> {
     vec![
-        10., 50., 100., 250., 500., 1_000., 2_500., 5_000., 10_000., 25_000., 50_000., 100_000.,
-        250_000., 500_000., 1_000_000.,
+        10., 25., 50., 100., 200., 300., 500., 750., 1_000., 1_500., 2_000., 3_000., 5_000.,
+        7_500., 10_000., 15_000., 20_000., 30_000., 50_000., 100_000., 250_000., 500_000.,
+        1_000_000.,
     ]
 }
 
@@ -207,6 +208,14 @@ lazy_static! {
     )
     .unwrap();
 
+    static ref EMIT_BASE: IntCounterVec = register_int_counter_vec_with_registry!(
+        "merge_emit_base_total",
+        "Emissions by whether a newer block from the base's builder was already waiting",
+        &["base"],
+        &BUILDER_METRICS_REGISTRY
+    )
+    .unwrap();
+
     /// Size of the state-root walk, by stage and unit.
     static ref STATE_WALK: HistogramVec = register_histogram_vec_with_registry!(
         "merge_state_walk",
@@ -219,8 +228,6 @@ lazy_static! {
 
     //////////////// PIPELINE ////////////////
 
-    /// Critical-path cost by stage: replay, extend, emit, and the activation
-    /// queue wait.
     static ref STAGE_LATENCY: HistogramVec = register_histogram_vec_with_registry!(
         "merge_stage_latency_us",
         "Merge pipeline latency by stage",
@@ -230,7 +237,6 @@ lazy_static! {
     )
     .unwrap();
 
-    /// Speculative replay bookkeeping, and where activations were served from.
     static ref SPECULATION: IntCounterVec = register_int_counter_vec_with_registry!(
         "merge_speculation_total",
         "Speculative replay events by outcome",
@@ -239,17 +245,42 @@ lazy_static! {
     )
     .unwrap();
 
-    static ref ACTIVATION_SOURCE: IntCounterVec = register_int_counter_vec_with_registry!(
-        "merge_activation_source_total",
-        "Merge session activations by where the session came from",
-        &["source"],
+    static ref LAYER_BUILD: IntCounterVec = register_int_counter_vec_with_registry!(
+        "merge_layer_build_total",
+        "State layer builds by whether they started from the builder's previous base",
+        &["outcome"],
+        &BUILDER_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    static ref WAIT_PHASE: HistogramVec = register_histogram_vec_with_registry!(
+        "merge_wait_phase_ms",
+        "Time a waiting base spent behind each phase of its stream's previous base",
+        &["phase"],
+        millis_buckets(),
+        &BUILDER_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    static ref WAIT_DOMINANT: IntCounterVec = register_int_counter_vec_with_registry!(
+        "merge_wait_dominant_total",
+        "Waits of 5ms or more, by the phase that took most of them",
+        &["phase"],
+        &BUILDER_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    static ref TX_REUSE: IntCounterVec = register_int_counter_vec_with_registry!(
+        "merge_tx_reuse_total",
+        "Txs by stage and whether an earlier result was reused",
+        &["stage", "outcome"],
         &BUILDER_METRICS_REGISTRY
     )
     .unwrap();
 
     static ref REJECTION: IntCounterVec = register_int_counter_vec_with_registry!(
         "merge_rejection_total",
-        "Blocks and activations refused, by reason",
+        "Blocks refused, by reason",
         &["stage", "reason"],
         &BUILDER_METRICS_REGISTRY
     )
@@ -377,126 +408,38 @@ pub fn gwei(v: U256) -> f64 {
     wei / WEI_PER_GWEI
 }
 
-pub fn order_outcome(outcome: &str, value: U256) {
-    ORDER_OUTCOME.with_label_values(&[outcome]).inc();
-    ORDER_VALUE.with_label_values(&[outcome]).observe(gwei(value));
-}
-
-pub fn emit_value(total_revenue: U256, proposer_delta: U256) {
-    EMIT_VALUE.with_label_values(&["total_revenue"]).observe(gwei(total_revenue));
-    EMIT_VALUE.with_label_values(&["proposer_delta"]).observe(gwei(proposer_delta));
-}
-
-pub fn base_age(stage: &str, age_ms: u64) {
-    BASE_AGE.with_label_values(&[stage]).observe(age_ms as f64);
-}
-
-pub fn beats_own_bid(reference: &str, beats: bool) {
-    BEATS_OWN_BID.with_label_values(&[reference, if beats { "yes" } else { "no" }]).inc();
-}
-
 pub fn ratchet(delta: U256, interval_ms: u64, rising: bool) {
     let direction = if rising { "up" } else { "down" };
     RATCHET_VALUE.with_label_values(&[direction]).observe(gwei(delta));
     RATCHET_INTERVAL.with_label_values(&[direction]).observe(interval_ms as f64);
 }
 
-/// One emission's full verdict: whether it beat the builder's own stream, how
-/// far behind it was, and how much headroom it actually had.
-pub fn emission_verdict(
-    won: bool,
-    steps_behind: u64,
-    base_age_ms: u64,
-    budget_steps: u64,
-    budget_ms: u64,
-    deadline_seen: bool,
-) {
-    let result = if won { "won" } else { "lost" };
-    let deadline = if deadline_seen { "seen" } else { "unseen" };
-    STEPS_BEHIND.with_label_values(&[result]).observe(steps_behind as f64);
-    BUDGET.with_label_values(&[result, deadline]).observe(budget_ms as f64);
-    BUDGET_STEPS.with_label_values(&[result, deadline]).observe(budget_steps as f64);
-    BASE_AGE.with_label_values(&[result]).observe(base_age_ms as f64);
+thread_local! {
+    static WARMING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// Splits one emission's base age into its phases. A zero stamp means the
-/// phase did not happen -- an inline replay never reaches a worker -- so those
-/// gaps are skipped rather than recorded as zero.
-pub fn emission_phases(t: &crate::engine::types::Timeline) {
-    let emit_ns = crate::utils::utcnow_ns();
-    let gap = |phase: &str, from: u64, to: u64| {
-        if from == 0 || to == 0 || to < from {
-            return;
-        }
-        PHASE.with_label_values(&[phase]).observe((to - from) as f64 / 1e6);
-    };
-    gap("ingest", t.recv_ns, t.ingest_done_ns);
-    gap("dispatch_wait", t.ingest_done_ns, t.dispatch_ns);
-    gap("worker_wait", t.dispatch_ns, t.replay_start_ns);
-    gap("replay", t.replay_start_ns, t.replay_end_ns);
-    gap("return_queue", t.replay_end_ns, t.handled_ns);
-    gap("to_live", t.handled_ns, t.live_ns);
-    gap("to_emit", t.live_ns, emit_ns);
-    gap("total", t.recv_ns, emit_ns);
+/// Latency metrics recorded on this thread are dropped while a warm-up base is processed.
+pub fn set_warming(warming: bool) {
+    WARMING.with(|w| w.set(warming));
 }
 
-/// How long a block waited before its stream started it, split by whether the
-/// stream was mid-merge or idle when it arrived.
-pub fn worker_wait(state: &str, ms: u64) {
-    PHASE.with_label_values(&[state]).observe(ms as f64);
-}
-
-/// Accounts and storage slots the state-root walk has to touch, split between
-/// what the base block alone changed and the full set at emission. If the base
-/// dominates, every emission is re-walking work that did not change.
-pub fn account_updates(stage: &str, accounts: usize, slots: usize) {
-    STATE_WALK.with_label_values(&[stage, "accounts"]).observe(accounts as f64);
-    STATE_WALK.with_label_values(&[stage, "slots"]).observe(slots as f64);
+pub fn warming() -> bool {
+    WARMING.with(|w| w.get())
 }
 
 pub fn stage_latency(stage: &str, micros: u64) {
+    if warming() {
+        return;
+    }
     STAGE_LATENCY.with_label_values(&[stage]).observe(micros as f64);
-}
-
-/// Extend/emit passes made on one base before moving to a fresher one.
-pub fn extend_passes(passes: u64) {
-    EXTEND_PASSES.observe(passes as f64);
-}
-
-/// Why a stream gave up the base it held.
-pub fn rebase_reason(reason: &str) {
-    REBASE_REASON.with_label_values(&[reason]).inc();
-}
-
-/// The delta one pass on a new base reaches, against the delta the previous
-/// base ended on. Recorded as two distributions rather than a per-event ratio:
-/// the ratio is unbounded when the previous base ended near zero, which made
-/// its mean meaningless.
-pub fn delta_on_base(stage: &str, delta: U256) {
-    DELTA_ON_BASE.with_label_values(&[stage]).observe(gwei(delta));
-}
-
-/// An emission that both beat the builder's own bid and is young enough for the
-/// relay to serve. Beating the bid on a base past the gate is worth nothing, so
-/// this is the objective, not `beats_own_bid` alone.
-pub fn servable_win(servable: bool) {
-    SERVABLE_WIN.with_label_values(&[if servable { "yes" } else { "no" }]).inc();
 }
 
 pub fn speculation(outcome: &str) {
     SPECULATION.with_label_values(&[outcome]).inc();
 }
 
-pub fn activation_source(source: &str) {
-    ACTIVATION_SOURCE.with_label_values(&[source]).inc();
-}
-
 pub fn rejection(stage: &str, reason: &str) {
     REJECTION.with_label_values(&[stage, reason]).inc();
-}
-
-pub fn extend_orders(step: &str, count: usize) {
-    EXTEND_ORDERS.with_label_values(&[step]).observe(count as f64);
 }
 
 pub fn sim_lap(stage: &str, since: Instant) -> Instant {
