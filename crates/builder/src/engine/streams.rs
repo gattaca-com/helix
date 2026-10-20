@@ -372,8 +372,8 @@ fn merge_base(
             }
             metrics::rebase_reason("holding");
         }
-        // Backstop only: past the relay's staleness gate nothing we emit on
-        // this base can be served, so further passes are wasted work.
+        // Bound work spent improving one base even when this builder does not submit a newer one.
+        // The relay's serving gate separately compares this base with the latest same-builder bid.
         if utcnow_ns().saturating_sub(job.base.recv_ns) >=
             shared.engine_config.max_base_age.as_nanos() as u64
         {
@@ -414,7 +414,11 @@ fn report_emission(
     let base_index = session.base_index;
     let delta = msg.proposer_value.saturating_sub(base_value);
     let uplift = own_latest.saturating_sub(base_value);
-    let latest_index = inner.submissions.get(&beneficiary).map(|s| s.count - 1).unwrap_or_default();
+    let (latest_index, base_lag_ms) = inner
+        .submissions
+        .get(&beneficiary)
+        .map(|s| (s.count - 1, s.last_recv_ns.saturating_sub(job.base.recv_ns) / 1_000_000))
+        .unwrap_or_default();
     let (budget_steps, budget_ms, deadline_seen) = inner
         .submissions
         .get(&beneficiary)
@@ -422,7 +426,7 @@ fn report_emission(
         .unwrap_or_default();
     let base_age_ms = utcnow_ns().saturating_sub(job.base.recv_ns) / 1_000_000;
     let servable =
-        beats_latest && base_age_ms <= job.shared.engine_config.max_base_age.as_millis() as u64;
+        beats_latest && base_lag_ms <= job.shared.engine_config.max_base_age.as_millis() as u64;
     metrics::servable_win(servable);
     metrics::emission_phases(&session.timeline);
     metrics::emission_verdict(
@@ -441,6 +445,7 @@ fn report_emission(
         latest_index,
         steps_behind = latest_index.saturating_sub(base_index),
         base_age_ms,
+        base_lag_ms,
         pass = passes,
         delta_gwei = metrics::gwei(delta),
         uplift_gwei = metrics::gwei(uplift),

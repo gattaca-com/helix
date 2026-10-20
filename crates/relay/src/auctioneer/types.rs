@@ -340,6 +340,15 @@ impl PayloadEntry {
         matches!(self, Self::Submission(s) if s.bid_adjustment_data.is_some())
     }
 
+    /// Relay receive time for a locally submitted payload. Gossiped payloads are retained for
+    /// unblinding and do not carry submission timing information.
+    pub fn receive_ns(&self) -> Option<u64> {
+        match self {
+            Self::Submission(s) => Some(s.submission_trace.receive_ns.0),
+            Self::Gossip(_) => None,
+        }
+    }
+
     pub fn value(&self) -> &U256 {
         match &self {
             Self::Submission(s) => s.signed_bid_submission.value(),

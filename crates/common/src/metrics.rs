@@ -529,11 +529,11 @@ lazy_static! {
     )
     .unwrap();
 
-    /// Age of the merged bid's base block when the decision is made, measured
-    /// against `max_merged_bid_age_ms`.
+    /// How much earlier the merged bid's base block was received than the latest bid from the
+    /// same builder, measured against `max_merged_bid_age_ms`.
     pub static ref MERGED_BID_AGE: HistogramVec = register_histogram_vec_with_registry!(
         "block_merge_bid_age_ms",
-        "Age of the merged bid's base block at the get_header decision",
+        "Receive-time lag of the merged bid's base behind the latest same-builder bid",
         &["outcome"],
         vec![1., 5., 10., 25., 50., 75., 100., 150., 200., 250., 300., 400., 600., 1_000., 2_000.],
         &RELAY_METRICS_REGISTRY

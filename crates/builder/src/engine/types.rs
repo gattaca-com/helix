@@ -24,8 +24,8 @@ pub struct EngineConfig {
     pub min_value_increase_wei: U256,
     /// Minimum spacing between emissions for the same base.
     pub min_emission_interval: Duration,
-    /// Stop improving a base once it is this old. Must match the relay's
-    /// `max_merged_bid_age_ms`; it is not sent over the wire.
+    /// Stop improving a base once it is this old. The relay uses the same duration as its
+    /// permitted receive-time lag behind the latest same-builder bid.
     pub max_base_age: Duration,
     /// Assumed share of a base's delta that one pass on a new base recovers,
     /// in basis points. The rebase rule charges the remainder against a
