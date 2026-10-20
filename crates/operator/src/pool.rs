@@ -27,16 +27,12 @@ type ReportKey = (BlsPublicKeyBytes, u64, alloy_primitives::B256);
 #[derive(Debug)]
 pub(crate) enum PoolError {
     /// A pubkey may never change pool.
-    BindingConflict {
-        pubkey: BlsPublicKeyBytes,
-        existing: CollateralId,
-        proposed: CollateralId,
-    },
-    /// A newer member set omitted a bound pubkey.
+    BindingConflict { pubkey: BlsPublicKeyBytes, existing: CollateralId, proposed: CollateralId },
+    /// Collateral for an id that no member set mentions.
+    UnknownPool { collateral_id: CollateralId },
+    /// A builder with no `builder_id` yields an empty id at the relay call sites.
+    EmptyPoolId,
     /// Bound exceeded; the message is dropped.
-    UnknownPool {
-        collateral_id: CollateralId,
-    },
     Capacity,
 }
 
@@ -54,6 +50,7 @@ impl std::fmt::Display for PoolError {
                 "collateral for pool {} with no known membership",
                 String::from_utf8_lossy(collateral_id),
             ),
+            Self::EmptyPoolId => f.write_str("message carries an empty collateral_id"),
             Self::Capacity => f.write_str("pool state at capacity"),
         }
     }
@@ -227,6 +224,9 @@ impl PoolState {
 
     /// Retain the newest promotion and discard reports it supersedes.
     pub(crate) fn apply_promotion(&mut self, promotion: &Promotion) -> Result<bool, PoolError> {
+        if promotion.collateral_id.is_empty() {
+            return Err(PoolError::EmptyPoolId);
+        }
         if let Some(existing) = self.binding.get(&promotion.builder_pubkey) &&
             existing != &promotion.collateral_id
         {
@@ -235,6 +235,11 @@ impl PoolState {
                 existing: existing.clone(),
                 proposed: promotion.collateral_id.clone(),
             });
+        }
+        if self.pools.len() >= MAX_UNBOUND_POOLS &&
+            !self.pools.contains_key(&promotion.collateral_id)
+        {
+            return Err(PoolError::Capacity);
         }
         let pool = self.pool_mut(&promotion.collateral_id);
         if pool.promotion.as_ref().is_some_and(|p| promotion.ts_ms <= p.ts_ms) {
@@ -249,6 +254,9 @@ impl PoolState {
     /// A report for an unknown or unbacked pool is retained and inert. Dropping it would make
     /// state depend on arrival order.
     pub(crate) fn apply_demotion(&mut self, demotion: &Demotion) -> Result<bool, PoolError> {
+        if demotion.collateral_id.is_empty() {
+            return Err(PoolError::EmptyPoolId);
+        }
         if let Some(existing) = self.binding.get(&demotion.builder_pubkey) &&
             existing != &demotion.collateral_id
         {
@@ -680,6 +688,21 @@ mod tests {
         assert_eq!(target.pools[C1].reports.len(), source.pools[C1].reports.len());
         assert_eq!(target.is_optimistic(&k1), source.is_optimistic(&k1));
         assert_eq!(target.is_optimistic(&k2), source.is_optimistic(&k2));
+    }
+
+    /// `builder_id` is optional, so the relay call sites yield an empty id for an unpooled
+    /// builder. It is a valid byte string, so no id screen catches it: every such builder's
+    /// reports would otherwise collect in one pool keyed by "".
+    #[test]
+    fn reports_with_an_empty_pool_id_are_rejected() {
+        let k1 = BlsPublicKeyBytes::random();
+        let mut state = state();
+
+        let demotion = apply(&mut state, &demote(10, SLOT, b"", k1, eth(3)));
+        assert!(matches!(demotion, Err(PoolError::EmptyPoolId)));
+        let promotion = apply(&mut state, &promote(11, b"", k1));
+        assert!(matches!(promotion, Err(PoolError::EmptyPoolId)));
+        assert!(state.pools.is_empty(), "an empty id must not take a pool slot");
     }
 
     /// A malformed id decodes as a byte string and would otherwise take a slot against

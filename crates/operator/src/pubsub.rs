@@ -172,6 +172,12 @@ pub(super) async fn run_operator_connection(
                     };
                     let transmit = match transmit {
                         Ok(changed) => changed,
+                        // An unpooled builder has no pool to charge, but peers must still see
+                        // the report: below `Follow` admission is the per-pubkey flag.
+                        Err(PoolError::EmptyPoolId) => {
+                            tracing::warn!("builder has no builder_id; report carries no pool");
+                            true
+                        }
                         Err(e) => {
                             tracing::error!(%e, "local operator message rejected by pool state");
                             false
@@ -272,6 +278,9 @@ pub(super) async fn run_operator_connection(
                                             tracing::warn!(%e, operator = operator.name, "collateral dropped");
                                             false
                                         }
+                                        // Not pool state, but still a report the demotion
+                                        // handler must see.
+                                        Err(PoolError::EmptyPoolId) => true,
                                         Err(e) => {
                                             tracing::error!(%e, operator = operator.name, "operator message rejected by pool state");
                                             false
