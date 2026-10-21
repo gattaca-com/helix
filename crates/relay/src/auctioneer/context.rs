@@ -428,6 +428,10 @@ impl<B: BidAdjustor> Context<B> {
             return;
         };
 
+        let Some(base_block_receive_ns) = original_payload.receive_ns() else {
+            warn!(%block_hash, "original payload for merged block has no receive timestamp");
+            return;
+        };
         let original_payload_and_blobs = original_payload.payload_and_blobs();
         let original_value = *original_payload.value();
         let builder_pubkey = *original_payload.bid_data_ref().builder_pubkey;
@@ -440,6 +444,7 @@ impl<B: BidAdjustor> Context<B> {
                 original_payload_and_blobs,
                 original_value,
                 builder_pubkey,
+                base_block_receive_ns,
             )
             .ok()
         else {

@@ -75,8 +75,7 @@ lazy_static! {
 
     //////////////// STALENESS AND THE RACE ////////////////
 
-    /// Age of the base block when we emit. The relay drops anything past
-    /// `max_merged_bid_age_ms`, so this distribution must sit under it.
+    /// Absolute age of the base block at each builder processing stage.
     static ref BASE_AGE: HistogramVec = register_histogram_vec_with_registry!(
         "merge_base_age_ms",
         "Age of the base block at a given stage",

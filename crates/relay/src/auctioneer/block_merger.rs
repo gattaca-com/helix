@@ -10,7 +10,7 @@ use helix_common::{
         MERGE_STORE, MERGE_STORE_DELTA, MERGE_TRACE_LATENCY, MERGED_BID_AGE, MERGED_BID_DECISION,
         MERGED_BID_MARGIN,
     },
-    utils::{utcnow_ms, utcnow_ns},
+    utils::utcnow_ns,
 };
 use helix_types::{BlsPublicKeyBytes, MergedBlock, PayloadAndBlobs, PayloadBidData, Transactions};
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
@@ -87,11 +87,21 @@ impl BlockMerger {
                 .set_merged_block_top_bid(entry.bid.block_hash(), *original_bid.value());
         }
 
+        let Some(original_bid_receive_ns) = original_bid.receive_ns() else {
+            MERGED_BID_DECISION.with_label_values(&["missing_receive_time"]).inc();
+            warn!(
+                block_hash = %original_bid.block_hash(),
+                "top bid has no receive timestamp, not serving merged header"
+            );
+            return None;
+        };
+
         if !merged_bid_higher(
             &entry.bid,
             original_bid,
-            entry.base_block_time_ms,
-            self.config.block_merging_config.max_merged_bid_age_ms,
+            entry.base_block_receive_ns,
+            original_bid_receive_ns,
+            entry.max_merged_bid_age_ms,
         ) {
             trace!("merged bid not higher");
             let original_block_hash = *original_bid.block_hash();
@@ -180,6 +190,7 @@ impl BlockMerger {
         original_payload: PayloadAndBlobs,
         original_value: U256,
         builder_pubkey: BlsPublicKeyBytes,
+        base_block_receive_ns: u64,
     ) -> Result<PayloadEntry, PayloadMergingError> {
         debug!(?response.builder_inclusions, %response.proposer_value, "preparing merged payload for storage");
         let start_time = Instant::now();
@@ -211,7 +222,6 @@ impl BlockMerger {
         let (base_read_ns, accept_ns) = (response.base_read_ns, response.accept_ns);
         let block_hash = response.execution_payload.block_hash;
         let response_value = response.proposer_value;
-        let base_block_time_ms = response.trace.request_time_ns / 1_000_000;
 
         let mut trace = response.trace;
         trace.finalize_time_ns = utcnow_ns();
@@ -268,8 +278,16 @@ impl BlockMerger {
         // address of the base block the merge was built from, so that a merge for one
         // builder's block can never be served in place of another builder's original bid.
         let coinbase = original_payload.execution_payload.fee_recipient;
-        self.best_merged_blocks
-            .insert(coinbase, BestMergedBlock { base_block_time_ms, bid: new_bid.clone() });
+        // Only `builder_id` is read here; it keys the per-builder staleness override.
+        let builder_id =
+            self.local_cache.get_builder_info(&builder_pubkey).and_then(|i| i.builder_id);
+        let max_merged_bid_age_ms =
+            self.config.block_merging_config.max_merged_bid_age_ms_for(builder_id.as_deref());
+        self.best_merged_blocks.insert(coinbase, BestMergedBlock {
+            base_block_receive_ns,
+            max_merged_bid_age_ms,
+            bid: new_bid.clone(),
+        });
 
         MERGE_STORE.with_label_values(&["stored"]).inc();
         let stored_ns = Nanos::now().0;
@@ -295,7 +313,11 @@ impl BlockMerger {
 }
 
 struct BestMergedBlock {
-    base_block_time_ms: u64,
+    /// Relay-side receive time, kept on the same clock as the top bid used at `get_header`.
+    base_block_receive_ns: u64,
+    /// Resolved for the base block's `builder_id` when the merge was stored, so `get_header`
+    /// does not repeat the lookup per request.
+    max_merged_bid_age_ms: u64,
     bid: PayloadEntry,
 }
 
@@ -348,11 +370,13 @@ fn gwei(v: U256) -> f64 {
 fn merged_bid_higher(
     merged_bid: &PayloadEntry,
     original_bid: &PayloadEntry,
-    time: u64,
+    base_block_receive_ns: u64,
+    original_bid_receive_ns: u64,
     max_merged_bid_age_ms: u64,
 ) -> bool {
-    let now_ms = utcnow_ms();
-    let age_ms = now_ms.saturating_sub(time);
+    // Comparing both ages at the same instant reduces to the difference between their receive
+    // times. Saturation treats a base newer than the current bid as having no lag.
+    let base_lag_ms = original_bid_receive_ns.saturating_sub(base_block_receive_ns) / 1_000_000;
     // Recorded for every decision, so the margin distribution shows both the
     // edge we win by and the ratchet we lose to.
     let (direction, margin) = if merged_bid.value() > original_bid.value() {
@@ -365,7 +389,7 @@ fn merged_bid_higher(
     // If the current best bid has equal or higher value, we use that
     if merged_bid.value() <= original_bid.value() {
         MERGED_BID_DECISION.with_label_values(&["not_higher"]).inc();
-        MERGED_BID_AGE.with_label_values(&["not_higher"]).observe(age_ms as f64);
+        MERGED_BID_AGE.with_label_values(&["not_higher"]).observe(base_lag_ms as f64);
         debug!(
             "merged bid {:?} with value {:?} is not higher than regular bid, using regular bid, value = {:?}, block_hash = {:?}",
             merged_bid.block_hash(),
@@ -375,22 +399,22 @@ fn merged_bid_higher(
         );
         return false;
     }
-    // If the merged bid is stale, we use the current best bid
-    if age_ms > max_merged_bid_age_ms {
+    // If the merge base is too far behind the current bid from this builder, use the current bid.
+    if base_lag_ms > max_merged_bid_age_ms {
         MERGED_BID_DECISION.with_label_values(&["stale"]).inc();
-        MERGED_BID_AGE.with_label_values(&["stale"]).observe(age_ms as f64);
+        MERGED_BID_AGE.with_label_values(&["stale"]).observe(base_lag_ms as f64);
         debug!(
-            "merged bid {:?} with value {:?} is stale ({} ms old), using regular bid, value = {:?}, block_hash = {:?}",
-            merged_bid.value(),
+            "merged bid {:?} with value {:?} is based on a block {} ms older than the regular bid, using regular bid with value {:?}, block hash {:?}",
             merged_bid.block_hash(),
-            age_ms,
+            merged_bid.value(),
+            base_lag_ms,
             original_bid.value(),
             original_bid.block_hash()
         );
         return false;
     }
 
-    MERGED_BID_AGE.with_label_values(&["higher"]).observe(age_ms as f64);
+    MERGED_BID_AGE.with_label_values(&["higher"]).observe(base_lag_ms as f64);
     debug!(
         "using merged bid, value = {:?}, block_hash = {:?}",
         merged_bid.value(),
@@ -402,4 +426,53 @@ fn merged_bid_higher(
 pub fn record_step(label: &str, duration: Duration) {
     let value = duration.as_nanos() as f64 / 1000.0;
     MERGE_TRACE_LATENCY.with_label_values(&[label]).observe(value);
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use helix_types::{BlobsBundle, ExecutionPayload, ExecutionRequests, TestRandom};
+    use rand::{SeedableRng, rngs::SmallRng};
+
+    use super::*;
+
+    fn bid(value: u64) -> PayloadEntry {
+        let mut rng = SmallRng::seed_from_u64(value);
+        PayloadEntry::new_gossip(
+            PayloadAndBlobs {
+                execution_payload: Arc::new(ExecutionPayload::random_for_test(&mut rng)),
+                blobs_bundle: Arc::new(BlobsBundle::default()),
+            },
+            PayloadBidData {
+                withdrawals_root: B256::ZERO,
+                tx_root: None,
+                execution_requests: Arc::new(ExecutionRequests::default()),
+                value: U256::from(value),
+                builder_pubkey: BlsPublicKeyBytes::default(),
+            },
+        )
+    }
+
+    #[test]
+    fn merged_bid_staleness_is_relative_to_latest_bid_receive_time() {
+        let merged_bid = bid(2);
+        let original_bid = bid(1);
+        let base_receive_ns = 1_000_000_000;
+
+        assert!(merged_bid_higher(
+            &merged_bid,
+            &original_bid,
+            base_receive_ns,
+            base_receive_ns + 250_000_000,
+            250,
+        ));
+        assert!(!merged_bid_higher(
+            &merged_bid,
+            &original_bid,
+            base_receive_ns,
+            base_receive_ns + 251_000_000,
+            250,
+        ));
+    }
 }

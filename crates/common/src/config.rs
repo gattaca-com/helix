@@ -321,9 +321,14 @@ pub struct BlockMergingConfig {
     /// Flag to enable this feature.
     #[serde(default = "default_bool::<false>")]
     pub is_enabled: bool,
-    /// Maximum age of a merged bid before it is considered stale and discarded.
+    /// Maximum amount by which a merged bid's base may predate the latest bid from the same
+    /// builder before the merged bid is considered stale.
     #[serde(default = "default_u64::<250>")]
     pub max_merged_bid_age_ms: u64,
+    /// Per-`builder_id` override of `max_merged_bid_age_ms`. A builder whose id is absent,
+    /// or that has no `builder_id`, uses the global value.
+    #[serde(default)]
+    pub max_merged_bid_age_ms_by_builder: FxHashMap<String, u64>,
     /// Testing-only: marks every decoded submission as mergeable, without builders having to
     /// submit real merge data themselves.
     #[serde(default = "default_bool::<false>")]
@@ -357,6 +362,13 @@ impl BlockMergingConfig {
             "serve_merged_headers must be false when mark_all_txs_mergeable is enabled"
         );
         Ok(())
+    }
+
+    /// Staleness bound for a merge whose base block came from `builder_id`.
+    pub fn max_merged_bid_age_ms_for(&self, builder_id: Option<&str>) -> u64 {
+        builder_id
+            .and_then(|id| self.max_merged_bid_age_ms_by_builder.get(id).copied())
+            .unwrap_or(self.max_merged_bid_age_ms)
     }
 
     pub fn is_merge_data_denied(&self, builder_pubkey: &BlsPublicKeyBytes) -> bool {
@@ -896,6 +908,17 @@ impl Default for HeaderStreamConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Absent from config, the override map is empty and every builder keeps the global bound.
+    #[test]
+    fn max_merged_bid_age_falls_back_to_the_global_bound() {
+        let mut config = BlockMergingConfig { max_merged_bid_age_ms: 250, ..Default::default() };
+        config.max_merged_bid_age_ms_by_builder.insert("slow-builder".to_owned(), 600);
+
+        assert_eq!(config.max_merged_bid_age_ms_for(Some("slow-builder")), 600);
+        assert_eq!(config.max_merged_bid_age_ms_for(Some("other")), 250);
+        assert_eq!(config.max_merged_bid_age_ms_for(None), 250);
+    }
 
     #[test]
     fn test_ip_frequency_threshold_config_default_and_override() {

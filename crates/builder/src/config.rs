@@ -83,11 +83,9 @@ pub struct SpeculationConfig {
     pub max_streams: usize,
     #[serde(default = "default_speculation_top_k")]
     pub top_k: usize,
-    /// Stop improving a base once it is this old. This must match the relay's
-    /// `max_merged_bid_age_ms`: set it lower and we stop accumulating value on
-    /// bases the relay would still serve; set it higher and we produce bids it
-    /// drops. The relay does not send this over the wire, so it is duplicated
-    /// here and has to be kept in step by hand.
+    /// Stop improving a base once it is this old. The relay uses its corresponding
+    /// `max_merged_bid_age_ms` as the permitted receive-time lag behind the latest
+    /// same-builder bid; this builder-side value is also an absolute compute backstop.
     #[serde(default = "default_max_base_age_ms")]
     pub max_base_age_ms: u64,
     /// How much of a base's accumulated delta the first pass on a *new* base is
