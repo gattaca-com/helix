@@ -42,17 +42,16 @@ impl<B: BidAdjustor> Context<B> {
             });
         };
 
-        // Keyed withdrawals are empty on the wire, so the decoder's root is of
-        // the empty list; take the cached list's root instead.
+        // Keyed withdrawals are not on the wire, so the decoder leaves their
+        // root to the hydration cache.
         let mut withdrawals_root = submission_data.withdrawals_root;
         if let helix_types::Submission::Dehydrated(ref dehydrated) = *submission {
             if !self.hydration_cache.can_hydrate(dehydrated, self.chain_info.max_blobs_per_block())
             {
                 return Err(BlockValidationError::CannotHydrate);
             }
-            if let Some(root) = self.hydration_cache.cached_withdrawals_root(dehydrated) {
-                withdrawals_root = root;
-            }
+            withdrawals_root = withdrawals_root
+                .or_else(|| self.hydration_cache.cached_withdrawals_root(dehydrated));
         }
 
         let slot = self.bid_slot.as_u64();
@@ -67,7 +66,7 @@ impl<B: BidAdjustor> Context<B> {
         self.validate_submission_data(
             submission,
             submission_data.decoder_params.fork_name,
-            &withdrawals_root,
+            withdrawals_root,
             slot_data,
             payload_attributes,
         )?;
@@ -81,7 +80,7 @@ impl<B: BidAdjustor> Context<B> {
         &self,
         payload: &Submission,
         decoded_fork: ForkName,
-        withdrawals_root: &B256,
+        withdrawals_root: Option<B256>,
         slot_data: &SlotData,
         payload_attributes: &PayloadAttributesUpdate,
     ) -> Result<(), BlockValidationError> {
@@ -121,9 +120,9 @@ impl<B: BidAdjustor> Context<B> {
             });
         }
 
-        if *withdrawals_root != payload_attributes.withdrawals_root {
+        if withdrawals_root != Some(payload_attributes.withdrawals_root) {
             return Err(BlockValidationError::WithdrawalsRootMismatch {
-                got: *withdrawals_root,
+                got: withdrawals_root.unwrap_or_default(),
                 expected: payload_attributes.withdrawals_root,
             });
         }

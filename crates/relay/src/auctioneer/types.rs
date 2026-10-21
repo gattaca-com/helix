@@ -268,7 +268,8 @@ pub struct SubmissionData {
     pub merging_data: Option<BlockMergingDataV2>,
     pub bid_adjustment_data: Option<BidAdjustmentData>,
     pub version: SubmissionVersion,
-    pub withdrawals_root: B256,
+    /// `None` for keyed withdrawals; validation takes the cached root.
+    pub withdrawals_root: Option<B256>,
     pub trace: SubmissionTrace,
     pub decoder_params: SubmissionDecoderParams,
     pub is_pessimistic: bool,
