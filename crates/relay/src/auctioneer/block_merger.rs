@@ -101,7 +101,7 @@ impl BlockMerger {
             original_bid,
             entry.base_block_receive_ns,
             original_bid_receive_ns,
-            self.config.block_merging_config.max_merged_bid_age_ms,
+            entry.max_merged_bid_age_ms,
         ) {
             trace!("merged bid not higher");
             let original_block_hash = *original_bid.block_hash();
@@ -278,8 +278,16 @@ impl BlockMerger {
         // address of the base block the merge was built from, so that a merge for one
         // builder's block can never be served in place of another builder's original bid.
         let coinbase = original_payload.execution_payload.fee_recipient;
-        self.best_merged_blocks
-            .insert(coinbase, BestMergedBlock { base_block_receive_ns, bid: new_bid.clone() });
+        // Only `builder_id` is read here; it keys the per-builder staleness override.
+        let builder_id =
+            self.local_cache.get_builder_info(&builder_pubkey).and_then(|i| i.builder_id);
+        let max_merged_bid_age_ms =
+            self.config.block_merging_config.max_merged_bid_age_ms_for(builder_id.as_deref());
+        self.best_merged_blocks.insert(coinbase, BestMergedBlock {
+            base_block_receive_ns,
+            max_merged_bid_age_ms,
+            bid: new_bid.clone(),
+        });
 
         MERGE_STORE.with_label_values(&["stored"]).inc();
         let stored_ns = Nanos::now().0;
@@ -307,6 +315,9 @@ impl BlockMerger {
 struct BestMergedBlock {
     /// Relay-side receive time, kept on the same clock as the top bid used at `get_header`.
     base_block_receive_ns: u64,
+    /// Resolved for the base block's `builder_id` when the merge was stored, so `get_header`
+    /// does not repeat the lookup per request.
+    max_merged_bid_age_ms: u64,
     bid: PayloadEntry,
 }
 
