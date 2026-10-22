@@ -337,7 +337,7 @@ impl DecoderTile {
     ) -> Result<
         (
             Submission,
-            B256,
+            Option<B256>,
             SubmissionVersion,
             Option<BlockMergingDataV2>,
             Option<BidAdjustmentData>,

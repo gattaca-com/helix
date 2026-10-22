@@ -1157,7 +1157,7 @@ mod tests {
             }),
             bid_adjustment_data: None,
             version: SubmissionVersion::new(0, None),
-            withdrawals_root: B256::ZERO,
+            withdrawals_root: Some(B256::ZERO),
             trace: SubmissionTrace::default(),
             decoder_params: SubmissionDecoderParams {
                 compression: Compression::None,

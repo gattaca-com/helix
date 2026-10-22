@@ -97,9 +97,9 @@ impl Submission {
         &self.bid_trace().block_hash
     }
 
-    pub fn withdrawal_root(&self) -> B256 {
+    pub fn withdrawal_root(&self) -> Option<B256> {
         match self {
-            Submission::Full(s) => s.withdrawals_root(),
+            Submission::Full(s) => Some(s.withdrawals_root()),
             Submission::Dehydrated(s) => s.withdrawal_root(),
         }
     }

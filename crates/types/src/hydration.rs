@@ -82,9 +82,13 @@ impl DehydratedBidSubmission {
         }
     }
 
-    pub fn withdrawal_root(&self) -> B256 {
+    /// `None` when the withdrawals are keyed: they are not on the wire and the
+    /// hydration cache holds their root.
+    pub fn withdrawal_root(&self) -> Option<B256> {
         match self {
-            DehydratedBidSubmission::Fulu(s) => s.execution_payload.withdrawals.tree_hash_root(),
+            DehydratedBidSubmission::Fulu(s) => {
+                (s.withdrawals_ref == 0).then(|| s.execution_payload.withdrawals.tree_hash_root())
+            }
         }
     }
 
