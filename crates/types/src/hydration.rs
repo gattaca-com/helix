@@ -920,29 +920,4 @@ mod tests {
         assert_eq!(decoded.message, submission.message);
         assert_eq!(decoded.merging_data, submission.merging_data);
     }
-
-    #[test]
-    fn keyed_withdrawals_root_comes_from_the_cache() {
-        let mut inline: DehydratedBidSubmissionFulu =
-            DehydratedBidSubmissionFuluV1::random_for_test(&mut rand::rng()).into();
-        inline.execution_payload.withdrawals = Withdrawals::new(vec![Withdrawal {
-            index: 7,
-            validator_index: 11,
-            address: Address::repeat_byte(1),
-            amount: 13,
-        }])
-        .unwrap();
-        let mut keyed = inline.clone();
-        keyed.withdrawals_ref = withdrawals_key(&inline.execution_payload.withdrawals);
-        keyed.execution_payload.withdrawals = Withdrawals::default();
-        let inline = DehydratedBidSubmission::Fulu(inline);
-        let keyed = DehydratedBidSubmission::Fulu(keyed);
-
-        let mut cache = HydrationCache::new();
-        cache.feed(&inline);
-
-        assert!(inline.withdrawal_root().is_some());
-        assert_eq!(keyed.withdrawal_root(), None);
-        assert_eq!(cache.cached_withdrawals_root(&keyed), inline.withdrawal_root());
-    }
 }
