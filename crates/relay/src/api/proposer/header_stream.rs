@@ -246,6 +246,7 @@ impl<A: Api> HeaderStream<A> {
                 is_mev_boost: self.is_mev_boost,
                 streamed: true,
                 _pad: [0; 6],
+                proposer_pubkey: self.params.pubkey,
             },
             IngestionTime::now(),
         );

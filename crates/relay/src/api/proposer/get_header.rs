@@ -189,6 +189,7 @@ impl<A: Api> ProposerApi<A> {
                 is_mev_boost,
                 streamed: false,
                 _pad: [0; 6],
+                proposer_pubkey: params.pubkey,
             },
             IngestionTime::now(),
         );

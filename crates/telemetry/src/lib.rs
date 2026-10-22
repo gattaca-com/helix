@@ -197,6 +197,13 @@ versioned_telemetry!(GetHeaderServed, persist = "Helix.Header.Served" =>
         pub streamed: bool,
         pub _pad: [u8; 6],
     }
+
+    /// Adds the proposer pubkey from the request path, zero when migrated from V1.
+    #[derive(Default)]
+    #[type_hash_lock(hash = 12626954008180730437)]
+    GetHeaderServedV2 {
+        add { pub proposer_pubkey: BlsPublicKeyBytes = BlsPublicKeyBytes::ZERO }
+    }
 );
 
 impl GetHeaderServed {
