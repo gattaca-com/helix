@@ -1,6 +1,12 @@
-use std::{net::IpAddr, sync::Arc, time::Duration};
+use std::{
+    net::{IpAddr, SocketAddr},
+    sync::Arc,
+    time::Duration,
+};
 
 use axum::http::HeaderMap;
+use flux::spine::StandaloneProducer;
+use helix_telemetry::GetHeaderServed;
 use helix_types::SignedValidatorRegistration;
 use tracing::warn;
 pub use uuid::Uuid;
@@ -77,6 +83,14 @@ pub trait ApiProvider: Send + Sync + Clone + 'static {
 
     /// Held `get_header` sent: bounds this client's real deadline from below.
     fn on_request_completed(&self, _ip: IpAddr, _held_ms: u64) {}
+
+    fn on_header_served(
+        &self,
+        _served: GetHeaderServed,
+        _peer: SocketAddr,
+        _producer: &StandaloneProducer<GetHeaderServed>,
+    ) {
+    }
 }
 
 pub struct TimingResult {
