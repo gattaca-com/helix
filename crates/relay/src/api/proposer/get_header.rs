@@ -1,6 +1,6 @@
 use std::{
     borrow::Cow,
-    net::IpAddr,
+    net::{IpAddr, SocketAddr},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -8,8 +8,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-use axum::{Extension, extract::Path, http::HeaderMap, response::IntoResponse};
-use flux::timing::IngestionTime;
+use axum::{
+    Extension,
+    extract::{ConnectInfo, Path},
+    http::HeaderMap,
+    response::IntoResponse,
+};
 use helix_common::{
     GET_HEADER_REQUEST_CUTOFF_MS, GetHeaderTrace, RequestTimings, ValidatorPreferences,
     api::proposer_api::GetHeaderParams,
@@ -112,6 +116,7 @@ impl<A: Api> ProposerApi<A> {
         Extension(proposer_api): Extension<Arc<ProposerApi<A>>>,
         Extension(timings): Extension<RequestTimings>,
         Extension(Terminating(terminating)): Extension<Terminating>,
+        ConnectInfo(peer): ConnectInfo<SocketAddr>,
         headers: HeaderMap,
         Path(params): Path<GetHeaderParams>,
     ) -> Result<impl IntoResponse, ProposerApiError> {
@@ -177,22 +182,20 @@ impl<A: Api> ProposerApi<A> {
         let block_number = ep.block_number;
         let extra_data = ep.extra_data.to_vec();
 
-        proposer_api.header_served.produce_with_ingestion(
-            GetHeaderServed {
-                slot: params.slot,
-                receive_ns: trace.receive,
-                best_bid_fetched_ns: trace.best_bid_fetched,
-                block_hash: bid_block_hash,
-                value,
-                builder_pubkey,
-                proposer_ip: GetHeaderServed::ip_octets(ip_addr),
-                is_mev_boost,
-                streamed: false,
-                _pad: [0; 6],
-                proposer_pubkey: params.pubkey,
-            },
-            IngestionTime::now(),
-        );
+        let served = GetHeaderServed {
+            slot: params.slot,
+            receive_ns: trace.receive,
+            best_bid_fetched_ns: trace.best_bid_fetched,
+            block_hash: bid_block_hash,
+            value,
+            builder_pubkey,
+            proposer_ip: GetHeaderServed::ip_octets(ip_addr),
+            is_mev_boost,
+            streamed: false,
+            proposer_pubkey: params.pubkey,
+            _pad: [0; 6],
+        };
+        proposer_api.api_provider.on_header_served(served, peer, &proposer_api.header_served);
 
         proposer_api.db.save_get_header_call(
             params,

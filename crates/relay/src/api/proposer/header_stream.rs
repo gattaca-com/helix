@@ -1,5 +1,5 @@
 use std::{
-    net::IpAddr,
+    net::{IpAddr, SocketAddr},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -11,12 +11,11 @@ use alloy_primitives::{B256, U256};
 use axum::{
     Extension,
     extract::{
-        Path,
+        ConnectInfo, Path,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
     response::IntoResponse,
 };
-use flux::timing::IngestionTime;
 use helix_common::{
     GET_HEADER_REQUEST_CUTOFF_MS, GetHeaderTrace, RequestTimings,
     api::{HEADER_START_TIME_UNIX_MS, proposer_api::GetHeaderParams},
@@ -49,6 +48,7 @@ impl<A: Api> ProposerApi<A> {
         Extension(proposer_api): Extension<Arc<ProposerApi<A>>>,
         Extension(timings): Extension<RequestTimings>,
         Extension(Terminating(terminating)): Extension<Terminating>,
+        ConnectInfo(peer): ConnectInfo<SocketAddr>,
         headers: HeaderMap,
         Path(params): Path<GetHeaderParams>,
         ws: WebSocketUpgrade,
@@ -118,6 +118,7 @@ impl<A: Api> ProposerApi<A> {
             is_mev_boost,
             user_agent,
             ip_addr,
+            peer,
             trace,
             start,
             end,
@@ -139,6 +140,7 @@ struct HeaderStream<A: Api> {
     is_mev_boost: bool,
     user_agent: Option<String>,
     ip_addr: Option<IpAddr>,
+    peer: SocketAddr,
     trace: GetHeaderTrace,
     start: Instant,
     end: Instant,
@@ -234,22 +236,20 @@ impl<A: Api> HeaderStream<A> {
 
         info!(%block_hash, ?value, "streamed bid");
 
-        self.api.header_served.produce_with_ingestion(
-            GetHeaderServed {
-                slot: self.params.slot,
-                receive_ns: trace.receive,
-                best_bid_fetched_ns: trace.best_bid_fetched,
-                block_hash,
-                value,
-                builder_pubkey,
-                proposer_ip: GetHeaderServed::ip_octets(self.ip_addr),
-                is_mev_boost: self.is_mev_boost,
-                streamed: true,
-                _pad: [0; 6],
-                proposer_pubkey: self.params.pubkey,
-            },
-            IngestionTime::now(),
-        );
+        let served = GetHeaderServed {
+            slot: self.params.slot,
+            receive_ns: trace.receive,
+            best_bid_fetched_ns: trace.best_bid_fetched,
+            block_hash,
+            value,
+            builder_pubkey,
+            proposer_ip: GetHeaderServed::ip_octets(self.ip_addr),
+            is_mev_boost: self.is_mev_boost,
+            streamed: true,
+            proposer_pubkey: self.params.pubkey,
+            _pad: [0; 6],
+        };
+        self.api.api_provider.on_header_served(served, self.peer, &self.api.header_served);
 
         // TODO: we might want to save these separately with less data?
         self.api.db.save_get_header_call(
