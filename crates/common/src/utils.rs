@@ -118,7 +118,7 @@ fn get_crate_filter(crates_level: tracing::Level) -> EnvFilter {
 }
 
 static APP_ID: OnceLock<String> = OnceLock::new();
-static DISCORD_WEBHOOK_URL: OnceLock<Url> = OnceLock::new();
+static ALERT_WEBHOOK_URL: OnceLock<Url> = OnceLock::new();
 
 /// Explicitly selects the aws-lc-rs rustls crypto provider for this process.
 ///
@@ -131,13 +131,13 @@ pub fn install_default_crypto_provider() {
 
 pub fn init_panic_hook(
     app_id: String,
-    discord_web_hook: Option<Url>,
+    alert_webhook_url: Option<Url>,
     crash_log_path: Option<PathBuf>,
 ) {
     APP_ID.set(app_id).unwrap();
 
-    if let Some(webhook_url) = discord_web_hook {
-        DISCORD_WEBHOOK_URL.set(webhook_url).unwrap();
+    if let Some(webhook_url) = alert_webhook_url {
+        ALERT_WEBHOOK_URL.set(webhook_url).unwrap();
     }
 
     panic::set_hook(Box::new(move |info| {
@@ -147,7 +147,7 @@ pub fn init_panic_hook(
         error!("{crash_log}");
         eprintln!("{crash_log}");
 
-        alert_discord(&crash_log);
+        send_alert(&crash_log);
 
         if let Some(crash_log_path) = crash_log_path.clone() {
             save_to_file(crash_log_path, crash_log.clone());
@@ -155,13 +155,13 @@ pub fn init_panic_hook(
     }));
 }
 
-pub fn discord_webhook_url() -> Option<&'static Url> {
-    DISCORD_WEBHOOK_URL.get()
+pub fn alert_webhook_url() -> Option<&'static Url> {
+    ALERT_WEBHOOK_URL.get()
 }
 
-pub fn discord_payload(message: &str) -> Option<(&'static Url, FxHashMap<&'static str, String>)> {
-    let Some(webhook_url) = DISCORD_WEBHOOK_URL.get() else {
-        error!("discord hook not set!");
+pub fn alert_payload(message: &str) -> Option<(&'static Url, FxHashMap<&'static str, String>)> {
+    let Some(webhook_url) = ALERT_WEBHOOK_URL.get() else {
+        error!("alert webhook not set!");
         error!("{message}");
         return None;
     };
@@ -171,19 +171,20 @@ pub fn discord_payload(message: &str) -> Option<(&'static Url, FxHashMap<&'stati
     let max_len = 1850.min(message.len());
     let msg = format!("Instance: {app_id}\n{}", &message[..max_len]);
 
-    Some((webhook_url, FxHashMap::from_iter([("content", msg)])))
+    let key = if webhook_url.host_str() == Some("hooks.slack.com") { "text" } else { "content" };
+    Some((webhook_url, FxHashMap::from_iter([(key, msg)])))
 }
 
-pub fn alert_discord(message: &str) {
-    let Some((webhook_url, content)) = discord_payload(message) else {
+pub fn send_alert(message: &str) {
+    let Some((webhook_url, content)) = alert_payload(message) else {
         return;
     };
 
     if let Err(err) =
         reqwest::blocking::Client::new().post(webhook_url.clone()).json(&content).send()
     {
-        error!("failed to send discord alert: {err}");
-        eprintln!("failed to send discord alert: {err}");
+        error!("failed to send alert: {err}");
+        eprintln!("failed to send alert: {err}");
     }
 }
 

@@ -33,7 +33,7 @@ async fn main() -> eyre::Result<()> {
 
     init_panic_hook(
         "helix-admin".to_string(),
-        config.discord_webhook_url.clone(),
+        config.alert_webhook_url.clone(),
         config.logging.dir_path(),
     );
 

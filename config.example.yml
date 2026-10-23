@@ -56,7 +56,8 @@ get_payload_v1_response_buffer_ms: 800
 # Maximum per-IP get_header frequency that permits payload sharing with operator peers.
 ip_frequency_threshold: 0.2
 primev_config: null
-discord_webhook_url: null
+# Slack (hooks.slack.com) or Discord webhook for panic and failsafe alerts.
+alert_webhook_url: null
 # Upstream source for the Blacklist route, cached for 5 minutes.
 blacklist_provider: null
 is_submission_instance: true

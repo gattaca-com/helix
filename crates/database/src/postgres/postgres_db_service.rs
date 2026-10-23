@@ -25,7 +25,7 @@ use helix_common::{
     expect_env_var,
     local_cache::LocalCache,
     metrics::{CACHE_SIZE, DbMetricRecord},
-    utils::{alert_discord, utcnow_ms},
+    utils::{send_alert, utcnow_ms},
 };
 use helix_types::{BlsPublicKeyBytes, Demotion, MergedBlock, Promotion, SignedBidSubmission, Slot};
 use rustc_hash::FxHashSet;
@@ -628,7 +628,7 @@ impl PostgresDatabaseService {
                 {
                     error!(%err, "error demoting builder in database triggering failsafe: stopping all optimistic submissions");
                     failsafe_triggered.store(true, Ordering::Relaxed);
-                    alert_discord(&format!(
+                    send_alert(&format!(
                         "{} {} {} failed to demote builder in database! Pausing all optmistic submissions",
                         builder_pub_key, err, block_hash
                     ));
@@ -740,7 +740,7 @@ impl PostgresDatabaseService {
                     failsafe_trigger.store(true, Ordering::Relaxed);
                     adjustments_enabled.store(false, Ordering::Relaxed);
                     error!(%block_hash, %err, "failed to disable adjustments in database, pulling the failsafe trigger");
-                    alert_discord(&format!(
+                    send_alert(&format!(
                         "{} {} failed to disable adjustments in database, pulling the failsafe trigger",
                         err, block_hash
                     ));
