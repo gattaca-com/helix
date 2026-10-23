@@ -26,7 +26,7 @@ use helix_common::{
     local_cache::LocalCache,
     metrics::{CACHE_SIZE, MERGE_SIM, SimulatorMetrics},
     spawn_tracked,
-    utils::{discord_payload, discord_webhook_url, utcnow_ms},
+    utils::{alert_payload, alert_webhook_url, utcnow_ms},
 };
 use helix_database::handle::DbHandle;
 use helix_operator::OperatorPubSub;
@@ -135,8 +135,8 @@ pub struct Context<B: BidAdjustor> {
     pub operator_api: Option<Arc<OperatorPubSub>>,
     http: HttpClient,
     /// Resolved at startup: the webhook's DNS lookup blocks, so it must stay off the loop.
-    discord_addr: Option<SocketAddr>,
-    discord_alert: Option<PendingResponse>,
+    alert_addr: Option<SocketAddr>,
+    pending_alert: Option<PendingResponse>,
     pub builder_preferences: BuilderPreferencesStore,
     pub gloas_builder_identity: Arc<GloasBuilderIdentity>,
     pub beacon_client: Arc<MultiBeaconClient>,
@@ -210,12 +210,12 @@ impl<B: BidAdjustor> Context<B> {
             alert_manager,
             operator_api,
             http: HttpClient::new().expect("http client"),
-            discord_addr: discord_webhook_url().and_then(|url| {
+            alert_addr: alert_webhook_url().and_then(|url| {
                 HttpClient::resolve(url)
-                    .inspect_err(|err| error!(%err, "failed to resolve discord webhook"))
+                    .inspect_err(|err| error!(%err, "failed to resolve alert webhook"))
                     .ok()
             }),
-            discord_alert: None,
+            pending_alert: None,
             builder_preferences: BuilderPreferencesStore::default(),
             gloas_builder_identity,
             beacon_client,
@@ -394,31 +394,31 @@ impl<B: BidAdjustor> Context<B> {
             "CRITICAL: block merging disabled -- merged block simulation failed for block \
              {block_hash:#x} from merge builder {endpoint} ({err})"
         );
-        let Some((webhook_url, content)) = discord_payload(&message) else { return };
-        let Some(addr) = self.discord_addr else {
-            error!("discord webhook address unresolved, dropping alert");
+        let Some((webhook_url, content)) = alert_payload(&message) else { return };
+        let Some(addr) = self.alert_addr else {
+            error!("alert webhook address unresolved, dropping alert");
             return;
         };
         let body = serde_json::to_vec(&content).expect("string map serializes");
-        self.discord_alert = self
+        self.pending_alert = self
             .http
             .post_to(webhook_url, addr, body.into())
             .map(|req| req.with_timeout(Duration::from_secs(10)))
-            .inspect_err(|err| error!(%err, "failed to send discord alert"))
+            .inspect_err(|err| error!(%err, "failed to send alert"))
             .ok();
     }
 
-    pub fn poll_discord_alert(&mut self) {
-        let Some(req) = self.discord_alert.as_mut() else { return };
+    pub fn poll_alert(&mut self) {
+        let Some(req) = self.pending_alert.as_mut() else { return };
         let Poll::Ready(res) = req.poll_bytes() else { return };
         match res {
             Ok((status, _)) if (200..300).contains(&status) => {}
             Ok((status, body)) => {
-                error!(status, body = %String::from_utf8_lossy(&body), "discord alert rejected")
+                error!(status, body = %String::from_utf8_lossy(&body), "alert rejected")
             }
-            Err(err) => error!(%err, "failed to send discord alert"),
+            Err(err) => error!(%err, "failed to send alert"),
         }
-        self.discord_alert = None;
+        self.pending_alert = None;
     }
 
     pub fn handle_merge_response(&mut self, response: &BlockMergeResponse) {
