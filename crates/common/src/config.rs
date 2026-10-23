@@ -57,7 +57,8 @@ pub struct RelayConfig {
     #[serde(default)]
     pub header_stream: HeaderStreamConfig,
     pub primev_config: Option<PrimevConfig>,
-    pub discord_webhook_url: Option<Url>,
+    #[serde(alias = "discord_webhook_url")]
+    pub alert_webhook_url: Option<Url>,
     pub alerts_config: Option<AlertsConfig>,
     pub inclusion_list: Option<InclusionListConfig>,
     pub is_submission_instance: bool,
@@ -146,7 +147,7 @@ impl RelayConfig {
             block_merging_config: Default::default(),
             header_stream: Default::default(),
             primev_config: Default::default(),
-            discord_webhook_url: Default::default(),
+            alert_webhook_url: Default::default(),
             alerts_config: Default::default(),
             inclusion_list: Default::default(),
             is_submission_instance: Default::default(),

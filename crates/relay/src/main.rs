@@ -86,7 +86,7 @@ fn main() {
 
     init_panic_hook(
         instance_id.clone(),
-        config.discord_webhook_url.clone(),
+        config.alert_webhook_url.clone(),
         config.logging.dir_path(),
     );
 
