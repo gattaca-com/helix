@@ -17,12 +17,12 @@ use axum::{
     response::IntoResponse,
 };
 use helix_common::{
-    GET_HEADER_REQUEST_CUTOFF_MS, GetHeaderTrace, RequestTimings,
+    GET_HEADER_REQUEST_CUTOFF_MS, GetHeaderTrace, HeaderStreamConfig, RequestTimings,
     api::{HEADER_START_TIME_UNIX_MS, proposer_api::GetHeaderParams},
     api_provider::{ApiProvider, header_u64},
     utils::{extract_request_id, utcnow_ms, utcnow_ns},
 };
-use helix_types::{ForkName, SignedBuilderBid};
+use helix_types::ForkName;
 use http::HeaderMap;
 use ssz::Encode;
 use tokio::time::{Instant, MissedTickBehavior};
@@ -38,7 +38,8 @@ use crate::{
     spine::messages::GetHeaderServed,
 };
 
-/// Frame layout: `[kind: u8][fork: u8][ssz SignedBuilderBid]`.
+/// Frame layout: `[kind: u8][fork: u8][ssz bid]`. The bid is a `SignedBuilderBid`, or a
+/// `SignedExecutionPayloadBid` on the Gloas bid stream.
 const FRAME_HEADER_LEN: usize = 2;
 const FRAME_KIND_BID: u8 = 1;
 
@@ -86,16 +87,8 @@ impl<A: Api> ProposerApi<A> {
             return Err(ProposerApiError::InvalidGetHeader("missing or invalid x-timeout-ms"));
         };
 
-        let handshake_ms = header_u64(&headers, HEADER_START_TIME_UNIX_MS)
-            .map(|start_time_ms| utcnow_ms().saturating_sub(start_time_ms))
-            .unwrap_or(0);
-
-        let window = stream_window(timeout_ms, handshake_ms, ms_into_slot);
-
         let now = Instant::now();
-        let end = now + window;
-        let start = now + window.saturating_sub(Duration::from_millis(config.stream_for_ms));
-        let interval = Duration::from_millis(config.interval_ms);
+        let schedule = StreamSchedule::new(now, &headers, timeout_ms, ms_into_slot, config);
 
         let fork = proposer_api.chain_info.fork_at_slot(params.slot.into());
 
@@ -103,10 +96,10 @@ impl<A: Api> ProposerApi<A> {
             ms_into_slot,
             is_mev_boost,
             timeout_ms,
-            handshake_ms,
+            handshake_ms = schedule.handshake_ms,
             ?fork,
-            start_in_ms = (start - now).as_millis(),
-            window_ms = (end - start).as_millis(),
+            start_in_ms = (schedule.start - now).as_millis(),
+            window_ms = (schedule.end - schedule.start).as_millis(),
             "accepting header stream"
         );
 
@@ -120,9 +113,7 @@ impl<A: Api> ProposerApi<A> {
             ip_addr,
             peer,
             trace,
-            start,
-            end,
-            interval,
+            schedule,
         };
 
         Ok(ws
@@ -142,55 +133,44 @@ struct HeaderStream<A: Api> {
     ip_addr: Option<IpAddr>,
     peer: SocketAddr,
     trace: GetHeaderTrace,
-    start: Instant,
-    end: Instant,
-    interval: Duration,
+    schedule: StreamSchedule,
 }
 
-enum SendResult {
+pub(super) enum SendResult {
     Bid,
     Skipped,
     Closed,
 }
 
+/// What a stream sends on each tick of its [`StreamSchedule`].
+pub(super) trait ProposerStream {
+    /// Identifies the bid sent last, so an unchanged one is not sent again.
+    type Sent: Send;
+
+    fn send_bid(
+        &self,
+        socket: &mut WebSocket,
+        last_sent: &mut Option<Self::Sent>,
+    ) -> impl Future<Output = SendResult> + Send;
+}
+
 impl<A: Api> HeaderStream<A> {
-    async fn run(self, socket: WebSocket) {
-        let mut delivered = 0;
-        let hit_deadline =
-            tokio::time::timeout_at(self.end, self.stream_bids(socket, &mut delivered))
-                .await
-                .is_err();
+    async fn run(self, mut socket: WebSocket) {
+        let (delivered, hit_deadline) =
+            self.schedule.run(&mut socket, &self.terminating, &self).await;
 
         info!(delivered, hit_deadline, "header stream closed");
     }
+}
 
-    async fn stream_bids(&self, mut socket: WebSocket, delivered: &mut usize) {
-        let mut ticker = tokio::time::interval_at(self.start, self.interval);
-        ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
-
-        let mut last_sent = None;
-
-        loop {
-            ticker.tick().await;
-
-            match self.send_bid(&mut socket, &mut last_sent).await {
-                SendResult::Bid => *delivered += 1,
-                SendResult::Skipped => {}
-                SendResult::Closed => return,
-            }
-        }
-    }
+impl<A: Api> ProposerStream for HeaderStream<A> {
+    type Sent = (B256, U256);
 
     async fn send_bid(
         &self,
         socket: &mut WebSocket,
         last_sent: &mut Option<(B256, U256)>,
     ) -> SendResult {
-        if self.terminating.load(Ordering::Relaxed) {
-            debug!("terminating, closing stream");
-            return SendResult::Closed;
-        }
-
         // TODO: time these
         let Ok(rx) = self.api.auctioneer_handle.get_header(self.params, self.is_mev_boost) else {
             error!("failed to send get_header to auctioneer");
@@ -269,6 +249,73 @@ impl<A: Api> HeaderStream<A> {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct StreamSchedule {
+    pub handshake_ms: u64,
+    pub start: Instant,
+    pub end: Instant,
+    interval: Duration,
+}
+
+impl StreamSchedule {
+    pub(super) fn new(
+        now: Instant,
+        headers: &HeaderMap,
+        timeout_ms: u64,
+        ms_into_slot: u64,
+        config: &HeaderStreamConfig,
+    ) -> Self {
+        let handshake_ms = header_u64(headers, HEADER_START_TIME_UNIX_MS)
+            .map(|start_time_ms| utcnow_ms().saturating_sub(start_time_ms))
+            .unwrap_or(0);
+
+        let window = stream_window(timeout_ms, handshake_ms, ms_into_slot);
+
+        Self {
+            handshake_ms,
+            start: now + window.saturating_sub(Duration::from_millis(config.stream_for_ms)),
+            end: now + window,
+            interval: Duration::from_millis(config.interval_ms),
+        }
+    }
+
+    /// Sends a bid every `interval` from `start` until the stream closes or `end` passes.
+    /// Returns the number of bids sent and whether `end` passed first.
+    pub(super) async fn run(
+        self,
+        socket: &mut WebSocket,
+        terminating: &AtomicBool,
+        stream: &impl ProposerStream,
+    ) -> (usize, bool) {
+        let mut delivered = 0;
+        let hit_deadline = tokio::time::timeout_at(self.end, async {
+            let mut ticker = tokio::time::interval_at(self.start, self.interval);
+            ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+
+            let mut last_sent = None;
+
+            loop {
+                ticker.tick().await;
+
+                if terminating.load(Ordering::Relaxed) {
+                    debug!("terminating, closing stream");
+                    return;
+                }
+
+                match stream.send_bid(socket, &mut last_sent).await {
+                    SendResult::Bid => delivered += 1,
+                    SendResult::Skipped => {}
+                    SendResult::Closed => return,
+                }
+            }
+        })
+        .await
+        .is_err();
+
+        (delivered, hit_deadline)
+    }
+}
+
 fn stream_window(timeout_ms: u64, handshake_ms: u64, ms_into_slot: u64) -> Duration {
     Duration::from_millis(
         timeout_ms
@@ -277,7 +324,7 @@ fn stream_window(timeout_ms: u64, handshake_ms: u64, ms_into_slot: u64) -> Durat
     )
 }
 
-fn build_frame(fork: ForkName, bid: &SignedBuilderBid) -> Vec<u8> {
+pub(super) fn build_frame(fork: ForkName, bid: &impl Encode) -> Vec<u8> {
     let mut frame = Vec::with_capacity(FRAME_HEADER_LEN + bid.ssz_bytes_len());
     frame.push(FRAME_KIND_BID);
     frame.push(fork_byte(fork));
