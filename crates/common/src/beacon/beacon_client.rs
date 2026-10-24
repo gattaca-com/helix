@@ -3,7 +3,10 @@ use std::{sync::Arc, task::Poll, time::Duration};
 use ::ssz::Encode;
 use alloy_primitives::B256;
 use helix_types::{ForkName, LhConfig, VersionedSignedProposal, spec_from_config};
-use http::{Request, header::CONTENT_TYPE};
+use http::{
+    Request,
+    header::{CONTENT_TYPE, HOST},
+};
 use http_body_util::Full;
 use hyper::body::Bytes;
 use serde::{Deserialize, Serialize};
@@ -74,9 +77,11 @@ impl BeaconClient {
             target.query_pairs_mut().append_pair("broadcast_validation", &validation.to_string());
         }
         let body_bytes = Bytes::from(block.as_ssz_bytes());
+        let (path, host) = HttpClient::origin_form(&target);
         let req = Request::builder()
             .method("POST")
-            .uri(target.as_str())
+            .uri(path)
+            .header(HOST, host)
             .header(CONSENSUS_VERSION_HEADER, fork.to_string())
             .header(CONTENT_TYPE, "application/octet-stream")
             .body(Full::new(body_bytes))?;
@@ -119,9 +124,11 @@ impl BeaconClient {
     /// Sending it here gives our own node the block root before the reveal needs it.
     pub async fn publish_gloas_block(&self, block: Bytes) -> Result<u16, BeaconClientError> {
         let target = self.config.url.join("eth/v2/beacon/blocks")?;
+        let (path, host) = HttpClient::origin_form(&target);
         let req = Request::builder()
             .method("POST")
-            .uri(target.as_str())
+            .uri(path)
+            .header(HOST, host)
             .header(CONSENSUS_VERSION_HEADER, ForkName::Gloas.to_string())
             .header(CONTENT_TYPE, "application/octet-stream")
             .body(Full::new(block))?;
@@ -147,9 +154,11 @@ impl BeaconClient {
             "broadcast_validation",
             &BroadcastValidation::ConsensusAndEquivocation.to_string(),
         );
+        let (path, host) = HttpClient::origin_form(&target);
         let req = Request::builder()
             .method("POST")
-            .uri(target.as_str())
+            .uri(path)
+            .header(HOST, host)
             .header(CONSENSUS_VERSION_HEADER, fork.to_string())
             .header(BLOB_DATA_INCLUDED_HEADER, "true")
             .header(CONTENT_TYPE, "application/octet-stream")
