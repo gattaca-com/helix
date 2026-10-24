@@ -6,9 +6,8 @@
 - Agents often leave tests that are useful for the PR, but have essentially no reusability.
   Before committing changes, make sure each test holds its place for the long term, delete any
   temporary tests you added.
-- Right at the end before final changes e.g., before pushing the PR, 
-  run `just fmt`, then `just clippy`, unless the user
-  specifies otherwise.
+- Right at the end before final changes e.g., before pushing the PR, run
+  these checks unless the user specifies otherwise:
   ```
   just fmt-check
   cargo clippy --all-features --no-deps -- -D warnings
