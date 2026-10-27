@@ -55,11 +55,11 @@ pub fn order_id(order_hash: B256, builder_pubkey: &BlsPublicKey) -> B256 {
 }
 
 pub fn bundle_order_hash(tx_hashes: &[B256]) -> B256 {
-    let mut buf = Vec::with_capacity(tx_hashes.len() * 32);
+    let mut hasher = alloy_primitives::Keccak256::new();
     for hash in tx_hashes {
-        buf.extend_from_slice(hash.as_slice());
+        hasher.update(hash);
     }
-    keccak256(buf)
+    hasher.finalize()
 }
 
 /// Index-based order reference into a forwarded block's transaction list —

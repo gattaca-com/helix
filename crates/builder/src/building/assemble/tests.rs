@@ -51,7 +51,7 @@ impl Fixture {
         }));
         Self {
             signers: funded_signers(&genesis, 8),
-            parent_hash: crate::engine::convert::b256(genesis_block.hash()),
+            parent_hash: crate::convert::b256(genesis_block.hash()),
             parent_timestamp: genesis_block.header.timestamp,
             parent_gas_limit: genesis_block.header.gas_limit,
             chain_id: genesis.config.chain_id,
@@ -173,7 +173,7 @@ impl Fixture {
 
     fn parent_header(&self) -> ethrex_common::types::BlockHeader {
         self.store
-            .get_block_header_by_hash(crate::engine::convert::h256(self.parent_hash))
+            .get_block_header_by_hash(crate::convert::h256(self.parent_hash))
             .unwrap()
             .unwrap()
     }
@@ -211,10 +211,10 @@ async fn the_block_extends_the_parent() {
     let built = fixture.build(&slot, &fixture.config()).unwrap();
 
     let header = &built.block.header;
-    assert_eq!(crate::engine::convert::b256(header.parent_hash), fixture.parent_hash);
+    assert_eq!(crate::convert::b256(header.parent_hash), fixture.parent_hash);
     assert_eq!(header.number, 1);
     assert_eq!(header.timestamp, slot.timestamp);
-    assert_eq!(crate::engine::convert::b256(header.prev_randao), slot.prev_randao);
+    assert_eq!(crate::convert::b256(header.prev_randao), slot.prev_randao);
     assert_eq!(header.extra_data.as_ref(), b"helix-builder");
     assert_eq!(
         header.coinbase,
@@ -390,11 +390,8 @@ async fn withdrawals_are_applied() {
 async fn blob_transactions_carry_their_sidecar() {
     let fixture = Fixture::new().await;
     let bundle = crate::testing::blob_bundle(1);
-    let hashes: Vec<B256> = bundle
-        .generate_versioned_hashes()
-        .iter()
-        .map(|hash| crate::engine::convert::b256(*hash))
-        .collect();
+    let hashes: Vec<B256> =
+        bundle.generate_versioned_hashes().iter().map(|hash| crate::convert::b256(*hash)).collect();
     let encoded = crate::testing::signed_blob_transfer(
         &fixture.signers[1],
         fixture.chain_id,
@@ -519,7 +516,7 @@ async fn a_first_payment_to_a_new_account_succeeds_under_amsterdam() {
         fixture
             .store
             .get_account_info_by_hash(
-                crate::engine::convert::h256(fixture.parent_hash),
+                crate::convert::h256(fixture.parent_hash),
                 eaddr(slot.proposer_fee_recipient),
             )
             .unwrap()

@@ -22,7 +22,7 @@ use tokio::{net::TcpListener, sync::Semaphore, time};
 use tracing::{error, info, warn};
 
 use crate::{
-    engine::convert::{Amsterdam, eblobs},
+    convert::{Amsterdam, eblobs},
     metrics,
     validation::{BlockValidator, error::ValidationError},
 };

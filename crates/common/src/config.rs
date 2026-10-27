@@ -323,7 +323,7 @@ pub struct BlockMergingConfig {
     pub is_enabled: bool,
     /// Maximum amount by which a merged bid's base may predate the latest bid from the same
     /// builder before the merged bid is considered stale.
-    #[serde(default = "default_u64::<250>")]
+    #[serde(default = "default_u64::<50>")]
     pub max_merged_bid_age_ms: u64,
     /// Per-`builder_id` override of `max_merged_bid_age_ms`. A builder whose id is absent,
     /// or that has no `builder_id`, uses the global value.

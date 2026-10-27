@@ -9,7 +9,7 @@ use ethrex_common::types::{Genesis, GenesisAccount};
 use ethrex_config::networks::Network;
 use ethrex_storage::{EngineType, Store};
 
-use crate::engine::convert::eaddr;
+use crate::convert::eaddr;
 
 /// Dev keys from ethrex's `fixtures/keys/private_keys_l1.txt`; a fixture picks
 /// the ones the `LocalDevnet` genesis actually funds.

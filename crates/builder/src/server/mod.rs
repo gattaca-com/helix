@@ -20,7 +20,7 @@ use helix_tcp_types::{
         MERGING_HEADER_SIZE, MergingFrameHeader, MergingHeaderError, MergingMsgId,
         builder_to_relay::{FatalV1, RejectCode, RejectSubject, RejectV1},
         control::{MergerAckV1, MergerRegistrationV1, PingV1, PongV1, RelayConfigV1},
-        relay_to_builder::{ActivateBaseBlockV1, SlotEndV1, SlotStartV1},
+        relay_to_builder::{SlotEndV1, SlotStartV1},
     },
 };
 use rustc_hash::FxHashMap;
@@ -30,7 +30,7 @@ use tracing::{debug, error, info, trace, warn};
 
 use crate::{
     config::MergingConfig,
-    engine::{EngineEvent, EngineOutput},
+    merge::{EngineEvent, EngineOutput},
     metrics,
     spine::BuilderSpine,
     utils::utcnow_ns,
@@ -544,29 +544,15 @@ fn handle_active_message(
             metrics::ingest("slot_end");
             send_control(engine_tx, EngineEvent::SlotEnd { slot: msg.slot });
         }
-        MergingMsgId::ActivateBaseBlockV1 => {
-            let Ok(msg) = ActivateBaseBlockV1::from_ssz_bytes(body) else {
-                fatal(replies, to_disconnect, RejectCode::InvalidOrder, "undecodable activation");
-                return;
-            };
-            debug!(slot = msg.slot, block_hash = %msg.block_hash, "activate base block");
-            metrics::ingest("activate_base");
-            send_control(engine_tx, EngineEvent::ActivateBase {
-                slot: msg.slot,
-                block_hash: msg.block_hash,
-                generation,
-            });
-        }
+        MergingMsgId::ActivateBaseBlockV1 => {}
         MergingMsgId::MergeableBlockV1 => {
-            // Not decoded here: the engine does SSZ + tx decoding off the tile
-            // thread. Only the slot for a possible Busy reject is peeked.
+            metrics::ingest("mergeable_block");
             let event = EngineEvent::MergeableBlock {
                 body: body.to_vec(),
                 recv_ns: utcnow_ns(),
                 generation,
             };
-            metrics::ingest("mergeable_block");
-            if let Err(TrySendError::Full(_)) = engine_tx.try_send(event) {
+            if engine_tx.try_send(event).is_err() {
                 metrics::queue_drop("engine_mergeable");
                 let slot = peek_slot(body).unwrap_or_default();
                 debug!(?token, slot, "engine busy, rejecting mergeable block");
