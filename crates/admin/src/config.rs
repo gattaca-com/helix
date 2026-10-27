@@ -13,7 +13,8 @@ pub struct AdminConfig {
     pub api_port: u16,
     /// Base URL of the relay's admin API, e.g. http://relay:4050
     pub relay_admin_url: Url,
-    pub discord_webhook_url: Option<Url>,
+    #[serde(alias = "discord_webhook_url")]
+    pub alert_webhook_url: Option<Url>,
 }
 
 fn default_api_port() -> u16 {

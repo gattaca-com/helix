@@ -13,4 +13,5 @@ api_port: 4060
 # Base URL of the relay's admin API (helix-relay listens on port 4050)
 relay_admin_url: "http://localhost:4050"
 
-# discord_webhook_url: "https://discord.com/api/webhooks/..."
+# Slack (hooks.slack.com) or Discord webhook for panic alerts.
+# alert_webhook_url: "https://hooks.slack.com/services/..."
