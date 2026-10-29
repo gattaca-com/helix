@@ -250,10 +250,12 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                                 self.registered.insert(token, msg.builder_pubkey);
                                 self.stats.registration_ok += 1;
                             } else {
+                                // The key may be a builder's real one sent with the wrong
+                                // pubkey, so only a prefix is logged.
                                 tracing::error!(
-                                    "unknown api key and pubkey pair: {} {}, disconnecting peer",
-                                    api_key,
-                                    msg.builder_pubkey
+                                    api_key_prefix = &api_key[..8],
+                                    builder_pubkey = %msg.builder_pubkey,
+                                    "unknown api key and pubkey pair, disconnecting peer"
                                 );
                                 self.stats.registration_invalid += 1;
                                 self.to_disconnect.push(token);
