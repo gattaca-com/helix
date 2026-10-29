@@ -920,4 +920,44 @@ mod tests {
         assert_eq!(decoded.message, submission.message);
         assert_eq!(decoded.merging_data, submission.merging_data);
     }
+
+    /// Rejected submissions only feed the cache, so feeding must leave it
+    /// as hydrating would for whatever later submissions reference.
+    #[test]
+    fn feed_caches_what_hydrate_caches() {
+        let mut v1 = DehydratedBidSubmissionFuluV1::random_for_test(&mut rand::rng());
+        v1.execution_payload.transactions =
+            Transactions::new(vec![full_tx_for_test(1), full_tx_for_test(2)]).unwrap();
+        v1.execution_payload.withdrawals = Withdrawals::new(vec![Withdrawal {
+            index: 1,
+            validator_index: 2,
+            address: Address::repeat_byte(3),
+            amount: 4,
+        }])
+        .unwrap();
+        let commitment = KzgCommitment::repeat_byte(5);
+        v1.blobs_bundle = DehydratedBlobsFulu {
+            commitments: vec![commitment],
+            new_items: vec![BlobItemFulu {
+                proof: vec![KzgProof::repeat_byte(6); CELLS_PER_EXT_BLOB],
+                commitment,
+                blob: Blob::default(),
+            }],
+        };
+        let pubkey = v1.message.builder_pubkey;
+        let submission = DehydratedBidSubmission::Fulu(v1.into());
+
+        let mut fed = HydrationCache::new();
+        fed.feed(&submission);
+        let mut hydrated = HydrationCache::new();
+        hydrated.hydrate(submission, 9).expect("self-contained submission hydrates");
+
+        let (fed, hydrated) = (&fed.caches[&pubkey], &hydrated.caches[&pubkey]);
+        assert_eq!(fed.transactions.len(), 2);
+        assert_eq!(fed.blobs_fulu.len(), 1);
+        assert_eq!(fed.withdrawals.len(), 1);
+        assert_eq!(fed.transactions, hydrated.transactions);
+        assert_eq!(fed.blobs_fulu, hydrated.blobs_fulu);
+        assert_eq!(fed.withdrawals, hydrated.withdrawals);
+    }
 }
