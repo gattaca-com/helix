@@ -169,60 +169,67 @@ impl From<DecodeError> for ProposerApiError {
     }
 }
 
+impl ProposerApiError {
+    pub fn status_code(&self) -> StatusCode {
+        match self {
+            ProposerApiError::NoBidPrepared | ProposerApiError::GetHeaderRequestTooLate { .. } => {
+                StatusCode::NO_CONTENT
+            }
+
+            ProposerApiError::HyperError(_) |
+            ProposerApiError::AxumError(_) |
+            ProposerApiError::ToStrError(_) |
+            ProposerApiError::UnexpectedProposerIndex { .. } |
+            ProposerApiError::BidRequestSlotMismatch { .. } |
+            ProposerApiError::UnexpectedProposerPubkey { .. } |
+            ProposerApiError::NoValidatorsCouldBeRegistered |
+            ProposerApiError::InvalidFork |
+            ProposerApiError::SerdeDecodeError(_) |
+            ProposerApiError::ProposerNotRegistered |
+            ProposerApiError::TimestampTooEarly { .. } |
+            ProposerApiError::TimestampTooFarInTheFuture { .. } |
+            ProposerApiError::RequestWrongSlot { .. } |
+            ProposerApiError::SlotTooNew |
+            ProposerApiError::GetPayloadRequestTooLate { .. } |
+            ProposerApiError::BlindedBlockAndPayloadHeaderMismatch |
+            ProposerApiError::UnsupportedBeaconChainVersion |
+            ProposerApiError::BeaconClientError(_) |
+            ProposerApiError::DatabaseError(_) |
+            ProposerApiError::AuctioneerError(_) |
+            ProposerApiError::EmptyRequest |
+            ProposerApiError::BlindedBlobsBundleLengthMismatch |
+            ProposerApiError::InternalSlotMismatchesWithSlotDuty { .. } |
+            ProposerApiError::InvalidBlindedBlockSlot { .. } |
+            ProposerApiError::BlobKzgCommitmentsMismatch |
+            ProposerApiError::SszError(_) |
+            ProposerApiError::SszDecodeError(_) |
+            ProposerApiError::SigError(_) |
+            ProposerApiError::DeliveringPayload |
+            ProposerApiError::GetPayloadAlreadyReceived |
+            ProposerApiError::RequestForPastSlot { .. } |
+            ProposerApiError::RequestAuthSlotMismatch { .. } |
+            ProposerApiError::MissingTimingHeaders |
+            ProposerApiError::InvalidProposerSignature => StatusCode::BAD_REQUEST,
+
+            // All authentication failures, kept indistinguishable by status
+            ProposerApiError::InvalidApiKey |
+            ProposerApiError::StreamNotAdmitted |
+            ProposerApiError::InvalidRequestAuthSignature => StatusCode::UNAUTHORIZED,
+
+            ProposerApiError::InternalServerError | ProposerApiError::NoExecutionPayloadFound => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+
+            ProposerApiError::ServiceUnavailableError => StatusCode::SERVICE_UNAVAILABLE,
+
+            ProposerApiError::InvalidGetHeader(_) => StatusCode::UNAUTHORIZED,
+        }
+    }
+}
+
 impl IntoResponse for ProposerApiError {
     fn into_response(self) -> Response {
-        let code =
-            match self {
-                ProposerApiError::NoBidPrepared |
-                ProposerApiError::GetHeaderRequestTooLate { .. } => StatusCode::NO_CONTENT,
-
-                ProposerApiError::HyperError(_) |
-                ProposerApiError::AxumError(_) |
-                ProposerApiError::ToStrError(_) |
-                ProposerApiError::UnexpectedProposerIndex { .. } |
-                ProposerApiError::BidRequestSlotMismatch { .. } |
-                ProposerApiError::UnexpectedProposerPubkey { .. } |
-                ProposerApiError::NoValidatorsCouldBeRegistered |
-                ProposerApiError::InvalidFork |
-                ProposerApiError::SerdeDecodeError(_) |
-                ProposerApiError::ProposerNotRegistered |
-                ProposerApiError::TimestampTooEarly { .. } |
-                ProposerApiError::TimestampTooFarInTheFuture { .. } |
-                ProposerApiError::RequestWrongSlot { .. } |
-                ProposerApiError::SlotTooNew |
-                ProposerApiError::GetPayloadRequestTooLate { .. } |
-                ProposerApiError::BlindedBlockAndPayloadHeaderMismatch |
-                ProposerApiError::UnsupportedBeaconChainVersion |
-                ProposerApiError::BeaconClientError(_) |
-                ProposerApiError::DatabaseError(_) |
-                ProposerApiError::AuctioneerError(_) |
-                ProposerApiError::EmptyRequest |
-                ProposerApiError::BlindedBlobsBundleLengthMismatch |
-                ProposerApiError::InternalSlotMismatchesWithSlotDuty { .. } |
-                ProposerApiError::InvalidBlindedBlockSlot { .. } |
-                ProposerApiError::BlobKzgCommitmentsMismatch |
-                ProposerApiError::SszError(_) |
-                ProposerApiError::SszDecodeError(_) |
-                ProposerApiError::SigError(_) |
-                ProposerApiError::DeliveringPayload |
-                ProposerApiError::GetPayloadAlreadyReceived |
-                ProposerApiError::RequestForPastSlot { .. } |
-                ProposerApiError::RequestAuthSlotMismatch { .. } |
-                ProposerApiError::MissingTimingHeaders |
-                ProposerApiError::InvalidProposerSignature => StatusCode::BAD_REQUEST,
-
-                // All authentication failures, kept indistinguishable by status
-                ProposerApiError::InvalidApiKey |
-                ProposerApiError::StreamNotAdmitted |
-                ProposerApiError::InvalidRequestAuthSignature => StatusCode::UNAUTHORIZED,
-
-                ProposerApiError::InternalServerError |
-                ProposerApiError::NoExecutionPayloadFound => StatusCode::INTERNAL_SERVER_ERROR,
-
-                ProposerApiError::ServiceUnavailableError => StatusCode::SERVICE_UNAVAILABLE,
-
-                ProposerApiError::InvalidGetHeader(_) => StatusCode::UNAUTHORIZED,
-            };
+        let code = self.status_code();
 
         // A 204 carries no body, and no content-type either. Attaching the message
         // leaves the response malformed, and clients then report it as whatever
