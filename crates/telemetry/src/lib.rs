@@ -162,7 +162,7 @@ impl SimError {
 /// Sim lifecycle family, queued on `sim_updates`. `Started` carries the
 /// identity; `TxIncluded` and `Finished` join to it on `submission_id`.
 #[repr(C)]
-#[derive(Clone, Copy, Debug, VersionedLeaves)]
+#[derive(Clone, Copy, Debug, VersionedLeaves, TypeHash)]
 pub enum SimUpdate {
     Started(SimStarted),
     TxIncluded(SimTxIncluded),
