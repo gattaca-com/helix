@@ -4,6 +4,7 @@ use std::{
 };
 
 use alloy_primitives::{Address, B256, U256};
+use bytes::Bytes;
 use flux::timing::Nanos;
 use flux_profiler::timed;
 use helix_common::{
@@ -15,7 +16,7 @@ use helix_common::{
     record_submission_step,
     simulator::{
         BlockSimError, JsonValidationRequest, MergedJsonValidationRequest,
-        SszMergedValidationRequest, SszValidationRequest, TxDetail,
+        SszMergedValidationRequestRef, SszValidationRequestRef, TxDetail,
     },
     spawn_tracked,
     utils::avg_duration,
@@ -663,15 +664,21 @@ impl Simulators {
             SimulatorMetrics::sim_count(optimistic_version.is_optimistic());
             let (mut res, ssz_retry) = match dispatch {
                 SimDispatch::Ssz { to_send, ssz_url, http } => {
-                    let request = create_ssz_request(&req, &submission);
+                    let body = ssz_request(
+                        req.apply_blacklist,
+                        req.registered_gas_limit,
+                        req.parent_beacon_block_root,
+                        &req.inclusion_list,
+                        &submission,
+                    );
                     let res = SimulatorClient::do_sim_request(
-                        &request,
+                        body.clone(),
                         req.is_top_bid,
                         to_send,
                         &ssz_url,
                     )
                     .await;
-                    (res, Some((request, ssz_url, http)))
+                    (res, Some((body, ssz_url, http)))
                 }
                 SimDispatch::Json { to_send, method } => match &submission {
                     SignedBidSubmission::Fulu(submission) => {
@@ -707,17 +714,10 @@ impl Simulators {
             let mut retried = false;
             if matches!(res, Err(BlockSimError::HydrationMiss)) {
                 debug!(%block_hash, "hydration miss — retrying with full SSZ");
-                if let Some((request, ssz_url, http)) = ssz_retry {
+                if let Some((body, ssz_url, http)) = ssz_retry {
                     let to_send = http.post(format!("{ssz_url}/validate"));
-                    let mut retry_req = request.clone();
-                    retry_req.signed_bid_submission = submission.as_ssz_bytes();
-                    res = SimulatorClient::do_sim_request(
-                        &retry_req,
-                        req.is_top_bid,
-                        to_send,
-                        &ssz_url,
-                    )
-                    .await;
+                    res = SimulatorClient::do_sim_request(body, req.is_top_bid, to_send, &ssz_url)
+                        .await;
                     retried = true;
                 } else {
                     res = Err(BlockSimError::RpcError);
@@ -832,15 +832,19 @@ impl Simulators {
             SimulatorMetrics::sim_count(false);
             let res = match dispatch {
                 MergedSimDispatch::Ssz(to_send, endpoint) => {
-                    let request = ssz_merged_request(
-                        apply_blacklist,
-                        registered_gas_limit,
-                        parent_beacon_block_root,
-                        inclusion_list,
-                        &submission,
+                    let body = SszMergedValidationRequestRef {
+                        base: SszValidationRequestRef {
+                            apply_blacklist,
+                            registered_gas_limit,
+                            parent_beacon_block_root,
+                            inclusion_list: &inclusion_list,
+                            decoder_params: None,
+                            signed_bid_submission: &submission,
+                        },
                         base_payment_tx_index,
-                    );
-                    SimulatorClient::do_sim_request(&request, false, to_send, &endpoint).await
+                    }
+                    .as_ssz_bytes();
+                    SimulatorClient::do_sim_request(body.into(), false, to_send, &endpoint).await
                 }
                 MergedSimDispatch::Json { to_send, method } => {
                     let filtering =
@@ -1472,63 +1476,36 @@ pub(crate) fn sim_finish_events<'a>(
     (tx_events, finished)
 }
 
-fn create_ssz_request(
-    req: &ValidationRequest,
-    submission: &SignedBidSubmission,
-) -> SszValidationRequest {
-    ssz_request(
-        req.apply_blacklist,
-        req.registered_gas_limit,
-        req.parent_beacon_block_root,
-        req.inclusion_list.clone(),
-        submission,
-    )
-}
-
+/// The body is the only buffer the encoded submission is written to; the
+/// hydration-miss retry resends it as is.
 fn ssz_request(
     apply_blacklist: bool,
     registered_gas_limit: u64,
     parent_beacon_block_root: B256,
-    inclusion_list: InclusionListWithMetadata,
+    inclusion_list: &InclusionListWithMetadata,
     submission: &SignedBidSubmission,
-) -> SszValidationRequest {
+) -> Bytes {
     let decoder_params = match submission {
         SignedBidSubmission::Fulu(_) => None,
         SignedBidSubmission::Gloas(_) => Some(SubmissionDecoderParams::plain(ForkName::Gloas)),
     };
-    SszValidationRequest {
+    SszValidationRequestRef {
         apply_blacklist,
         registered_gas_limit,
         parent_beacon_block_root,
         inclusion_list,
         decoder_params,
-        signed_bid_submission: submission.as_ssz_bytes(),
+        signed_bid_submission: submission,
     }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn ssz_merged_request(
-    apply_blacklist: bool,
-    registered_gas_limit: u64,
-    parent_beacon_block_root: B256,
-    inclusion_list: InclusionListWithMetadata,
-    submission: &SignedBidSubmissionFulu,
-    base_payment_tx_index: u64,
-) -> SszMergedValidationRequest {
-    SszMergedValidationRequest {
-        apply_blacklist,
-        registered_gas_limit,
-        parent_beacon_block_root,
-        inclusion_list,
-        decoder_params: None,
-        signed_bid_submission: submission.as_ssz_bytes(),
-        base_payment_tx_index,
-    }
+    .as_ssz_bytes()
+    .into()
 }
 
 #[cfg(test)]
 mod tests {
+    use helix_common::simulator::SszValidationRequest;
     use helix_types::TestRandomSeed;
+    use ssz::Decode;
 
     use super::*;
 
@@ -1538,13 +1515,14 @@ mod tests {
         let mut submission = SignedBidSubmissionFulu::test_random();
         submission.blobs_bundle = Default::default();
 
-        let request = ssz_request(
+        let body = ssz_request(
             false,
             0,
             B256::ZERO,
-            Default::default(),
+            &Default::default(),
             &SignedBidSubmission::Fulu(submission.clone()),
         );
+        let request = SszValidationRequest::from_ssz_bytes(&body).unwrap();
 
         assert!(request.decoder_params.is_none());
         assert_eq!(request.signed_bid_submission, submission.as_ssz_bytes());

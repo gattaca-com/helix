@@ -1,4 +1,5 @@
 use alloy_primitives::{Address, U256};
+use bytes::Bytes;
 use helix_common::{
     SimulatorConfig,
     simulator::{BlockSimError, SszValidationResponse, TxDetail},
@@ -10,7 +11,7 @@ use reqwest::{
 };
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
-use ssz::{Decode, Encode};
+use ssz::Decode;
 use tracing::error;
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -129,12 +130,11 @@ impl SimulatorClient {
     }
 
     pub async fn do_sim_request(
-        ssz_req: &impl Encode,
+        body: Bytes,
         is_top_bid: bool,
         to_send: RequestBuilder,
         endpoint: &str,
     ) -> Result<Vec<TxDetail>, BlockSimError> {
-        let body = ssz_req.as_ssz_bytes();
         let body_len = body.len();
         Self::ssz_request(to_send.body(body), is_top_bid, endpoint, body_len).await
     }
