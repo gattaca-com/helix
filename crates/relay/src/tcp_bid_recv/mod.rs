@@ -1,12 +1,15 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use dashmap::DashMap;
-use flux::{tile::Tile, timing::Nanos};
+use flux::{
+    tile::Tile,
+    timing::{Duration, Instant, Nanos},
+};
 use flux_network::{Event, Network, TcpGroupConfig, Token};
 use flux_utils::{DCachePtr, SharedVector};
 use helix_common::{
-    BuilderConfig, SubmissionTrace, is_local_dev, metrics::SUB_CLIENT_TO_SERVER_LATENCY,
-    utils::utcnow_ns,
+    BuilderConfig, SubmissionTrace, api::builder_api::MAX_PAYLOAD_LENGTH, is_local_dev,
+    metrics::SUB_CLIENT_TO_SERVER_LATENCY, utils::utcnow_ns,
 };
 use helix_tcp_types::BID_SUB_HEADER_SIZE;
 use helix_types::BlsPublicKeyBytes;
@@ -34,6 +37,16 @@ pub use crate::tcp_bid_recv::types::{
 
 type SubmissionError = (Token, Option<u32>, Option<Uuid>, BidSubmissionError);
 
+/// flux reserves a frame's dcache slot as soon as its length header arrives, before
+/// registration is checked, so this bounds what any peer can claim. It is the HTTP body limit,
+/// which also caps decompression. Not the queue MTU (6 MiB): an uncompressed block at the
+/// 10 MiB consensus payload limit plus its blobs exceeds that.
+const MAX_FRAME_SIZE: usize = BID_SUB_HEADER_SIZE + MAX_PAYLOAD_LENGTH;
+
+/// Clients send the registration as their first frame on connect, so a peer still
+/// unregistered after this is dropped.
+const REGISTRATION_TIMEOUT_MS: u64 = 1_000;
+
 /// `submissions_received + header_parse_errors == messages_from_registered`, and
 /// `registration_ok + registration_invalid == registration_attempts`.
 #[derive(Default)]
@@ -43,6 +56,8 @@ struct Stats {
     disconnected: u32,
     registration_ok: u32,
     registration_invalid: u32,
+    /// Unregistered peers dropped on timeout or evicted by a newer one.
+    registration_timeouts: u32,
     submissions_received: u32,
     header_parse_errors: u32,
     results_sent: u32,
@@ -55,6 +70,11 @@ pub struct BidSubmissionTcpListener {
 
     to_disconnect: Vec<Token>,
     registered: FxHashMap<Token, BlsPublicKeyBytes>,
+    /// Accepted but not yet registered, oldest first, with their accept time. A new peer
+    /// past `max_pending` evicts the oldest.
+    pending: Vec<(Token, Instant)>,
+    max_pending: usize,
+    registration_timeout: Duration,
     submission_errors: Vec<SubmissionError>,
     send_buf: Vec<u8>,
 
@@ -78,7 +98,7 @@ impl BidSubmissionTcpListener {
         let mut listener = Network::default().with_dcache(dcache_ptr);
         let group = listener.add_group(TcpGroupConfig {
             socket_buf_size: Some(64 * 1024 * 1024), // 64MB
-            max_frame_size: u32::MAX as usize,
+            max_frame_size: MAX_FRAME_SIZE,
             ..Default::default()
         });
         // One socket per address in the same Network: connection tokens stay unique, so
@@ -94,6 +114,9 @@ impl BidSubmissionTcpListener {
             api_key_cache,
             to_disconnect: Vec::with_capacity(max_connections),
             registered: FxHashMap::with_capacity_and_hasher(max_connections, Default::default()),
+            pending: Vec::with_capacity(max_connections),
+            max_pending: max_connections.max(1),
+            registration_timeout: Duration::from_millis(REGISTRATION_TIMEOUT_MS),
             submission_errors: Vec::with_capacity(max_connections),
             send_buf: Vec::new(),
             slot_events,
@@ -125,6 +148,7 @@ impl BidSubmissionTcpListener {
             registration_attempts = stats.registration_ok + stats.registration_invalid,
             registration_ok = stats.registration_ok,
             registration_invalid = stats.registration_invalid,
+            registration_timeouts = stats.registration_timeouts,
             messages_from_registered = stats.submissions_received + stats.header_parse_errors,
             submissions_received = stats.submissions_received,
             header_parse_errors = stats.header_parse_errors,
@@ -142,6 +166,12 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
             Event::Accepted { token: stream, peer_addr, .. } => {
                 tracing::trace!("connected to new peer {:?} with token {:?}", peer_addr, stream);
                 self.stats.accepted += 1;
+                if self.pending.len() >= self.max_pending {
+                    let (oldest, _) = self.pending.remove(0);
+                    self.stats.registration_timeouts += 1;
+                    self.to_disconnect.push(oldest);
+                }
+                self.pending.push((stream, Instant::now()));
                 None
             }
             Event::Connected { token, .. } => {
@@ -151,7 +181,11 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
             }
             Event::Disconnected { token, .. } => {
                 tracing::trace!("disconnected from peer with token {:?}", token);
-                self.registered.remove(&token);
+                if self.registered.remove(&token).is_none() &&
+                    let Some(i) = self.pending.iter().position(|(t, _)| *t == token)
+                {
+                    self.pending.remove(i);
+                }
                 self.stats.disconnected += 1;
                 None
             }
@@ -200,6 +234,9 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                         },
                     })
                 } else {
+                    if let Some(i) = self.pending.iter().position(|(t, _)| *t == token) {
+                        self.pending.remove(i);
+                    }
                     match RegistrationMsg::from_ssz_bytes(payload) {
                         Ok(msg) => {
                             let api_key = Uuid::from_bytes(msg.api_key).to_string();
@@ -232,6 +269,14 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                 }
             }
         });
+
+        while let Some(&(token, accepted_at)) = self.pending.first() &&
+            accepted_at.elapsed() > self.registration_timeout
+        {
+            self.pending.remove(0);
+            self.stats.registration_timeouts += 1;
+            self.to_disconnect.push(token);
+        }
 
         for token in self.to_disconnect.drain(..) {
             self.listener.disconnect(token);
