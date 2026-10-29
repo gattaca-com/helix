@@ -487,9 +487,17 @@ impl LocalCache {
         let fee_recipient_changed = existing.fee_recipient != new.fee_recipient;
         let gas_limit_changed = existing.gas_limit != new.gas_limit;
 
-        let resigned =
-            (fee_recipient_changed || gas_limit_changed || existing.timestamp != new.timestamp) &&
-                new.timestamp >= existing.timestamp;
+        // Signed registrations are public, so anyone can replay one. Only a strictly newer
+        // timestamp may change the message: validators sign a fresh timestamp for every change,
+        // and accepting a different message at the same timestamp would let two such
+        // registrations be replayed against each other.
+        if new.timestamp < existing.timestamp ||
+            (new.timestamp == existing.timestamp && (fee_recipient_changed || gas_limit_changed))
+        {
+            return RegistrationUpdate::Unchanged;
+        }
+
+        let resigned = new.timestamp > existing.timestamp;
 
         if !api_provider.admit_registration(resigned, existing_entry.value(), headers) {
             return RegistrationUpdate::Rejected;
@@ -547,10 +555,11 @@ impl LocalCache {
 #[cfg(test)]
 mod tests {
 
-    use alloy_primitives::U256;
+    use alloy_primitives::{Address, U256};
+    use helix_types::ValidatorRegistration;
 
     use super::*;
-    use crate::BuilderConfig;
+    use crate::{BuilderConfig, api_provider::DefaultApiProvider};
 
     #[tokio::test]
     pub async fn test_get_builder_info() {
@@ -716,6 +725,49 @@ mod tests {
             !cache.get_builder_info_local_collateral_only(&sibling).unwrap().is_optimistic,
             "the stored flag is untouched"
         );
+    }
+
+    /// Registrations are public and replayable: an older one, or a different message at the same
+    /// timestamp, must not replace the stored one. Re-posting the stored one under a new api key
+    /// still updates the unsigned preferences.
+    #[test]
+    fn registration_update_ignores_replayed_registrations() {
+        let cache = LocalCache::new();
+        let pubkey = BlsPublicKeyBytes::random();
+        let registration = |timestamp, fee_recipient| SignedValidatorRegistration {
+            message: ValidatorRegistration {
+                fee_recipient,
+                gas_limit: 60_000_000,
+                timestamp,
+                pubkey,
+            },
+            signature: Default::default(),
+        };
+        let [stored, other] = [Address::repeat_byte(1), Address::repeat_byte(2)];
+        cache.save_validator_registrations(
+            std::iter::once(ValidatorRegistrationInfo {
+                registration: registration(100, stored),
+                preferences: Default::default(),
+            }),
+            None,
+        );
+        let update = |registration, api_key| {
+            cache.registration_update(
+                &registration,
+                api_key,
+                &HeaderMap::new(),
+                &DefaultApiProvider,
+            )
+        };
+
+        assert_eq!(update(registration(99, other), None), RegistrationUpdate::Unchanged);
+        assert_eq!(update(registration(100, other), None), RegistrationUpdate::Unchanged);
+        assert_eq!(update(registration(100, stored), None), RegistrationUpdate::Unchanged);
+        assert_eq!(
+            update(registration(100, stored), Some(Uuid::new_v4())),
+            RegistrationUpdate::Required
+        );
+        assert_eq!(update(registration(101, other), None), RegistrationUpdate::Required);
     }
 
     #[tokio::test]
