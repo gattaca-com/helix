@@ -691,8 +691,8 @@ impl Simulators {
                             req.registered_gas_limit,
                             submission,
                             ValidatorPreferences { filtering, ..Default::default() },
-                            Some(req.parent_beacon_block_root),
-                            Some(req.inclusion_list.clone()),
+                            req.parent_beacon_block_root,
+                            &req.inclusion_list,
                         );
                         let res = SimulatorClient::do_json_sim_request(
                             &json_req,
@@ -807,7 +807,6 @@ impl Simulators {
         let started = sim_started_event(submission_id, block_hash, true, false);
         spawn_tracked!(async move {
             let start_sim = Nanos::now();
-            let inclusion_list = req.inclusion_list.clone();
             let submission = match merged_block_to_submission(&response, &req) {
                 Ok(submission) => submission,
                 Err(err) => {
@@ -837,7 +836,7 @@ impl Simulators {
                             apply_blacklist,
                             registered_gas_limit,
                             parent_beacon_block_root,
-                            inclusion_list: &inclusion_list,
+                            inclusion_list: &req.inclusion_list,
                             decoder_params: None,
                             signed_bid_submission: &submission,
                         },
@@ -854,8 +853,8 @@ impl Simulators {
                             registered_gas_limit,
                             &submission,
                             ValidatorPreferences { filtering, ..Default::default() },
-                            Some(parent_beacon_block_root),
-                            Some(inclusion_list),
+                            parent_beacon_block_root,
+                            &req.inclusion_list,
                         ),
                         base_payment_tx_index,
                     };

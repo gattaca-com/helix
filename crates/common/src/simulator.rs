@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use alloy_primitives::{Address, B256, U256};
 use helix_telemetry::SimError;
 use helix_types::{
@@ -338,39 +336,40 @@ pub struct SszValidationResponse {
     pub txs: Vec<TxDetail>,
 }
 
-// TODO: refactor this in a SignedBidSubmissionFulu + extra fields
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct JsonValidationRequest {
+/// JSON-RPC params of a block validation. Borrows from the submission, so building
+/// it clones nothing.
+#[derive(Debug, serde::Serialize)]
+pub struct JsonValidationRequest<'a> {
     #[serde(with = "serde_utils::quoted_u64")]
     pub registered_gas_limit: u64,
-    pub message: BidTrace,
-    pub execution_payload: ExecutionPayload,
-    pub signature: BlsSignatureBytes,
+    pub message: &'a BidTrace,
+    pub execution_payload: &'a ExecutionPayload,
+    pub signature: &'a BlsSignatureBytes,
     pub proposer_preferences: ValidatorPreferences,
-    pub blobs_bundle: Option<Arc<BlobsBundle>>,
-    pub execution_requests: Option<Arc<ExecutionRequests>>,
-    pub parent_beacon_block_root: Option<B256>,
-    pub inclusion_list: Option<InclusionListWithMetadata>,
+    pub blobs_bundle: &'a BlobsBundle,
+    pub execution_requests: &'a ExecutionRequests,
+    pub parent_beacon_block_root: B256,
+    pub inclusion_list: &'a InclusionListWithMetadata,
     pub apply_blacklist: bool,
 }
 
-impl JsonValidationRequest {
+impl<'a> JsonValidationRequest<'a> {
     pub fn new(
         registered_gas_limit: u64,
-        block: &SignedBidSubmissionFulu,
+        block: &'a SignedBidSubmissionFulu,
         proposer_preferences: ValidatorPreferences,
-        parent_beacon_block_root: Option<B256>,
-        inclusion_list: Option<InclusionListWithMetadata>,
+        parent_beacon_block_root: B256,
+        inclusion_list: &'a InclusionListWithMetadata,
     ) -> Self {
         Self {
             registered_gas_limit,
-            message: block.bid_trace().clone(),
-            execution_payload: block.execution_payload_ref().clone(),
-            signature: *block.signature(),
+            message: block.bid_trace(),
+            execution_payload: block.execution_payload_ref(),
+            signature: block.signature(),
             apply_blacklist: proposer_preferences.filtering.is_regional(),
             proposer_preferences,
-            blobs_bundle: Some(block.blobs_bundle().clone()),
-            execution_requests: Some(block.execution_requests_ref().clone()),
+            blobs_bundle: &block.blobs_bundle,
+            execution_requests: block.execution_requests_ref(),
             parent_beacon_block_root,
             inclusion_list,
         }
@@ -379,15 +378,17 @@ impl JsonValidationRequest {
 
 /// Merged-block counterpart of [`JsonValidationRequest`], carrying the extra
 /// `base_payment_tx_index` -- see [`SszMergedValidationRequest`].
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct MergedJsonValidationRequest {
+#[derive(Debug, serde::Serialize)]
+pub struct MergedJsonValidationRequest<'a> {
     #[serde(flatten)]
-    pub base: JsonValidationRequest,
+    pub base: JsonValidationRequest<'a>,
     pub base_payment_tx_index: u64,
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use helix_types::{
         GloasBidSubmission, GloasBidTrace, SignedBidSubmission, SignedBidSubmissionGloas, Slot,
     };
