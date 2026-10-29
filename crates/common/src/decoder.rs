@@ -8,8 +8,8 @@ use flate2::read::GzDecoder;
 use flux_profiler::timed;
 use flux_versioned_types::ByteStable;
 use helix_types::{
-    BidAdjustmentData, BlockMergingData, BlockMergingDataV2, Compression, DehydratedBidSubmission,
-    DehydratedBidSubmissionFulu, DehydratedBidSubmissionFuluV1,
+    BidAdjustmentData, BlockMergingData, BlockMergingDataV2, BlsPublicKeyBytes, Compression,
+    DehydratedBidSubmission, DehydratedBidSubmissionFulu, DehydratedBidSubmissionFuluV1,
     DehydratedBidSubmissionFuluWithAdjustments,
     DehydratedBidSubmissionFuluWithAdjustmentsAndMergingData,
     DehydratedBidSubmissionFuluWithMergingData, ForkName, ForkVersionDecode, GloasBidSubmission,
@@ -331,6 +331,24 @@ impl SubmissionDecoder {
 
     pub fn fork_name(&self) -> ForkName {
         self.fork_name
+    }
+
+    pub fn peek_slot_and_builder(&self, payload: &[u8]) -> Option<(u64, BlsPublicKeyBytes)> {
+        if !matches!(self.encoding, Encoding::Ssz) || self.compression != Compression::None {
+            return None;
+        }
+        let v2 = self.merging_v2 || self.dehydrated_v2;
+        let start = match (v2, self.is_dehydrated, self.merge_type, self.with_adjustments) {
+            (true, _, MergeType::Mergeable, _) |
+            (true, _, _, true) |
+            (false, false, MergeType::Mergeable, false) => {
+                u32::from_le_bytes(payload.get(..4)?.try_into().ok()?) as usize
+            }
+            (false, false, MergeType::AppendOnly, false) => return None,
+            _ => 0,
+        };
+        let trace = payload.get(start..start + 120)?;
+        Some((u64::from_le_bytes(trace[..8].try_into().ok()?), trace[72..].try_into().ok()?))
     }
 
     fn submission_slot(&self, body: &[u8]) -> Result<u64, DecoderError> {

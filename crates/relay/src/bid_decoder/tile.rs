@@ -366,7 +366,8 @@ impl DecoderTile {
 
         let sequence_number = header.has_sequence_number.then_some(header.sequence_number);
         let version = SubmissionVersion::new(trace.receive_ns.0, sequence_number);
-        if let Some((slot, builder)) = header.peek_slot_and_builder(payload) {
+        let mut decoder = SubmissionDecoder::new(&decoder_params);
+        if let Some((slot, builder)) = decoder.peek_slot_and_builder(payload) {
             if slot < bid_slot {
                 return Err(BlockValidationError::SubmissionForWrongSlot {
                     expected: Slot::new(bid_slot),
@@ -384,7 +385,6 @@ impl DecoderTile {
             cache.check_submission_version(builder, bid_slot, version)?;
         }
 
-        let mut decoder = SubmissionDecoder::new(&decoder_params);
         let (submission, merging_data, bid_adjustment_data) =
             decoder.decode_at(payload, buffer, chain_info)?;
         decoder_params.fork_name = decoder.fork_name();
