@@ -32,7 +32,5 @@ In scope in `main` branch:
 Bounties are awarded based on severity, impact and likelihood:
 
 | Severity |     Maximum | Example                                                                          |
-|----------|------------:|----------------------------------------------------------------------------------|
-| Medium   |  $1,000 USD | A bug that causes the relay to go offline                                        |
-| High     | $15,000 USD | A bug that causes proposers to miss several slots                                |
-| Critical | $25,000 USD | A bug that causes an untrusted proposer to access an invalid unblinded payload   |
+|----------|------------:|----------------------------------------------------------------------------------|                              |
+| Critical | $5,000 USD | A bug that causes an RCE or untrusted proposer to access an invalid unblinded payload   |

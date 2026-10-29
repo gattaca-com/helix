@@ -34,7 +34,6 @@ use helix_relay::{
     start_db_service,
 };
 use helix_types::BlsKeypair;
-use helix_website::WebsiteService;
 use tikv_jemallocator::Jemalloc;
 use tokio::signal::unix::{SignalKind, signal};
 use tracing::{error, info};
@@ -263,10 +262,6 @@ async fn run(
             gossip_sender,
             gossip_receiver,
         );
-
-        if config.website.enabled {
-            tokio::spawn(WebsiteService::run_loop(config.clone(), db.clone()));
-        }
 
         if config.is_registration_instance {
             for core in config.cores.reg_workers.clone() {

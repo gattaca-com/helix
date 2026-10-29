@@ -1,6 +1,6 @@
 [workspace]
 default-members = ["crates/relay", "crates/data-gatherer"]
-members = ["crates/admin", "crates/builder", "crates/common", "crates/data-api", "crates/database", "crates/relay", "crates/simulator", "crates/tcp-types", "crates/telemetry", "crates/data-gatherer", "crates/types", "crates/test-harness", "crates/website", "crates/operator"]
+members = ["crates/builder", "crates/common", "crates/data-api", "crates/database", "crates/relay", "crates/tcp-types", "crates/telemetry", "crates/data-gatherer", "crates/types", "crates/test-harness", "crates/operator"]
 resolver = "2"
 
 [workspace.package]
@@ -86,7 +86,6 @@ type-hash-derive = { git = "https://github.com/gattaca-com/flux", rev = "53d6c0a
 
 futures = "0.3"
 futures-util = { version = "0.3", features = ["compat"] }
-helix-admin = { path = "crates/admin" }
 helix-builder = { path = "crates/builder" }
 helix-common = { path = "crates/common" }
 helix-data-api = { path = "crates/data-api" }
@@ -96,7 +95,6 @@ helix-relay = { path = "crates/relay" }
 helix-tcp-types = { path = "./crates/tcp-types" }
 helix-telemetry = { path = "./crates/telemetry" }
 helix-types = { path = "./crates/types" }
-helix-website = { path = "crates/website" }
 hex = "0.4.3"
 http = "1.0"
 http-body = "1.0"

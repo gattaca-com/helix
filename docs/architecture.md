@@ -467,23 +467,6 @@ These counters are used by the data API to serve recent activity stats.
 this --{stats counters}--> Data API handlers (read on request)
 ```
 
-### Website
-
-#### 26. Website Service
-
-**Spawned by**: `spine.start` callback (if `website.enabled`)
-**Runs on**: tokio
-**File**: `website/website_service.rs`
-
-Outer loop restarts the service on crash. Inner loop watches for slot changes and
-re-renders website templates with updated data (recent blocks, builder stats).
-Serves the relay's public-facing website.
-
-```
---{slot changes}--> this ===[DB queries]==> PostgreSQL
-                         ===[HTTP]==> (serves website)
-```
-
 ## Data Flow Summary
 
 The critical path through the system:
