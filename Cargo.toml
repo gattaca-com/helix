@@ -148,7 +148,7 @@ serde_with = "1.14"
 serde_yaml = "0.9.25"
 serial_test = "1.0.0"
 sha2 = "0.10.8"
-silver_ssz = { git = "https://github.com/gattaca-com/silver", rev = "69d91092" }
+silver_ssz = { git = "https://github.com/gattaca-com/silver", rev = "0896b4dd" }
 smallvec = { version = "1.15", features = ["serde"] }
 ssz_types = "0.14"
 strum = "0.27"
