@@ -597,7 +597,14 @@ impl DehydratedBidSubmissionFulu {
         let mut blob_cache_hits: usize = 0;
         let new_blobs = self.blobs_bundle.new_items.len();
         let mut new_keys = Vec::with_capacity(new_blobs);
-        for blob_item in self.blobs_bundle.new_items {
+        for (index, blob_item) in self.blobs_bundle.new_items.into_iter().enumerate() {
+            // A cached blob is sliced as `CELLS_PER_EXT_BLOB` proofs wherever its bundle is
+            // read, and not every caller runs `can_hydrate` first.
+            if blob_item.proof.len() != CELLS_PER_EXT_BLOB {
+                last_err =
+                    Err(HydrationError::InvalidBlobProofs { index, proofs: blob_item.proof.len() });
+                continue;
+            }
             let key = blob_cache_key(&blob_item.commitment);
             new_keys.push(key);
             blobs.insert(key, (blob_item.commitment, blob_item.proof, blob_item.blob));
@@ -667,6 +674,9 @@ impl DehydratedBidSubmissionFulu {
             }
         }
         for blob_item in &self.blobs_bundle.new_items {
+            if blob_item.proof.len() != CELLS_PER_EXT_BLOB {
+                continue;
+            }
             blobs.insert(
                 blob_cache_key(&blob_item.commitment),
                 (blob_item.commitment, blob_item.proof.clone(), blob_item.blob.clone()),
@@ -836,6 +846,9 @@ pub enum HydrationError {
 
     #[error("unknown withdrawals: key {key}")]
     UnknownWithdrawals { key: u64 },
+
+    #[error("new blob {index} has {proofs} proofs, expected {CELLS_PER_EXT_BLOB}")]
+    InvalidBlobProofs { index: usize, proofs: usize },
 }
 
 /// Test helpers. These live here because `DehydratedBidSubmissionFulu`'s fields are
@@ -919,5 +932,36 @@ mod tests {
 
         assert_eq!(decoded.message, submission.message);
         assert_eq!(decoded.merging_data, submission.merging_data);
+    }
+
+    /// The block-merging tile hydrates without `can_hydrate`, and every reader slices a cached
+    /// blob's proofs as one full cell set, so a short list must never reach the cache.
+    #[test]
+    fn a_new_blob_without_a_full_cell_set_is_refused_and_not_cached() {
+        let mut v1 = DehydratedBidSubmissionFuluV1::random_for_test(&mut rand::rng());
+        v1.execution_payload.transactions = Transactions::new(vec![]).unwrap();
+        let commitment = KzgCommitment::repeat_byte(5);
+        v1.blobs_bundle = DehydratedBlobsFulu {
+            commitments: vec![commitment],
+            new_items: vec![BlobItemFulu {
+                proof: vec![KzgProof::repeat_byte(6); CELLS_PER_EXT_BLOB - 1],
+                commitment,
+                blob: Blob::default(),
+            }],
+        };
+        let pubkey = v1.message.builder_pubkey;
+        let submission = DehydratedBidSubmission::Fulu(v1.into());
+
+        let mut fed = HydrationCache::new();
+        fed.feed(&submission);
+        let mut hydrated = HydrationCache::new();
+        let result = hydrated.hydrate(submission, 9);
+
+        assert!(matches!(
+            result,
+            Err(HydrationError::InvalidBlobProofs { index: 0, proofs }) if proofs == CELLS_PER_EXT_BLOB - 1
+        ));
+        assert!(fed.caches[&pubkey].blobs_fulu.is_empty());
+        assert!(hydrated.caches[&pubkey].blobs_fulu.is_empty());
     }
 }
