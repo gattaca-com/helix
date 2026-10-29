@@ -29,7 +29,7 @@ use strum::{AsRefStr, EnumString};
 use tracing::{error, trace};
 use type_hash_derive::TypeHash;
 use zstd::{
-    stream::read::Decoder as ZstdDecoder,
+    bulk::Decompressor as BulkZstdDecompressor,
     zstd_safe::{CONTENTSIZE_ERROR, CONTENTSIZE_UNKNOWN, get_frame_content_size},
 };
 
@@ -278,16 +278,22 @@ impl SubmissionDecoder {
                 }
             }
             Compression::Zstd => {
-                let cap = zstd_size_hint(payload).unwrap_or(payload.len() * 2);
-                self.estimated_decompress = cap;
+                self.estimated_decompress = zstd_size_hint(payload).unwrap_or(payload.len() * 2);
                 buf.clear();
-                buf.reserve(cap);
-                let inner = match ZstdDecoder::new(payload) {
-                    Ok(d) => d,
-                    Err(e) => return Some(Err(e.into())),
-                };
-                let mut decoder = inner.take(MAX_PAYLOAD_LENGTH as u64);
-                if let Err(e) = decoder.read_to_end(buf) {
+                // Bulk decompression writes every frame straight into the spare capacity and
+                // fails rather than grow the buffer, so the capacity bounds the output. The
+                // content-size header can't size it: it is optional and covers only the first
+                // frame.
+                buf.reserve(MAX_PAYLOAD_LENGTH);
+                let decompressed = BulkZstdDecompressor::new()
+                    .and_then(|mut d| d.decompress_to_buffer(payload, buf));
+                if let Err(e) = decompressed {
+                    return Some(Err(e.into()));
+                }
+                // A caller's buffer can have more capacity than the limit.
+                if buf.len() > MAX_PAYLOAD_LENGTH {
+                    let e =
+                        std::io::Error::other("decompressed payload exceeds MAX_PAYLOAD_LENGTH");
                     return Some(Err(e.into()));
                 }
             }
@@ -1394,5 +1400,47 @@ mod tests {
             bid_adjustment_data.expect("adjustments should be carried"),
             expected_adjustment_data
         );
+    }
+
+    #[test]
+    fn a_zstd_submission_split_across_frames_decodes() {
+        let mut submission = SignedBidSubmissionFulu::test_random();
+        submission.blobs_bundle = Default::default();
+        let body = submission.as_ssz_bytes();
+        let (head, tail) = body.split_at(body.len() / 2);
+        // The second frame comes from the streaming encoder, which writes no content-size
+        // header.
+        let mut payload = zstd::bulk::compress(head, 3).unwrap();
+        payload.extend(zstd::stream::encode_all(tail, 3).unwrap());
+
+        let mut params = SubmissionDecoderParams::plain(ForkName::Fulu);
+        params.compression = Compression::Zstd;
+        let mut buf = Vec::new();
+        let (decoded, _, _) = SubmissionDecoder::new(&params)
+            .decode(&payload, &mut buf)
+            .expect("a multi-frame zstd submission must decode");
+
+        assert_eq!(buf, body);
+        assert!(matches!(decoded, Submission::Full(SignedBidSubmission::Fulu(_))));
+    }
+
+    #[test]
+    fn zstd_output_beyond_max_payload_length_is_rejected() {
+        let mut params = SubmissionDecoderParams::plain(ForkName::Fulu);
+        params.compression = Compression::Zstd;
+        let mut decoder = SubmissionDecoder::new(&params);
+        let bomb = zstd::stream::encode_all(&vec![0u8; MAX_PAYLOAD_LENGTH + 1][..], 1).unwrap();
+        let at_limit = zstd::stream::encode_all(&vec![0u8; MAX_PAYLOAD_LENGTH][..], 1).unwrap();
+
+        let mut buf = Vec::new();
+        assert!(matches!(decoder.decompress(&at_limit, &mut buf), Some(Ok(()))));
+        assert_eq!(buf.len(), MAX_PAYLOAD_LENGTH);
+        assert!(matches!(decoder.decompress(&bomb, &mut buf), Some(Err(DecoderError::IOError(_)))));
+
+        let mut oversized = Vec::with_capacity(2 * MAX_PAYLOAD_LENGTH);
+        assert!(matches!(
+            decoder.decompress(&bomb, &mut oversized),
+            Some(Err(DecoderError::IOError(_)))
+        ));
     }
 }
