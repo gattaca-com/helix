@@ -12,6 +12,7 @@ use helix_types::{
     BlsPublicKey, BlsPublicKeyBytes, ExecPayload, GetPayloadResponse, SigError,
     SignedBlindedBeaconBlock,
 };
+use hyper::StatusCode;
 use tokio::sync::oneshot::{self, Receiver};
 use tracing::trace;
 
@@ -27,8 +28,9 @@ use crate::{
 /// 96-byte BLS signature used as dedup key for get_payload.
 type SignatureKey = [u8; 96];
 
-/// Dedup waiters only get the response on success or a flag on error.
-pub type DedupPayloadResult = Option<GetPayloadResponse>;
+/// What dedup waiters get from the primary: the response, or its error's status and message,
+/// since `ProposerApiError` is not `Clone`.
+pub type DedupPayloadResult = Result<GetPayloadResponse, (StatusCode, String)>;
 type SharedPayloadFut = Shared<Receiver<Arc<DedupPayloadResult>>>;
 //Shared<Pin<Box<dyn Future<Output = Arc<DedupPayloadResult>> + Send + 'static>>>;
 
@@ -297,14 +299,20 @@ mod tests {
         let proposer = BlsKeypair::random();
         let block = signed_block(&chain_info, &proposer);
 
-        assert!(matches!(
-            request(&handle, &chain_info, &proposer, &block),
-            GetPayloadKind::Primary { .. }
-        ));
-        assert!(matches!(
-            request(&handle, &chain_info, &proposer, &block),
-            GetPayloadKind::Dedup(_)
-        ));
+        let GetPayloadKind::Primary { dedup_tx, .. } =
+            request(&handle, &chain_info, &proposer, &block)
+        else {
+            panic!("the first request is the primary");
+        };
+        let GetPayloadKind::Dedup(waiter) = request(&handle, &chain_info, &proposer, &block) else {
+            panic!("a verified duplicate waits on the primary");
+        };
         assert_eq!(rx.len(), 1);
+
+        // The waiter answers with the primary's own error, not a bare 500.
+        let failure = (StatusCode::BAD_REQUEST, "request for past slot".to_string());
+        let _ = dedup_tx.send(Arc::new(Err(failure.clone())));
+        let outcome = waiter.now_or_never().expect("resolved").expect("sent");
+        assert!(matches!(&*outcome, Err(got) if *got == failure));
     }
 }

@@ -92,6 +92,10 @@ pub enum ProposerApiError {
     #[error("internal server error")]
     InternalServerError,
 
+    /// A duplicate get_payload answered with its primary request's error.
+    #[error("{message}")]
+    PrimaryRequestFailed { status: StatusCode, message: String },
+
     #[error("service unavailable")]
     ServiceUnavailableError,
 
@@ -221,6 +225,8 @@ impl ProposerApiError {
             }
 
             ProposerApiError::ServiceUnavailableError => StatusCode::SERVICE_UNAVAILABLE,
+
+            ProposerApiError::PrimaryRequestFailed { status, .. } => *status,
 
             ProposerApiError::InvalidGetHeader(_) => StatusCode::UNAUTHORIZED,
         }
