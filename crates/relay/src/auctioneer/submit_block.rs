@@ -54,8 +54,11 @@ impl<B: BidAdjustor> Context<B> {
                         ])
                         .inc();
                     // The auctioneer's hydration cache must still learn this submission's
-                    // txs, otherwise subsequent submissions referencing them fail.
-                    let _ = self.hydrate(submission_data.submission.clone());
+                    // txs, blobs and withdrawals, otherwise subsequent submissions
+                    // referencing them fail.
+                    if let Submission::Dehydrated(d) = &submission_data.submission {
+                        self.hydration_cache.feed(d);
+                    }
                     send_submission_result(
                         producers,
                         &self.future_results,
