@@ -15,7 +15,7 @@ use helix_common::{
 };
 use helix_tcp_types::{BidSubmissionFlags, BidSubmissionHeader};
 use helix_types::{
-    BidAdjustmentData, BlockMergingDataV2, BlsPublicKeyBytes, BuilderBid, Compression,
+    BidAdjustmentData, BidTrace, BlockMergingDataV2, BlsPublicKeyBytes, BuilderBid, Compression,
     ExecutionPayload, ForkName, GetPayloadResponse, GloasBidSubmission, MergeType, PayloadAndBlobs,
     PayloadBidData, PayloadBidDataRef, SignedBidSubmissionFulu, SignedBlindedBeaconBlock, Slot,
     Submission, SubmissionVersion, VersionedSignedProposal, gloas::GloasBlock,
@@ -340,6 +340,10 @@ impl GloasPayload {
         let bid = submission.unsigned_bid(fee_recipient, execution_payment);
         Self { submission, bid }
     }
+
+    pub fn has_bid_trace(&self, bid_trace: &BidTrace) -> bool {
+        self.submission.bid_trace() == bid_trace
+    }
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -382,6 +386,18 @@ impl PayloadEntry {
 
     pub fn is_adjustable(&self) -> bool {
         matches!(self, Self::Submission(s) if s.bid_adjustment_data.is_some())
+    }
+
+    /// Whether `bid_trace` describes this entry's bid. A gossiped or merged payload keeps
+    /// only the value and builder of its bid, so only those are compared.
+    pub fn has_bid_trace(&self, bid_trace: &BidTrace) -> bool {
+        match self {
+            Self::Submission(s) => s.signed_bid_submission.bid_trace() == bid_trace,
+            Self::Gossip(s) => {
+                s.bid_data.value == bid_trace.value &&
+                    s.bid_data.builder_pubkey == bid_trace.builder_pubkey
+            }
+        }
     }
 
     /// Relay receive time for a locally submitted payload. Gossiped payloads are retained for
@@ -622,6 +638,8 @@ impl Event {
 
 #[cfg(test)]
 mod tests {
+    use helix_types::TestRandomSeed;
+
     use super::*;
 
     fn attrs(parent_hash: B256, parent_root: B256, prev_randao: B256) -> PayloadAttributesUpdate {
@@ -650,5 +668,29 @@ mod tests {
             let got = slot_data.attrs_for_submission(&parent_hash, &fork.prev_randao).unwrap();
             assert_eq!(got.parent_root(), fork.parent_root());
         }
+    }
+
+    /// The relay does not recompute block hashes, so only the stored trace vouches for the
+    /// stored payload.
+    #[test]
+    fn a_stored_payload_answers_only_to_its_own_bid_trace() {
+        let submission = SignedBidSubmissionFulu::test_random();
+        let stored = submission.message.clone();
+        let entry = PayloadEntry::new_submission(
+            submission,
+            B256::ZERO,
+            None,
+            None,
+            SubmissionVersion::new(0, None),
+            SubmissionTrace::default(),
+            None,
+        );
+
+        assert!(entry.has_bid_trace(&stored), "a resubmission of the same block");
+        let raised = BidTrace { value: stored.value ^ U256::from(1), ..stored.clone() };
+        assert!(!entry.has_bid_trace(&raised));
+        let mut rebranded = stored;
+        rebranded.builder_pubkey.0[0] ^= 1;
+        assert!(!entry.has_bid_trace(&rebranded));
     }
 }
