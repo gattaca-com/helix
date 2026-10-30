@@ -56,13 +56,16 @@ pub trait ApiProvider: Send + Sync + Clone + 'static {
         fallback
     }
 
+    /// Asked only for a registration that would change the stored one. By default only a
+    /// newly signed message is admitted: preferences are unsigned, so re-posting the stored
+    /// message must not change them.
     fn admit_registration(
         &self,
-        _resigned: bool,
+        resigned: bool,
         _existing: &SignedValidatorRegistrationEntry,
         _headers: &HeaderMap,
     ) -> bool {
-        true
+        resigned
     }
 
     fn admit_header_stream(
