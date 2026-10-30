@@ -11,10 +11,12 @@ interface Vm {
 /// every chain:
 ///
 ///   forge script script/DeployMultiPayment.s.sol --rpc-url $RPC --broadcast \
-///       --private-key $DEPLOYER_KEY
+///       --slow --private-key $DEPLOYER_KEY
 ///
-/// The forwarder's runtime hardcodes the leg's address. The leg goes first: a
-/// call to a leg without code would succeed and keep the entry's amount.
+/// The forwarder's runtime hardcodes the leg's address. The leg goes first, and
+/// `--slow` sends the forwarder only once the leg's deployment has landed and
+/// succeeded: a call to a leg without code would succeed and keep the entry's
+/// amount, and a later leg would pay it to whoever it pays next.
 contract DeployMultiPayment {
     Vm constant vm = Vm(0x7109709ECfa91a80626fF3989D68f67F5b1DD12D);
     address constant CREATE2_PROXY = 0x4e59b44847b379578588920cA78FbF26c0B4956C;

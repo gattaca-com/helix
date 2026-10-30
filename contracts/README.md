@@ -119,24 +119,39 @@ entries, each entry's recipient gains its amount, the final recipient gains the
 value minus the entries plus whatever the forwarder held, the first entry's
 recipient also gains whatever the leg held, and both contracts end empty.
 
-Gas is fixed by the calldata and two facts about each recipient: whether it was
-already accessed in the transaction and whether its account is empty.
+Gas follows from the calldata, the access list and two facts about each
+payment: whether its recipient was already accessed, and whether its account is
+empty when paid. Prague figures, unchanged on Cancun and Osaka:
 
 ```
-gas  = 21,000 + 4 per zero calldata byte + 16 per non-zero byte + execution
+gas  = 21,000 + 4 per zero calldata byte + 16 per non-zero byte
+     + 2,400 per access-list address + 1,900 per storage key
+     + execution
 
 execution, no entries:        7,669
 execution, N >= 1 entries:   10,195 + 14,483 * N
-  per recipient already accessed     -2,600   (entry or final recipient)
-  per payment > 0 to an empty account  +25,000 (entry or final recipient)
-  per entry with amount 0             -6,700
+  per payment to a recipient already accessed       -2,600
+  per payment of more than 0 to an empty account   +25,000
+  per entry with amount 0                           -6,700
+  leg in the access list, N >= 1                    -2,500
 ```
 
-A recipient counts as already accessed if it is the sender, the coinbase, a
-precompile, in the access list, or named earlier in the same transaction. The
-figures assume a cold leg; it is warm only if listed in the access list, which
-makes the first entry 2,500 cheaper, 100 net of the access list's 2,400. The EIP-7623 calldata floor never binds,
-since execution far outweighs it.
+Payments run in execution order: the entries in calldata order, then the final
+recipient, although its address comes first in the calldata. A recipient counts
+as already accessed if it is the sender, the coinbase, a precompile, in the
+access list, or paid earlier in the transaction. It is empty if, when paid, it
+has no balance, nonce or code. Listing a recipient that would otherwise be cold
+saves 200 net of its access-list entry, and listing the leg saves 100.
+
+A payment is what actually moves: an entry's amount, plus whatever the leg held
+for the first entry, and the value left after the entries, plus whatever the
+forwarder held, for the final recipient. Anyone can send wei to either contract,
+so an entry or a remainder of 0 can still create an account; paying every
+recipient more than 0 keeps the gas independent of the contracts' balances.
+
+The EIP-7623 calldata floor never binds, since execution far outweighs it.
+EIP-7825 caps a transaction at 2^24 gas: about 1,100 entries to existing
+accounts, or 418 if each one creates an account.
 
 A gas limit of exactly this figure is enough. Each call to the leg keeps 1/64
 of the remaining gas back, and the final payment after it always leaves more
@@ -155,10 +170,15 @@ SELFDESTRUCT          // send balance to recipient
 ## Development
 
 Foundry project, not wired into the Rust build. Requires
-[forge](https://getfoundry.sh). The tests run against the committed runtime, so
-no Huff compiler is needed to verify behaviour.
+[forge](https://getfoundry.sh). `foundry.toml` runs each call from a test as a
+transaction of its own (`isolate = true`), so the gas tests measure what a
+transaction pays. The tests run against the committed runtime, so no Huff
+compiler is needed to verify behaviour; `script/check-runtime.sh` checks that
+runtime against the MultiPayment Huff sources with
+[huff2](https://github.com/huff-language/huff2).
 
 ```bash
 forge test
 forge snapshot    # refresh .gas-snapshot
+HUFF=path/to/huff script/check-runtime.sh
 ```
