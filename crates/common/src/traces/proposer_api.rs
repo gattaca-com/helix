@@ -32,9 +32,10 @@ pub struct GetPayloadTrace {
     pub payload_fetched: u64,
     #[serde(default)]
     pub slot_start_awaited: u64,
-    /// After `gossip_payload` returns: SSZ encode, one deep clone + gzip per peer
-    /// relay, and the operator broadcast. Awaited on both API versions, so without
-    /// this stamp it is indistinguishable from the beacon publish that follows it.
+    /// After the payload gossip is spawned, just before the beacon publish is spawned.
+    /// The gossip (SSZ encode, one copy + gzip per peer relay, the operator broadcast)
+    /// runs concurrently with the publish, so it is in neither this step nor
+    /// `beacon_client_broadcast`.
     #[serde(default)]
     pub gossiped: u64,
     pub validation_complete: u64,

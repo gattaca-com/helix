@@ -257,7 +257,7 @@ impl<A: Api> ProposerApi<A> {
     }
 
     pub async fn _get_payload(
-        &self,
+        self: &Arc<Self>,
         signed_blinded_block: SignedBlindedBeaconBlock,
         trace: &mut GetPayloadTrace,
         user_agent: Option<String>,
@@ -372,15 +372,25 @@ impl<A: Api> ProposerApi<A> {
 
         trace.slot_start_awaited = utcnow_ns();
 
-        self.gossip_payload(
-            to_publish.signed_block.slot(),
-            &proposer_public_key,
-            Cow::Borrowed(&to_proposer.data),
-            fork,
-            Cow::Borrowed(&bid),
-            true,
-        )
-        .await;
+        // Spawned before the publish task: tokio runs a worker's most recently spawned task
+        // next, so the publish starts on this worker as soon as this task yields, and the gossip
+        // goes to the run queue where an idle worker can take it.
+        let gossip_api = self.clone();
+        let gossip_slot = to_publish.signed_block.slot();
+        let gossip_payload = to_proposer.data.clone();
+        let gossip_bid = bid.clone();
+        spawn_tracked!(async move {
+            gossip_api
+                .gossip_payload(
+                    gossip_slot,
+                    &proposer_public_key,
+                    Cow::Owned(gossip_payload),
+                    fork,
+                    Cow::Owned(gossip_bid),
+                    true,
+                )
+                .await;
+        });
 
         trace.gossiped = utcnow_ns();
 
