@@ -313,17 +313,9 @@ impl<A: Api> ProposerApi<A> {
                     let message = "primary get_payload ended without a result".to_string();
                     Arc::new(Err((StatusCode::INTERNAL_SERVER_ERROR, message)))
                 });
-                return match Arc::try_unwrap(result).unwrap_or_else(|arc| (*arc).clone()) {
-                    Ok(response) => Ok(response),
-                    Err((status, message)) => {
-                        if status.is_server_error() {
-                            warn!(%status, %message, "dedup get_payload: primary failed");
-                        } else {
-                            info!(%status, %message, "dedup get_payload: primary failed");
-                        }
-                        Err(ProposerApiError::PrimaryRequestFailed { status, message })
-                    }
-                };
+                return Arc::try_unwrap(result).unwrap_or_else(|arc| (*arc).clone()).map_err(
+                    |(status, message)| ProposerApiError::PrimaryRequestFailed { status, message },
+                );
             }
             GetPayloadKind::Primary { rx, dedup_tx } => (rx, dedup_tx),
         };
