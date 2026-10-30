@@ -76,6 +76,82 @@ transaction then costs exactly the gas the builder reported, so the header
 balance all stay consistent without re-estimating anything. Replacing a forwarded
 payment with a direct transfer changes its gas and invalidates the block.
 
+## MultiPaymentForwarder
+
+```
+MultiPaymentForwarder 0xFeEeEEEAEA9b3cE71Ce8A252aAa11D2dC439CC69
+MultiPaymentLeg       0xFeEeEEE0e9C10f0484111144Ba82788E0B550D91
+```
+
+Not deployed yet. Both go through the same CREATE2 proxy as PaymentForwarder
+(`script/DeployMultiPayment.s.sol`); the forwarder's runtime hardcodes the leg's
+address, so the leg is deployed first.
+
+Pays several recipients in one transaction, bound to one slot like
+PaymentForwarder, without running any recipient's code.
+
+```
+calldata: [uint32 timestamp][20-byte final recipient]
+          then any number of [20-byte recipient][uint96 amount] entries
+```
+
+The header is PaymentForwarder's calldata. Each entry's amount is sent to
+MultiPaymentLeg, which self-destructs it to the entry's recipient: a
+self-destruct always sends the whole balance, so every amount needs its own
+account to leave from. Whatever is left afterwards is self-destructed to the
+final recipient, so with no entries this pays exactly like PaymentForwarder.
+
+- The call reverts on a timestamp mismatch, if the value does not cover the
+  entries, or if the calldata after the header is not whole 32-byte entries.
+  Calldata of 24 bytes or less is read like PaymentForwarder's, without a
+  length check.
+- Anything already sitting in the leg is paid out with the first entry, and
+  anything in the forwarder goes to the final recipient.
+- Never name the forwarder or the leg as a recipient: an amount paid to either
+  just moves on to the final recipient or the next entry.
+
+### Deriving a payment without simulating it
+
+No recipient code runs and nothing is read beyond the calldata, the block
+timestamp and the two contracts' balances, so a payer can compute the outcome
+instead of simulating it. If the timestamp matches and the value covers the
+entries, each entry's recipient gains its amount, the final recipient gains the
+value minus the entries plus whatever the forwarder held, the first entry's
+recipient also gains whatever the leg held, and both contracts end empty.
+
+Gas is fixed by the calldata and two facts about each recipient: whether it was
+already accessed in the transaction and whether its account is empty.
+
+```
+gas  = 21,000 + 4 per zero calldata byte + 16 per non-zero byte + execution
+
+execution, no entries:        7,669
+execution, N >= 1 entries:   10,195 + 14,483 * N
+  per recipient already accessed     -2,600   (entry or final recipient)
+  per payment > 0 to an empty account  +25,000 (entry or final recipient)
+  per entry with amount 0             -6,700
+```
+
+A recipient counts as already accessed if it is the sender, the coinbase, a
+precompile, in the access list, or named earlier in the same transaction. The
+figures assume a cold leg; it is warm only if listed in the access list, which
+makes the first entry 2,500 cheaper, 100 net of the access list's 2,400. The EIP-7623 calldata floor never binds,
+since execution far outweighs it.
+
+A gas limit of exactly this figure is enough. Each call to the leg keeps 1/64
+of the remaining gas back, and the final payment after it always leaves more
+than that, so no leg runs short.
+
+MultiPaymentLeg's 6 bytes of runtime:
+
+```
+5f3560601cff
+
+PUSH0 CALLDATALOAD    // calldata: [20-byte recipient]
+PUSH1 0x60 SHR        // recipient
+SELFDESTRUCT          // send balance to recipient
+```
+
 ## Development
 
 Foundry project, not wired into the Rust build. Requires

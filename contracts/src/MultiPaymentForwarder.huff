@@ -1,0 +1,63 @@
+/// Pays several recipients in one transaction, but only in the block the caller
+/// signed for. Each entry's amount is sent through MultiPaymentLeg, which
+/// self-destructs it to the entry's recipient. Whatever is left afterwards is
+/// self-destructed to the final recipient.
+///
+/// calldata: [uint32 timestamp][20-byte final recipient]
+///           then any number of [20-byte recipient][uint96 amount] entries
+///
+/// The header is PaymentForwarder's calldata, so with no entries this pays
+/// exactly like PaymentForwarder.
+
+#define constant LEG = 0xfeeeeee0e9c10f0484111144ba82788e0b550d91 // MultiPaymentLeg
+#define constant AMOUNT_MASK = 0xffffffffffffffffffffffff
+
+#define macro MAIN() = takes(0) returns(0) {
+    // Check the timestamp
+    push0 calldataload      // [header]
+    dup1 0xe0 shr           // [timestamp, header]
+    timestamp xor           // zero if timestamp matches
+    fail jumpi              // [header]
+
+    // Check whether there are entries
+    0x40 shr                // [final]  its low 160 bits are the final recipient
+    0x18                    // [offset, final]
+    calldatasize dup2 lt    // [has entries, offset, final]
+
+    // If yes, jump to multi-recipient handling
+    dup1 pay jumpi
+    // If not, pay the single recipient
+    pop pop selfdestruct
+
+    // Loop over recipients.
+    // Entered with `1` on top, the previous call's success or the entry check. It
+    // is used as the call's return size: the leg returns no data, so it costs
+    // nothing and saves popping it.
+    pay:                    // [1, offset, final]
+
+    // Prepare stack and CALL leg contract
+    push0 0x14 push0        // [args offset(0), args size (0x14), ret offset (0), ret size (1), offset, final]
+    dup5 calldataload       // [entry, ...]
+    dup1 push0 mstore       // leg calldata: the entry's recipient
+    [AMOUNT_MASK] and       // [amount, ...]
+    [LEG] gas call          // [success, offset, final]
+
+    // Update offset
+    swap1 0x20 add swap1    // [success, next offset, final]
+
+    // Check whether we reached the final recipient
+    dup1 calldatasize dup4 lt and
+    // If not, loop
+    pay jumpi               // next entry while calls succeed and entries remain
+    // Otherwise, pay the final recipient.
+    // The check below triggers if any call so far failed, or if the calldata is
+    // not the header plus whole entries. Neither should happen, but it is a
+    // cheap safeguard against a bug on the builder side.
+    swap1 calldatasize eq   // [whole entries, success, final]
+    and iszero fail jumpi   // [final]
+    selfdestruct            // pay the rest to the final recipient
+
+    // Revert
+    fail:
+    push0 push0 revert
+}
