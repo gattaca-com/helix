@@ -45,8 +45,8 @@ use helix_types::Slot;
 use rustc_hash::FxHashMap;
 use tracing::{debug, error, info, trace, warn};
 pub use types::{
-    Event, GetPayloadResultData, InternalBidSubmissionHeader, PayloadEntry, SeenBlock, SlotData,
-    SubmissionData, SubmissionPayload,
+    BidKey, Event, GetPayloadResultData, InternalBidSubmissionHeader, PayloadEntry, SeenBlock,
+    SlotData, SubmissionData, SubmissionPayload,
 };
 
 use crate::{
@@ -487,7 +487,10 @@ impl State {
             }
 
             // get_execution_payload_bid (Gloas)
-            (State::Sorting(slot_data), Event::GetExecutionPayloadBid { params, res_tx, span }) => {
+            (
+                State::Sorting(slot_data),
+                Event::GetExecutionPayloadBid { params, last_sent, res_tx, span },
+            ) => {
                 let _guard = span.enter();
                 trace!("received in auctioneer");
 
@@ -497,7 +500,7 @@ impl State {
                         bid_slot: slot_data.bid_slot.into(),
                     }));
                 } else {
-                    ctx.handle_get_execution_payload_bid(params, slot_data, res_tx)
+                    ctx.handle_get_execution_payload_bid(params, last_sent, slot_data, res_tx)
                 }
 
                 trace!("finished processing");

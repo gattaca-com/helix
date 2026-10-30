@@ -72,7 +72,7 @@ pub trait ApiProvider: Send + Sync + Clone + 'static {
         _registered: &ValidatorPreferences,
         config: &HeaderStreamConfig,
     ) -> Result<(), &'static str> {
-        if config.admit_all { Ok(()) } else { Err("header stream not available") }
+        if config.admit_all { Ok(()) } else { Err("stream not available") }
     }
 
     /// Payload delivered for a signature-verified blinded block: this ip is the slot's proposer.
