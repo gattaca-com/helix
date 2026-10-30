@@ -1,4 +1,5 @@
 use std::{
+    fmt,
     io::Read,
     time::{Duration, Instant},
 };
@@ -8,8 +9,8 @@ use flate2::read::GzDecoder;
 use flux_profiler::timed;
 use flux_versioned_types::ByteStable;
 use helix_types::{
-    BidAdjustmentData, BlockMergingData, BlockMergingDataV2, Compression, DehydratedBidSubmission,
-    DehydratedBidSubmissionFulu, DehydratedBidSubmissionFuluV1,
+    BidAdjustmentData, BlockMergingData, BlockMergingDataV2, BlsPublicKeyBytes, Compression,
+    DehydratedBidSubmission, DehydratedBidSubmissionFulu, DehydratedBidSubmissionFuluV1,
     DehydratedBidSubmissionFuluWithAdjustments,
     DehydratedBidSubmissionFuluWithAdjustmentsAndMergingData,
     DehydratedBidSubmissionFuluWithMergingData, ForkName, ForkVersionDecode, GloasBidSubmission,
@@ -22,7 +23,10 @@ use http::{
     HeaderMap, HeaderValue, StatusCode,
     header::{ACCEPT, CONTENT_TYPE},
 };
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{
+    Deserialize, Deserializer, Serialize,
+    de::{self, DeserializeOwned, DeserializeSeed, IgnoredAny, MapAccess, Visitor},
+};
 use ssz::Decode;
 use ssz_derive::{Decode, Encode};
 use strum::{AsRefStr, EnumString};
@@ -325,7 +329,11 @@ impl SubmissionDecoder {
             Some(Ok(())) => buf,
             Some(Err(e)) => return Err(e),
         };
-        self.fork_name = chain_info.fork_at_slot(self.submission_slot(body)?.into());
+        // A body without a readable slot is malformed for every fork; it
+        // keeps the configured fork and `decode_body` reports why.
+        if let Some(slot) = self.submission_slot(body) {
+            self.fork_name = chain_info.fork_at_slot(slot.into());
+        }
         self.decode_body(body)
     }
 
@@ -333,42 +341,51 @@ impl SubmissionDecoder {
         self.fork_name
     }
 
-    fn submission_slot(&self, body: &[u8]) -> Result<u64, DecoderError> {
+    pub fn peek_slot_and_builder(&self, payload: &[u8]) -> Option<(u64, BlsPublicKeyBytes)> {
+        if !matches!(self.encoding, Encoding::Ssz) || self.compression != Compression::None {
+            return None;
+        }
+        let start = self.ssz_trace_offset(payload)?;
+        let trace = payload.get(start..start + 120)?;
+        Some((u64::from_le_bytes(trace[..8].try_into().ok()?), trace[72..].try_into().ok()?))
+    }
+
+    fn submission_slot(&self, body: &[u8]) -> Option<u64> {
         match self.encoding {
             Encoding::Ssz => {
-                body.get(..8).and_then(|slot| slot.try_into().ok()).map(u64::from_le_bytes).ok_or(
-                    DecoderError::SszDecode(ssz::DecodeError::InvalidByteLength {
-                        len: body.len(),
-                        expected: 8,
-                    }),
-                )
+                let start = self.ssz_trace_offset(body)?;
+                Some(u64::from_le_bytes(body.get(start..start + 8)?.try_into().ok()?))
             }
             Encoding::Json => {
-                // Borrows only the slot; every other field is skipped without allocating.
-                #[derive(serde::Deserialize)]
-                struct Body<'a> {
-                    #[serde(borrow)]
-                    message: Message<'a>,
-                }
-                #[derive(serde::Deserialize)]
-                struct Message<'a> {
-                    slot: Option<&'a str>,
-                    #[serde(borrow)]
-                    trace: Option<Trace<'a>>,
-                }
-                #[derive(serde::Deserialize)]
-                struct Trace<'a> {
-                    slot: &'a str,
-                }
-                let message = serde_json::from_slice::<Body>(body)?.message;
-                message
-                    .slot
-                    .or(message.trace.map(|t| t.slot))
-                    .and_then(|slot| slot.parse().ok())
-                    .ok_or_else(|| serde::de::Error::custom("missing message slot"))
-                    .map_err(DecoderError::JsonDecodeError)
+                let mut slot = None;
+                // The scan ends in an error as soon as it has the slot, so the
+                // error says nothing about the rest of the body.
+                let _ = JsonSlot(&mut slot)
+                    .deserialize(&mut serde_json::Deserializer::from_slice(body));
+                slot
             }
         }
+    }
+
+    /// Where the bid trace starts in an uncompressed SSZ body of the shape
+    /// `decode_body` picks. Flat shapes open with the trace; wrappers open
+    /// with the offset of their inner submission.
+    fn ssz_trace_offset(&self, body: &[u8]) -> Option<usize> {
+        let offset_at =
+            |at: usize| Some(u32::from_le_bytes(body.get(at..at + 4)?.try_into().ok()?) as usize);
+        let wrapped = if self.dehydrated_v2 || self.merging_v2 {
+            self.merge_type == MergeType::Mergeable || self.with_adjustments
+        } else if self.is_dehydrated || !self.with_mergeable_data || self.with_adjustments {
+            false
+        } else if self.merge_type == MergeType::AppendOnly {
+            // Append-only bodies may leave out the merging data. A wrapper's
+            // first offset is its 8-byte fixed part and its second cannot be
+            // smaller; a plain body opens with the slot, whose upper half is 0.
+            offset_at(0)? == 8 && offset_at(4)? >= 8
+        } else {
+            true
+        };
+        if wrapped { offset_at(0) } else { Some(0) }
     }
 
     fn decode_body(&mut self, body: &[u8]) -> Result<DecodedParts, DecoderError> {
@@ -704,6 +721,47 @@ impl SubmissionDecoder {
     }
 }
 
+/// Reads the bid slot of a JSON submission and stops there, so the payload
+/// and blobs after the bid trace are never scanned. Descends through
+/// `submission` (merging wrapper), `message` and `trace` (Gloas) to `slot`.
+struct JsonSlot<'a>(&'a mut Option<u64>);
+
+impl<'de> DeserializeSeed<'de> for JsonSlot<'_> {
+    type Value = ();
+
+    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<(), D::Error> {
+        deserializer.deserialize_map(self)
+    }
+}
+
+impl<'de> Visitor<'de> for JsonSlot<'_> {
+    type Value = ();
+
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("a bid submission")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<(), A::Error> {
+        #[derive(Deserialize)]
+        struct Slot(#[serde(with = "serde_utils::quoted_u64")] u64);
+
+        while let Some(key) = map.next_key::<&str>()? {
+            match key {
+                "submission" | "message" | "trace" => map.next_value_seed(JsonSlot(self.0))?,
+                "slot" => {
+                    *self.0 = Some(map.next_value::<Slot>()?.0);
+                    // Unwinds the parser without reading the rest of the body.
+                    return Err(de::Error::custom("slot found"));
+                }
+                _ => {
+                    map.next_value::<IgnoredAny>()?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 fn zstd_size_hint(buf: &[u8]) -> Option<usize> {
     match get_frame_content_size(buf) {
         Ok(Some(size)) if size != CONTENTSIZE_ERROR && size != CONTENTSIZE_UNKNOWN => {
@@ -765,7 +823,7 @@ mod tests {
         assert_eq!(MergeType::AppendOnly.as_ref(), "append_only");
     }
 
-    fn gloas_body() -> Vec<u8> {
+    fn gloas_submission() -> SignedBidSubmissionGloas {
         SignedBidSubmissionGloas {
             message: GloasBidTrace {
                 trace: helix_types::BidTrace::test_random(),
@@ -776,21 +834,226 @@ mod tests {
             execution_requests: Default::default(),
             signature: helix_types::BlsSignatureBytes::random(),
         }
-        .as_ssz_bytes()
+    }
+
+    fn gloas_body() -> Vec<u8> {
+        gloas_submission().as_ssz_bytes()
+    }
+
+    /// Fulu from genesis, Gloas from epoch 5 (slot 160). The fixture bid is
+    /// for slot 130, so it decodes only if `decode_at` reads its slot: any
+    /// other bytes read as a slot land past 160 and pick Gloas.
+    fn gloas_from_epoch_5() -> ChainInfo {
+        let mut spec = helix_types::ChainSpec::mainnet();
+        spec.fulu_fork_epoch = Some(helix_types::Epoch::new(0));
+        spec.gloas_fork_epoch = Some(helix_types::Epoch::new(5));
+        ChainInfo::new(spec, Default::default(), 0)
+    }
+
+    fn fixture() -> SignedBidSubmissionFulu {
+        let mut json: serde_json::Value = serde_json::from_slice(include_bytes!(
+            "../../types/src/testdata/signed-bid-submission-fulu-2.json"
+        ))
+        .expect("the fixture is JSON");
+        // A 128 KiB blob overflows the test thread's stack in a debug build.
+        json["blobs_bundle"] = serde_json::json!({ "commitments": [], "proofs": [], "blobs": [] });
+        serde_json::from_value(json).expect("the fixture is a Fulu submission")
+    }
+
+    #[derive(Serialize, Encode)]
+    struct V2WithMergingData {
+        submission: SignedBidSubmissionFulu,
+        merging_data: BlockMergingDataV2,
+    }
+
+    #[derive(Serialize, Encode)]
+    struct V2WithAdjustmentsAndMergingData {
+        submission: SignedBidSubmissionFulu,
+        adjustments: BidAdjustmentData,
+        merging_data: BlockMergingDataV2,
+    }
+
+    fn encode<T: Encode + Serialize>(encoding: Encoding, body: &T) -> Vec<u8> {
+        match encoding {
+            Encoding::Json => serde_json::to_vec(body).expect("serialize"),
+            Encoding::Ssz => body.as_ssz_bytes(),
+        }
+    }
+
+    /// The fixture in every body shape that carries a full Fulu submission,
+    /// with the flags the bid decoder tile sets for it.
+    fn fixture_shapes(encoding: Encoding) -> Vec<(&'static str, SubmissionDecoderParams, Vec<u8>)> {
+        let params = |merge_type: MergeType, with_adjustments: bool, merging_v2: bool| {
+            SubmissionDecoderParams {
+                encoding,
+                merge_type,
+                with_mergeable_data: merge_type.is_some(),
+                with_adjustments,
+                merging_v2,
+                ..SubmissionDecoderParams::plain(ForkName::Fulu)
+            }
+        };
+        let submission = fixture();
+        let adjustments =
+            BidAdjustmentData::V1(BidAdjustmentDataV1::Original(BidAdjData::default()));
+        let merging_data = BlockMergingData {
+            allow_appending: true,
+            builder_address: submission.fee_recipient(),
+            merge_orders: vec![],
+        };
+        let with_adjustments = SignedBidSubmissionWithAdjustments {
+            message: submission.message.clone(),
+            execution_payload: submission.execution_payload.clone(),
+            blobs_bundle: submission.blobs_bundle.clone(),
+            execution_requests: submission.execution_requests.clone(),
+            signature: submission.signature,
+            bid_adjustment_data: adjustments.clone(),
+        };
+        let with_adjustments_and_merging = SignedBidSubmissionWithAdjustmentsAndMergingData {
+            message: submission.message.clone(),
+            execution_payload: submission.execution_payload.clone(),
+            blobs_bundle: submission.blobs_bundle.clone(),
+            execution_requests: submission.execution_requests.clone(),
+            signature: submission.signature,
+            bid_adjustment_data: adjustments.clone(),
+            merging_data: merging_data.clone(),
+        };
+        let with_merging = SignedBidSubmissionWithMergingData {
+            submission: submission.clone(),
+            merging_data: merging_data.clone(),
+        };
+
+        let mut shapes = vec![
+            ("plain", params(MergeType::None, false, false), encode(encoding, &submission)),
+            (
+                "with adjustments",
+                params(MergeType::None, true, false),
+                encode(encoding, &with_adjustments),
+            ),
+            (
+                "mergeable",
+                params(MergeType::Mergeable, false, false),
+                encode(encoding, &with_merging),
+            ),
+            (
+                "mergeable with adjustments",
+                params(MergeType::Mergeable, true, false),
+                encode(encoding, &with_adjustments_and_merging),
+            ),
+            (
+                "append-only",
+                params(MergeType::AppendOnly, false, false),
+                encode(encoding, &with_merging),
+            ),
+            (
+                "append-only without merging data",
+                params(MergeType::AppendOnly, false, false),
+                encode(encoding, &submission),
+            ),
+        ];
+        if encoding == Encoding::Ssz {
+            let merging_data = BlockMergingDataV2::from(merging_data);
+            shapes.push((
+                "v2 mergeable",
+                params(MergeType::Mergeable, false, true),
+                encode(encoding, &V2WithMergingData {
+                    submission: submission.clone(),
+                    merging_data: merging_data.clone(),
+                }),
+            ));
+            shapes.push((
+                "v2 mergeable with adjustments",
+                params(MergeType::Mergeable, true, true),
+                encode(encoding, &V2WithAdjustmentsAndMergingData {
+                    submission,
+                    adjustments,
+                    merging_data,
+                }),
+            ));
+        }
+        shapes
     }
 
     #[test]
-    fn the_json_slot_is_read_from_either_message_shape() {
+    fn decode_at_reads_the_slot_of_every_wire_shape() {
+        let chain_info = gloas_from_epoch_5();
+        let mut failures = Vec::new();
+        for encoding in [Encoding::Json, Encoding::Ssz] {
+            for (shape, params, body) in fixture_shapes(encoding) {
+                let mut decoder = SubmissionDecoder::new(&params);
+                let decoded = decoder.decode_at(&body, &mut Vec::new(), &chain_info);
+                if let Err(e) = decoded {
+                    failures.push(format!("{encoding:?} {shape} ({:?}): {e}", decoder.fork_name()));
+                } else if decoder.fork_name() != ForkName::Fulu {
+                    failures.push(format!("{encoding:?} {shape}: {:?}", decoder.fork_name()));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    #[test]
+    fn decode_at_leaves_a_body_without_a_slot_to_the_decode() {
+        let chain_info = gloas_from_epoch_5();
+        for (encoding, body) in
+            [(Encoding::Json, &br#"{"message":{}}"#[..]), (Encoding::Ssz, &[0; 4])]
+        {
+            let params = SubmissionDecoderParams {
+                encoding,
+                ..SubmissionDecoderParams::plain(ForkName::Fulu)
+            };
+            let err = SubmissionDecoder::new(&params)
+                .decode_at(body, &mut Vec::new(), &chain_info)
+                .expect_err("the body is malformed");
+
+            assert!(
+                matches!(
+                    (encoding, &err),
+                    (Encoding::Json, DecoderError::JsonDecodeError(_)) |
+                        (Encoding::Ssz, DecoderError::SszDecode(_))
+                ),
+                "{encoding:?}: {err}",
+            );
+        }
+    }
+
+    #[test]
+    fn decode_at_picks_gloas_for_a_gloas_slot() {
+        let chain_info = gloas_from_epoch_5();
+        let mut submission = gloas_submission();
+        submission.message.trace.slot = 160;
+        for encoding in [Encoding::Json, Encoding::Ssz] {
+            let params = SubmissionDecoderParams {
+                encoding,
+                ..SubmissionDecoderParams::plain(ForkName::Fulu)
+            };
+            let mut decoder = SubmissionDecoder::new(&params);
+            let (decoded, _, _) = decoder
+                .decode_at(&encode(encoding, &submission), &mut Vec::new(), &chain_info)
+                .unwrap_or_else(|e| panic!("{encoding:?}: {e}"));
+
+            assert_eq!(decoder.fork_name(), ForkName::Gloas, "{encoding:?}");
+            assert!(matches!(decoded, Submission::Full(SignedBidSubmission::Gloas(_))));
+        }
+    }
+
+    #[test]
+    fn the_json_slot_is_read_from_every_message_shape() {
         let mut params = SubmissionDecoderParams::plain(ForkName::Fulu);
         params.encoding = Encoding::Json;
         let decoder = SubmissionDecoder::new(&params);
 
         let fulu = br#"{"message":{"slot":"7","value":"1"},"execution_payload":{"transactions":["0x00"]}}"#;
         let gloas = br#"{"message":{"trace":{"slot":"9"},"parent_block_root":"0x00"}}"#;
+        let merging = br#"{"submission":{"message":{"value":"1","slot":"11"}},"merging_data":{}}"#;
+        // Nothing after the slot is read, so a body cut off there still has one.
+        let truncated = br#"{"message":{"slot":"13","value":"#;
 
-        assert_eq!(decoder.submission_slot(fulu).unwrap(), 7);
-        assert_eq!(decoder.submission_slot(gloas).unwrap(), 9);
-        assert!(decoder.submission_slot(br#"{"message":{}}"#).is_err());
+        assert_eq!(decoder.submission_slot(fulu), Some(7));
+        assert_eq!(decoder.submission_slot(gloas), Some(9));
+        assert_eq!(decoder.submission_slot(merging), Some(11));
+        assert_eq!(decoder.submission_slot(truncated), Some(13));
+        assert_eq!(decoder.submission_slot(br#"{"message":{}}"#), None);
     }
 
     #[test]
