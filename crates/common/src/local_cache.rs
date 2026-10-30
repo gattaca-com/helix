@@ -497,20 +497,22 @@ impl LocalCache {
             return RegistrationUpdate::Unchanged;
         }
 
-        let resigned = new.timestamp > existing.timestamp;
-
-        if !api_provider.admit_registration(resigned, existing_entry.value(), headers) {
-            return RegistrationUpdate::Rejected;
-        }
-
-        if existing.timestamp < new.timestamp.saturating_sub(VALIDATOR_REGISTRATION_UPDATE_INTERVAL) ||
+        let update_needed = existing.timestamp <
+            new.timestamp.saturating_sub(VALIDATOR_REGISTRATION_UPDATE_INTERVAL) ||
             fee_recipient_changed ||
             gas_limit_changed ||
-            existing_entry.registration_info.preferences.api_key != api_key
-        {
+            existing_entry.registration_info.preferences.api_key != api_key;
+        // Validators re-post the same registration every epoch; only ask the provider about
+        // one that would change something, so those re-posts are skipped, not refused.
+        if !update_needed {
+            return RegistrationUpdate::Unchanged;
+        }
+
+        let resigned = new.timestamp > existing.timestamp;
+        if api_provider.admit_registration(resigned, existing_entry.value(), headers) {
             RegistrationUpdate::Required
         } else {
-            RegistrationUpdate::Unchanged
+            RegistrationUpdate::Rejected
         }
     }
 
@@ -728,8 +730,8 @@ mod tests {
     }
 
     /// Registrations are public and replayable: an older one, or a different message at the same
-    /// timestamp, must not replace the stored one. Re-posting the stored one under a new api key
-    /// still updates the unsigned preferences.
+    /// timestamp, must not replace the stored one, and re-posting the stored one must not change
+    /// its unsigned preferences.
     #[test]
     fn registration_update_ignores_replayed_registrations() {
         let cache = LocalCache::new();
@@ -763,9 +765,10 @@ mod tests {
         assert_eq!(update(registration(99, other), None), RegistrationUpdate::Unchanged);
         assert_eq!(update(registration(100, other), None), RegistrationUpdate::Unchanged);
         assert_eq!(update(registration(100, stored), None), RegistrationUpdate::Unchanged);
+        // Preferences are unsigned, so the default provider refuses them on a re-post.
         assert_eq!(
             update(registration(100, stored), Some(Uuid::new_v4())),
-            RegistrationUpdate::Required
+            RegistrationUpdate::Rejected
         );
         assert_eq!(update(registration(101, other), None), RegistrationUpdate::Required);
     }
