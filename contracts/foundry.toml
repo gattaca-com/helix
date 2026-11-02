@@ -12,6 +12,9 @@ optimizer_runs = 1000000
 # CREATE2 address is stable.
 bytecode_hash = "none"
 cbor_metadata = false
+# Run each call from a test as a transaction of its own, so the gas tests
+# measure what a transaction pays: intrinsic gas included, accounts cold.
+isolate = true
 
 [profile.default.fuzz]
 runs = 1024

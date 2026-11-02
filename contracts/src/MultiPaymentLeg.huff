@@ -1,0 +1,11 @@
+/// Sends its balance to a recipient without running the recipient's code.
+/// MultiPaymentForwarder pays each entry by calling this with the entry's amount.
+///
+/// calldata: [20-byte recipient]
+///
+/// Since EIP-6780 SELFDESTRUCT just sends the balance to the recipient.
+#define macro MAIN() = takes(0) returns(0) {
+    push0 calldataload  // load calldata word
+    0x60 shr            // extract recipient
+    selfdestruct        // send balance to recipient
+}
