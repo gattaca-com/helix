@@ -26,6 +26,24 @@ impl<B: BidAdjustor> Context<B> {
             });
         }
 
+        // The relay never recomputes a block hash, so a stored hash only vouches for the bid
+        // trace it was stored with; a resubmission of the same block carries the same trace.
+        // The previous Gloas generation counts too, since its payloads are still revealed.
+        let bid_trace = submission.bid_trace();
+        let trace_mismatch = match submission {
+            Submission::Full(SignedBidSubmission::Gloas(_)) => self
+                .gloas_payloads
+                .get_for_reveal(&bid_trace.block_hash)
+                .is_some_and(|stored| !stored.has_bid_trace(bid_trace)),
+            _ => self
+                .payloads
+                .get(&bid_trace.block_hash)
+                .is_some_and(|stored| !stored.has_bid_trace(bid_trace)),
+        };
+        if trace_mismatch {
+            return Err(BlockValidationError::BidTraceMismatch { block_hash: bid_trace.block_hash });
+        }
+
         let payload_attributes = match submission {
             Submission::Full(SignedBidSubmission::Gloas(gloas)) => {
                 slot_data.payload_attributes_map.get(&ForkKey {
