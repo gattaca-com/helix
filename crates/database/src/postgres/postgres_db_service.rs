@@ -872,13 +872,19 @@ impl PostgresDatabaseService {
 
             // Join the values clauses and append them to the SQL statement
             sql.push_str(&values_clauses.join(", "));
-            sql.push_str(" ON CONFLICT (public_key) DO UPDATE SET fee_recipient = excluded.fee_recipient, gas_limit = excluded.gas_limit, timestamp = excluded.timestamp, signature = excluded.signature, inserted_at = excluded.inserted_at, user_agent = excluded.user_agent, active = true");
+            // Same rule as `LocalCache::registration_update`, which only sees this instance's
+            // cache: only a newer timestamp, or the same signed message, may overwrite a row.
+            sql.push_str(" ON CONFLICT (public_key) DO UPDATE SET fee_recipient = excluded.fee_recipient, gas_limit = excluded.gas_limit, timestamp = excluded.timestamp, signature = excluded.signature, inserted_at = excluded.inserted_at, user_agent = excluded.user_agent, active = true WHERE validator_registrations.timestamp < excluded.timestamp OR (validator_registrations.timestamp = excluded.timestamp AND validator_registrations.fee_recipient = excluded.fee_recipient AND validator_registrations.gas_limit = excluded.gas_limit) RETURNING public_key");
 
             // Execute the query
-            transaction.execute(&sql, &params[..]).await?;
+            let landed = transaction.query(&sql, &params[..]).await?;
 
+            // Preferences are unsigned and ride on the registration, so a stale one carries none.
             let params: Vec<&(dyn ToSql + Sync)> = structured_params_for_pref
                 .iter()
+                .filter(|tuple| {
+                    landed.iter().any(|row| row.get::<_, &[u8]>(0) == tuple.public_key.as_slice())
+                })
                 .flat_map(|tuple| {
                     vec![
                         &tuple.public_key as &(dyn ToSql + Sync),
@@ -920,7 +926,9 @@ impl PostgresDatabaseService {
             );
 
             // Execute the query
-            transaction.execute(&sql, &params[..]).await?;
+            if !params.is_empty() {
+                transaction.execute(&sql, &params[..]).await?;
+            }
 
             if structured_params_for_trusted.is_empty() {
                 transaction.commit().await?;
