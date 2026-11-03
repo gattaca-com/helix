@@ -153,6 +153,7 @@ smallvec = { version = "1.15", features = ["serde"] }
 ssz_types = "0.14"
 strum = "0.27"
 strum_macros = "0.27"
+subtle = "2.6"
 teloxide = { version = "0.13", features = ["macros"] }
 thiserror = "1.0.49"
 tikv-jemallocator = { version = "0.6", features = ["profiling"] }

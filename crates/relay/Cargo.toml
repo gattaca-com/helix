@@ -64,6 +64,7 @@ serde_json.workspace = true
 serial_test.workspace = true
 strum.workspace = true
 strum_macros.workspace = true
+subtle.workspace = true
 thiserror.workspace = true
 tikv-jemallocator.workspace = true
 tokio.workspace = true

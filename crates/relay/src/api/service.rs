@@ -28,7 +28,7 @@ use crate::{
         Api, FutureBidSubmissionResult, blacklist::BlacklistCache, builder::api::BuilderApi,
         extract::raw_web_socket::RawWebSocket, proposer::ProposerApi, router::build_router,
     },
-    gossip::{GossipedMessage, GrpcGossiperClientManager, process_gossip_messages},
+    gossip::{GossipToken, GossipedMessage, GrpcGossiperClientManager, process_gossip_messages},
     network::api::RelayNetworkApi,
     spine::messages::{GetHeaderServed, NewBidSubmission},
 };
@@ -110,9 +110,12 @@ pub async fn run_api_service<A: Api>(
     gossip_receiver: Receiver<GossipedMessage>,
 ) {
     let gossiper = Arc::new(
-        GrpcGossiperClientManager::new(config.relays.iter().map(|cfg| cfg.url.clone()).collect())
-            .await
-            .expect("failed to initialise gRPC gossiper"),
+        GrpcGossiperClientManager::new(
+            config.relays.iter().map(|cfg| cfg.url.clone()).collect(),
+            GossipToken::from_env(),
+        )
+        .await
+        .expect("failed to initialise gRPC gossiper"),
     );
 
     let validator_preferences = Arc::new(config.validator_preferences.clone());
