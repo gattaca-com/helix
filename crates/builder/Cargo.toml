@@ -67,5 +67,10 @@ uuid = { workspace = true, features = ["serde"] }
 zstd.workspace = true
 
 [dev-dependencies]
+criterion.workspace = true
 rand_xorshift.workspace = true
 tower = { version = "0.5", features = ["util"] }
+
+[[bench]]
+harness = false
+name = "blob_kzg"
