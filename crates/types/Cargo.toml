@@ -46,10 +46,15 @@ tree_hash_derive.workspace = true
 [dev-dependencies]
 alloy-rpc-types.workspace = true
 criterion.workspace = true
+tikv-jemallocator.workspace = true
 
 [[bench]]
 harness = false
 name = "blob_bundle"
+
+[[bench]]
+harness = false
+name = "bls_verify"
 
 [[bench]]
 harness = false
