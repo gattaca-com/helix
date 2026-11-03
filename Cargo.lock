@@ -5309,6 +5309,7 @@ dependencies = [
  "rustc-hash",
  "serde",
  "serde_json",
+ "silver_crypto_simd",
  "silver_ssz",
  "slot_clock",
  "smallvec",

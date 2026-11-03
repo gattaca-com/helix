@@ -264,8 +264,10 @@ fn built_with_bal(bal: Vec<u8>) -> BuiltBlock {
 }
 
 #[test]
-fn a_gloas_submission_carries_the_block_access_list() {
-    let submitter = Submitter::new("http://localhost:1", "key".to_string(), gloas_signing());
+fn gloas_submission_preserves_block_access_list_and_binds_domain() {
+    let signing = gloas_signing();
+    let domain = signing.chain_info.builder_domain;
+    let submitter = Submitter::new("http://localhost:1", "key".to_string(), signing);
     let bal = vec![9u8; 64];
 
     let bid = submitter.sign(&built_with_bal(bal.clone()), &slot_context()).unwrap();
@@ -281,6 +283,8 @@ fn a_gloas_submission_carries_the_block_access_list() {
         panic!("Gloas decodes to its own shape");
     };
     assert_eq!(decoded.block_access_list(), bal.as_slice());
+    decoded.verify_signature(domain).expect("the relay must accept our signature");
+    assert!(decoded.verify_signature(B256::ZERO).is_err(), "only under the builder domain");
 }
 
 #[test]

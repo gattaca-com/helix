@@ -1,5 +1,8 @@
 use alloy_primitives::{Address, B256};
 use bytes::Bytes;
+use silver_crypto_simd::bls::{
+    G1Point, G2Point, PairingProduct, uncompress_in_g1, uncompress_in_g2,
+};
 use silver_ssz::{
     merkle::{hash_concat, merkleize, uint64_chunk},
     ssz_hash_gloas::ExecutionRequestsView,
@@ -272,14 +275,22 @@ impl GloasBidSubmission {
 }
 
 pub fn bls_verify(pubkey: &[u8], signature: &[u8], root: B256) -> Result<(), SigError> {
-    let pubkey = blst::min_pk::PublicKey::key_validate(pubkey)
-        .map_err(|_| SigError::InvalidBlsPubkeyBytes)?;
-    let signature = blst::min_pk::Signature::from_bytes(signature)
-        .map_err(|_| SigError::InvalidBlsSignatureBytes)?;
-    match signature.verify(true, root.as_slice(), BLS_DST, &[], &pubkey, false) {
-        blst::BLST_ERROR::BLST_SUCCESS => Ok(()),
-        _ => Err(SigError::InvalidBlsSignature),
-    }
+    let pubkey = pubkey.try_into().map_err(|_| SigError::InvalidBlsPubkeyBytes)?;
+    let signature = signature.try_into().map_err(|_| SigError::InvalidBlsSignatureBytes)?;
+    let (mut pk, mut sig) = ([None], [None]);
+    uncompress_in_g1(&[pubkey], &mut pk);
+    // An infinity key and signature pass for every message.
+    let [Some(pk)] = pk.map(|p| p.filter(|p| !p.is_infinity())) else {
+        return Err(SigError::InvalidBlsPubkeyBytes);
+    };
+    uncompress_in_g2(&[signature], &mut sig);
+    let [Some(sig)] = sig else {
+        return Err(SigError::InvalidBlsSignatureBytes);
+    };
+    let hash = G2Point::hash_to_curve(root.as_slice(), BLS_DST);
+    PairingProduct::two_pairs_are_one((&G1Point::negative_generator(), &sig), (&pk, &hash))
+        .then_some(())
+        .ok_or(SigError::InvalidBlsSignature)
 }
 
 pub fn signing_root(object_root: B256, domain: B256) -> B256 {
@@ -404,4 +415,48 @@ fn blobs_bundle_layout_ok(bundle: &[u8]) -> bool {
     blobs.is_multiple_of(BYTES_PER_BLOB) &&
         commitments == blobs / BYTES_PER_BLOB * BYTES_PER_KZG_COMMITMENT &&
         proofs == blobs / BYTES_PER_BLOB * CELLS_PER_EXT_BLOB * BYTES_PER_KZG_PROOF
+}
+
+#[cfg(test)]
+mod tests {
+    use alloy_primitives::hex;
+    use lh_bls::{INFINITY_PUBLIC_KEY, INFINITY_SIGNATURE};
+
+    use super::*;
+    use crate::{BlsPublicKey, BlsSignature, get_fixed_pubkey, get_fixed_secret};
+
+    /// On-curve point outside the G2 subgroup, from batch 93 of
+    /// `crates/crypto_simd/proof/decompress_g2_vectors.txt` in silver
+    /// at tag `silver_crypto_simd-v0.1.0`.
+    const OUTSIDE_G2: [u8; 96] = hex!(
+        "82ad35e7521bc55f76767951977505562e3d2ccbe916a4eec9eb039471d8a2e1"
+        "8e48a60704f3f49873ffff81994ff4750d34624ab262ab1d0c494c944408f4ca"
+        "e3b2624a1218391c71e5f22a3878fc12330cca92d6f7233e5ff5a9c125ebf647"
+    );
+
+    #[test]
+    fn verdicts_match_lighthouse() {
+        let root = B256::repeat_byte(1);
+        let (pk, sig) =
+            (get_fixed_pubkey(0).serialize(), get_fixed_secret(0).sign(root).serialize());
+        let mut flagless = sig;
+        flagless[0] &= 0x7f;
+        let check = |case: &str, pubkey: &[u8], signature: &[u8], root: B256, valid: bool| {
+            assert_eq!(bls_verify(pubkey, signature, root).is_ok(), valid, "{case}");
+            let lighthouse = BlsPublicKey::deserialize(pubkey)
+                .and_then(|pubkey| Ok(BlsSignature::deserialize(signature)?.verify(&pubkey, root)));
+            assert_eq!(lighthouse.unwrap_or(false), valid, "{case}: lighthouse");
+        };
+        let outside = BlsSignature::deserialize(&OUTSIDE_G2).expect("OUTSIDE_G2 is on the curve");
+        assert!(!outside.point().unwrap().subgroup_check(), "OUTSIDE_G2 is outside G2");
+
+        check("valid", &pk, &sig, root, true);
+        check("wrong message", &pk, &sig, B256::repeat_byte(2), false);
+        check("wrong key", &get_fixed_pubkey(1).serialize(), &sig, root, false);
+        check("signature outside G2", &pk, &OUTSIDE_G2, root, false);
+        check("all-zero signature", &pk, &[0; 96], root, false);
+        check("missing compression flag", &pk, &flagless, root, false);
+        check("infinity signature", &pk, &INFINITY_SIGNATURE, root, false);
+        check("infinity key and signature", &INFINITY_PUBLIC_KEY, &INFINITY_SIGNATURE, root, false);
+    }
 }
