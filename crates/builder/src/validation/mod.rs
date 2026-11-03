@@ -241,11 +241,8 @@ impl BlockValidator {
             .validate_blob_commitment_hashes(&versioned_hashes)
             .map_err(|_| ValidationError::InvalidBlobsBundle)?;
 
-        let valid = self
-            .blob_cache
-            .verify(blobs, self.head.borrow().number)
-            .map_err(|_| ValidationError::InvalidBlobsBundle)?;
-        if !valid {
+        let head = self.head.borrow().number;
+        if !self.blob_cache.verify(blobs, head) {
             return Err(ValidationError::InvalidBlobsBundle);
         }
 

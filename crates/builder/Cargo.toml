@@ -55,6 +55,7 @@ secp256k1.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
+silver_crypto_simd.workspace = true
 thiserror.workspace = true
 tikv-jemallocator.workspace = true
 tokio.workspace = true

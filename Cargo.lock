@@ -4962,6 +4962,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "silver_crypto_simd",
  "thiserror 1.0.69",
  "tikv-jemallocator",
  "tokio",
@@ -10128,6 +10129,15 @@ checksum = "77549399552de45a898a580c1b41d445bf730df867cc44e6c0233bbc4b8329de"
 dependencies = [
  "digest 0.10.7",
  "rand_core 0.6.4",
+]
+
+[[package]]
+name = "silver_crypto_simd"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7df4b23a7896834e59c57593b90d65ffc3d5bc3236da7a74d259dd7ec45108f2"
+dependencies = [
+ "blst",
 ]
 
 [[package]]
