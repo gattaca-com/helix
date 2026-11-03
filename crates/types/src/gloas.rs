@@ -1,7 +1,8 @@
 use alloy_primitives::{Address, B256};
 use bytes::Bytes;
-use silver_crypto_simd::bls::{
-    G1Point, G2Point, PairingProduct, uncompress_in_g1, uncompress_in_g2,
+use silver_crypto_simd::{
+    bls::{G1Point, G2Point, PairingProduct, uncompress_in_g1, uncompress_in_g2},
+    kzg::CELLS_PER_EXT_BLOB,
 };
 use silver_ssz::{
     merkle::{hash_concat, merkleize, uint64_chunk},
@@ -23,7 +24,6 @@ use crate::{
 const GLOAS_BID_TRACE_SIZE: usize = 268;
 const SUBMISSION_FIXED: usize = GLOAS_BID_TRACE_SIZE + 3 * 4 + 96;
 const WITHDRAWAL_SIZE: usize = 44;
-const CELLS_PER_EXT_BLOB: usize = 128;
 const BID_FIXED: usize = 224;
 const ENVELOPE_FIXED: usize = 80;
 const SIGNED_FIXED: usize = 100;

@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use alloy_eips::eip7594::CELLS_PER_EXT_BLOB;
 use helix_common::{
     api::{PATH_BUILDER_API, PATH_SUBMIT_BLOCK},
     signing::RelaySigningContext,
@@ -10,6 +9,7 @@ use helix_types::{
     SignedBidSubmissionFulu, SignedBidSubmissionGloas, Slot, execution_requests_to_gloas,
     payload_from_v3,
 };
+use silver_crypto_simd::kzg::CELLS_PER_EXT_BLOB;
 use ssz::Encode;
 use thiserror::Error;
 

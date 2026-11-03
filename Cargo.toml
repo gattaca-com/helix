@@ -22,7 +22,7 @@ split-debuginfo = "off"
 
 [workspace.dependencies]
 alloy-consensus = { version = "2.1.1", default-features = false, features = ["k256"] }
-alloy-eips = { version = "2.1.1", default-features = false, features = ["kzg"] }
+alloy-eips = { version = "2.1.1", default-features = false }
 alloy-primitives = { version = "1.6.1", features = ["getrandom", "k256"] }
 alloy-rlp = { version = "0.3.16", default-features = false, features = ["core-net"] }
 alloy-rpc-types = { version = "2.1.1", default-features = false, features = ["beacon", "engine", "ssz"] }

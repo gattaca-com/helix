@@ -1,11 +1,11 @@
 use std::{hash::Hasher, sync::Arc};
 
-use alloy_eips::eip7594::CELLS_PER_EXT_BLOB;
 use alloy_primitives::{Address, B256, U256};
 use flux_profiler::timed;
 use lh_types::{EthSpec, ForkName, ForkVersionDecode, MainnetEthSpec, Withdrawal};
 use rustc_hash::{FxHashMap, FxHasher};
 use serde::{Deserialize, Serialize};
+use silver_crypto_simd::kzg::CELLS_PER_EXT_BLOB;
 use ssz::{Decode, DecodeError};
 use ssz_derive::{Decode, Encode};
 use tracing::trace;

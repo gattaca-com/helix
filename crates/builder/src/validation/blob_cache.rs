@@ -6,9 +6,11 @@ use std::{
     },
 };
 
-use ethrex_common::types::{Blob, BlobsBundle, CELLS_PER_EXT_BLOB, Commitment, Proof};
+use ethrex_common::types::{Blob, BlobsBundle, Commitment, Proof};
 use rustc_hash::FxHashMap;
-use silver_crypto_simd::kzg::{BYTES_PER_CELL, CellBatchVerifier, CellExtender};
+use silver_crypto_simd::kzg::{
+    BYTES_PER_CELL, CELLS_PER_EXT_BLOB, CellBatchVerifier, CellExtender,
+};
 
 use crate::metrics;
 
