@@ -9,8 +9,8 @@ use helix_common::{
     utils::utcnow_ns,
 };
 use helix_types::{
-    BlsPublicKey, BlsPublicKeyBytes, ExecPayload, GetPayloadResponse, SigError,
-    SignedBlindedBeaconBlock,
+    BlsPublicKeyBytes, Domain, ExecPayload, G2Point, GetPayloadResponse, SigError,
+    SignedBlindedBeaconBlock, SignedRoot, gloas,
 };
 use tokio::sync::oneshot::{self, Receiver};
 use tracing::trace;
@@ -197,23 +197,54 @@ fn verify_signed_blinded_block_signature(
     signed_blinded_beacon_block: &SignedBlindedBeaconBlock,
     public_key: &BlsPublicKeyBytes,
 ) -> Result<(), SigError> {
-    let uncompressed_public_key = BlsPublicKey::deserialize(public_key.as_slice())
-        .map_err(|_| SigError::InvalidBlsPubkeyBytes)?;
-    let slot = signed_blinded_beacon_block.message().slot();
-    let epoch = slot.epoch(chain_info.slots_per_epoch());
-    let fork = chain_info.spec.fork_at_epoch(epoch);
-
-    let valid = signed_blinded_beacon_block.verify_signature(
-        None,
-        &uncompressed_public_key,
-        &fork,
-        chain_info.genesis_validators_root,
-        &chain_info.spec,
-    );
-
-    if !valid {
+    if signed_blinded_beacon_block.fork_name(&chain_info.spec).is_err() {
         return Err(SigError::InvalidBlsSignature);
     }
+    let signature = signed_blinded_beacon_block
+        .signature()
+        .point()
+        .and_then(|signature| G2Point::from_blst((*signature).into()))
+        .ok_or(SigError::InvalidBlsSignatureBytes)?;
+    let message = signed_blinded_beacon_block.message();
+    let domain = chain_info.domain_at(Domain::BeaconProposer, message.slot());
+    gloas::bls_verify_point(public_key.as_slice(), &signature, message.signing_root(domain))
+}
 
-    Ok(())
+#[cfg(test)]
+mod tests {
+    use helix_types::{
+        BlsSignature, EmptyBlock, SignedBlindedBeaconBlockFulu, Slot, get_fixed_pubkey_bytes,
+        get_fixed_secret,
+    };
+
+    use super::*;
+
+    fn fulu_block_signed_at(slot: Slot, chain_info: &ChainInfo) -> SignedBlindedBeaconBlock {
+        let spec = &chain_info.spec;
+        let mut block = SignedBlindedBeaconBlockFulu {
+            message: EmptyBlock::empty(spec),
+            signature: BlsSignature::empty(),
+        };
+        block.message.slot = slot;
+        let (block, _) = SignedBlindedBeaconBlock::Fulu(block).deconstruct();
+        let fork = spec.fork_at_epoch(block.epoch());
+        block.sign(&get_fixed_secret(0), &fork, chain_info.genesis_validators_root, spec)
+    }
+
+    #[test]
+    fn blinded_block_verifies_only_under_its_proposer_and_fork() {
+        let chain_info = ChainInfo::default();
+        let fulu = chain_info.spec.fulu_fork_epoch.expect("mainnet schedules Fulu");
+        let fulu = fulu.start_slot(chain_info.slots_per_epoch());
+        let verify = |block, key| {
+            verify_signed_blinded_block_signature(&chain_info, &block, &get_fixed_pubkey_bytes(key))
+                .is_ok()
+        };
+
+        assert!(verify(fulu_block_signed_at(fulu, &chain_info), 0));
+        assert!(!verify(fulu_block_signed_at(fulu, &chain_info), 1));
+        assert!(!verify(fulu_block_signed_at(Slot::new(0), &chain_info), 0), "Fulu body at slot 0");
+        let (block, _) = fulu_block_signed_at(fulu, &chain_info).deconstruct();
+        assert!(!verify(SignedBlindedBeaconBlock::from_block(block, BlsSignature::empty()), 0));
+    }
 }

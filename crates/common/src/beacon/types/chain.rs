@@ -1,7 +1,6 @@
 use alloy_primitives::{Address, B256, hex};
 use helix_types::{
-    BlsPublicKey, BlsPublicKeyBytes, BlsSignature, BlsSignatureBytes, Domain, SignedRoot, Slot,
-    Withdrawals,
+    BlsPublicKeyBytes, BlsSignatureBytes, Domain, SignedRoot, Slot, Withdrawals, gloas,
 };
 use serde::{Deserialize, Serialize};
 use tree_hash_derive::TreeHash;
@@ -95,13 +94,8 @@ impl SignedProposerPreferences {
     /// comes from here, so an unsigned message would let anyone redirect it.
     pub fn verify(&self, pubkey: &BlsPublicKeyBytes, chain_info: &ChainInfo) -> bool {
         let domain = chain_info.domain_at(Domain::ProposerPreferences, self.message.proposal_slot);
-        let Ok(pubkey) = BlsPublicKey::deserialize(pubkey.as_ref()) else {
-            return false;
-        };
-        let Ok(signature) = BlsSignature::deserialize(self.signature.as_ref()) else {
-            return false;
-        };
-        signature.verify(&pubkey, self.message.signing_root(domain))
+        let root = self.message.signing_root(domain);
+        gloas::bls_verify(pubkey.as_slice(), self.signature.as_slice(), root).is_ok()
     }
 }
 

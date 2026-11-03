@@ -147,6 +147,7 @@ fn the_signature_verifies_under_the_builder_domain() {
 
     // The exact check the relay's decoder tile makes.
     submission.verify_signature(domain).expect("the relay must accept our signature");
+    assert!(submission.verify_signature(B256::ZERO).is_err(), "only under the builder domain");
 }
 
 #[test]

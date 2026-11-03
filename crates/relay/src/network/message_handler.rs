@@ -126,10 +126,7 @@ impl RelayNetworkManager {
                 if !known_peer {
                     return Err(WsConnectionError::UnknownPeer(pubkey));
                 }
-                {
-                    let deserialized_pubkey = hello_msg.deserialize_pubkey()?;
-                    hello_msg.verify_signature(&deserialized_pubkey)?;
-                }
+                hello_msg.verify_signature()?;
                 debug!(peer=%pubkey, "Verified Hello message from peer");
 
                 let supported_message_types = hello_msg.into_supported_message_types();

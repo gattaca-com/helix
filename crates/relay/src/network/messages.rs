@@ -5,7 +5,7 @@ use helix_common::{
     signing::{RELAY_DOMAIN, RelaySigningContext},
     utils::utcnow_ms,
 };
-use helix_types::{BlsPublicKey, BlsPublicKeyBytes, BlsSignature, BlsSignatureBytes, SignedRoot};
+use helix_types::{BlsPublicKeyBytes, BlsSignatureBytes, SigError, SignedRoot, gloas};
 use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
 use tree_hash_derive::TreeHash;
@@ -137,15 +137,7 @@ impl HelloMessage {
         smt
     }
 
-    pub(crate) fn deserialize_pubkey(&self) -> Result<BlsPublicKey, MessageAuthenticationError> {
-        BlsPublicKey::deserialize(&*self.pubkey)
-            .map_err(|_| MessageAuthenticationError::CouldNotDeserializePubkey)
-    }
-
-    pub(crate) fn verify_signature(
-        &self,
-        pubkey: &BlsPublicKey,
-    ) -> Result<(), MessageAuthenticationError> {
+    pub(crate) fn verify_signature(&self) -> Result<(), MessageAuthenticationError> {
         let now = utcnow_ms();
         if self.valid_until < now {
             return Err(MessageAuthenticationError::ExpiredMessage);
@@ -155,13 +147,17 @@ impl HelloMessage {
         let message = MessageToSign { pubkey: self.pubkey, valid_until: self.valid_until };
         let signing_root = message.signing_root(RELAY_DOMAIN.into());
 
-        let signature = BlsSignature::deserialize(self.signature.as_ref())
-            .map_err(|_| MessageAuthenticationError::CouldNotDeserializeSignature)?;
-
-        if !signature.verify(pubkey, signing_root) {
-            return Err(MessageAuthenticationError::InvalidSignature);
-        }
-        Ok(())
+        gloas::bls_verify(self.pubkey.as_slice(), self.signature.as_slice(), signing_root).map_err(
+            |err| match err {
+                SigError::InvalidBlsPubkeyBytes => {
+                    MessageAuthenticationError::CouldNotDeserializePubkey
+                }
+                SigError::InvalidBlsSignatureBytes => {
+                    MessageAuthenticationError::CouldNotDeserializeSignature
+                }
+                SigError::InvalidBlsSignature => MessageAuthenticationError::InvalidSignature,
+            },
+        )
     }
 }
 
@@ -188,8 +184,10 @@ mod tests {
     use std::fmt::Debug;
 
     use alloy_primitives::Bytes;
-    use helix_common::api::builder_api::InclusionList;
-    use helix_types::Transaction;
+    use helix_common::{
+        api::builder_api::InclusionList, chain_info::ChainInfo, signing::RelaySigningContext,
+    };
+    use helix_types::{BlsKeypair, Transaction, get_fixed_pubkey_bytes};
     use serde::{Deserialize, Serialize};
 
     use crate::network::messages::{
@@ -265,6 +263,16 @@ mod tests {
         assert!(matches!(message, RawNetworkMessage::Hello(_)));
 
         test_roundtrip(&message);
+    }
+
+    #[test]
+    fn hello_verifies_only_under_its_sender_key() {
+        let context = RelaySigningContext::new(BlsKeypair::random(), ChainInfo::default().into());
+        let mut hello = HelloMessage::new(&context);
+        assert!(hello.verify_signature().is_ok());
+
+        hello.pubkey = get_fixed_pubkey_bytes(0);
+        assert!(hello.verify_signature().is_err());
     }
 
     #[test]

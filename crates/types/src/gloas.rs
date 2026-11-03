@@ -275,20 +275,25 @@ impl GloasBidSubmission {
 }
 
 pub fn bls_verify(pubkey: &[u8], signature: &[u8], root: B256) -> Result<(), SigError> {
-    let pubkey = pubkey.try_into().map_err(|_| SigError::InvalidBlsPubkeyBytes)?;
     let signature = signature.try_into().map_err(|_| SigError::InvalidBlsSignatureBytes)?;
-    let (mut pk, mut sig) = ([None], [None]);
+    let mut sig = [None];
+    uncompress_in_g2(&[signature], &mut sig);
+    let [Some(sig)] = sig else {
+        return Err(SigError::InvalidBlsSignatureBytes);
+    };
+    bls_verify_point(pubkey, &sig, root)
+}
+
+pub fn bls_verify_point(pubkey: &[u8], signature: &G2Point, root: B256) -> Result<(), SigError> {
+    let pubkey = pubkey.try_into().map_err(|_| SigError::InvalidBlsPubkeyBytes)?;
+    let mut pk = [None];
     uncompress_in_g1(&[pubkey], &mut pk);
     // An infinity key and signature pass for every message.
     let [Some(pk)] = pk.map(|p| p.filter(|p| !p.is_infinity())) else {
         return Err(SigError::InvalidBlsPubkeyBytes);
     };
-    uncompress_in_g2(&[signature], &mut sig);
-    let [Some(sig)] = sig else {
-        return Err(SigError::InvalidBlsSignatureBytes);
-    };
     let hash = G2Point::hash_to_curve(root.as_slice(), BLS_DST);
-    PairingProduct::two_pairs_are_one((&G1Point::negative_generator(), &sig), (&pk, &hash))
+    PairingProduct::two_pairs_are_one((&G1Point::negative_generator(), signature), (&pk, &hash))
         .then_some(())
         .ok_or(SigError::InvalidBlsSignature)
 }

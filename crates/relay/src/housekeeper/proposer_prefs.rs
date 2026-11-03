@@ -430,7 +430,7 @@ mod tests {
 
         // Correctly signed, but by someone who does not propose this slot.
         let mut store = ProposerPreferencesStore::default();
-        let ev = event_from(101, 999, attacker_address, 45_000_000);
+        let ev = event_from(101, 1, attacker_address, 45_000_000);
         store.process(Slot::new(0), sign_event(&attacker_key, &chain_info, ev));
 
         let feed = synthesize_duty_feed(

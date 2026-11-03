@@ -15,10 +15,9 @@ use tree_hash::TreeHash;
 use tree_hash_derive::TreeHash;
 
 use crate::{
-    BlobsBundle, BlobsError, BlockMergingData, Bloom, BlsPublicKey, BlsPublicKeyBytes,
-    BlsSignature, BlsSignatureBytes, DehydratedBidSubmission, ExecutionPayload,
-    ExecutionPayloadGloas, ExecutionRequestsGloas, ExtraData, GloasBidSubmission, PayloadAndBlobs,
-    SszError, TestRandom,
+    BlobsBundle, BlobsError, BlockMergingData, Bloom, BlsPublicKeyBytes, BlsSignatureBytes,
+    DehydratedBidSubmission, ExecutionPayload, ExecutionPayloadGloas, ExecutionRequestsGloas,
+    ExtraData, GloasBidSubmission, PayloadAndBlobs, SszError, TestRandom,
     bid_adjustment_data::{BidAdjData, BidAdjustmentData, BidAdjustmentDataV1},
     error::SigError,
     fields::ExecutionRequests,
@@ -570,20 +569,11 @@ impl SignedBidSubmissionFulu {
 
     #[timed]
     pub fn verify_signature(&self, builder_domain: B256) -> Result<(), SigError> {
-        let uncompressed_builder_pubkey =
-            BlsPublicKey::deserialize(self.message.builder_pubkey.as_slice())
-                .map_err(|_| SigError::InvalidBlsPubkeyBytes)?;
-        let uncompressed_signature = BlsSignature::deserialize(self.signature.as_slice())
-            .map_err(|_| SigError::InvalidBlsSignatureBytes)?;
-
-        let message = self.message.signing_root(builder_domain);
-        let valid = uncompressed_signature.verify(&uncompressed_builder_pubkey, message);
-
-        if !valid {
-            return Err(SigError::InvalidBlsSignature);
-        }
-
-        Ok(())
+        crate::gloas::bls_verify(
+            self.message.builder_pubkey.as_slice(),
+            self.signature.as_slice(),
+            self.message.signing_root(builder_domain),
+        )
     }
 
     pub fn num_txs(&self) -> usize {
