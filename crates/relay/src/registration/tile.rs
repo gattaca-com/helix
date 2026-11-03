@@ -10,7 +10,7 @@ use flux::{
 use flux_profiler::timed;
 use flux_utils::SharedVector;
 use helix_common::{chain_info::ChainInfo, utils::utcnow_ns};
-use helix_types::SignedValidatorRegistration;
+use helix_types::{SignedRoot, SignedValidatorRegistration, gloas::BlsBatch};
 use tracing::info;
 
 use crate::{
@@ -92,6 +92,7 @@ pub struct RegistrationTile {
     slot_events: Arc<SharedVector<SlotUpdate>>,
     bid_slot: u64,
     stats: RegStats,
+    batch: BlsBatch,
 }
 
 impl RegistrationTile {
@@ -111,6 +112,7 @@ impl RegistrationTile {
             slot_events,
             bid_slot: 0,
             stats: RegStats::default(),
+            batch: BlsBatch::default(),
         }
     }
 
@@ -146,9 +148,13 @@ impl RegistrationTile {
         use helix_common::metrics::{WORKER_TASK_COUNT, WORKER_TASK_LATENCY_US};
 
         let start_task = Instant::now();
-        let completed = self.process_reg_task(task);
-        let tag = if completed { "RegistrationBatch" } else { "RegistrationBatch_Aborted" };
-        if completed {
+        let outcome = self.process_reg_task(task);
+        let tag = match outcome {
+            Some(false) => "RegistrationBatch",
+            Some(true) => "RegistrationBatch_Fallback",
+            None => "RegistrationBatch_Aborted",
+        };
+        if outcome.is_some() {
             self.stats.completed += 1;
         } else {
             self.stats.aborted += 1;
@@ -161,35 +167,45 @@ impl RegistrationTile {
         WORKER_TASK_LATENCY_US.with_label_values(&[tag, &self.id]).observe(dur.as_micros() as f64);
     }
 
-    /// Returns whether the task completed (false = caller dropped the result channel).
+    /// Returns `None` if cancellation is observed before verification; otherwise
+    /// returns whether a multi-item check fell back, wrapped in `Some`.
     #[timed]
-    fn process_reg_task(&mut self, RegWorkerJob { regs, range, res_tx }: RegWorkerJob) -> bool {
-        use helix_common::metrics::{WORKER_TASK_COUNT, WORKER_TASK_LATENCY_US};
+    fn process_reg_task(
+        &mut self,
+        RegWorkerJob { regs, range, res_tx }: RegWorkerJob,
+    ) -> Option<bool> {
+        use helix_common::metrics::WORKER_TASK_COUNT;
 
+        if res_tx.is_closed() {
+            return None;
+        }
         let mut res = Vec::with_capacity(range.len());
-
+        self.batch.clear();
         for i in range {
-            if res_tx.is_closed() {
-                return false;
+            let reg = &regs[i];
+            let candidate = validate_timestamp(&self.chain_info, reg).is_ok();
+            if candidate {
+                let root = reg.message.signing_root(self.chain_info.builder_domain);
+                self.batch.push(&reg.message.pubkey.0, &reg.signature.0, root);
             }
-
-            let start = Instant::now();
-            let valid = validate_registration(&self.chain_info, &regs[i]);
-            if valid.is_ok() {
-                self.stats.valid += 1;
-            } else {
-                self.stats.invalid += 1;
-            }
-            res.push((i, valid.is_ok()));
-
-            WORKER_TASK_COUNT.with_label_values(&["Registration", &self.id]).inc();
-            WORKER_TASK_LATENCY_US
-                .with_label_values(&["Registration", &self.id])
-                .observe(start.elapsed().as_micros() as f64);
+            res.push((i, candidate));
+        }
+        if res_tx.is_closed() {
+            return None;
         }
 
+        let fell_back = self.batch.verify();
+        let candidates = res.iter_mut().filter(|(_, candidate)| *candidate);
+        for ((_, valid), &verdict) in candidates.zip(self.batch.verdicts()) {
+            *valid = verdict;
+        }
+        let valid = res.iter().filter(|(_, valid)| *valid).count() as u32;
+        self.stats.valid += valid;
+        self.stats.invalid += res.len() as u32 - valid;
+        WORKER_TASK_COUNT.with_label_values(&["Registration", &self.id]).inc_by(res.len() as u64);
+
         let _ = res_tx.send(res);
-        true
+        Some(fell_back)
     }
 }
 
@@ -208,8 +224,7 @@ impl Tile<HelixSpine> for RegistrationTile {
     }
 }
 
-#[timed]
-fn validate_registration(
+fn validate_timestamp(
     chain_info: &ChainInfo,
     registration: &SignedValidatorRegistration,
 ) -> Result<(), ProposerApiError> {
@@ -228,6 +243,49 @@ fn validate_registration(
             max_timestamp: utcnow_sec() + 10,
         });
     }
-    registration.verify_signature(chain_info.builder_domain)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use alloy_primitives::B256;
+    use helix_common::utils::utcnow_sec;
+    use helix_types::{ValidatorRegistration, get_fixed_pubkey_bytes, get_fixed_secret};
+    use tokio::sync::oneshot;
+
+    use super::*;
+
+    #[test]
+    fn job_reports_each_registration_in_its_range() {
+        let chain_info = ChainInfo::default();
+        let registration = |key: usize, timestamp: u64, domain: B256| {
+            let message = ValidatorRegistration {
+                pubkey: get_fixed_pubkey_bytes(key),
+                timestamp,
+                ..Default::default()
+            };
+            let root = message.signing_root(domain);
+            let signature = get_fixed_secret(key).sign(root).serialize().into();
+            SignedValidatorRegistration { message, signature }
+        };
+        let (now, domain) = (utcnow_sec(), chain_info.builder_domain);
+        let mut regs = vec![
+            registration(0, now, domain),
+            registration(1, chain_info.genesis_time_in_secs - 1, domain),
+            registration(2, now, domain),
+            registration(3, now, !domain),
+            registration(4, now, domain),
+        ];
+        regs[2].message.gas_limit = 1;
+
+        let (res_tx, mut res_rx) = oneshot::channel();
+        let mut tile =
+            RegistrationTile::new(0, chain_info, crossbeam_channel::never(), Default::default());
+        // Driving the tile's loop requires a full spine; this tests the job handler.
+        tile.handle_reg_task(RegWorkerJob { regs: Arc::new(regs), range: 1..5, res_tx });
+
+        let mut res = res_rx.try_recv().expect("the job reports");
+        res.sort_unstable();
+        assert_eq!(res, [(1, false), (2, false), (3, false), (4, true)]);
+    }
 }
