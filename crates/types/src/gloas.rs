@@ -13,13 +13,15 @@ use silver_ssz::{
         EXECUTION_PAYLOAD_FIXED_GLOAS, ExecutionPayloadBidView, ExecutionPayloadEnvelopeView,
         ExecutionPayloadView, MAX_BYTES_PER_TRANSACTION, MAX_EXTRA_DATA_BYTES,
         MAX_TRANSACTIONS_PER_PAYLOAD, MAX_WITHDRAWALS_PER_PAYLOAD, SignedBeaconBlockView,
+        WithdrawalView,
     },
 };
 use ssz::{Decode, DecodeError};
 use tree_hash::TreeHash;
 
 use crate::{
-    BidTrace, BlockValidationError, GloasBidTrace, SszError, Withdrawals, error::SigError,
+    BidTrace, BlockValidationError, GloasBidTrace, SszError, error::SigError,
+    execution_payload::withdrawals_root_of,
 };
 
 const GLOAS_BID_TRACE_SIZE: usize = 268;
@@ -197,9 +199,17 @@ impl GloasBidSubmission {
         let payload = self.execution_payload();
         let withdrawals = &payload[ExecutionPayloadView::withdrawals_offset(payload) as usize..
             ExecutionPayloadView::block_access_list_offset(payload) as usize];
-        Withdrawals::from_ssz_bytes(withdrawals)
-            .map(|withdrawals| withdrawals.tree_hash_root())
-            .unwrap_or_default()
+        // `from_ssz_bytes` validates complete 44-byte entries and at most 16 withdrawals.
+        withdrawals_root_of(withdrawals.chunks_exact(WITHDRAWAL_SIZE).map(|w| {
+            let w = w.try_into().expect("one withdrawal");
+            let address = WithdrawalView::address(w);
+            (
+                WithdrawalView::index(w),
+                WithdrawalView::validator_index(w),
+                address,
+                WithdrawalView::amount(w),
+            )
+        }))
     }
 
     fn bundle_section(&self, i: usize) -> &[u8] {

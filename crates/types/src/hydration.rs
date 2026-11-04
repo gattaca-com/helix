@@ -9,7 +9,6 @@ use silver_crypto_simd::kzg::CELLS_PER_EXT_BLOB;
 use ssz::{Decode, DecodeError};
 use ssz_derive::{Decode, Encode};
 use tracing::trace;
-use tree_hash::TreeHash;
 
 use crate::{
     BidTrace, Blob, BlobsBundle, BlockMergingData, BlockValidationError, BlsPublicKeyBytes,
@@ -17,6 +16,7 @@ use crate::{
     bid_adjustment_data::{BidAdjData, BidAdjustmentData, BidAdjustmentDataV1},
     bid_submission,
     fields::{ExecutionRequests, KzgCommitment, KzgProof, Transaction, Transactions, Withdrawals},
+    withdrawals_root,
 };
 
 /// A bid submission where transactions and blobs may be replaced by hashes instead of payload
@@ -87,7 +87,7 @@ impl DehydratedBidSubmission {
     pub fn withdrawal_root(&self) -> Option<B256> {
         match self {
             DehydratedBidSubmission::Fulu(s) => {
-                (s.withdrawals_ref == 0).then(|| s.execution_payload.withdrawals.tree_hash_root())
+                (s.withdrawals_ref == 0).then(|| s.execution_payload.withdrawals_root())
             }
         }
     }
@@ -561,7 +561,7 @@ impl DehydratedBidSubmissionFulu {
             let w = &self.execution_payload.withdrawals;
             withdrawals
                 .entry(withdrawals_key(w))
-                .or_insert_with(|| (w.clone(), w.tree_hash_root()));
+                .or_insert_with(|| (w.clone(), withdrawals_root(w)));
         }
 
         let full: Vec<Transaction> =
@@ -666,7 +666,7 @@ impl DehydratedBidSubmissionFulu {
             let w = &self.execution_payload.withdrawals;
             withdrawals
                 .entry(withdrawals_key(w))
-                .or_insert_with(|| (w.clone(), w.tree_hash_root()));
+                .or_insert_with(|| (w.clone(), withdrawals_root(w)));
         }
         for tx in &self.execution_payload.transactions {
             if tx.len() >= TX_KEY_SIZE {

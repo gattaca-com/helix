@@ -11,7 +11,6 @@ use serde::{Deserialize, Serialize};
 use ssz::{Decode, DecodeError};
 use ssz_derive::{Decode, Encode};
 use tracing::error;
-use tree_hash::TreeHash;
 use tree_hash_derive::TreeHash;
 
 use crate::{
@@ -706,7 +705,7 @@ impl SignedBidSubmissionFulu {
     }
 
     pub fn withdrawals_root(&self) -> B256 {
-        self.execution_payload.withdrawals.tree_hash_root()
+        self.execution_payload.withdrawals_root()
     }
 
     pub fn transactions_root(&self) -> B256 {
@@ -1120,9 +1119,10 @@ mod tests {
 #[cfg(test)]
 mod gloas_submission_tests {
     use ssz::{Decode, Encode};
+    use tree_hash::TreeHash;
 
     use super::*;
-    use crate::TestRandomSeed;
+    use crate::{TestRandomSeed, Withdrawal, Withdrawals};
 
     fn decodable_gloas_submission() -> SignedBidSubmissionGloas {
         let mut execution_payload = ExecutionPayloadGloas::default();
@@ -1163,6 +1163,23 @@ mod gloas_submission_tests {
         assert_eq!(decoded.execution_payload, submission.execution_payload);
         assert_eq!(decoded.execution_requests, submission.execution_requests);
         assert_eq!(bytes, decoded.as_ssz_bytes());
+    }
+
+    #[test]
+    fn gloas_withdrawals_root_matches_lighthouse() {
+        for count in [0, 1, 15, 16] {
+            let mut submission = decodable_gloas_submission();
+            let mut rng = rand::rng();
+            let withdrawals: Vec<_> =
+                (0..count).map(|_| Withdrawal::random_for_test(&mut rng)).collect();
+            Arc::make_mut(&mut submission.execution_payload).withdrawals =
+                withdrawals.clone().into();
+            let decoded =
+                GloasBidSubmission::from_ssz_bytes(submission.as_ssz_bytes().into()).unwrap();
+
+            let expected = Withdrawals::new(withdrawals).unwrap().tree_hash_root();
+            assert_eq!(decoded.withdrawals_root(), expected, "{count} withdrawals");
+        }
     }
 
     #[test]
