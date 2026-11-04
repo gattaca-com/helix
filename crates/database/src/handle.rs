@@ -13,7 +13,7 @@ use helix_common::{
     },
     bid_submission::OptimisticVersion,
     is_local_dev,
-    utils::{alert_discord, utcnow_sec},
+    utils::{send_alert, utcnow_sec},
 };
 use helix_types::{BlsPublicKeyBytes, MergedBlock, SignedBidSubmission};
 use tracing::{error, warn};
@@ -127,7 +127,7 @@ impl DbHandle {
         }) {
             error!(%err, "failed to send DbDemoteBuilder request triggering failsafe: stopping all optimistic submissions");
             failsafe_triggered.store(true, Ordering::Relaxed);
-            alert_discord(&format!(
+            send_alert(&format!(
                 "{} {} {} failed to demote builder in database! Pausing all optmistic submissions",
                 builder_pub_key, err, block_hash
             ));
@@ -289,7 +289,7 @@ impl DbHandle {
         }) {
             error!(%err, "failed to send DisableAdjustments request triggering failsafe: stopping all adjustments");
             failsafe_trigger.store(true, Ordering::Relaxed);
-            alert_discord(&format!(
+            send_alert(&format!(
                 "{} {} failed to disable adjustments in database! Pausing all adjustments",
                 block_hash, err
             ));

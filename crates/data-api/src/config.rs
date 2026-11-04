@@ -13,7 +13,8 @@ pub struct DataApiConfig {
     pub router_config: RouterConfig,
     #[serde(default = "default_api_port")]
     pub api_port: u16,
-    pub discord_webhook_url: Option<Url>,
+    #[serde(alias = "discord_webhook_url")]
+    pub alert_webhook_url: Option<Url>,
 }
 
 fn default_api_port() -> u16 {
