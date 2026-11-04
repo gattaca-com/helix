@@ -138,7 +138,7 @@ impl<B: BidAdjustor> Tile<HelixSpine> for Auctioneer<B> {
             self.state.step(event, &mut self.ctx, &mut self.tel, &mut adapter.producers);
         }
 
-        self.ctx.poll_discord_alert();
+        self.ctx.poll_alert();
 
         let mut started = Vec::new();
         while let Some(done) = self.ctx.sims.next_done(&mut started) {
