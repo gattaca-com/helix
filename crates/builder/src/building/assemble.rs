@@ -22,7 +22,7 @@ use thiserror::Error;
 use crate::{
     building::slot::SlotContext,
     config::BuildingConfig,
-    engine::convert::{au256, eaddr, eu256, h256},
+    convert::{au256, eaddr, eu256, h256},
 };
 
 #[derive(Debug, Error)]

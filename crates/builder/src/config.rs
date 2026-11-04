@@ -17,10 +17,10 @@ pub struct MergingConfig {
     pub listen_addr: SocketAddr,
     /// Allowlisted relay api keys (`MergerRegistrationV1.api_key`).
     pub api_keys: Vec<Uuid>,
-    /// Advertised in `MergerAckV1` and enforced on ingest.
+    /// Advertised in `MergerAckV1` and enforced per slot.
     #[serde(default = "default_max_orders_per_slot")]
     pub max_orders_per_slot: u32,
-    /// Advertised in `MergerAckV1`; caps decompressed frame bodies.
+    /// Advertised in `MergerAckV1`; caps frame bodies and is the engine -> server queue's mtu.
     #[serde(default = "default_max_frame_bytes")]
     pub max_frame_bytes: u32,
     #[serde(default = "default_true")]
@@ -36,21 +36,31 @@ pub struct MergingConfig {
     /// Mergeable blocks admitted per slot before `LimitExceeded`.
     #[serde(default = "default_max_blocks_per_slot")]
     pub max_blocks_per_slot: usize,
-    /// Capacity of the tile -> engine event queue; overflow answers `Busy`.
+    /// Events in flight to the engine, rounded up to a power of two; overflow answers `Busy`.
     #[serde(default = "default_event_queue_capacity")]
     pub event_queue_capacity: usize,
+    /// Payload bytes in flight to the engine (power of two); overflow answers `Busy`. A block
+    /// takes about twice its body length, see `spine::charge`.
+    #[serde(default = "default_event_queue_bytes")]
+    pub event_queue_bytes: usize,
     #[serde(default)]
     pub cores: CoreConfig,
     #[serde(default)]
     pub emission: EmissionConfig,
     #[serde(default)]
     pub speculation: SpeculationConfig,
+    /// Record sampled slots for local replay; off when absent.
+    #[serde(default)]
+    pub record: Option<crate::merge::record::RecordConfig>,
     /// Port for the merging-role prometheus endpoint; omit to disable.
     #[serde(default = "default_metrics_port")]
     pub metrics_port: Option<u16>,
     /// Blacklist applied to pooled orders on slots the proposer filters.
     #[serde(default = "default_blacklist_endpoint")]
     pub blacklist_endpoint: String,
+    /// Publish `#[timed]` frames for the `flux-profiler` CLI to attach to.
+    #[serde(default)]
+    pub enable_flux_profiler: bool,
 }
 
 fn default_metrics_port() -> Option<u16> {
@@ -63,37 +73,22 @@ fn default_metrics_port() -> Option<u16> {
 pub struct CoreConfig {
     pub server_tile: Option<usize>,
     pub merge_worker: Option<usize>,
-    /// One core per merge stream, in creation order. Streams beyond the list
-    /// run unpinned, so a short list is a valid choice, not an error.
-    #[serde(default)]
-    pub replay_workers: Vec<usize>,
 }
 
-/// Speculative base-block replay: warms a merge session for every appendable
-/// block as it arrives, so `ActivateBaseBlockV1` costs a lookup, not a replay.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SpeculationConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
-    /// Cap on distinct per-builder merge streams. One stream runs per builder
-    /// that sends appendable blocks, so this only needs to exceed the relay's
-    /// collateral set.
+    /// Builders merged per slot. One merge runs per builder that sends
+    /// appendable blocks, so this only needs to exceed the relay's collateral set.
     #[serde(default = "default_max_builder_streams")]
     pub max_streams: usize,
-    #[serde(default = "default_speculation_top_k")]
-    pub top_k: usize,
     /// Stop improving a base once it is this old. The relay uses its corresponding
     /// `max_merged_bid_age_ms` as the permitted receive-time lag behind the latest
     /// same-builder bid; this builder-side value is also an absolute compute backstop.
     #[serde(default = "default_max_base_age_ms")]
     pub max_base_age_ms: u64,
-    /// How much of a base's accumulated delta the first pass on a *new* base is
-    /// assumed to recover, in basis points. Switching forfeits the rest, so the
-    /// rebase rule requires a waiting bid to beat that forfeit as well as the
-    /// last pass's gain. Lower means hold a base longer.
-    #[serde(default = "default_rebase_recovery_bps")]
-    pub rebase_recovery_bps: u64,
 }
 
 impl Default for SpeculationConfig {
@@ -101,9 +96,7 @@ impl Default for SpeculationConfig {
         Self {
             enabled: true,
             max_streams: default_max_builder_streams(),
-            top_k: default_speculation_top_k(),
             max_base_age_ms: default_max_base_age_ms(),
-            rebase_recovery_bps: default_rebase_recovery_bps(),
         }
     }
 }
@@ -112,34 +105,17 @@ fn default_max_builder_streams() -> usize {
     16
 }
 
-fn default_speculation_top_k() -> usize {
-    4
-}
-
 fn default_max_base_age_ms() -> u64 {
-    600
+    50
 }
 
-fn default_rebase_recovery_bps() -> u64 {
-    5_000
-}
-
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EmissionConfig {
     /// A merged block is only emitted when its proposer value exceeds the last
     /// emission for the same base by more than this many wei.
     #[serde(default)]
     pub min_value_increase_wei: u128,
-    /// Minimum spacing between emissions for the same base block.
-    #[serde(default = "default_min_interval_ms")]
-    pub min_interval_ms: u64,
-}
-
-impl Default for EmissionConfig {
-    fn default() -> Self {
-        Self { min_value_increase_wei: 0, min_interval_ms: default_min_interval_ms() }
-    }
 }
 
 impl MergingConfig {
@@ -159,11 +135,23 @@ impl MergingConfig {
         if self.max_frame_bytes < 1024 * 1024 {
             eyre::bail!("merging config: max_frame_bytes must be at least 1 MiB");
         }
+        if self.event_queue_capacity == 0 {
+            eyre::bail!("merging config: event_queue_capacity must be > 0");
+        }
+        // Room for a full frame plus the server's control headroom.
+        if !self.event_queue_bytes.is_power_of_two() ||
+            self.event_queue_bytes < 4 * self.max_frame_bytes as usize
+        {
+            eyre::bail!(
+                "merging config: event_queue_bytes must be a power of two >= 4 * max_frame_bytes"
+            );
+        }
+        // Flux sizes the dcache from a per-slot mtu, which must be at least one cache line.
+        if self.event_queue_bytes / (self.event_queue_capacity.next_power_of_two() + 1) < 64 {
+            eyre::bail!("merging config: event_queue_bytes must be >= 64 * event_queue_capacity");
+        }
         if self.max_orders_per_slot == 0 || self.max_blocks_per_slot == 0 {
             eyre::bail!("merging config: max_orders_per_slot and max_blocks_per_slot must be > 0");
-        }
-        if self.speculation.enabled && self.speculation.rebase_recovery_bps > 10_000 {
-            eyre::bail!("merging config: speculation.rebase_recovery_bps must be <= 10000");
         }
         Ok(())
     }
@@ -363,8 +351,8 @@ fn default_max_blocks_per_slot() -> usize {
 fn default_event_queue_capacity() -> usize {
     4096
 }
-fn default_min_interval_ms() -> u64 {
-    25
+fn default_event_queue_bytes() -> usize {
+    256 * 1024 * 1024
 }
 
 #[cfg(test)]
@@ -377,7 +365,6 @@ mod tests {
         let config: MergingConfig = serde_yaml::from_str(example).unwrap();
         config.validate().unwrap();
         assert!(config.supports_zstd);
-        assert_eq!(config.emission.min_interval_ms, 25);
     }
 
     #[test]

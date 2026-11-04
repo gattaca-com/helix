@@ -1021,7 +1021,7 @@
     },
     {
       "type": "row",
-      "title": "2. Builder ingest \u2014 what arrives and what it refuses",
+      "title": "2. Relay frames \u2014 what arrives and what it refuses",
       "id": 17,
       "collapsed": false,
       "gridPos": {
@@ -1054,7 +1054,7 @@
             "uid": "${DS}"
           },
           "editorMode": "code",
-          "expr": "sum by (kind) (rate(helix_builder_merge_ingest_total{job=~\"$builder_job\", instance=~\"$builder_instance\"}[$__rate_interval]))",
+          "expr": "sum by (kind) (rate(helix_builder_merge_relay_frame_total{job=~\"$builder_job\", instance=~\"$builder_instance\"}[$__rate_interval]))",
           "legendFormat": "{{kind}}",
           "range": true,
           "refId": "A"
@@ -1294,7 +1294,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Ingest and merge-cycle rejections",
+      "title": "Submission and merge-cycle rejections",
       "id": 22,
       "datasource": {
         "type": "prometheus",
@@ -3633,10 +3633,10 @@
           "uid": "${DS}"
         },
         "query": {
-          "query": "label_values(helix_builder_merge_ingest_total, job)",
+          "query": "label_values(helix_builder_merge_relay_frame_total, job)",
           "refId": "A"
         },
-        "definition": "label_values(helix_builder_merge_ingest_total, job)",
+        "definition": "label_values(helix_builder_merge_relay_frame_total, job)",
         "current": {
           "text": [
             "All"
@@ -3665,10 +3665,10 @@
           "uid": "${DS}"
         },
         "query": {
-          "query": "label_values(helix_builder_merge_ingest_total{job=~\"$builder_job\"}, instance)",
+          "query": "label_values(helix_builder_merge_relay_frame_total{job=~\"$builder_job\"}, instance)",
           "refId": "A"
         },
-        "definition": "label_values(helix_builder_merge_ingest_total{job=~\"$builder_job\"}, instance)",
+        "definition": "label_values(helix_builder_merge_relay_frame_total{job=~\"$builder_job\"}, instance)",
         "current": {
           "text": [
             "All"

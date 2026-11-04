@@ -15,7 +15,7 @@ use thiserror::Error;
 
 use crate::{
     building::{assemble::BuiltBlock, slot::SlotContext},
-    engine::convert::{block_to_payload_v3, decode_execution_requests},
+    convert::{block_to_payload_v3, decode_execution_requests},
 };
 
 impl SubmitError {
@@ -197,7 +197,7 @@ impl Submitter {
     }
 }
 
-/// Inverse of [`crate::engine::convert::eblobs`].
+/// Inverse of [`crate::convert::eblobs`].
 ///
 /// ethrex's `AddAssign` for `BlobsBundle` does not propagate `version`, so an
 /// aggregated bundle always claims version 0. The proof count is the only
