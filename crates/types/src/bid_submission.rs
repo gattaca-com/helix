@@ -880,11 +880,27 @@ impl SignedBidSubmission {
             Self::Gloas(s) => s.num_txs(),
         }
     }
+}
 
-    pub fn as_ssz_bytes(&self) -> Vec<u8> {
+/// The fork's own submission encoding, with no union selector: the reader
+/// knows the fork from elsewhere. A Gloas submission is still the bytes it
+/// arrived as, so encoding it is a single copy.
+impl ssz::Encode for SignedBidSubmission {
+    fn is_ssz_fixed_len() -> bool {
+        false
+    }
+
+    fn ssz_bytes_len(&self) -> usize {
         match self {
-            Self::Fulu(s) => ssz::Encode::as_ssz_bytes(s),
-            Self::Gloas(s) => s.as_bytes().to_vec(),
+            Self::Fulu(s) => s.ssz_bytes_len(),
+            Self::Gloas(s) => s.as_bytes().len(),
+        }
+    }
+
+    fn ssz_append(&self, buf: &mut Vec<u8>) {
+        match self {
+            Self::Fulu(s) => s.ssz_append(buf),
+            Self::Gloas(s) => buf.extend_from_slice(s.as_bytes()),
         }
     }
 }
