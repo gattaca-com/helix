@@ -9,7 +9,7 @@ use helix_common::{
     decoder::{Encoding, HEADER_SSZ},
     utils::extract_request_id,
 };
-use helix_types::{ForkName, SignedBuilderRequestAuth, ssz_json};
+use helix_types::{ForkName, SignedBuilderRequestAuth, Slot, ssz_json};
 use http::{HeaderValue, header::CONTENT_TYPE};
 use ssz::Decode;
 use tracing::{info, warn};
@@ -55,8 +55,13 @@ impl<A: Api> ProposerApi<A> {
             });
         }
 
-        signed_request_auth
-            .verify_signature(&params.proposer_pubkey, proposer_api.chain_info.request_auth_domain)
+        proposer_api
+            .local_cache
+            .proposer_key(Slot::new(params.slot), &params.proposer_pubkey)
+            .and_then(|key| {
+                signed_request_auth
+                    .verify_signature(&key, proposer_api.chain_info.request_auth_domain)
+            })
             .map_err(|_| ProposerApiError::InvalidRequestAuthSignature)?;
 
         let (auth_slot, auth_data_len, auth_data) = super::auth_summary(&signed_request_auth);

@@ -286,27 +286,44 @@ impl GloasBidSubmission {
 }
 
 pub fn bls_verify(pubkey: &[u8], signature: &[u8], root: B256) -> Result<(), SigError> {
+    let signature = decode_signature(signature)?;
+    bls_verify_point(&decode_pubkey(pubkey)?, &signature, root)
+}
+
+/// Verifies a signing root with an admitted G1 key and a subgroup-checked
+/// G2 signature. The key must come from [`decode_pubkey`] or a `Some` entry
+/// returned by [`decode_pubkeys`].
+pub fn bls_verify_point(pubkey: &G1Point, signature: &G2Point, root: B256) -> Result<(), SigError> {
+    let hash = G2Point::hash_to_curve(root.as_slice(), BLS_DST);
+    PairingProduct::two_pairs_are_one((&G1Point::negative_generator(), signature), (pubkey, &hash))
+        .then_some(())
+        .ok_or(SigError::InvalidBlsSignature)
+}
+
+pub fn decode_signature(signature: &[u8]) -> Result<G2Point, SigError> {
     let signature = signature.try_into().map_err(|_| SigError::InvalidBlsSignatureBytes)?;
     let mut sig = [None];
     uncompress_in_g2(&[signature], &mut sig);
-    let [Some(sig)] = sig else {
-        return Err(SigError::InvalidBlsSignatureBytes);
-    };
-    bls_verify_point(pubkey, &sig, root)
+    sig[0].ok_or(SigError::InvalidBlsSignatureBytes)
 }
 
-pub fn bls_verify_point(pubkey: &[u8], signature: &G2Point, root: B256) -> Result<(), SigError> {
+pub fn decode_pubkey(pubkey: &[u8]) -> Result<G1Point, SigError> {
     let pubkey = pubkey.try_into().map_err(|_| SigError::InvalidBlsPubkeyBytes)?;
     let mut pk = [None];
-    uncompress_in_g1(&[pubkey], &mut pk);
-    // An infinity key and signature pass for every message.
-    let [Some(pk)] = pk.map(|p| p.filter(|p| !p.is_infinity())) else {
-        return Err(SigError::InvalidBlsPubkeyBytes);
-    };
-    let hash = G2Point::hash_to_curve(root.as_slice(), BLS_DST);
-    PairingProduct::two_pairs_are_one((&G1Point::negative_generator(), signature), (&pk, &hash))
-        .then_some(())
-        .ok_or(SigError::InvalidBlsSignature)
+    decode_pubkeys(&[pubkey], &mut pk);
+    pk[0].ok_or(SigError::InvalidBlsPubkeyBytes)
+}
+
+/// Decodes each key as a subgroup-checked G1 point, rejecting infinity.
+/// `out` must have one entry per input key; rejected keys are written as `None`.
+pub fn decode_pubkeys(pubkeys: &[[u8; 48]], out: &mut [Option<G1Point>]) {
+    uncompress_in_g1(pubkeys, out);
+    for key in out {
+        // An infinity key and signature make both pairings the identity for every message.
+        if key.is_some_and(|key| key.is_infinity()) {
+            *key = None;
+        }
+    }
 }
 
 /// Verdicts match [`bls_verify`], except for false acceptance with probability

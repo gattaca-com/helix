@@ -11,7 +11,7 @@ use ssz_derive::{Decode, Encode};
 use ssz_types::typenum::{U4096, Unsigned};
 use tree_hash_derive::TreeHash;
 
-use crate::{BlsPublicKeyBytes, BlsSignatureBytes, SigError};
+use crate::{BlsSignatureBytes, G1Point, SigError, gloas};
 
 crate::ssz_bytes_wrapper! {
     /// ByteList[MAX_DATA_SIZE], MAX_DATA_SIZE = 4096
@@ -39,11 +39,7 @@ pub struct SignedBuilderRequestAuth {
 impl SignedBuilderRequestAuth {
     /// `pubkey` is resolved from the `proposer_pubkey` path parameter, not carried inside
     /// `BuilderRequestAuth` itself. `domain` is `ChainInfo::request_auth_domain`.
-    pub fn verify_signature(
-        &self,
-        pubkey: &BlsPublicKeyBytes,
-        domain: B256,
-    ) -> Result<(), SigError> {
+    pub fn verify_signature(&self, pubkey: &G1Point, domain: B256) -> Result<(), SigError> {
         let data = &self.message.data;
         // Decoding does not enforce the SSZ limit; `merkleize_bytes` requires
         // the input to fit within its chunk capacity.
@@ -54,11 +50,8 @@ impl SignedBuilderRequestAuth {
             mix_in_length(&merkleize_bytes(data, U4096::USIZE / 32), data.len()),
             uint64_chunk(self.message.slot),
         ]);
-        crate::gloas::bls_verify(
-            pubkey.as_slice(),
-            self.signature.as_slice(),
-            crate::gloas::signing_root(B256::from(root), domain),
-        )
+        let signature = gloas::decode_signature(self.signature.as_slice())?;
+        gloas::bls_verify_point(pubkey, &signature, gloas::signing_root(B256::from(root), domain))
     }
 }
 
@@ -119,7 +112,7 @@ mod tests {
     #[test]
     fn signed_request_auth_signature_round_trips() {
         let keypair = BlsKeypair::random();
-        let pubkey: BlsPublicKeyBytes = keypair.pk.serialize().into();
+        let pubkey = gloas::decode_pubkey(&keypair.pk.serialize()).unwrap();
         let domain = B256::repeat_byte(7);
         for len in [0, 1, 32, 33, 4096] {
             let mut data = vec![0; len];

@@ -41,7 +41,7 @@ pub use lh_types::{
 pub use operator::*;
 pub use request_auth::*;
 use serde::{Deserialize, Serialize};
-pub use silver_crypto_simd::bls::G2Point;
+pub use silver_crypto_simd::bls::{G1Point, G2Point};
 pub use silver_ssz::ssz_hash::compute_domain;
 use ssz_derive::{Decode, Encode};
 pub use test_random_compat::TestRandom;

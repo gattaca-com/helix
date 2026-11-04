@@ -9,7 +9,7 @@ use helix_common::{
     utils::utcnow_ns,
 };
 use helix_types::{
-    BlsPublicKeyBytes, Domain, ExecPayload, G2Point, GetPayloadResponse, SigError,
+    BlsPublicKeyBytes, Domain, ExecPayload, G1Point, G2Point, GetPayloadResponse, SigError,
     SignedBlindedBeaconBlock, SignedRoot, gloas,
 };
 use hyper::StatusCode;
@@ -114,7 +114,7 @@ impl AuctioneerHandle {
         &self,
         chain_info: &ChainInfo,
         api_version: ProposerApiVersion,
-        proposer_pubkey: BlsPublicKeyBytes,
+        proposer_key: &G1Point,
         blinded_block: SignedBlindedBeaconBlock,
         mut trace: GetPayloadTrace,
     ) -> Result<GetPayloadKind, ChannelFull> {
@@ -128,7 +128,7 @@ impl AuctioneerHandle {
         // and a request that fails it doesn't claim the signature for the rest of the slot.
         let (res_tx, rx) = oneshot::channel();
         let block_hash =
-            verify_signed_blinded_block_signature(chain_info, &blinded_block, &proposer_pubkey)
+            verify_signed_blinded_block_signature(chain_info, &blinded_block, proposer_key)
                 .map_err(ProposerApiError::from)
                 .and_then(|()| {
                     blinded_block
@@ -200,7 +200,7 @@ pub struct ChannelFull;
 fn verify_signed_blinded_block_signature(
     chain_info: &ChainInfo,
     signed_blinded_beacon_block: &SignedBlindedBeaconBlock,
-    public_key: &BlsPublicKeyBytes,
+    proposer_key: &G1Point,
 ) -> Result<(), SigError> {
     if signed_blinded_beacon_block.fork_name(&chain_info.spec).is_err() {
         return Err(SigError::InvalidBlsSignature);
@@ -212,7 +212,7 @@ fn verify_signed_blinded_block_signature(
         .ok_or(SigError::InvalidBlsSignatureBytes)?;
     let message = signed_blinded_beacon_block.message();
     let domain = chain_info.domain_at(Domain::BeaconProposer, message.slot());
-    gloas::bls_verify_point(public_key.as_slice(), &signature, message.signing_root(domain))
+    gloas::bls_verify_point(proposer_key, &signature, message.signing_root(domain))
 }
 
 #[cfg(test)]
@@ -244,8 +244,8 @@ mod tests {
         let fulu = chain_info.spec.fulu_fork_epoch.expect("mainnet schedules Fulu");
         let fulu = fulu.start_slot(chain_info.slots_per_epoch());
         let verify = |block, key| {
-            verify_signed_blinded_block_signature(&chain_info, &block, &get_fixed_pubkey_bytes(key))
-                .is_ok()
+            let key = gloas::decode_pubkey(get_fixed_pubkey_bytes(key).as_slice()).unwrap();
+            verify_signed_blinded_block_signature(&chain_info, &block, &key).is_ok()
         };
 
         assert!(verify(fulu_block_signed_at(fulu, &chain_info), 0));
@@ -269,8 +269,8 @@ mod tests {
         block.into()
     }
 
-    fn pubkey(keypair: &BlsKeypair) -> BlsPublicKeyBytes {
-        keypair.pk.compress().serialize().into()
+    fn key(keypair: &BlsKeypair) -> G1Point {
+        gloas::decode_pubkey(&keypair.pk.serialize()).unwrap()
     }
 
     fn request(
@@ -282,7 +282,7 @@ mod tests {
         let Ok(kind) = handle.get_payload(
             chain_info,
             ProposerApiVersion::V1,
-            pubkey(proposer),
+            &key(proposer),
             block.clone(),
             GetPayloadTrace::default(),
         ) else {
