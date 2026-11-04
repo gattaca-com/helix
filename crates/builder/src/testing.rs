@@ -1,4 +1,8 @@
-use std::str::FromStr;
+use std::{
+    path::PathBuf,
+    str::FromStr,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use alloy_consensus::{SignableTransaction, TxEip1559};
 use alloy_eips::eip2718::Encodable2718;
@@ -8,8 +12,40 @@ use alloy_signer_local::PrivateKeySigner;
 use ethrex_common::types::{Genesis, GenesisAccount};
 use ethrex_config::networks::Network;
 use ethrex_storage::{EngineType, Store};
+use flux::spine::DCacheQueueParams;
 
-use crate::engine::convert::eaddr;
+use crate::{
+    convert::eaddr,
+    spine::{BuilderSpine, BuilderSpineConfig},
+};
+
+/// A spine private to one test, in a fresh directory; its shared memory is unlinked on drop.
+/// Queues are small but deep enough for a test to drain outputs in bursts.
+pub struct TestSpine {
+    pub spine: BuilderSpine,
+    pub dir: PathBuf,
+}
+
+impl TestSpine {
+    pub fn new() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("helix-spine-{}-{n}", std::process::id()));
+        flux::communication::cleanup_shmem(&dir);
+        let mtu = 4 << 20;
+        let config = BuilderSpineConfig {
+            to_engine: DCacheQueueParams { size: 1 << 6, mtu },
+            from_engine: DCacheQueueParams { size: 1 << 7, mtu },
+        };
+        Self { spine: BuilderSpine::new_with_base_dir_and_config(&dir, None, config), dir }
+    }
+}
+
+impl Drop for TestSpine {
+    fn drop(&mut self) {
+        flux::communication::cleanup_shmem(&self.dir);
+    }
+}
 
 /// Dev keys from ethrex's `fixtures/keys/private_keys_l1.txt`; a fixture picks
 /// the ones the `LocalDevnet` genesis actually funds.

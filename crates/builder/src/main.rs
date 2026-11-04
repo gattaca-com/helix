@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use clap::Parser;
 use flux::{
-    spine::FluxSpine,
+    spine::{DCacheQueueParams, FluxSpine},
     tile::{TileConfig, attach_tile},
 };
 use helix_common::{tx_sink::TxSimSink, utils::install_default_crypto_provider};
@@ -12,7 +12,8 @@ use tracing_subscriber::EnvFilter;
 mod building;
 mod cli;
 mod config;
-mod engine;
+mod convert;
+mod merge;
 mod metrics;
 mod node;
 mod server;
@@ -25,9 +26,9 @@ mod validation;
 use building::BuildingKeys;
 use cli::BuilderCli;
 use config::{BuildingConfig, MergingConfig, Roles, SimulationConfig};
-use engine::{MergeEngine, types::EngineConfig};
+use merge::{EngineConfig, MergeEngine};
 use server::MergingServerTile;
-use spine::BuilderSpine;
+use spine::{BuilderSpine, BuilderSpineConfig, EngineCursor};
 use validation::{BlockValidator, server as validation_server};
 
 #[global_allocator]
@@ -47,6 +48,9 @@ fn main() -> eyre::Result<()> {
     // Fail fast on a missing/invalid RELAY_KEY, before the node boots.
     let relay_signer = roles.merging().map(|merging_config| {
         info!(listen_addr = %merging_config.listen_addr, "Loaded merging config");
+        if merging_config.enable_flux_profiler {
+            flux_profiler::enable_profiler("helix-builder");
+        }
         EngineConfig::load_relay_signer()
     });
 
@@ -141,9 +145,6 @@ fn main() -> eyre::Result<()> {
     if let Some(merging_config) = roles.merging() {
         let relay_signer = relay_signer.expect("the merging role loads a relay signer");
 
-        let (event_tx, event_rx) = crossbeam_channel::bounded(merging_config.event_queue_capacity);
-        let (output_tx, output_rx) = crossbeam_channel::bounded(64);
-
         let engine_config = EngineConfig {
             relay_signer,
             max_blocks_per_slot: merging_config.max_blocks_per_slot,
@@ -151,42 +152,45 @@ fn main() -> eyre::Result<()> {
             min_value_increase_wei: alloy_primitives::U256::from(
                 merging_config.emission.min_value_increase_wei,
             ),
-            min_emission_interval: std::time::Duration::from_millis(
-                merging_config.emission.min_interval_ms,
-            ),
-            core: merging_config.cores.merge_worker,
-            max_builder_streams: if merging_config.speculation.enabled {
+            max_builders: if merging_config.speculation.enabled {
                 merging_config.speculation.max_streams
             } else {
                 0
             },
-            speculation_top_k: merging_config.speculation.top_k,
             max_base_age: std::time::Duration::from_millis(
                 merging_config.speculation.max_base_age_ms,
             ),
-            rebase_recovery_bps: merging_config.speculation.rebase_recovery_bps,
-            replay_worker_cores: merging_config.cores.replay_workers.clone(),
-            disallow,
+            warmup: true,
+            blacklist: disallow,
+            record: merging_config.record.clone(),
         };
-        let _engine = MergeEngine::spawn(
-            engine_config,
-            node.store.clone(),
-            node.blockchain.clone(),
-            node.head.clone(),
-            event_tx.clone(),
-            event_rx,
-            output_tx,
-        );
+        let cursor = Arc::new(EngineCursor::default());
+        let engine = MergeEngine::new(engine_config, node.store.clone(), cursor.clone());
 
+        // Flux sizes a dcache as next_pow2((depth + 1) * mtu); this mtu makes that exactly
+        // `event_queue_bytes`. `EngineCursor` bounds what is in flight, not the mtu.
+        let depth = merging_config.event_queue_capacity.next_power_of_two();
+        let mut spine_config = BuilderSpineConfig::default();
+        spine_config.to_engine = DCacheQueueParams {
+            size: depth,
+            mtu: (merging_config.event_queue_bytes / (depth + 1)) & !63,
+        };
+        spine_config.from_engine.mtu = merging_config.max_frame_bytes as usize;
         BuilderSpine::remove_all_files();
-        let spine = BuilderSpine::new(None);
+        let spine = BuilderSpine::new_with_config(None, spine_config);
         let server_tile_config = match merging_config.cores.server_tile {
             Some(core) => TileConfig::new(core, None),
             None => TileConfig::background(None, None),
         };
+        let engine_tile_config = match merging_config.cores.merge_worker {
+            Some(core) => TileConfig::new(core, None),
+            None => TileConfig::background(None, None),
+        }
+        .with_stack_size(merge::STACK_SIZE);
         spine.start(None, None, |spine| {
-            let tile = MergingServerTile::new(merging_config, event_tx.clone(), output_rx.clone());
-            attach_tile(tile, spine, server_tile_config);
+            // The engine's consumer must exist before the server can publish.
+            attach_tile(engine, spine, engine_tile_config);
+            attach_tile(MergingServerTile::new(merging_config, cursor), spine, server_tile_config);
         });
     }
 

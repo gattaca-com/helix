@@ -672,6 +672,11 @@ impl BlockMergingTile {
             return;
         }
         MERGE_REJECT.with_label_values(&[reject_label(reject.code)]).inc();
+        // The builder dropped at least one block unread, so the txs it carried whole never reached
+        // the builder's resolution cache; send them whole again.
+        if matches!(reject.code, RejectCode::Busy) {
+            self.conn.sent_txs.clear();
+        }
         if matches!(reject.code, RejectCode::StaleSlot) || reject.slot > self.slot.bid_slot {
             self.conn.builder_ahead = true;
         }
@@ -1294,6 +1299,17 @@ mod tests {
 
         assert!(tile.slot.appendable.contains(&block_hash));
         assert_eq!(tile.stats.skipped_builder_ahead, 0);
+    }
+
+    #[test]
+    fn busy_reject_resends_txs_whole() {
+        let mut tile = tile_in_slot(5);
+        tile.conn.sent_txs.insert(B256::repeat_byte(4));
+        tile.on_reject(Token(0), reject(5, RejectCode::InvalidOrder));
+        assert_eq!(tile.conn.sent_txs.len(), 1);
+
+        tile.on_reject(Token(0), reject(5, RejectCode::Busy));
+        assert!(tile.conn.sent_txs.is_empty());
     }
 
     /// A reject from a connection that is not ours must not gate our forwarding.
