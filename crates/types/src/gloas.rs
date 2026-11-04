@@ -8,6 +8,7 @@ use silver_ssz::{
         EXECUTION_PAYLOAD_FIXED_GLOAS, ExecutionPayloadBidView, ExecutionPayloadEnvelopeView,
         ExecutionPayloadView, MAX_BYTES_PER_TRANSACTION, MAX_EXTRA_DATA_BYTES,
         MAX_TRANSACTIONS_PER_PAYLOAD, MAX_WITHDRAWALS_PER_PAYLOAD, SignedBeaconBlockView,
+        SignedExecutionPayloadBidView,
     },
 };
 use ssz::{Decode, DecodeError};
@@ -304,6 +305,19 @@ pub fn envelope_root(envelope: &[u8]) -> B256 {
 
 pub fn bid_slot(bid: &[u8]) -> u64 {
     ExecutionPayloadBidView::slot(bid)
+}
+
+pub fn bid_block_hash(bid: &[u8]) -> B256 {
+    B256::from(*ExecutionPayloadBidView::block_hash(bid))
+}
+
+pub fn bid_execution_payment(bid: &[u8]) -> u64 {
+    ExecutionPayloadBidView::execution_payment(bid)
+}
+
+/// The `ExecutionPayloadBid` inside a `SignedExecutionPayloadBid`'s ssz.
+pub fn signed_bid_message(signed_bid: &[u8]) -> &[u8] {
+    SignedExecutionPayloadBidView::message(signed_bid)
 }
 
 pub fn set_bid_builder_index(bid: &mut [u8], builder_index: u64) {

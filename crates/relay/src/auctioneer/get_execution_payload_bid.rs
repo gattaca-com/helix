@@ -1,13 +1,16 @@
-use helix_common::{ForkKey, api::proposer_api::GetExecutionPayloadBidParams};
+use helix_common::{
+    ForkKey, api::proposer_api::GetExecutionPayloadBidParams, chain_info::ChainInfo,
+};
 use tokio::sync::oneshot;
 use tracing::warn;
 
 use crate::{
     api::proposer::ProposerApiError,
     auctioneer::{
+        GloasBuilderIdentity,
         bid_adjustor::BidAdjustor,
         context::Context,
-        types::{GetExecutionPayloadBidResult, SlotData},
+        types::{BidKey, GetExecutionPayloadBidResult, SlotData},
     },
 };
 
@@ -15,6 +18,7 @@ impl<B: BidAdjustor> Context<B> {
     pub(super) fn handle_get_execution_payload_bid(
         &self,
         params: GetExecutionPayloadBidParams,
+        last_sent: Option<BidKey>,
         slot_data: &SlotData,
         res_tx: oneshot::Sender<GetExecutionPayloadBidResult>,
     ) {
@@ -23,10 +27,29 @@ impl<B: BidAdjustor> Context<B> {
                 self.bid_sorter.get_header(&fork).ok_or(ProposerApiError::NoBidPrepared)?;
             let entry =
                 self.gloas_payloads.get(&best_block_hash).ok_or(ProposerApiError::NoBidPrepared)?;
-            self.gloas_builder_identity.sign_bid(&entry.bid, &self.chain_info)
+            sign_bid_unless_sent(
+                &entry.bid,
+                last_sent,
+                &self.gloas_builder_identity,
+                &self.chain_info,
+            )
         });
         let _ = res_tx.send(result);
     }
+}
+
+/// Signs `bid` under helix's Gloas builder identity, unless it is the bid `last_sent`
+/// describes: a stream asks every few ms, so an unchanged bid costs only this comparison.
+pub(super) fn sign_bid_unless_sent(
+    bid: &[u8],
+    last_sent: Option<BidKey>,
+    identity: &GloasBuilderIdentity,
+    chain_info: &ChainInfo,
+) -> GetExecutionPayloadBidResult {
+    if last_sent == Some(BidKey::of(bid)) {
+        return Err(ProposerApiError::BidUnchanged);
+    }
+    identity.sign_bid(bid, chain_info)
 }
 
 /// Checks the request against the live auction, returning the fork it asks for.
@@ -249,6 +272,52 @@ mod tests {
                 .signature
                 .verify(&identity.keypair.pk, signed_bid.message.signing_root(domain))
         );
+    }
+
+    fn top_bid(block_hash: B256, value: u64) -> Vec<u8> {
+        let parent_hash = B256::repeat_byte(0x11);
+        let parent_root = B256::repeat_byte(0x22);
+        gloas_payload(block_hash, parent_hash, parent_root, value, Default::default()).bid
+    }
+
+    fn sent_key(signed_bid: &[u8]) -> BidKey {
+        BidKey::of(helix_types::gloas::signed_bid_message(signed_bid))
+    }
+
+    #[test]
+    fn the_bid_a_stream_last_sent_is_not_signed_again() {
+        let bid = top_bid(B256::repeat_byte(0x99), 42_000_000_000);
+        let last_sent = BidKey { block_hash: B256::repeat_byte(0x99), execution_payment: 42 };
+
+        let result =
+            sign_bid_unless_sent(&bid, Some(last_sent), &bid_identity(7), &ChainInfo::default());
+
+        assert!(matches!(result, Err(ProposerApiError::BidUnchanged)));
+    }
+
+    #[test]
+    fn a_new_block_paying_the_same_is_signed() {
+        let bid = top_bid(B256::repeat_byte(0xaa), 42_000_000_000);
+        let last_sent = BidKey { block_hash: B256::repeat_byte(0x99), execution_payment: 42 };
+
+        let signed =
+            sign_bid_unless_sent(&bid, Some(last_sent), &bid_identity(7), &ChainInfo::default())
+                .unwrap();
+
+        assert_eq!(sent_key(&signed).block_hash, B256::repeat_byte(0xaa));
+    }
+
+    #[test]
+    fn the_same_block_paying_more_is_signed() {
+        let block_hash = B256::repeat_byte(0x99);
+        let bid = top_bid(block_hash, 43_000_000_000);
+        let last_sent = BidKey { block_hash, execution_payment: 42 };
+
+        let signed =
+            sign_bid_unless_sent(&bid, Some(last_sent), &bid_identity(7), &ChainInfo::default())
+                .unwrap();
+
+        assert_eq!(sent_key(&signed).execution_payment, 43);
     }
 
     #[test]

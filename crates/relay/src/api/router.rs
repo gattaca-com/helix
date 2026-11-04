@@ -137,6 +137,7 @@ pub fn build_router<A: Api>(
             Route::GetPayload => post(ProposerApi::<A>::get_payload),
             Route::GetPayloadV2 => post(ProposerApi::<A>::get_payload_v2),
             Route::GetExecutionPayloadBid => post(ProposerApi::<A>::get_execution_payload_bid),
+            Route::ExecutionPayloadBidStream => get(ProposerApi::<A>::execution_payload_bid_stream),
             Route::SubmitBuilderPreferences => post(ProposerApi::<A>::submit_builder_preferences),
             Route::SubmitSignedBeaconBlock => post(ProposerApi::<A>::submit_signed_beacon_block),
             Route::ProposerPayloadDelivered => {

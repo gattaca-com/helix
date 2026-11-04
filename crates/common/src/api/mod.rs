@@ -22,6 +22,8 @@ pub const HEADER_TIMEOUT_MS: &str = "x-timeout-ms";
 pub const HEADER_FORWARDED_FOR: &str = "x-forwarded-for";
 /// When the client started the request, unix millis
 pub const HEADER_START_TIME_UNIX_MS: &str = "date-milliseconds";
+/// Standard padded base64 of the ssz `SignedBuilderRequestAuth`, for a request with no body
+pub const HEADER_REQUEST_AUTH: &str = "x-request-auth";
 
 pub const PATH_PROPOSER_API: &str = "/eth/v1/builder";
 pub const PATH_PROPOSER_API_V2: &str = "/eth/v2/builder";
@@ -30,6 +32,8 @@ pub const PATH_STATUS: &str = "/status";
 pub const PATH_REGISTER_VALIDATORS: &str = "/validators";
 pub const PATH_GET_HEADER: &str = "/header/{slot}/{parent_hash}/{pubkey}";
 pub const PATH_HEADER_STREAM: &str = "/header_stream/{slot}/{parent_hash}/{pubkey}";
+pub const PATH_EXECUTION_PAYLOAD_BID_STREAM: &str =
+    "/execution_payload_bid_stream/{slot}/{parent_hash}/{parent_root}/{proposer_pubkey}";
 pub const PATH_GET_PAYLOAD: &str = "/blinded_blocks";
 
 // Gloas (ePBS) builder-API additions, per

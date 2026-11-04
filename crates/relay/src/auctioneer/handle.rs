@@ -18,7 +18,7 @@ use tracing::trace;
 use crate::{
     api::proposer::{ProposerApiError, get_payload::ProposerApiVersion},
     auctioneer::types::{
-        Event, GetExecutionPayloadBidResult, GetHeaderResult, GetPayloadResult,
+        BidKey, Event, GetExecutionPayloadBidResult, GetHeaderResult, GetPayloadResult,
         SubmitBuilderPreferencesResult,
     },
     gossip::BroadcastPayloadParams,
@@ -76,12 +76,14 @@ impl AuctioneerHandle {
     pub fn get_execution_payload_bid(
         &self,
         params: GetExecutionPayloadBidParams,
+        last_sent: Option<BidKey>,
     ) -> Result<oneshot::Receiver<GetExecutionPayloadBidResult>, ChannelFull> {
         let (tx, rx) = oneshot::channel();
         trace!("sending to auctioneer");
         self.auctioneer
             .try_send(Event::GetExecutionPayloadBid {
                 params,
+                last_sent,
                 res_tx: tx,
                 span: tracing::Span::current(),
             })
