@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use alloy_eips::eip7594::CELLS_PER_EXT_BLOB;
 use lh_types::{ForkName, ForkVersionDecode};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use silver_crypto_simd::kzg::CELLS_PER_EXT_BLOB;
 use ssz::DecodeError;
 use ssz_derive::{Decode, Encode};
 

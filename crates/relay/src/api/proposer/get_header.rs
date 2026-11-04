@@ -329,7 +329,10 @@ pub fn resign_builder_bid(
     let start = Instant::now();
 
     message.pubkey = *signing_ctx.pubkey();
-    let sig = signing_ctx.sign_builder_message(&message).serialize().into();
+    let sig = signing_ctx
+        .sign(message.signing_root(signing_ctx.chain_info.builder_domain))
+        .serialize()
+        .into();
 
     let bid = GetHeaderResponse {
         version: fork,
@@ -346,6 +349,8 @@ pub fn resign_builder_bid(
 #[cfg(test)]
 mod tests {
     use helix_common::api_provider::DefaultApiProvider;
+    use helix_types::{BlsKeypair, BlsSignature, SigningData, TestRandomSeed};
+    use tree_hash::TreeHash;
 
     use super::*;
     use crate::api::Api;
@@ -355,6 +360,19 @@ mod tests {
 
     impl Api for TestApi {
         type ApiProvider = DefaultApiProvider;
+    }
+
+    #[test]
+    fn relay_signs_the_served_bid_under_the_builder_domain() {
+        let signing = RelaySigningContext::new(BlsKeypair::random(), Default::default());
+        let signed = resign_builder_bid(BuilderBid::test_random(), &signing, ForkName::Fulu).data;
+
+        assert_eq!(signed.message.pubkey, *signing.pubkey());
+        let domain = signing.chain_info.builder_domain;
+        let object_root = signed.message.tree_hash_root();
+        let root = SigningData { object_root, domain }.tree_hash_root();
+        let signature = BlsSignature::deserialize(signed.signature.as_slice()).unwrap();
+        assert!(signature.verify(&signing.keypair.pk, root));
     }
 
     #[test]

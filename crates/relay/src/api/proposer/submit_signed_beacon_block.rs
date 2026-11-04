@@ -6,7 +6,7 @@ use helix_common::{
     chain_info::ChainInfo, decoder::Encoding, spawn_tracked, utils::extract_request_id,
 };
 use helix_types::{
-    BlsPublicKeyBytes, Domain, ForkName, Slot,
+    Domain, ForkName, G1Point, Slot,
     gloas::{self, GloasBlock},
     ssz_json,
 };
@@ -25,11 +25,13 @@ use crate::{
 fn proposer_signed_block(
     block: &GloasBlock<'_>,
     block_root: B256,
-    pubkey: &BlsPublicKeyBytes,
+    pubkey: &G1Point,
     chain_info: &ChainInfo,
 ) -> bool {
     let domain = chain_info.domain_at(Domain::BeaconProposer, Slot::new(block.slot()));
-    gloas::bls_verify(pubkey.as_slice(), block.signature(), gloas::signing_root(block_root, domain))
+    let root = gloas::signing_root(block_root, domain);
+    gloas::decode_signature(block.signature())
+        .and_then(|signature| gloas::bls_verify_point(pubkey, &signature, root))
         .is_ok()
 }
 
@@ -74,7 +76,10 @@ impl<A: Api> ProposerApi<A> {
             return Ok(StatusCode::ACCEPTED);
         };
         let block_root = block.block_root();
-        if !proposer_signed_block(&block, block_root, &pubkey, &proposer_api.chain_info) {
+        let signed = proposer_api.local_cache.proposer_key(slot, &pubkey).is_ok_and(|key| {
+            proposer_signed_block(&block, block_root, &key, &proposer_api.chain_info)
+        });
+        if !signed {
             return Err(ProposerApiError::InvalidProposerSignature);
         }
 
@@ -110,8 +115,8 @@ mod tests {
         BlsKeypair::random()
     }
 
-    fn pubkey(keypair: &BlsKeypair) -> BlsPublicKeyBytes {
-        keypair.pk.compress().serialize().into()
+    fn pubkey(keypair: &BlsKeypair) -> G1Point {
+        gloas::decode_pubkey(&keypair.pk.serialize()).unwrap()
     }
 
     /// Signs a block the way the proposer's validator client would.
@@ -123,7 +128,7 @@ mod tests {
         SignedBeaconBlockGloas { message, signature: signer.sk.sign(signing_root) }.as_ssz_bytes()
     }
 
-    fn verify(block: &[u8], pubkey: &BlsPublicKeyBytes) -> bool {
+    fn verify(block: &[u8], pubkey: &G1Point) -> bool {
         let block = GloasBlock::new(block).expect("a well-formed block");
         proposer_signed_block(&block, block.block_root(), pubkey, &ChainInfo::default())
     }

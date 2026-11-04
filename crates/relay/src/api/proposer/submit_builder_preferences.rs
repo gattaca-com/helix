@@ -64,9 +64,12 @@ impl<A: Api> ProposerApi<A> {
             slot,
         )?;
 
-        request
-            .auth
-            .verify_signature(&params.proposer_pubkey, proposer_api.chain_info.request_auth_domain)
+        proposer_api
+            .local_cache
+            .proposer_key(slot, &params.proposer_pubkey)
+            .and_then(|key| {
+                request.auth.verify_signature(&key, proposer_api.chain_info.request_auth_domain)
+            })
             .map_err(|_| ProposerApiError::InvalidRequestAuthSignature)?;
 
         let (auth_slot, auth_data_len, auth_data) = super::auth_summary(&request.auth);

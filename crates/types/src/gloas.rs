@@ -1,5 +1,10 @@
 use alloy_primitives::{Address, B256};
 use bytes::Bytes;
+use rand::Rng;
+use silver_crypto_simd::{
+    bls::{G1Point, G2Point, PairingProduct, uncompress_in_g1, uncompress_in_g2},
+    kzg::CELLS_PER_EXT_BLOB,
+};
 use silver_ssz::{
     merkle::{hash_concat, merkleize, uint64_chunk},
     ssz_hash_gloas::ExecutionRequestsView,
@@ -8,19 +13,20 @@ use silver_ssz::{
         EXECUTION_PAYLOAD_FIXED_GLOAS, ExecutionPayloadBidView, ExecutionPayloadEnvelopeView,
         ExecutionPayloadView, MAX_BYTES_PER_TRANSACTION, MAX_EXTRA_DATA_BYTES,
         MAX_TRANSACTIONS_PER_PAYLOAD, MAX_WITHDRAWALS_PER_PAYLOAD, SignedBeaconBlockView,
+        WithdrawalView,
     },
 };
 use ssz::{Decode, DecodeError};
 use tree_hash::TreeHash;
 
 use crate::{
-    BidTrace, BlockValidationError, GloasBidTrace, SszError, Withdrawals, error::SigError,
+    BidTrace, BlockValidationError, GloasBidTrace, SszError, error::SigError,
+    execution_payload::withdrawals_root_of,
 };
 
 const GLOAS_BID_TRACE_SIZE: usize = 268;
 const SUBMISSION_FIXED: usize = GLOAS_BID_TRACE_SIZE + 3 * 4 + 96;
 const WITHDRAWAL_SIZE: usize = 44;
-const CELLS_PER_EXT_BLOB: usize = 128;
 const BID_FIXED: usize = 224;
 const ENVELOPE_FIXED: usize = 80;
 const SIGNED_FIXED: usize = 100;
@@ -193,9 +199,17 @@ impl GloasBidSubmission {
         let payload = self.execution_payload();
         let withdrawals = &payload[ExecutionPayloadView::withdrawals_offset(payload) as usize..
             ExecutionPayloadView::block_access_list_offset(payload) as usize];
-        Withdrawals::from_ssz_bytes(withdrawals)
-            .map(|withdrawals| withdrawals.tree_hash_root())
-            .unwrap_or_default()
+        // `from_ssz_bytes` validates complete 44-byte entries and at most 16 withdrawals.
+        withdrawals_root_of(withdrawals.chunks_exact(WITHDRAWAL_SIZE).map(|w| {
+            let w = w.try_into().expect("one withdrawal");
+            let address = WithdrawalView::address(w);
+            (
+                WithdrawalView::index(w),
+                WithdrawalView::validator_index(w),
+                address,
+                WithdrawalView::amount(w),
+            )
+        }))
     }
 
     fn bundle_section(&self, i: usize) -> &[u8] {
@@ -272,13 +286,137 @@ impl GloasBidSubmission {
 }
 
 pub fn bls_verify(pubkey: &[u8], signature: &[u8], root: B256) -> Result<(), SigError> {
-    let pubkey = blst::min_pk::PublicKey::key_validate(pubkey)
-        .map_err(|_| SigError::InvalidBlsPubkeyBytes)?;
-    let signature = blst::min_pk::Signature::from_bytes(signature)
-        .map_err(|_| SigError::InvalidBlsSignatureBytes)?;
-    match signature.verify(true, root.as_slice(), BLS_DST, &[], &pubkey, false) {
-        blst::BLST_ERROR::BLST_SUCCESS => Ok(()),
-        _ => Err(SigError::InvalidBlsSignature),
+    let signature = decode_signature(signature)?;
+    bls_verify_point(&decode_pubkey(pubkey)?, &signature, root)
+}
+
+/// Verifies a signing root with an admitted G1 key and a subgroup-checked
+/// G2 signature. The key must come from [`decode_pubkey`] or a `Some` entry
+/// returned by [`decode_pubkeys`].
+pub fn bls_verify_point(pubkey: &G1Point, signature: &G2Point, root: B256) -> Result<(), SigError> {
+    let hash = G2Point::hash_to_curve(root.as_slice(), BLS_DST);
+    PairingProduct::two_pairs_are_one((&G1Point::negative_generator(), signature), (pubkey, &hash))
+        .then_some(())
+        .ok_or(SigError::InvalidBlsSignature)
+}
+
+pub fn decode_signature(signature: &[u8]) -> Result<G2Point, SigError> {
+    let signature = signature.try_into().map_err(|_| SigError::InvalidBlsSignatureBytes)?;
+    let mut sig = [None];
+    uncompress_in_g2(&[signature], &mut sig);
+    sig[0].ok_or(SigError::InvalidBlsSignatureBytes)
+}
+
+pub fn decode_pubkey(pubkey: &[u8]) -> Result<G1Point, SigError> {
+    let pubkey = pubkey.try_into().map_err(|_| SigError::InvalidBlsPubkeyBytes)?;
+    let mut pk = [None];
+    decode_pubkeys(&[pubkey], &mut pk);
+    pk[0].ok_or(SigError::InvalidBlsPubkeyBytes)
+}
+
+/// Decodes each key as a subgroup-checked G1 point, rejecting infinity.
+/// `out` must have one entry per input key; rejected keys are written as `None`.
+pub fn decode_pubkeys(pubkeys: &[[u8; 48]], out: &mut [Option<G1Point>]) {
+    uncompress_in_g1(pubkeys, out);
+    for key in out {
+        // An infinity key and signature make both pairings the identity for every message.
+        if key.is_some_and(|key| key.is_infinity()) {
+            *key = None;
+        }
+    }
+}
+
+/// Verdicts match [`bls_verify`], except for false acceptance with probability
+/// at most 2⁻⁶³ per batch for fixed inputs and independent uniform RNG outputs.
+/// This assumes the CSPRNG remains unpredictable to submitters.
+///
+/// Two or more admitted items (both points decode and the key is finite) check
+/// `Π e(rᵢ·pkᵢ, H(mᵢ)) · e(−G1, Σ rᵢ·sigᵢ) == 1`.
+/// Weights are 64-bit CSPRNG outputs, with zero replaced by one.
+/// Both decoders check subgroup membership before weighting; checking only
+/// the weighted sum can hide small-order signature components. A failed
+/// batch check falls back to individual verification.
+#[derive(Default)]
+pub struct BlsBatch {
+    pubkeys: Vec<[u8; 48]>,
+    signatures: Vec<[u8; 96]>,
+    roots: Vec<B256>,
+    keys: Vec<Option<G1Point>>,
+    sigs: Vec<Option<G2Point>>,
+    included_keys: Vec<G1Point>,
+    included_sigs: Vec<G2Point>,
+    included_hashes: Vec<G2Point>,
+    weights: Vec<u8>,
+    pairing: PairingProduct,
+    verdicts: Vec<bool>,
+}
+
+impl BlsBatch {
+    pub fn clear(&mut self) {
+        self.pubkeys.clear();
+        self.signatures.clear();
+        self.roots.clear();
+    }
+
+    pub fn push(&mut self, pubkey: &[u8; 48], signature: &[u8; 96], root: B256) {
+        self.pubkeys.push(*pubkey);
+        self.signatures.push(*signature);
+        self.roots.push(root);
+    }
+
+    /// Verdicts from the last [`Self::verify`], in the order items were pushed.
+    pub fn verdicts(&self) -> &[bool] {
+        &self.verdicts
+    }
+
+    /// Returns true if a multi-item check was rejected. Results are in [`Self::verdicts`].
+    pub fn verify(&mut self) -> bool {
+        self.keys.resize(self.roots.len(), None);
+        self.sigs.resize(self.roots.len(), None);
+        uncompress_in_g1(&self.pubkeys, &mut self.keys);
+        uncompress_in_g2(&self.signatures, &mut self.sigs);
+        self.included_keys.clear();
+        self.included_sigs.clear();
+        self.included_hashes.clear();
+        self.weights.clear();
+        self.pairing.clear();
+        self.verdicts.clear();
+        for ((key, sig), root) in self.keys.iter().zip(&self.sigs).zip(&self.roots) {
+            // An infinity key and signature pass for every message.
+            let (Some(key), Some(sig)) = (key.filter(|key| !key.is_infinity()), sig) else {
+                self.verdicts.push(false);
+                continue;
+            };
+            self.included_keys.push(key);
+            self.included_sigs.push(*sig);
+            self.included_hashes.push(G2Point::hash_to_curve(root.as_slice(), BLS_DST));
+            self.verdicts.push(true);
+        }
+        let batched = self.included_keys.len() > 1;
+        if batched {
+            let mut rng = rand::rng();
+            for (key, hash) in self.included_keys.iter().zip(&self.included_hashes) {
+                // Zero would omit the item; replacing it with one makes that weight twice as
+                // likely.
+                let weight = rng.random::<u64>().max(1).to_le_bytes();
+                self.pairing.push(&G1Point::weighted_sum(&[*key], &weight), hash);
+                self.weights.extend_from_slice(&weight);
+            }
+            let sum = G2Point::weighted_sum(&self.included_sigs, &self.weights);
+            self.pairing.push(&G1Point::negative_generator(), &sum);
+            if self.pairing.is_one() {
+                return false;
+            }
+        }
+        let included = self.verdicts.iter_mut().filter(|verdict| **verdict);
+        let points = self.included_keys.iter().zip(&self.included_sigs).zip(&self.included_hashes);
+        for (verdict, ((key, sig), hash)) in included.zip(points) {
+            *verdict = PairingProduct::two_pairs_are_one(
+                (&G1Point::negative_generator(), sig),
+                (key, hash),
+            );
+        }
+        batched
     }
 }
 
@@ -404,4 +542,189 @@ fn blobs_bundle_layout_ok(bundle: &[u8]) -> bool {
     blobs.is_multiple_of(BYTES_PER_BLOB) &&
         commitments == blobs / BYTES_PER_BLOB * BYTES_PER_KZG_COMMITMENT &&
         proofs == blobs / BYTES_PER_BLOB * CELLS_PER_EXT_BLOB * BYTES_PER_KZG_PROOF
+}
+
+#[cfg(test)]
+mod tests {
+    use alloy_primitives::hex;
+    use blst::min_pk;
+    use lh_bls::{AggregateSignature, INFINITY_PUBLIC_KEY, INFINITY_SIGNATURE};
+
+    use super::*;
+    use crate::{BlsPublicKey, BlsSignature, get_fixed_pubkey, get_fixed_secret};
+
+    /// On-curve point outside the G2 subgroup, from batch 93 of
+    /// `crates/crypto_simd/proof/decompress_g2_vectors.txt` in silver
+    /// at tag `silver_crypto_simd-v0.1.0`.
+    const OUTSIDE_G2: [u8; 96] = hex!(
+        "82ad35e7521bc55f76767951977505562e3d2ccbe916a4eec9eb039471d8a2e1"
+        "8e48a60704f3f49873ffff81994ff4750d34624ab262ab1d0c494c944408f4ca"
+        "e3b2624a1218391c71e5f22a3878fc12330cca92d6f7233e5ff5a9c125ebf647"
+    );
+
+    /// Nonzero point of order 13 on the BLS12-381 twist.
+    /// Derived as `(h₂/13²)·r·OUTSIDE_G2`, where 13² divides the G2 cofactor h₂.
+    const ORDER_13: [u8; 96] = hex!(
+        "a3a58fd8e0c4b1a4025da5ca3176405ed7fa11dcf55003b1ceae958a7a62815f"
+        "5f3a79792d91eebf83ccffc228784a4509c801b1c24e6662e6c94f9b8f0ac017"
+        "68d0b974fe1ad3d3727c7afc77bafd60e086aeed8a678de31267be27fd73543b"
+    );
+
+    #[test]
+    fn verdicts_match_lighthouse() {
+        let root = B256::repeat_byte(1);
+        let (pk, sig) =
+            (get_fixed_pubkey(0).serialize(), get_fixed_secret(0).sign(root).serialize());
+        let mut flagless = sig;
+        flagless[0] &= 0x7f;
+        let check = |case: &str, pubkey: &[u8], signature: &[u8], root: B256, valid: bool| {
+            assert_eq!(bls_verify(pubkey, signature, root).is_ok(), valid, "{case}");
+            let lighthouse = BlsPublicKey::deserialize(pubkey)
+                .and_then(|pubkey| Ok(BlsSignature::deserialize(signature)?.verify(&pubkey, root)));
+            assert_eq!(lighthouse.unwrap_or(false), valid, "{case}: lighthouse");
+        };
+        let outside = BlsSignature::deserialize(&OUTSIDE_G2).expect("OUTSIDE_G2 is on the curve");
+        assert!(!outside.point().unwrap().subgroup_check(), "OUTSIDE_G2 is outside G2");
+
+        check("valid", &pk, &sig, root, true);
+        check("wrong message", &pk, &sig, B256::repeat_byte(2), false);
+        check("wrong key", &get_fixed_pubkey(1).serialize(), &sig, root, false);
+        check("signature outside G2", &pk, &OUTSIDE_G2, root, false);
+        check("all-zero signature", &pk, &[0; 96], root, false);
+        check("missing compression flag", &pk, &flagless, root, false);
+        check("infinity signature", &pk, &INFINITY_SIGNATURE, root, false);
+        check("infinity key and signature", &INFINITY_PUBLIC_KEY, &INFINITY_SIGNATURE, root, false);
+    }
+
+    type Item = ([u8; 48], [u8; 96], B256);
+
+    fn signed_item(key: usize, root: B256) -> Item {
+        (get_fixed_pubkey(key).serialize(), get_fixed_secret(key).sign(root).serialize(), root)
+    }
+
+    fn verify_batch(items: &[Item]) -> (Vec<bool>, bool) {
+        let mut batch = BlsBatch::default();
+        for (pubkey, signature, root) in items {
+            batch.push(pubkey, signature, *root);
+        }
+        let fell_back = batch.verify();
+        (batch.verdicts().to_vec(), fell_back)
+    }
+
+    #[test]
+    fn batch_flags_only_the_invalid_signature() {
+        let mut items: Vec<_> =
+            (0..4).map(|i| signed_item(i, B256::repeat_byte(i as u8))).collect();
+        items[2].2 = B256::repeat_byte(9);
+
+        assert_eq!(verify_batch(&items), (vec![true, true, false, true], true));
+    }
+
+    #[test]
+    fn batch_flags_signatures_whose_errors_cancel() {
+        let (root0, root1) = (B256::repeat_byte(1), B256::repeat_byte(2));
+        let (sig0, sig1) = (get_fixed_secret(0).sign(root0), get_fixed_secret(1).sign(root1));
+        // Swapping adds `sig1 - sig0` to one signature and subtracts it from the other.
+        let mut sum = AggregateSignature::infinity();
+        sum.add_assign(&sig1);
+        sum.add_assign(&sig0);
+        let keys = [get_fixed_pubkey(0), get_fixed_pubkey(1)];
+        assert!(sum.aggregate_verify(&[root0, root1], &[&keys[0], &keys[1]]), "unweighted sum");
+
+        let items = [
+            (keys[0].serialize(), sig1.serialize(), root0),
+            (keys[1].serialize(), sig0.serialize(), root1),
+            signed_item(2, B256::repeat_byte(3)),
+        ];
+        assert_eq!(verify_batch(&items).0, [false, false, true]);
+    }
+
+    #[test]
+    fn batch_excludes_signature_with_small_order_component() {
+        let component = min_pk::Signature::from_bytes(&ORDER_13).expect("on the curve");
+        assert!(!component.subgroup_check(), "outside G2, so not infinity");
+        let thirteen =
+            min_pk::AggregateSignature::aggregate_with_randomness(&[component], &[13], 8, false);
+        assert_eq!(thirteen.unwrap().to_signature().to_bytes(), INFINITY_SIGNATURE, "order 13");
+
+        let (pk, sig, root) = signed_item(0, B256::repeat_byte(1));
+        let sig = min_pk::Signature::from_bytes(&sig).unwrap();
+        let tampered = min_pk::AggregateSignature::aggregate(&[&sig, &component], false).unwrap();
+        let items = [
+            (pk, tampered.to_signature().to_bytes(), root),
+            signed_item(1, B256::repeat_byte(2)),
+            signed_item(2, B256::repeat_byte(3)),
+        ];
+        // A subgroup check on the weighted sum misses this component when 13 divides its weight.
+        // The false verdict without fallback distinguishes decoding rejection from a failed
+        // pairing.
+        assert_eq!(verify_batch(&items), (vec![false, true, true], false));
+    }
+
+    #[test]
+    fn batch_flags_infinity() {
+        let items = [
+            signed_item(0, B256::repeat_byte(1)),
+            (INFINITY_PUBLIC_KEY, INFINITY_SIGNATURE, B256::repeat_byte(2)),
+            signed_item(1, B256::repeat_byte(3)),
+        ];
+        assert_eq!(verify_batch(&items).0, [true, false, true]);
+
+        let items: Vec<_> = (0..3)
+            .map(|i| {
+                (get_fixed_pubkey(i).serialize(), INFINITY_SIGNATURE, B256::repeat_byte(i as u8))
+            })
+            .collect();
+        assert_eq!(verify_batch(&items).0, [false; 3]);
+    }
+
+    #[test]
+    fn reused_batch_accepts_valid_signatures_in_one_check() {
+        let mut batch = BlsBatch::default();
+        let mut first = [1, 2, 3].map(|i| signed_item(i, B256::repeat_byte(i as u8)));
+        first[1].2 = B256::repeat_byte(9);
+        for (pubkey, signature, root) in first {
+            batch.push(&pubkey, &signature, root);
+        }
+        assert!(batch.verify(), "the first job falls back");
+
+        for len in [9, 2, 1] {
+            batch.clear();
+            for i in 0..len {
+                let (pubkey, signature, root) = signed_item(i % 5, B256::repeat_byte(i as u8 + 10));
+                batch.push(&pubkey, &signature, root);
+            }
+            assert!(!batch.verify(), "{len} items pass without fallback");
+            assert_eq!(batch.verdicts(), vec![true; len]);
+        }
+    }
+
+    #[test]
+    fn batch_verdicts_match_single_verify() {
+        let root = B256::repeat_byte(1);
+        let (pk, sig) =
+            (get_fixed_pubkey(0).serialize(), get_fixed_secret(0).sign(root).serialize());
+        let mut flagless = sig;
+        flagless[0] &= 0x7f;
+        let mut items = vec![
+            (pk, sig, root),
+            (pk, sig, B256::repeat_byte(2)),
+            (get_fixed_pubkey(1).serialize(), sig, root),
+            (pk, OUTSIDE_G2, root),
+            (pk, [0; 96], root),
+            (pk, flagless, root),
+            (pk, INFINITY_SIGNATURE, root),
+            (INFINITY_PUBLIC_KEY, INFINITY_SIGNATURE, root),
+            ([0; 48], sig, root),
+        ];
+        items.extend((1..5).map(|i| signed_item(i, B256::repeat_byte(i as u8 + 10))));
+        let single: Vec<_> =
+            items.iter().map(|(pk, sig, root)| bls_verify(pk, sig, *root).is_ok()).collect();
+        assert!(single.contains(&true) && single.contains(&false), "mixed fixture");
+
+        assert_eq!(verify_batch(&items).0, single);
+        for (item, valid) in items.iter().zip(single) {
+            assert_eq!(verify_batch(&[*item, (pk, [0; 96], root)]), (vec![valid, false], false));
+        }
+    }
 }

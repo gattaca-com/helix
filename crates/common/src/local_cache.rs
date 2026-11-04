@@ -10,8 +10,8 @@ use axum::{
 };
 use dashmap::{DashMap, DashSet};
 use helix_types::{
-    BlockValidationError, BlsPublicKeyBytes, CryptoError, MergedBlock, SignedValidatorRegistration,
-    Slot, SubmissionVersion,
+    BlockValidationError, BlsPublicKeyBytes, CryptoError, G1Point, MergedBlock, SigError,
+    SignedValidatorRegistration, Slot, SubmissionVersion, gloas,
 };
 use parking_lot::RwLock;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -143,9 +143,11 @@ pub struct LocalCache {
     /// toggled live via the admin API, same as `kill_switch`.
     serve_merged_headers: Arc<AtomicBool>,
     proposer_duties: Arc<RwLock<Vec<BuilderGetValidatorsResponseEntry>>>,
-    /// Every scheduled proposer, registered or not; `proposer_duties` holds only those
-    /// with a registration.
-    proposer_schedule: Arc<RwLock<Vec<ProposerDuty>>>,
+    /// All scheduled duties, including unregistered proposers. Each key is a
+    /// subgroup-checked, non-infinity point or `None` for a rejected key.
+    /// `proposer_duties` contains only registered proposers.
+    #[allow(clippy::type_complexity)]
+    proposer_schedule: Arc<RwLock<Vec<(ProposerDuty, Option<G1Point>)>>>,
     merged_blocks: Arc<DashMap<B256, MergedBlock>>,
     pub validator_registration_cache:
         Arc<DashMap<BlsPublicKeyBytes, SignedValidatorRegistrationEntry>>,
@@ -434,11 +436,33 @@ impl LocalCache {
     }
 
     pub fn update_proposer_schedule(&self, duties: Vec<ProposerDuty>) {
-        *self.proposer_schedule.write() = duties;
+        let pubkeys: Vec<_> = duties.iter().map(|duty| duty.pubkey.0).collect();
+        let mut keys = vec![None; duties.len()];
+        gloas::decode_pubkeys(&pubkeys, &mut keys);
+        *self.proposer_schedule.write() = duties.into_iter().zip(keys).collect();
     }
 
     pub fn proposer_pubkey(&self, slot: Slot) -> Option<BlsPublicKeyBytes> {
-        self.proposer_schedule.read().iter().find(|duty| duty.slot == slot).map(|duty| duty.pubkey)
+        let schedule = self.proposer_schedule.read();
+        schedule.iter().find(|(duty, _)| duty.slot == slot).map(|(duty, _)| duty.pubkey)
+    }
+
+    /// Returns the admitted point for `pubkey`, reusing the schedule only when
+    /// both slot and compressed key match. Other keys are decoded on demand.
+    /// Schedule membership is not an authorization check performed by this method.
+    pub fn proposer_key(
+        &self,
+        slot: Slot,
+        pubkey: &BlsPublicKeyBytes,
+    ) -> Result<G1Point, SigError> {
+        let scheduled =
+            self.proposer_schedule.read().iter().find_map(|(duty, key)| {
+                (duty.slot == slot && duty.pubkey == *pubkey).then_some(*key)
+            });
+        match scheduled {
+            Some(key) => key.ok_or(SigError::InvalidBlsPubkeyBytes),
+            None => gloas::decode_pubkey(pubkey.as_slice()),
+        }
     }
 
     pub fn save_merged_block(&self, merged_block: MergedBlock) {
@@ -558,10 +582,51 @@ impl LocalCache {
 mod tests {
 
     use alloy_primitives::{Address, U256};
-    use helix_types::ValidatorRegistration;
+    use helix_types::{ValidatorRegistration, get_fixed_pubkey_bytes, get_fixed_secret};
 
     use super::*;
     use crate::{BuilderConfig, api_provider::DefaultApiProvider};
+
+    #[test]
+    fn scheduled_keys_give_bls_verify_verdicts() {
+        let mut infinity = [0; 48];
+        infinity[0] = 0xc0;
+        let mut infinity_signature = [0; 96];
+        infinity_signature[0] = 0xc0;
+        let root = B256::repeat_byte(1);
+        let signature = get_fixed_secret(0).sign(root).serialize();
+        let signer = get_fixed_pubkey_bytes(0);
+        let cases = [
+            ("valid", signer, signature, root, true),
+            ("wrong key", get_fixed_pubkey_bytes(1), signature, root, false),
+            ("wrong message", signer, signature, B256::repeat_byte(2), false),
+            ("infinity key", infinity.into(), infinity_signature, root, false),
+            ("undecodable key", [0xff; 48].into(), signature, root, false),
+        ];
+        let cache = LocalCache::new();
+        let duty = |slot: usize, pubkey| ProposerDuty {
+            pubkey,
+            validator_index: slot as u64,
+            slot: Slot::new(slot as u64),
+        };
+        let schedule = cases.iter().enumerate().map(|(slot, (_, pubkey, ..))| duty(slot, *pubkey));
+        cache.update_proposer_schedule(schedule.collect());
+
+        for (slot, (case, pubkey, signature, root, valid)) in cases.into_iter().enumerate() {
+            assert_eq!(
+                gloas::bls_verify(pubkey.as_slice(), &signature, root).is_ok(),
+                valid,
+                "{case}"
+            );
+            // Cache hits, mismatched duties and missing duties must give the same BLS verdict.
+            for slot in [slot, (slot + 1) % cases.len(), cases.len()] {
+                let verdict = cache.proposer_key(Slot::new(slot as u64), &pubkey).and_then(|key| {
+                    gloas::bls_verify_point(&key, &gloas::decode_signature(&signature)?, root)
+                });
+                assert_eq!(verdict.is_ok(), valid, "{case}, slot {slot}");
+            }
+        }
+    }
 
     #[tokio::test]
     pub async fn test_get_builder_info() {

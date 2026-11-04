@@ -1,16 +1,30 @@
+use std::iter;
+
 use alloy_primitives::{Address, B256, U256};
 use lh_types::{EthSpec, ForkName, ForkVersionDecode, MainnetEthSpec};
 use serde::{Deserialize, Serialize};
+use silver_ssz::{
+    merkle::{
+        self, ZERO_HASH, ZERO_HASHES, hash_concat_many, mix_in_length, pack_byte_chunks,
+        uint64_chunk,
+    },
+    ssz_view::{
+        MAX_BYTES_PER_TRANSACTION, MAX_TRANSACTIONS_PER_PAYLOAD, MAX_WITHDRAWALS_PER_PAYLOAD,
+    },
+};
 use ssz::Decode;
 use ssz_derive::{Decode, Encode};
-use tree_hash::TreeHash;
 use tree_hash_derive::TreeHash;
 
 use crate::{
     BlockValidationError, SszError, TestRandom, convert_bloom_to_lighthouse,
     convert_transactions_to_lighthouse, convert_transactions_to_progressive,
-    fields::{Bloom, ExtraData, Transactions, Withdrawals},
+    fields::{Bloom, ExtraData, Transaction, Transactions, Withdrawals},
 };
+
+const TRANSACTION_DEPTH: u32 = (MAX_BYTES_PER_TRANSACTION / 32).ilog2();
+const TRANSACTIONS_DEPTH: u32 = MAX_TRANSACTIONS_PER_PAYLOAD.ilog2();
+const WITHDRAWALS_DEPTH: u32 = MAX_WITHDRAWALS_PER_PAYLOAD.ilog2();
 
 // Both Electra and Fulu share the same ExecutionPayload,
 // so we avoid wrapping it in an enum
@@ -125,11 +139,38 @@ impl ExecutionPayload {
     }
 
     pub fn transaction_root(&self) -> B256 {
-        self.transactions.tree_hash_root()
+        let txs = &self.transactions;
+        let n = txs.len();
+        if n == 0 {
+            return B256::from(mix_in_length(&ZERO_HASHES[TRANSACTIONS_DEPTH as usize], 0));
+        }
+        // A zero chunk represents an empty transaction before fixed-depth padding.
+        let leaves = |tx: &Transaction| tx.len().div_ceil(32).max(1);
+        let mut pairs =
+            Vec::with_capacity(txs.iter().map(|tx| leaves(tx).next_multiple_of(2)).sum());
+        for tx in txs.iter() {
+            let start = pairs.len();
+            pack_byte_chunks(tx, |chunk| pairs.push(chunk));
+            pairs.resize(start + leaves(tx).next_multiple_of(2), ZERO_HASH);
+        }
+        let mut nodes = vec![ZERO_HASH; pairs.len() / 2];
+        let len = pairs.len();
+        merkleize_trees(&mut pairs, &mut nodes, len, txs.iter().map(leaves), TRANSACTION_DEPTH);
+        for (i, tx) in txs.iter().enumerate() {
+            pairs[2 * i] = nodes[i];
+            pairs[2 * i + 1] = uint64_chunk(tx.len() as u64);
+        }
+        hash_concat_many(&mut nodes[..n], &pairs[..2 * n]);
+        pairs[..n].copy_from_slice(&nodes[..n]);
+        // Each transaction reserved at least two entries, leaving room for an odd-list pad.
+        pairs[n] = ZERO_HASH;
+        let len = n.next_multiple_of(2);
+        merkleize_trees(&mut pairs, &mut nodes, len, iter::once(n), TRANSACTIONS_DEPTH);
+        B256::from(mix_in_length(&nodes[0], n))
     }
 
     pub fn withdrawals_root(&self) -> B256 {
-        self.withdrawals.tree_hash_root()
+        withdrawals_root(&self.withdrawals)
     }
 
     pub fn to_lighthouse_fulu_payload(
@@ -186,6 +227,70 @@ impl ExecutionPayload {
             block_access_list: block_access_list.iter().copied().collect(),
             slot_number: slot,
         })
+    }
+}
+
+pub fn withdrawals_root(withdrawals: &Withdrawals) -> B256 {
+    withdrawals_root_of(
+        withdrawals.iter().map(|w| (w.index, w.validator_index, &w.address.0.0, w.amount)),
+    )
+}
+
+/// Computes the bounded SSZ `List[Withdrawal, 16]` root from withdrawal fields.
+/// Callers must supply at most 16 withdrawals.
+pub(crate) fn withdrawals_root_of<'a>(
+    withdrawals: impl Iterator<Item = (u64, u64, &'a [u8; 20], u64)>,
+) -> B256 {
+    let mut leaves = [[ZERO_HASH; 4]; MAX_WITHDRAWALS_PER_PAYLOAD];
+    let mut n = 0;
+    for (leaf, (index, validator_index, address, amount)) in leaves.iter_mut().zip(withdrawals) {
+        leaf[0] = uint64_chunk(index);
+        leaf[1] = uint64_chunk(validator_index);
+        leaf[2][..20].copy_from_slice(address);
+        leaf[3] = uint64_chunk(amount);
+        n += 1;
+    }
+    if n == 0 {
+        return B256::from(mix_in_length(&ZERO_HASHES[WITHDRAWALS_DEPTH as usize], 0));
+    }
+    let mut nodes = [ZERO_HASH; 2 * MAX_WITHDRAWALS_PER_PAYLOAD];
+    // Unused entries supply zero chunks when the withdrawal count is odd.
+    let mut pairs = [ZERO_HASH; MAX_WITHDRAWALS_PER_PAYLOAD];
+    hash_concat_many(&mut nodes[..2 * n], leaves[..n].as_flattened());
+    hash_concat_many(&mut pairs[..n], &nodes[..2 * n]);
+    let len = n.next_multiple_of(2);
+    merkleize_trees(&mut pairs, &mut nodes, len, iter::once(n), WITHDRAWALS_DEPTH);
+    B256::from(mix_in_length(&nodes[0], n))
+}
+
+/// Batches independent pairs from adjacent SSZ chunk trees at each level.
+/// `depth` must be positive; every count from `leaves` must be in `1..=2^depth`.
+/// `pairs[..len]` contains the trees in order, each padded to an even leaf count
+/// with `ZERO_HASH`. `nodes` must have room for `len / 2` hashes.
+/// Roots are written at the start of `nodes` in tree order, without length mix-ins.
+fn merkleize_trees(
+    pairs: &mut [merkle::B256],
+    nodes: &mut [merkle::B256],
+    mut len: usize,
+    leaves: impl Iterator<Item = usize> + Clone,
+    depth: u32,
+) {
+    for level in 1..=depth {
+        hash_concat_many(&mut nodes[..len / 2], &pairs[..len]);
+        if level == depth {
+            return;
+        }
+        let (mut from, mut to) = (0, 0);
+        for count in leaves.clone().map(|leaves| leaves.div_ceil(1 << level)) {
+            pairs[to..to + count].copy_from_slice(&nodes[from..from + count]);
+            from += count;
+            to += count;
+            if count % 2 == 1 {
+                pairs[to] = ZERO_HASHES[level as usize];
+                to += 1;
+            }
+        }
+        len = to;
     }
 }
 
@@ -307,8 +412,8 @@ impl TestRandom for ExecutionPayloadHeader {
 
 impl From<&ExecutionPayload> for ExecutionPayloadHeader {
     fn from(value: &ExecutionPayload) -> Self {
-        let transactions_root = value.transactions.tree_hash_root();
-        let withdrawals_root = value.withdrawals.tree_hash_root();
+        let transactions_root = value.transaction_root();
+        let withdrawals_root = value.withdrawals_root();
         Self {
             parent_hash: value.parent_hash,
             fee_recipient: value.fee_recipient,
@@ -333,12 +438,48 @@ impl From<&ExecutionPayload> for ExecutionPayloadHeader {
 
 #[cfg(test)]
 mod tests {
-    use lh_types::{ForkName, MainnetEthSpec};
+    use lh_types::{ForkName, MainnetEthSpec, Withdrawal};
+    use rand::{Rng, RngCore, SeedableRng};
+    use rand_xorshift::XorShiftRng;
     use ssz::Encode;
     use tree_hash::TreeHash;
 
     use super::*;
     use crate::TestRandomSeed;
+
+    #[test]
+    fn roots_match_lighthouse() {
+        let mut rng = XorShiftRng::from_seed([7; 16]);
+        let boundaries = vec![0, 1, 31, 32, 33, 63, 64, 65, 100_000];
+        let mainnet_like = (0..300).map(|_| rng.random_range(100..=600)).collect();
+        for tx_lens in [vec![], vec![0], vec![1], vec![64, 32], boundaries, mainnet_like] {
+            for withdrawals in [0, 1, 15, 16] {
+                let mut payload = ExecutionPayload::test_random();
+                let txs = tx_lens.iter().map(|&len| {
+                    let mut tx = vec![0; len];
+                    rng.fill_bytes(&mut tx);
+                    Transaction(tx.into())
+                });
+                payload.transactions = Transactions::new(txs.collect()).unwrap();
+                let withdrawals = (0..withdrawals).map(|_| Withdrawal::random_for_test(&mut rng));
+                payload.withdrawals = Withdrawals::new(withdrawals.collect()).unwrap();
+                let lighthouse = payload.to_lighthouse_fulu_payload().unwrap();
+
+                let case =
+                    format!("{} txs, {} withdrawals", tx_lens.len(), payload.withdrawals.len());
+                assert_eq!(
+                    payload.transaction_root(),
+                    lighthouse.transactions.tree_hash_root(),
+                    "{case}"
+                );
+                assert_eq!(
+                    payload.withdrawals_root(),
+                    lighthouse.withdrawals.tree_hash_root(),
+                    "{case}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn test_execution_payload() {

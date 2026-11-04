@@ -7,12 +7,14 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+silver_crypto_simd.workspace = true
 silver_ssz.workspace = true
 bytes.workspace = true
 alloy-consensus.workspace = true
 alloy-eips.workspace = true
 alloy-primitives.workspace = true
 alloy-rpc-types.workspace = true
+# Keeps `no-threads` enabled for the shared blst dependency.
 blst.workspace = true
 bitflags.workspace = true
 ethereum_serde_utils.workspace = true
@@ -44,6 +46,7 @@ tree_hash_derive.workspace = true
 [dev-dependencies]
 alloy-rpc-types.workspace = true
 criterion.workspace = true
+tikv-jemallocator.workspace = true
 
 [[bench]]
 harness = false
@@ -51,7 +54,15 @@ name = "blob_bundle"
 
 [[bench]]
 harness = false
+name = "bls_verify"
+
+[[bench]]
+harness = false
 name = "execution_payload"
+
+[[bench]]
+harness = false
+name = "roots_and_signing"
 
 [[bench]]
 harness = false

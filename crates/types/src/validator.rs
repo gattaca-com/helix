@@ -4,10 +4,7 @@ use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
 use tree_hash_derive::TreeHash;
 
-use crate::{
-    BlsPublicKey, BlsPublicKeyBytes, BlsSignature, BlsSignatureBytes, SigError, TestRandom,
-    TestRandomSeed,
-};
+use crate::{BlsPublicKeyBytes, BlsSignatureBytes, TestRandom, TestRandomSeed};
 
 /// From Lighthouse, replacing PublicKeyBytes with PublicKey
 /// Validator registration, for use in interacting with servers implementing the builder API.
@@ -28,22 +25,6 @@ pub struct ValidatorRegistrationData {
 }
 
 impl SignedRoot for ValidatorRegistrationData {}
-
-impl SignedValidatorRegistrationData {
-    pub fn verify_signature(&self, builder_domain: B256) -> Result<(), SigError> {
-        let signature = BlsSignature::deserialize(self.signature.as_slice())
-            .map_err(|_| SigError::InvalidBlsSignatureBytes)?;
-        let pubkey = BlsPublicKey::deserialize(self.message.pubkey.as_slice())
-            .map_err(|_| SigError::InvalidBlsPubkeyBytes)?;
-
-        let message = self.message.signing_root(builder_domain);
-        if !signature.verify(&pubkey, message) {
-            return Err(SigError::InvalidBlsSignature);
-        }
-
-        Ok(())
-    }
-}
 
 /// From Lighthouse, replacing PublicKeyBytes with PublicKey
 /// Information about a `BeaconChain` validator.

@@ -27,7 +27,7 @@ panic = "unwind"
 
 [workspace.dependencies]
 alloy-consensus = { version = "2.1.1", default-features = false, features = ["k256"] }
-alloy-eips = { version = "2.1.1", default-features = false, features = ["kzg"] }
+alloy-eips = { version = "2.1.1", default-features = false }
 alloy-primitives = { version = "1.6.1", features = ["getrandom", "k256"] }
 alloy-rlp = { version = "0.3.16", default-features = false, features = ["core-net"] }
 alloy-rpc-types = { version = "2.1.1", default-features = false, features = ["beacon", "engine", "ssz"] }
@@ -154,6 +154,7 @@ serde_with = "1.14"
 serde_yaml = "0.9.25"
 serial_test = "1.0.0"
 sha2 = "0.10.8"
+silver_crypto_simd = "0.1"
 silver_ssz = { git = "https://github.com/gattaca-com/silver", rev = "0896b4dd" }
 smallvec = { version = "1.15", features = ["serde"] }
 ssz_types = "0.14"
