@@ -257,7 +257,7 @@ impl<A: Api> ProposerApi<A> {
     }
 
     pub async fn _get_payload(
-        &self,
+        self: &Arc<Self>,
         signed_blinded_block: SignedBlindedBeaconBlock,
         trace: &mut GetPayloadTrace,
         user_agent: Option<String>,
@@ -309,9 +309,13 @@ impl<A: Api> ProposerApi<A> {
         let (rx, dedup_tx) = match payload_kind {
             GetPayloadKind::Dedup(fut) => {
                 info!("dedup get_payload, waiting for primary");
-                let result = fut.await.unwrap_or_else(|_| Arc::new(None));
-                let response = Arc::try_unwrap(result).unwrap_or_else(|arc| (*arc).clone());
-                return response.ok_or(ProposerApiError::InternalServerError);
+                let result = fut.await.unwrap_or_else(|_| {
+                    let message = "primary get_payload ended without a result".to_string();
+                    Arc::new(Err((StatusCode::INTERNAL_SERVER_ERROR, message)))
+                });
+                return Arc::try_unwrap(result).unwrap_or_else(|arc| (*arc).clone()).map_err(
+                    |(status, message)| ProposerApiError::PrimaryRequestFailed { status, message },
+                );
             }
             GetPayloadKind::Primary { rx, dedup_tx } => (rx, dedup_tx),
         };
@@ -321,13 +325,15 @@ impl<A: Api> ProposerApi<A> {
             Ok(Ok(result)) => result,
             Ok(Err(err)) => {
                 error!(%err, "failed to receive payload response from auctioneer");
-                let _ = dedup_tx.send(Arc::new(None));
-                return Err(ProposerApiError::InternalServerError);
+                let err = ProposerApiError::InternalServerError;
+                let _ = dedup_tx.send(Arc::new(Err((err.status_code(), err.to_string()))));
+                return Err(err);
             }
             Err(_elapsed) => {
                 error!("timed out waiting for payload response from auctioneer");
-                let _ = dedup_tx.send(Arc::new(None));
-                return Err(ProposerApiError::InternalServerError);
+                let err = ProposerApiError::InternalServerError;
+                let _ = dedup_tx.send(Arc::new(Err((err.status_code(), err.to_string()))));
+                return Err(err);
             }
         };
 
@@ -335,13 +341,7 @@ impl<A: Api> ProposerApi<A> {
             match result {
                 Ok(data) => data,
                 Err(err) => {
-                    match err {
-                        ProposerApiError::InvalidFork | ProposerApiError::SigError(_) => {
-                            // Bad request - cache the error
-                            let _ = dedup_tx.send(Arc::new(None));
-                        }
-                        _ => {}
-                    }
+                    let _ = dedup_tx.send(Arc::new(Err((err.status_code(), err.to_string()))));
                     return Err(err);
                 }
             };
@@ -365,22 +365,32 @@ impl<A: Api> ProposerApi<A> {
                         trace.payload_fetched,
                     );
 
-                    let _ = dedup_tx.send(Arc::new(None));
+                    let _ = dedup_tx.send(Arc::new(Err((err.status_code(), err.to_string()))));
                     return Err(err);
                 }
             };
 
         trace.slot_start_awaited = utcnow_ns();
 
-        self.gossip_payload(
-            to_publish.signed_block.slot(),
-            &proposer_public_key,
-            Cow::Borrowed(&to_proposer.data),
-            fork,
-            Cow::Borrowed(&bid),
-            true,
-        )
-        .await;
+        // Spawned before the publish task: tokio runs a worker's most recently spawned task
+        // next, so the publish starts on this worker as soon as this task yields, and the gossip
+        // goes to the run queue where an idle worker can take it.
+        let gossip_api = self.clone();
+        let gossip_slot = to_publish.signed_block.slot();
+        let gossip_payload = to_proposer.data.clone();
+        let gossip_bid = bid.clone();
+        spawn_tracked!(async move {
+            gossip_api
+                .gossip_payload(
+                    gossip_slot,
+                    &proposer_public_key,
+                    Cow::Owned(gossip_payload),
+                    fork,
+                    Cow::Owned(gossip_bid),
+                    true,
+                )
+                .await;
+        });
 
         trace.gossiped = utcnow_ns();
 
@@ -449,7 +459,9 @@ impl<A: Api> ProposerApi<A> {
 
         if matches!(api_version, ProposerApiVersion::V1) {
             let Ok((new_trace, publish_outcome)) = handle.await else {
-                return Err(ProposerApiError::InternalServerError);
+                let err = ProposerApiError::InternalServerError;
+                let _ = dedup_tx.send(Arc::new(Err((err.status_code(), err.to_string()))));
+                return Err(err);
             };
             *trace = new_trace;
 
@@ -460,8 +472,9 @@ impl<A: Api> ProposerApi<A> {
                 }
                 PublishOutcome::BlockInvalid => {
                     error!("beacon rejected block as invalid, caching failure");
-                    let _ = dedup_tx.send(Arc::new(None));
-                    return Err(ProposerApiError::InternalServerError);
+                    let err = ProposerApiError::InternalServerError;
+                    let _ = dedup_tx.send(Arc::new(Err((err.status_code(), err.to_string()))));
+                    return Err(err);
                 }
             }
 
@@ -482,13 +495,13 @@ impl<A: Api> ProposerApi<A> {
             if let SlotTiming::WithinResponseBuffer(err) = slot_timing {
                 warn!(error = %err, "get_payload landed in the V1 response-safety buffer, withholding payload");
                 GET_PAYLOAD_V1_RESPONSE_WITHHELD.inc();
-                let _ = dedup_tx.send(Arc::new(None));
+                let _ = dedup_tx.send(Arc::new(Err((err.status_code(), err.to_string()))));
                 return Err(err);
             }
         }
 
         // Notify dedup waiters with the successful response.
-        let _ = dedup_tx.send(Arc::new(Some(to_proposer.clone())));
+        let _ = dedup_tx.send(Arc::new(Ok(to_proposer.clone())));
 
         // Return response
         info!(?trace, timestamp = utcnow_ns(), "delivering payload");

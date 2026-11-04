@@ -18,7 +18,7 @@ use helix_common::simulator::BlockSimError;
 use tokio::sync::watch;
 
 use crate::{
-    engine::convert::{
+    convert::{
         Amsterdam, b256, block_to_payload_v3, eaddr, eblobs, h256, payload_v3_to_block,
         requests_to_v4,
     },

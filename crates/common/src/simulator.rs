@@ -1,11 +1,10 @@
-use std::sync::Arc;
-
 use alloy_primitives::{Address, B256, U256};
 use helix_telemetry::SimError;
 use helix_types::{
     BidTrace, BlobsBundle, BlsSignatureBytes, ExecutionPayload, ExecutionRequests, ForkName,
     SignedBidSubmissionFulu,
 };
+use ssz::Encode as _;
 use ssz_derive::{Decode, Encode};
 use thiserror::Error;
 
@@ -238,6 +237,84 @@ pub struct SszMergedValidationRequest {
     pub base_payment_tx_index: u64,
 }
 
+/// Encode-only form of [`SszValidationRequest`] that borrows the submission and writes
+/// it straight into the output. The derived container encoder stages every
+/// variable-length field in a scratch `Vec` before appending it, which would copy a
+/// multi-MB submission twice more. Encodes to the same bytes as the owned request.
+pub struct SszValidationRequestRef<'a, S> {
+    pub apply_blacklist: bool,
+    pub registered_gas_limit: u64,
+    pub parent_beacon_block_root: B256,
+    pub inclusion_list: &'a InclusionListWithMetadata,
+    pub decoder_params: Option<SubmissionDecoderParams>,
+    pub signed_bid_submission: &'a S,
+}
+
+impl<S: ssz::Encode> SszValidationRequestRef<'_, S> {
+    const FIXED_LEN: usize = 1 + 8 + 32 + 3 * ssz::BYTES_PER_LENGTH_OFFSET;
+
+    /// `extra_fixed` is the fixed part of any fields declared after the submission. It sits
+    /// between the submission's offset and the variable parts, so the submission stays the
+    /// final bytes of the encoding.
+    fn append_with(&self, extra_fixed: &[u8], buf: &mut Vec<u8>) {
+        let mut offset = Self::FIXED_LEN + extra_fixed.len();
+        self.apply_blacklist.ssz_append(buf);
+        self.registered_gas_limit.ssz_append(buf);
+        self.parent_beacon_block_root.ssz_append(buf);
+        buf.extend_from_slice(&ssz::encode_length(offset));
+        offset += self.inclusion_list.ssz_bytes_len();
+        buf.extend_from_slice(&ssz::encode_length(offset));
+        offset += self.decoder_params.ssz_bytes_len();
+        buf.extend_from_slice(&ssz::encode_length(offset));
+        buf.extend_from_slice(extra_fixed);
+        self.inclusion_list.ssz_append(buf);
+        self.decoder_params.ssz_append(buf);
+        self.signed_bid_submission.ssz_append(buf);
+    }
+
+    fn bytes_len_with(&self, extra_fixed: usize) -> usize {
+        Self::FIXED_LEN +
+            extra_fixed +
+            self.inclusion_list.ssz_bytes_len() +
+            self.decoder_params.ssz_bytes_len() +
+            self.signed_bid_submission.ssz_bytes_len()
+    }
+}
+
+impl<S: ssz::Encode> ssz::Encode for SszValidationRequestRef<'_, S> {
+    fn is_ssz_fixed_len() -> bool {
+        false
+    }
+
+    fn ssz_bytes_len(&self) -> usize {
+        self.bytes_len_with(0)
+    }
+
+    fn ssz_append(&self, buf: &mut Vec<u8>) {
+        self.append_with(&[], buf);
+    }
+}
+
+/// Encode-only form of [`SszMergedValidationRequest`]; see [`SszValidationRequestRef`].
+pub struct SszMergedValidationRequestRef<'a> {
+    pub base: SszValidationRequestRef<'a, SignedBidSubmissionFulu>,
+    pub base_payment_tx_index: u64,
+}
+
+impl ssz::Encode for SszMergedValidationRequestRef<'_> {
+    fn is_ssz_fixed_len() -> bool {
+        false
+    }
+
+    fn ssz_bytes_len(&self) -> usize {
+        self.base.bytes_len_with(size_of::<u64>())
+    }
+
+    fn ssz_append(&self, buf: &mut Vec<u8>) {
+        self.base.append_with(&self.base_payment_tx_index.to_le_bytes(), buf);
+    }
+}
+
 /// One transaction of a validated block.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct TxDetail {
@@ -259,39 +336,40 @@ pub struct SszValidationResponse {
     pub txs: Vec<TxDetail>,
 }
 
-// TODO: refactor this in a SignedBidSubmissionFulu + extra fields
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct JsonValidationRequest {
+/// JSON-RPC params of a block validation. Borrows from the submission, so building
+/// it clones nothing.
+#[derive(Debug, serde::Serialize)]
+pub struct JsonValidationRequest<'a> {
     #[serde(with = "serde_utils::quoted_u64")]
     pub registered_gas_limit: u64,
-    pub message: BidTrace,
-    pub execution_payload: ExecutionPayload,
-    pub signature: BlsSignatureBytes,
+    pub message: &'a BidTrace,
+    pub execution_payload: &'a ExecutionPayload,
+    pub signature: &'a BlsSignatureBytes,
     pub proposer_preferences: ValidatorPreferences,
-    pub blobs_bundle: Option<Arc<BlobsBundle>>,
-    pub execution_requests: Option<Arc<ExecutionRequests>>,
-    pub parent_beacon_block_root: Option<B256>,
-    pub inclusion_list: Option<InclusionListWithMetadata>,
+    pub blobs_bundle: &'a BlobsBundle,
+    pub execution_requests: &'a ExecutionRequests,
+    pub parent_beacon_block_root: B256,
+    pub inclusion_list: &'a InclusionListWithMetadata,
     pub apply_blacklist: bool,
 }
 
-impl JsonValidationRequest {
+impl<'a> JsonValidationRequest<'a> {
     pub fn new(
         registered_gas_limit: u64,
-        block: &SignedBidSubmissionFulu,
+        block: &'a SignedBidSubmissionFulu,
         proposer_preferences: ValidatorPreferences,
-        parent_beacon_block_root: Option<B256>,
-        inclusion_list: Option<InclusionListWithMetadata>,
+        parent_beacon_block_root: B256,
+        inclusion_list: &'a InclusionListWithMetadata,
     ) -> Self {
         Self {
             registered_gas_limit,
-            message: block.bid_trace().clone(),
-            execution_payload: block.execution_payload_ref().clone(),
-            signature: *block.signature(),
+            message: block.bid_trace(),
+            execution_payload: block.execution_payload_ref(),
+            signature: block.signature(),
             apply_blacklist: proposer_preferences.filtering.is_regional(),
             proposer_preferences,
-            blobs_bundle: Some(block.blobs_bundle().clone()),
-            execution_requests: Some(block.execution_requests_ref().clone()),
+            blobs_bundle: &block.blobs_bundle,
+            execution_requests: block.execution_requests_ref(),
             parent_beacon_block_root,
             inclusion_list,
         }
@@ -300,16 +378,119 @@ impl JsonValidationRequest {
 
 /// Merged-block counterpart of [`JsonValidationRequest`], carrying the extra
 /// `base_payment_tx_index` -- see [`SszMergedValidationRequest`].
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct MergedJsonValidationRequest {
+#[derive(Debug, serde::Serialize)]
+pub struct MergedJsonValidationRequest<'a> {
     #[serde(flatten)]
-    pub base: JsonValidationRequest,
+    pub base: JsonValidationRequest<'a>,
     pub base_payment_tx_index: u64,
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use helix_types::{
+        GloasBidSubmission, GloasBidTrace, SignedBidSubmission, SignedBidSubmissionGloas, Slot,
+    };
+    use ssz::Encode;
+
     use super::*;
+    use crate::api::builder_api::InclusionListTxWithMetadata;
+
+    /// Simulators decode the borrowed requests as the derived owned ones, so the two must
+    /// encode to the same bytes.
+    #[test]
+    fn borrowed_ssz_requests_encode_like_the_owned_ones() {
+        // Deserializing the fixture's blob overflows the default test stack in debug builds.
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(borrowed_ssz_requests_encode_like_the_owned_ones_inner)
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    fn borrowed_ssz_requests_encode_like_the_owned_ones_inner() {
+        let fulu: SignedBidSubmissionFulu = serde_json::from_slice(include_bytes!(
+            "../../types/src/testdata/signed-bid-submission-fulu-2.json"
+        ))
+        .unwrap();
+        let gloas = SignedBidSubmissionGloas {
+            message: GloasBidTrace { trace: fulu.message.clone(), parent_block_root: B256::ZERO },
+            execution_payload: Arc::new(
+                fulu.execution_payload
+                    .to_lighthouse_gloas_payload(Slot::new(fulu.message.slot), &Default::default())
+                    .unwrap(),
+            ),
+            blobs_bundle: fulu.blobs_bundle.clone(),
+            execution_requests: Default::default(),
+            signature: fulu.signature,
+        };
+        let gloas = GloasBidSubmission::from_ssz_bytes(gloas.as_ssz_bytes().into()).unwrap();
+        let inclusion_list = InclusionListWithMetadata {
+            txs: vec![InclusionListTxWithMetadata {
+                hash: B256::repeat_byte(3),
+                bytes: fulu.execution_payload.transactions[0].clone(),
+            }],
+        };
+        let root = B256::repeat_byte(9);
+
+        let cases = [
+            (fulu.as_ssz_bytes(), SignedBidSubmission::Fulu(fulu.clone()), None),
+            (
+                gloas.as_bytes().to_vec(),
+                SignedBidSubmission::Gloas(gloas),
+                Some(SubmissionDecoderParams::plain(ForkName::Gloas)),
+            ),
+        ];
+        for (submission_bytes, submission, decoder_params) in cases {
+            let owned = SszValidationRequest {
+                apply_blacklist: true,
+                registered_gas_limit: 36_000_000,
+                parent_beacon_block_root: root,
+                inclusion_list: inclusion_list.clone(),
+                decoder_params: decoder_params.clone(),
+                signed_bid_submission: submission_bytes,
+            }
+            .as_ssz_bytes();
+            let borrowed = SszValidationRequestRef {
+                apply_blacklist: true,
+                registered_gas_limit: 36_000_000,
+                parent_beacon_block_root: root,
+                inclusion_list: &inclusion_list,
+                decoder_params,
+                signed_bid_submission: &submission,
+            };
+
+            assert_eq!(borrowed.ssz_bytes_len(), owned.len());
+            assert_eq!(borrowed.as_ssz_bytes(), owned);
+        }
+
+        let owned = SszMergedValidationRequest {
+            apply_blacklist: false,
+            registered_gas_limit: 36_000_000,
+            parent_beacon_block_root: root,
+            inclusion_list: inclusion_list.clone(),
+            decoder_params: None,
+            signed_bid_submission: fulu.as_ssz_bytes(),
+            base_payment_tx_index: 7,
+        }
+        .as_ssz_bytes();
+        let borrowed = SszMergedValidationRequestRef {
+            base: SszValidationRequestRef {
+                apply_blacklist: false,
+                registered_gas_limit: 36_000_000,
+                parent_beacon_block_root: root,
+                inclusion_list: &inclusion_list,
+                decoder_params: None,
+                signed_bid_submission: &fulu,
+            },
+            base_payment_tx_index: 7,
+        };
+
+        assert_eq!(borrowed.ssz_bytes_len(), owned.len());
+        assert_eq!(borrowed.as_ssz_bytes(), owned);
+    }
 
     #[test]
     fn test_temporary() {

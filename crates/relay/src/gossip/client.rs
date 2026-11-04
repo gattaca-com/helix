@@ -8,9 +8,10 @@ use tokio::{
     time::sleep,
 };
 use tonic::{Request, Response, Status, codec::CompressionEncoding, transport::Channel};
-use tracing::error;
+use tracing::{error, warn};
 
 use crate::gossip::{
+    auth::{GOSSIP_TOKEN_ENV_VAR, GossipToken},
     error::GossipError,
     grpc::{
         self,
@@ -26,12 +27,13 @@ const GET_PAYLOAD_ID: &str = "get_payload";
 #[derive(Clone)]
 pub struct GrpcGossiperClient {
     endpoint: String,
+    token: GossipToken,
     client: Arc<RwLock<Option<GossipServiceClient<Channel>>>>,
 }
 
 impl GrpcGossiperClient {
-    pub fn new(endpoint: String) -> Self {
-        Self { endpoint, client: Arc::new(RwLock::new(None)) }
+    pub fn new(endpoint: String, token: GossipToken) -> Self {
+        Self { endpoint, token, client: Arc::new(RwLock::new(None)) }
     }
 
     pub async fn connect(&self) {
@@ -77,7 +79,8 @@ impl GrpcGossiperClient {
         let size = request.encoded_len();
         GossipMetrics::out_size(PAYLOAD_ID, size);
 
-        let request = Request::new(request);
+        let mut request = Request::new(request);
+        self.token.attach(&mut request);
 
         if let Some(mut client) = self.client() {
             let result =
@@ -113,7 +116,8 @@ impl GrpcGossiperClient {
         let size = request.encoded_len();
         GossipMetrics::out_size(GET_PAYLOAD_ID, size);
 
-        let request = Request::new(request);
+        let mut request = Request::new(request);
+        self.token.attach(&mut request);
 
         if let Some(mut client) = self.client() {
             let result =
@@ -147,23 +151,36 @@ impl GrpcGossiperClient {
 #[derive(Clone)]
 pub struct GrpcGossiperClientManager {
     clients: Vec<GrpcGossiperClient>,
+    token: Option<GossipToken>,
 }
 
 impl GrpcGossiperClientManager {
-    pub async fn new(endpoints: Vec<String>) -> Result<Self, tonic::transport::Error> {
+    /// Panics if `endpoints` is non-empty and no token is given.
+    pub async fn new(
+        endpoints: Vec<String>,
+        token: Option<GossipToken>,
+    ) -> Result<Self, tonic::transport::Error> {
         let mut clients = Vec::with_capacity(endpoints.len());
         for endpoint in endpoints {
-            let client = GrpcGossiperClient::new(endpoint);
+            let token = token.clone().unwrap_or_else(|| {
+                panic!("{GOSSIP_TOKEN_ENV_VAR} should be set when gossip relays are configured")
+            });
+            let client = GrpcGossiperClient::new(endpoint, token);
             client.connect().await;
             clients.push(client);
         }
-        Ok(Self { clients })
+        Ok(Self { clients, token })
     }
 
-    /// Starts the gRPC server to listen for gossip requests on the 50051 port.
+    /// Starts the gRPC server to listen for gossip requests on the 50051 port. Without a
+    /// token no peer can authenticate, so the server is not started.
     /// Will panic if the server can't be started.
     pub async fn start_server(&self, gossip_sender: mpsc::Sender<GossipedMessage>) {
-        let service = GrpcGossiperService { gossip_sender };
+        let Some(token) = self.token.clone() else {
+            warn!("{GOSSIP_TOKEN_ENV_VAR} is not set, not starting gossip server");
+            return;
+        };
+        let service = GrpcGossiperService { gossip_sender, token };
 
         let addr = "0.0.0.0:50051".parse().unwrap();
         spawn_tracked!(async move {
@@ -217,6 +234,7 @@ impl GrpcGossiperClientManager {
 /// and processes them.
 pub struct GrpcGossiperService {
     gossip_sender: mpsc::Sender<GossipedMessage>,
+    token: GossipToken,
 }
 
 #[tonic::async_trait]
@@ -225,6 +243,7 @@ impl GossipService for GrpcGossiperService {
         &self,
         request: Request<grpc::BroadcastPayloadParams>,
     ) -> Result<Response<()>, Status> {
+        self.token.verify(&request)?;
         GossipMetrics::in_count(PAYLOAD_ID);
         let inner = request.into_inner();
         let size = inner.encoded_len();
@@ -249,6 +268,7 @@ impl GossipService for GrpcGossiperService {
         &self,
         request: Request<grpc::BroadcastGetPayloadParams>,
     ) -> Result<Response<()>, Status> {
+        self.token.verify(&request)?;
         GossipMetrics::in_count(GET_PAYLOAD_ID);
         let inner = request.into_inner();
         let size = inner.encoded_len();

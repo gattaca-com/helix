@@ -1,4 +1,5 @@
 use alloy_primitives::{Address, U256};
+use bytes::Bytes;
 use helix_common::{
     SimulatorConfig,
     simulator::{BlockSimError, SszValidationResponse, TxDetail},
@@ -10,7 +11,7 @@ use reqwest::{
 };
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
-use ssz::{Decode, Encode};
+use ssz::Decode;
 use tracing::error;
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -21,6 +22,22 @@ struct JsonRpcError {
 #[derive(Debug, serde::Deserialize)]
 struct BlockSimRpcResponse {
     error: Option<JsonRpcError>,
+}
+
+/// Serialized straight into the request body, so the params are never first
+/// converted into a `serde_json::Value` tree.
+#[derive(serde::Serialize)]
+struct JsonRpcRequest<'a, T> {
+    jsonrpc: &'static str,
+    id: &'static str,
+    method: &'a str,
+    params: [&'a T; 1],
+}
+
+impl<'a, T> JsonRpcRequest<'a, T> {
+    fn new(method: &'a str, params: &'a T) -> Self {
+        Self { jsonrpc: "2.0", id: "1", method, params: [params] }
+    }
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
@@ -102,15 +119,8 @@ impl SimulatorClient {
             headers.insert("X-High-Priority", HeaderValue::from_static("true"));
         }
 
-        let rpc_payload = json!({
-            "jsonrpc": "2.0",
-            "id": "1",
-            "method": sim_method,
-            "params": [request]
-        });
-
         let res = match Self::rpc_request::<BlockSimRpcResponse>(
-            to_send.headers(headers).json(&rpc_payload),
+            to_send.headers(headers).json(&JsonRpcRequest::new(sim_method, request)),
         )
         .await
         {
@@ -129,12 +139,11 @@ impl SimulatorClient {
     }
 
     pub async fn do_sim_request(
-        ssz_req: &impl Encode,
+        body: Bytes,
         is_top_bid: bool,
         to_send: RequestBuilder,
         endpoint: &str,
     ) -> Result<Vec<TxDetail>, BlockSimError> {
-        let body = ssz_req.as_ssz_bytes();
         let body_len = body.len();
         Self::ssz_request(to_send.body(body), is_top_bid, endpoint, body_len).await
     }
@@ -242,11 +251,17 @@ impl SimulatorClient {
 
 #[cfg(test)]
 mod test {
-    use alloy_primitives::hex::FromHex;
-    use helix_common::SimulatorConfig;
-    use helix_types::ForkName;
+    use alloy_primitives::{B256, hex::FromHex};
+    use helix_common::{
+        SimulatorConfig,
+        api::builder_api::{InclusionListTxWithMetadata, InclusionListWithMetadata},
+        simulator::{JsonValidationRequest, MergedJsonValidationRequest},
+        validator_preferences::{Filtering, ValidatorPreferences},
+    };
+    use helix_types::{ForkName, SignedBidSubmissionFulu};
+    use serde_json::{Value, json};
 
-    use super::SimulatorClient;
+    use super::{JsonRpcRequest, SimulatorClient};
 
     fn sim_client() -> SimulatorClient {
         SimulatorClient::new(reqwest::Client::new(), SimulatorConfig {
@@ -300,6 +315,77 @@ mod test {
         assert!(
             ssz_client().ssz_request_builder(ForkName::Heze).is_none(),
             "the SSZ path short-circuited above the fork gate #517 added",
+        );
+    }
+
+    /// The body must keep the field names and encodings the simulator parses.
+    #[test]
+    fn json_sim_body_keeps_its_wire_shape() {
+        // Deserializing the fixture's blob overflows the default test stack in debug builds.
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(json_sim_body_keeps_its_wire_shape_inner)
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    fn json_sim_body_keeps_its_wire_shape_inner() {
+        let submission: SignedBidSubmissionFulu = serde_json::from_slice(include_bytes!(
+            "../../../types/src/testdata/signed-bid-submission-fulu-2.json"
+        ))
+        .unwrap();
+        let inclusion_list = InclusionListWithMetadata {
+            txs: vec![InclusionListTxWithMetadata {
+                hash: B256::repeat_byte(3),
+                bytes: submission.execution_payload.transactions[0].clone(),
+            }],
+        };
+        let root = B256::repeat_byte(9);
+        let prefs = ValidatorPreferences { filtering: Filtering::Regional, ..Default::default() };
+        let request = JsonValidationRequest::new(
+            36_000_000,
+            &submission,
+            prefs.clone(),
+            root,
+            &inclusion_list,
+        );
+        fn body(request: &JsonRpcRequest<'_, impl serde::Serialize>) -> Value {
+            serde_json::from_slice(&serde_json::to_vec(request).unwrap()).unwrap()
+        }
+        let mut params = json!({
+            "registered_gas_limit": "36000000",
+            "message": submission.message,
+            "execution_payload": submission.execution_payload,
+            "signature": submission.signature,
+            "proposer_preferences": prefs,
+            "blobs_bundle": submission.blobs_bundle,
+            "execution_requests": submission.execution_requests,
+            "parent_beacon_block_root": root,
+            "inclusion_list": inclusion_list,
+            "apply_blacklist": true,
+        });
+
+        assert_eq!(
+            body(&JsonRpcRequest::new("relay_validateBuilderSubmissionV5", &request)),
+            json!({
+                "jsonrpc": "2.0",
+                "id": "1",
+                "method": "relay_validateBuilderSubmissionV5",
+                "params": [params],
+            }),
+        );
+
+        let merged = MergedJsonValidationRequest { base: request, base_payment_tx_index: 7 };
+        params["base_payment_tx_index"] = json!(7);
+        assert_eq!(
+            body(&JsonRpcRequest::new("relay_validateMergedBuilderSubmissionV5", &merged)),
+            json!({
+                "jsonrpc": "2.0",
+                "id": "1",
+                "method": "relay_validateMergedBuilderSubmissionV5",
+                "params": [params],
+            }),
         );
     }
 

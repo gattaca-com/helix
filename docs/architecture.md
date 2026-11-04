@@ -328,7 +328,10 @@ Inter-relay communication for geographic distribution.
 **Runs on**: tokio (tonic accept loop)
 **File**: `gossip/client.rs`
 
-Listens for incoming gossip from other relay instances. Receives two message types:
+Listens for incoming gossip from other relay instances. Each request must carry the
+shared `GOSSIP_TOKEN` in the `x-gossip-token` metadata header, otherwise it is rejected
+as unauthenticated. The server is not started when `GOSSIP_TOKEN` is unset. Receives
+two message types:
 `BroadcastPayload` (a validated block submission) and `BroadcastGetPayload` (a
 request for a payload another instance needs). Forwards both to the `gossip` mpsc
 channel.
