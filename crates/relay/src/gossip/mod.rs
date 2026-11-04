@@ -1,3 +1,4 @@
+mod auth;
 mod client;
 mod error;
 mod types;
@@ -9,6 +10,7 @@ mod grpc {
 
 use std::sync::Arc;
 
+pub use auth::GossipToken;
 pub use client::GrpcGossiperClientManager;
 use helix_common::{GetPayloadTrace, spawn_tracked, utils::utcnow_ns};
 use tokio::sync::mpsc;

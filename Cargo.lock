@@ -5198,6 +5198,7 @@ dependencies = [
  "serial_test",
  "strum",
  "strum_macros",
+ "subtle",
  "thiserror 1.0.69",
  "tikv-jemallocator",
  "tokio",
