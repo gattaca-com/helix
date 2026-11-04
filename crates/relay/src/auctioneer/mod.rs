@@ -324,12 +324,8 @@ impl State {
                         (registration_data, payload_attributes_map.clone(), il)
                     }
                     Ordering::Greater => {
-                        if *curr_slot > 0 {
-                            assert_eq!(
-                                bid_slot,
-                                *curr_slot + 1,
-                                "gap in slot data received (slot)"
-                            );
+                        if *curr_slot > 0 && bid_slot != *curr_slot + 1 {
+                            warn!(%curr_slot, %bid_slot, "gap in slot data received (slot)");
                         }
 
                         ctx.on_new_slot(bid_slot, producers);
@@ -373,11 +369,9 @@ impl State {
                     }
                 }
                 Ordering::Greater => {
-                    assert_eq!(
-                        bid_slot,
-                        slot_data.bid_slot + 1,
-                        "gap in slot data received (sort)"
-                    );
+                    if bid_slot != slot_data.bid_slot + 1 {
+                        warn!(curr_slot =% slot_data.bid_slot, %bid_slot, "gap in slot data received (sort)");
+                    }
 
                     ctx.on_new_slot(bid_slot, producers);
                     // another relay delivered the payload
@@ -399,11 +393,9 @@ impl State {
             ) => match bid_slot.cmp(&slot_data.bid_slot) {
                 Ordering::Less | Ordering::Equal => (),
                 Ordering::Greater => {
-                    assert_eq!(
-                        bid_slot,
-                        slot_data.bid_slot + 1,
-                        "gap in slot data received (broadcast)"
-                    );
+                    if bid_slot != slot_data.bid_slot + 1 {
+                        warn!(curr_slot =% slot_data.bid_slot, %bid_slot, "gap in slot data received (broadcast)");
+                    }
 
                     if payload_attributes.iter().all(|a| &a.parent_hash != block_hash) &&
                         !payload_attributes.is_empty()
