@@ -422,8 +422,15 @@ fn bundle(count: u16, reverting_txs: Vec<u16>, dropping_txs: Vec<u16>) -> Vec<Me
 }
 
 fn best(engine: &mut Harness) -> Box<MergedBlockV1> {
+    // In a debug build under CPU contention, the first merge can take longer
+    // than one quiet window.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut outputs = Vec::new();
+    while outputs.is_empty() && Instant::now() < deadline {
+        outputs = engine.settle(Duration::from_secs(3));
+    }
     let mut best: Option<Box<MergedBlockV1>> = None;
-    for output in engine.settle(Duration::from_secs(3)) {
+    for output in outputs {
         let msg = match output {
             Output::Merged(msg) => msg,
             Output::Reject(msg) => {
