@@ -3,7 +3,10 @@ use std::hint::black_box;
 use alloy_primitives::B256;
 use blst::{BLST_ERROR, min_pk};
 use criterion::{Criterion, criterion_group, criterion_main};
-use helix_types::{BlsPublicKey, BlsSignature, get_fixed_secret, gloas::bls_verify};
+use helix_types::{
+    BlsPublicKey, BlsSignature, get_fixed_secret,
+    gloas::{BlsBatch, bls_verify},
+};
 
 #[global_allocator]
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
@@ -33,5 +36,53 @@ fn bls(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bls);
+/// Verification jobs with distinct keys and precomputed signing roots.
+fn batch(c: &mut Criterion) {
+    let mut batch = BlsBatch::default();
+    let mut job = |items: &[([u8; 48], [u8; 96], B256)], valid: usize| {
+        batch.clear();
+        for (pk, sig, root) in black_box(items) {
+            batch.push(pk, sig, *root);
+        }
+        batch.verify();
+        assert_eq!(batch.verdicts().iter().filter(|v| **v).count(), valid);
+    };
+    for n in [1, 2, 8, 32, 128] {
+        let item = |i: usize, claimed: usize| {
+            let sk = min_pk::SecretKey::key_gen(&[i as u8; 32], &[]).unwrap();
+            let sig = sk.sign(&[i as u8; 32], DST, &[]).compress();
+            (sk.sk_to_pk().compress(), sig, B256::repeat_byte(claimed as u8))
+        };
+        let valid: Vec<_> = (0..n).map(|i| item(i, i)).collect();
+        let mut one_bad = valid.clone();
+        one_bad[0] = item(0, n);
+        let all_bad: Vec<_> = (0..n).map(|i| item(i, i + n)).collect();
+        let mut malformed = valid.clone();
+        malformed.iter_mut().for_each(|(_, sig, _)| sig[0] &= 0x7f);
+
+        let mut group = c.benchmark_group(format!("job_{n}"));
+        group.bench_function("lighthouse_seq", |b| {
+            b.iter(|| {
+                for (pk, sig, root) in black_box(&valid) {
+                    let pk = BlsPublicKey::deserialize(pk).unwrap();
+                    assert!(BlsSignature::deserialize(sig).unwrap().verify(&pk, *root));
+                }
+            })
+        });
+        group.bench_function("silver_seq", |b| {
+            b.iter(|| {
+                for (pk, sig, root) in black_box(&valid) {
+                    bls_verify(pk, sig, *root).unwrap();
+                }
+            })
+        });
+        group.bench_function("batch_valid", |b| b.iter(|| job(&valid, n)));
+        group.bench_function("batch_one_bad", |b| b.iter(|| job(&one_bad, n - 1)));
+        group.bench_function("batch_all_bad", |b| b.iter(|| job(&all_bad, 0)));
+        group.bench_function("batch_malformed", |b| b.iter(|| job(&malformed, 0)));
+        group.finish();
+    }
+}
+
+criterion_group!(benches, bls, batch);
 criterion_main!(benches);
