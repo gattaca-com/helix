@@ -62,6 +62,10 @@ name = "execution_payload"
 
 [[bench]]
 harness = false
+name = "roots_and_signing"
+
+[[bench]]
+harness = false
 name = "signed_bid_submission"
 
 [[bench]]
