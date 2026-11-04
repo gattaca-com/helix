@@ -6,9 +6,9 @@
 
 use alloy_primitives::B256;
 use serde::{Deserialize, Serialize};
+use silver_ssz::merkle::{merkleize, merkleize_bytes, mix_in_length, uint64_chunk};
 use ssz_derive::{Decode, Encode};
-use ssz_types::typenum::U4096;
-use tree_hash::TreeHash as _;
+use ssz_types::typenum::{U4096, Unsigned};
 use tree_hash_derive::TreeHash;
 
 use crate::{BlsPublicKeyBytes, BlsSignatureBytes, SigError};
@@ -44,10 +44,20 @@ impl SignedBuilderRequestAuth {
         pubkey: &BlsPublicKeyBytes,
         domain: B256,
     ) -> Result<(), SigError> {
+        let data = &self.message.data;
+        // Decoding does not enforce the SSZ limit; `merkleize_bytes` requires
+        // the input to fit within its chunk capacity.
+        if data.len() > U4096::USIZE {
+            return Err(SigError::InvalidBlsSignature);
+        }
+        let root = merkleize(&[
+            mix_in_length(&merkleize_bytes(data, U4096::USIZE / 32), data.len()),
+            uint64_chunk(self.message.slot),
+        ]);
         crate::gloas::bls_verify(
             pubkey.as_slice(),
             self.signature.as_slice(),
-            crate::gloas::signing_root(self.message.tree_hash_root(), domain),
+            crate::gloas::signing_root(B256::from(root), domain),
         )
     }
 }
@@ -68,7 +78,9 @@ pub struct BuilderPreferencesRequest {
 
 #[cfg(test)]
 mod tests {
+    use rand::RngCore;
     use ssz::{Decode, Encode};
+    use tree_hash::TreeHash;
 
     use super::*;
     use crate::BlsKeypair;
@@ -107,20 +119,33 @@ mod tests {
     #[test]
     fn signed_request_auth_signature_round_trips() {
         let keypair = BlsKeypair::random();
-        let domain = B256::repeat_byte(7);
-        let message = sample_request_auth();
-        let root = tree_hash::TreeHash::tree_hash_root(&lh_types::SigningData {
-            object_root: message.tree_hash_root(),
-            domain,
-        });
-        let signature = keypair.sk.sign(root);
-
-        let signed = SignedBuilderRequestAuth { message, signature: signature.serialize().into() };
         let pubkey: BlsPublicKeyBytes = keypair.pk.serialize().into();
+        let domain = B256::repeat_byte(7);
+        for len in [0, 1, 32, 33, 4096] {
+            let mut data = vec![0; len];
+            rand::rng().fill_bytes(&mut data);
+            let message = BuilderRequestAuth { data: RequestAuthData(data.into()), slot: 123 };
+            let object_root = message.tree_hash_root();
+            let root = lh_types::SigningData { object_root, domain }.tree_hash_root();
+            let signature = keypair.sk.sign(root).serialize().into();
+            let signed = SignedBuilderRequestAuth { message, signature };
 
-        signed.verify_signature(&pubkey, domain).expect("valid signature should verify");
-        signed
-            .verify_signature(&pubkey, B256::repeat_byte(8))
-            .expect_err("wrong domain should fail verification");
+            signed.verify_signature(&pubkey, domain).expect("valid signature should verify");
+            signed
+                .verify_signature(&pubkey, B256::repeat_byte(8))
+                .expect_err("wrong domain should fail verification");
+        }
+
+        let data = vec![1; U4096::USIZE + 1];
+        let object_root = B256::from(merkleize(&[
+            mix_in_length(&merkleize_bytes(&data, U4096::USIZE / 32), data.len()),
+            uint64_chunk(123),
+        ]));
+        let root = lh_types::SigningData { object_root, domain }.tree_hash_root();
+        let signature = keypair.sk.sign(root).serialize().into();
+        let message = BuilderRequestAuth { data: RequestAuthData(data.into()), slot: 123 };
+        SignedBuilderRequestAuth { message, signature }
+            .verify_signature(&pubkey, domain)
+            .expect_err("data over the limit should fail verification");
     }
 }

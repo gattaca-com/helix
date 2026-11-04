@@ -3,7 +3,7 @@ use std::time::Duration;
 use alloy_primitives::B256;
 use helix_types::{
     ChainSpec, Domain, EthSpec, ForkName, MAINNET_GENESIS_TIME, MainnetEthSpec, Slot, SlotClock,
-    SlotClockTrait, duration_into_slot, new_slot_clock,
+    SlotClockTrait, compute_domain, duration_into_slot, new_slot_clock,
 };
 
 pub(crate) const MAINNET_GENESIS_VALIDATOR_ROOT: [u8; 32] = [
@@ -92,8 +92,9 @@ impl ChainInfo {
     /// Signing domain for `domain` under the fork active at `slot`.
     pub fn domain_at(&self, domain: Domain, slot: Slot) -> B256 {
         let epoch = slot.epoch(self.slots_per_epoch());
-        let fork = self.spec.fork_at_epoch(epoch);
-        self.spec.get_domain(epoch, domain, &fork, self.genesis_validators_root)
+        let domain = self.spec.get_domain_constant(domain);
+        let version = self.spec.fork_version_for_epoch(epoch);
+        B256::from(compute_domain(domain, version, &self.genesis_validators_root.0))
     }
 
     pub fn max_blobs_per_block(&self) -> usize {
@@ -112,6 +113,27 @@ impl Default for ChainInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn domains_match_lighthouse() {
+        let mut spec = ChainSpec::mainnet();
+        spec.gloas_fork_epoch = spec.fulu_fork_epoch.map(|epoch| epoch + 1);
+        let info =
+            ChainInfo::new(spec, MAINNET_GENESIS_VALIDATOR_ROOT.into(), MAINNET_GENESIS_TIME);
+        let spec = &info.spec;
+        let fork_epochs = ForkName::list_all().into_iter().filter_map(|fork| spec.fork_epoch(fork));
+        for epoch in
+            fork_epochs.flat_map(|epoch| [epoch.as_u64().saturating_sub(1), epoch.as_u64()])
+        {
+            let epoch = helix_types::Epoch::new(epoch);
+            let slot = epoch.start_slot(info.slots_per_epoch());
+            for domain in [Domain::BeaconProposer, Domain::BeaconBuilder, Domain::Randao] {
+                let fork = spec.fork_at_epoch(epoch);
+                let expected = spec.get_domain(epoch, domain, &fork, info.genesis_validators_root);
+                assert_eq!(info.domain_at(domain, slot), expected, "{domain:?} at {epoch}");
+            }
+        }
+    }
 
     #[test]
     fn the_gloas_attestation_deadline_is_a_quarter_of_the_slot() {

@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
-use alloy_primitives::U256;
-use lh_types::SignedRoot;
+use alloy_primitives::{B256, U256};
 use serde::{Deserialize, Serialize};
+use silver_ssz::ssz_hash::{compute_signing_root, hash_builder_bid_fulu};
+use ssz::Encode;
 use ssz_derive::{Decode, Encode};
 use tree_hash_derive::TreeHash;
 
@@ -33,7 +34,12 @@ impl TestRandom for BuilderBid {
     }
 }
 
-impl SignedRoot for BuilderBid {}
+impl BuilderBid {
+    pub fn signing_root(&self, domain: B256) -> B256 {
+        let root = hash_builder_bid_fulu(&self.as_ssz_bytes());
+        B256::from(compute_signing_root(&root, &domain.0))
+    }
+}
 
 #[derive(PartialEq, Debug, Encode, Serialize, Deserialize, Clone)]
 pub struct SignedBuilderBid {
@@ -43,11 +49,43 @@ pub struct SignedBuilderBid {
 
 #[cfg(test)]
 mod tests {
-    use lh_types::{ForkName, ForkVersionDecode, MainnetEthSpec};
+    use lh_types::{
+        ConsolidationRequest, DepositRequest, ForkName, ForkVersionDecode, MainnetEthSpec,
+        SigningData, WithdrawalRequest,
+    };
     use ssz::Encode;
     use tree_hash::TreeHash;
 
-    use crate::{BuilderBid, TestRandomSeed};
+    use super::*;
+    use crate::{ExtraData, TestRandomSeed, fields::KzgCommitment};
+
+    #[test]
+    fn signing_root_matches_lighthouse() {
+        let domain = B256::repeat_byte(3);
+        for count in [0, 1, 6] {
+            let mut bid = BuilderBid::test_random();
+            bid.header.extra_data = ExtraData(vec![5; 17].into());
+            let rng = &mut rand::rng();
+            bid.execution_requests = Arc::new(ExecutionRequests {
+                deposits: vec![DepositRequest::random_for_test(rng)].try_into().unwrap(),
+                withdrawals: vec![WithdrawalRequest::random_for_test(rng)].try_into().unwrap(),
+                consolidations: vec![ConsolidationRequest::random_for_test(rng)]
+                    .try_into()
+                    .unwrap(),
+            });
+            let commitments = (0..count).map(|_| KzgCommitment::random()).collect();
+            bid.blob_kzg_commitments = KzgCommitments::new(commitments).unwrap();
+            let lighthouse = lh_types::BuilderBid::<MainnetEthSpec>::from_ssz_bytes_by_fork(
+                &bid.as_ssz_bytes(),
+                ForkName::Fulu,
+            )
+            .unwrap();
+
+            let object_root = lighthouse.tree_hash_root();
+            let expected = SigningData { object_root, domain }.tree_hash_root();
+            assert_eq!(bid.signing_root(domain), expected, "{count} commitments");
+        }
+    }
 
     #[test]
     fn test_execution_payload_header() {
