@@ -1,4 +1,4 @@
-use std::{convert::TryFrom, task::Poll};
+use std::{convert::TryFrom, net::SocketAddr, task::Poll};
 
 use alloy_primitives::U256;
 use alloy_sol_types::{SolCall, sol};
@@ -60,6 +60,41 @@ fn process_bls_key_data(data: &[u8]) -> Option<BlsPublicKeyBytes> {
     BlsPublicKeyBytes::try_from(&data_part[..48]).ok()
 }
 
+/// Primev RPC endpoints, resolved once at startup. `HttpClient::post` does a blocking DNS
+/// lookup per call, which stalls the housekeeper tile for the resolver timeout.
+pub struct PrimevEndpoints {
+    builder_url: Url,
+    builder_addr: SocketAddr,
+    builder_contract: String,
+    validator_url: Url,
+    validator_addr: SocketAddr,
+    validator_contract: String,
+}
+
+impl PrimevEndpoints {
+    /// `None` (primev disabled for this process) if either URL fails to parse or resolve.
+    pub fn resolve(config: &PrimevConfig) -> Option<Self> {
+        let resolve = |s: &str| {
+            let url =
+                Url::parse(s).inspect_err(|e| error!(%e, url = s, "invalid primev url")).ok()?;
+            let addr = HttpClient::resolve(&url)
+                .inspect_err(|e| error!(%e, url = s, "failed to resolve primev url"))
+                .ok()?;
+            Some((url, addr))
+        };
+        let (builder_url, builder_addr) = resolve(&config.builder_url)?;
+        let (validator_url, validator_addr) = resolve(&config.validator_url)?;
+        Some(Self {
+            builder_url,
+            builder_addr,
+            builder_contract: config.builder_contract.clone(),
+            validator_url,
+            validator_addr,
+            validator_contract: config.validator_contract.clone(),
+        })
+    }
+}
+
 // --- Poll-based state machines ---
 
 pub struct PrimevBuildersFetch {
@@ -67,14 +102,15 @@ pub struct PrimevBuildersFetch {
 }
 
 impl PrimevBuildersFetch {
-    pub fn new(http_client: &HttpClient, config: &PrimevConfig) -> Option<Self> {
+    pub fn new(http_client: &HttpClient, endpoints: &PrimevEndpoints) -> Option<Self> {
         let topic = bls_key_added_topic();
         let body = format!(
             r#"{{"jsonrpc":"2.0","id":1,"method":"eth_getLogs","params":[{{"fromBlock":"0x0","address":"{}","topics":["{}"]}}]}}"#,
-            config.builder_contract, topic
+            endpoints.builder_contract, topic
         );
-        let url = Url::parse(&config.builder_url).ok()?;
-        let req = http_client.post(&url, Bytes::from(body)).ok()?;
+        let req = http_client
+            .post_to(&endpoints.builder_url, endpoints.builder_addr, Bytes::from(body))
+            .ok()?;
         Some(Self { req })
     }
 
@@ -109,7 +145,7 @@ pub struct PrimevValidatorsFetch {
 impl PrimevValidatorsFetch {
     pub fn new(
         http_client: &HttpClient,
-        config: &PrimevConfig,
+        endpoints: &PrimevEndpoints,
         duties: Vec<ProposerDuty>,
     ) -> Option<Self> {
         if duties.is_empty() {
@@ -124,10 +160,11 @@ impl PrimevValidatorsFetch {
         let hex_data = alloy_primitives::hex::encode_prefixed(call.abi_encode());
         let body = format!(
             r#"{{"jsonrpc":"2.0","id":1,"method":"eth_call","params":[{{"to":"{}","data":"{}"}},"latest"]}}"#,
-            config.validator_contract, hex_data
+            endpoints.validator_contract, hex_data
         );
-        let url = Url::parse(&config.validator_url).ok()?;
-        let req = http_client.post(&url, Bytes::from(body)).ok()?;
+        let req = http_client
+            .post_to(&endpoints.validator_url, endpoints.validator_addr, Bytes::from(body))
+            .ok()?;
         Some(Self { req, duties })
     }
 

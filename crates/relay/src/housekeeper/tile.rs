@@ -10,8 +10,8 @@ use flux::{
 };
 use flux_utils::SharedVector;
 use helix_common::{
-    CurrentSlotInfo, ForkKey, InclusionListConfig, PayloadAttributesUpdate, PrimevConfig,
-    ProposerDuty, RelayConfig, SlotDuties, ValidatorPreferences, ValidatorSummary,
+    CurrentSlotInfo, ForkKey, InclusionListConfig, PayloadAttributesUpdate, ProposerDuty,
+    RelayConfig, SlotDuties, ValidatorPreferences, ValidatorSummary,
     api::builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
     beacon::{
         MultiBeaconClient,
@@ -39,7 +39,7 @@ use crate::{
         inclusion_list_service::{IL_CUTOFF, IlFetchState},
         payload_attrs::process_payload_attributes,
         primev_service::{
-            PRIMEV_BUILDER_ID, PrimevBuildersFetch, PrimevValidatorsFetch,
+            PRIMEV_BUILDER_ID, PrimevBuildersFetch, PrimevEndpoints, PrimevValidatorsFetch,
             build_primev_builder_configs,
         },
         proposer_prefs::{
@@ -111,7 +111,7 @@ pub struct HousekeeperTile {
     payload_attr_sse: Vec<SseStream>,
     proposer_prefs_sse: Vec<SseStream>,
     proposer_prefs: ProposerPreferencesStore,
-    primev_config: Option<PrimevConfig>,
+    primev: Option<PrimevEndpoints>,
     validator_preferences: ValidatorPreferences,
     il_config: Option<InclusionListConfig>,
 
@@ -218,7 +218,7 @@ impl HousekeeperTile {
             payload_attr_sse,
             proposer_prefs_sse,
             proposer_prefs: ProposerPreferencesStore::default(),
-            primev_config: config.primev_config.clone(),
+            primev: config.primev_config.as_ref().and_then(PrimevEndpoints::resolve),
             validator_preferences: config.validator_preferences.clone(),
             il_config: config.inclusion_list.clone(),
             slot_events,
@@ -339,10 +339,10 @@ impl HousekeeperTile {
     }
 
     fn maybe_fetch_primev(&mut self) {
-        if let Some(cfg) = &self.primev_config {
-            self.primev_builders_fetch = PrimevBuildersFetch::new(&self.http_client, cfg);
+        if let Some(endpoints) = &self.primev {
+            self.primev_builders_fetch = PrimevBuildersFetch::new(&self.http_client, endpoints);
             self.primev_validators_fetch =
-                PrimevValidatorsFetch::new(&self.http_client, cfg, self.duties.clone());
+                PrimevValidatorsFetch::new(&self.http_client, endpoints, self.duties.clone());
         }
     }
 
