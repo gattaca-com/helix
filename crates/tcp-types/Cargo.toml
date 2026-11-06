@@ -7,6 +7,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+alloy-eips.workspace = true
 alloy-primitives.workspace = true
 alloy-rpc-types.workspace = true
 bitflags.workspace = true
@@ -24,7 +25,6 @@ uuid.workspace = true
 
 [dev-dependencies]
 alloy-consensus.workspace = true
-alloy-eips.workspace = true
 alloy-signer.workspace = true
 alloy-signer-local.workspace = true
 tokio.workspace = true

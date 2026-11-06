@@ -1,3 +1,4 @@
+mod bal;
 mod block;
 mod effects;
 mod keccak;
@@ -27,7 +28,7 @@ use flux::{
     tile::Tile,
 };
 use helix_tcp_types::merging::{
-    builder_to_relay::{RejectCode, RejectSubject, RejectV1},
+    builder_to_relay::{MergedBlockV1, RejectCode, RejectSubject, RejectV1},
     control::RelayConfigV1,
     relay_to_builder::SlotStartV1,
 };
@@ -391,9 +392,8 @@ impl MergeEngine {
                 builder.bases.swap_remove(top);
                 return true;
             }
-            if !warming {
-                metrics::stage_latency("merge_open", start.elapsed().as_micros() as u64);
-            }
+            let stage = if warming { "merge_warmup" } else { "merge_open" };
+            metrics::stage_latency(stage, start.elapsed().as_micros() as u64);
         }
         if !merger.live {
             return true;
@@ -426,7 +426,14 @@ impl MergeEngine {
                     proposer_value = %msg.proposer_value,
                     "merged block emitted"
                 );
-                publish(out, OutputKind::Merged, self.generation, &mut self.ssz_buf, &msg);
+                let (kind, buf) = (OutputKind::MergedV2, &mut self.ssz_buf);
+                if !msg.block_access_list.is_empty() {
+                    publish(out, kind, self.generation, buf, &msg);
+                } else if let Ok(msg) = MergedBlockV1::try_from(msg) {
+                    publish(out, OutputKind::Merged, self.generation, buf, &msg);
+                } else {
+                    metrics::rejection("merge_emit", "requests");
+                }
             }
             Ok(None) => {}
             Err(reason) => {

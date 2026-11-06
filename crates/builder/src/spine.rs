@@ -93,10 +93,12 @@ pub enum OutputKind {
     Merged = 0,
     /// Body: SSZ `RejectV1`.
     Reject = 1,
+    /// Body: SSZ `MergedBlockV2`, stamped like `Merged`.
+    MergedV2 = 2,
 }
 
 versioned_struct!(FromEngine =>
-    #[type_hash_lock(hash = 4309133942227997742)]
+    #[type_hash_lock(hash = 4746643111235198656)]
     FromEngineV1 {
         pub kind: OutputKind,
         pub _pad: [u8; 7],

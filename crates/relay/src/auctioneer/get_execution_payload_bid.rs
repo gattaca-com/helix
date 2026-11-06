@@ -23,7 +23,11 @@ impl<B: BidAdjustor> Context<B> {
                 self.bid_sorter.get_header(&fork).ok_or(ProposerApiError::NoBidPrepared)?;
             let entry =
                 self.gloas_payloads.get(&best_block_hash).ok_or(ProposerApiError::NoBidPrepared)?;
-            self.gloas_builder_identity.sign_bid(&entry.bid, &self.chain_info)
+            let merged = self
+                .block_merger
+                .gloas_header(entry)
+                .and_then(|block_hash| self.gloas_payloads.get(&block_hash));
+            self.gloas_builder_identity.sign_bid(&merged.unwrap_or(entry).bid, &self.chain_info)
         });
         let _ = res_tx.send(result);
     }
@@ -213,6 +217,7 @@ mod tests {
             )
             .unwrap(),
             fee_recipient,
+            0,
         )
     }
 

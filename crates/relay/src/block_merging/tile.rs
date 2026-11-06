@@ -23,7 +23,7 @@ use helix_common::{
 use helix_tcp_types::merging::{
     MERGING_HEADER_SIZE, MERGING_PROTOCOL_VERSION, MergingFrameHeader, MergingHeaderError,
     MergingMsgId,
-    builder_to_relay::{FatalV1, MergedBlockV1, RejectCode, RejectV1},
+    builder_to_relay::{FatalV1, MergedBlockV1, MergedBlockV2, RejectCode, RejectV1},
     control::{
         BuilderCollateral, MergerAckV1, MergerRegistrationV1, PingV1, PongV1, RelayConfigV1,
     },
@@ -31,8 +31,8 @@ use helix_tcp_types::merging::{
     relay_to_builder::{MergeableBlockV1, SlotStartV1},
 };
 use helix_types::{
-    BlobWithMetadata, BlsPublicKeyBytes, HydrationCache, SignedBidSubmission, Submission,
-    payload_to_v3,
+    BidTrace, BlobWithMetadata, BlobsBundle, BlsPublicKeyBytes, HydrationCache,
+    SignedBidSubmission, Submission, payload_to_v3,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 use ssz::Decode;
@@ -235,7 +235,7 @@ impl Tile<HelixSpine> for BlockMergingTile {
     }
 }
 
-/// Validates and converts an incoming `MergedBlockV1` into a response to
+/// Validates and converts an incoming merged block into a response to
 /// forward to the auctioneer, or `None` if it's dropped (disabled, stale,
 /// regressed, missing a blob sidecar, or unbundled by the builder).
 /// Extracted from `poll_sockets` so this compute is unit-testable without a
@@ -245,7 +245,7 @@ impl Tile<HelixSpine> for BlockMergingTile {
 fn handle_merged_block(
     enabled: bool,
     token: Token,
-    merged: MergedBlockV1,
+    merged: MergedBlockV2,
     slot: &mut SlotState,
     stats: &mut SlotStats,
     blob_sidecars: &FxHashMap<B256, BlobWithMetadata>,
@@ -590,8 +590,12 @@ impl BlockMergingTile {
                             pongs.push((token, ping.nonce));
                         }
                     }
-                    MergingMsgId::MergedBlockV1 => {
-                        let Ok(merged) = MergedBlockV1::from_ssz_bytes(body) else {
+                    MergingMsgId::MergedBlockV1 | MergingMsgId::MergedBlockV2 => {
+                        let merged = match header.msg_id {
+                            MergingMsgId::MergedBlockV2 => MergedBlockV2::from_ssz_bytes(body),
+                            _ => MergedBlockV1::from_ssz_bytes(body).map(Into::into),
+                        };
+                        let Ok(merged) = merged else {
                             warn!(?token, "undecodable merged block");
                             return;
                         };
@@ -704,23 +708,30 @@ impl BlockMergingTile {
             self.slot.fee_recipient = Some(reg.entry.registration.message.fee_recipient);
             self.slot.apply_blacklist = reg.entry.preferences.filtering.is_regional();
         }
+        let mut newest = None;
         for attr in &ev.payload_attributes {
-            self.slot
-                .attrs
-                .insert(attr.parent_hash, attr.parent_beacon_block_root.unwrap_or_default());
+            let root = attr.parent_beacon_block_root.unwrap_or_default();
+            if self.slot.attrs.insert(attr.parent_hash, root).is_none() {
+                newest = Some((attr.parent_hash, root));
+            }
         }
-        self.maybe_start_slot();
+        self.maybe_start_slot(newest);
     }
 
-    fn maybe_start_slot(&mut self) {
-        if self.slot.slot_start.is_some() {
-            return;
-        }
+    /// Starts the slot on one parent: builders cross-check against their synced head and
+    /// reject with HeadMismatch on competing forks. A Gloas slot gains a second parent once
+    /// the head's payload is revealed and the later bids build on it, so a `newest` parent
+    /// restarts the slot there; the engine drops the earlier parent's pool.
+    fn maybe_start_slot(&mut self, newest: Option<(B256, B256)>) {
         let Some(fee_recipient) = self.slot.fee_recipient else { return };
-        // single parent: builders cross-check against their synced head and
-        // reject with HeadMismatch on competing forks
-        let Some((&parent_hash, &parent_beacon_block_root)) = self.slot.attrs.iter().next() else {
-            return;
+        let (parent_hash, parent_beacon_block_root) = match (&self.slot.slot_start, newest) {
+            (Some(start), Some((parent, root))) if parent != start.parent_hash => (parent, root),
+            (Some(_), _) => return,
+            (None, Some(parent)) => parent,
+            (None, None) => match self.slot.attrs.iter().next() {
+                Some((&parent, &root)) => (parent, root),
+                None => return,
+            },
         };
         let msg = SlotStartV1 {
             slot: self.slot.bid_slot,
@@ -729,7 +740,7 @@ impl BlockMergingTile {
             parent_beacon_block_root,
             apply_blacklist: self.slot.apply_blacklist,
         };
-        debug!(slot = self.slot.bid_slot, "merging slot start");
+        debug!(slot = self.slot.bid_slot, %parent_hash, "merging slot start");
 
         if self.conn.active &&
             let Some(token) = self.token
@@ -857,38 +868,46 @@ impl BlockMergingTile {
         };
 
         let hydrated;
-        let signed = match &sub.submission {
-            Submission::Full(SignedBidSubmission::Gloas(_)) => return,
-            Submission::Full(SignedBidSubmission::Fulu(signed)) => {
-                if !is_replay {
-                    self.stats.forwarded_full += 1;
+        let (message, execution_payload, bundle): (&BidTrace, _, Arc<BlobsBundle>) =
+            match &sub.submission {
+                Submission::Full(SignedBidSubmission::Gloas(signed)) => {
+                    if !is_replay {
+                        self.stats.forwarded_full += 1;
+                    }
+                    (signed.bid_trace(), signed.payload_v3(), Arc::new(signed.bundle()))
                 }
-                signed
-            }
-            // hydrating also feeds this submission's new txs into the cache
-            Submission::Dehydrated(d) => {
-                match self.hydration_cache.hydrate(d.clone(), self.chain_info.max_blobs_per_block())
-                {
-                    Ok(h) => {
-                        if !is_replay {
-                            self.stats.forwarded_hydrated += 1;
+                Submission::Full(SignedBidSubmission::Fulu(signed)) => {
+                    if !is_replay {
+                        self.stats.forwarded_full += 1;
+                    }
+                    let payload = payload_to_v3(&signed.execution_payload);
+                    (&signed.message, payload, signed.blobs_bundle())
+                }
+                // hydrating also feeds this submission's new txs into the cache
+                Submission::Dehydrated(d) => {
+                    let max_blobs = self.chain_info.max_blobs_per_block();
+                    match self.hydration_cache.hydrate(d.clone(), max_blobs) {
+                        Ok(h) => {
+                            if !is_replay {
+                                self.stats.forwarded_hydrated += 1;
+                            }
+                            hydrated = h.submission;
+                            let payload = payload_to_v3(&hydrated.execution_payload);
+                            (&hydrated.message, payload, hydrated.blobs_bundle())
                         }
-                        hydrated = h.submission;
-                        &hydrated
-                    }
-                    Err(_) => {
-                        self.stats.hydration_failed += 1;
-                        return;
+                        Err(_) => {
+                            self.stats.hydration_failed += 1;
+                            return;
+                        }
                     }
                 }
-            }
-        };
+            };
 
         // Cache this submission's own blob sidecars so any of its blob txs that get merged
         // into another builder's base block can be re-attached from here later.
-        self.blob_sidecars.extend(submission_blob_sidecars(&signed.blobs_bundle()));
+        self.blob_sidecars.extend(submission_blob_sidecars(&bundle));
 
-        let block_tx_count = signed.num_txs();
+        let block_tx_count = execution_payload.payload_inner.payload_inner.transactions.len();
         let mut merge_orders = Vec::with_capacity(merging.orders.len());
         for (i, order) in merging.orders.iter().enumerate() {
             let codes = merging.tx_codes.iter().find(|c| c.order as usize == i);
@@ -897,23 +916,23 @@ impl BlockMergingTile {
                 None => self.stats.orders_dropped += 1,
             }
         }
-        let block_hash = signed.message.block_hash;
+        let block_hash = message.block_hash;
 
         let mut msg = MergeableBlockV1 {
-            slot: signed.message.slot,
-            builder_pubkey: signed.message.builder_pubkey,
-            block_value: signed.message.value,
+            slot: message.slot,
+            builder_pubkey: message.builder_pubkey,
+            block_value: message.value,
             builder_address: merging.builder_address,
-            proposer_fee_recipient: signed.message.proposer_fee_recipient,
+            proposer_fee_recipient: message.proposer_fee_recipient,
             parent_beacon_block_root: self
                 .slot
                 .attrs
-                .get(&signed.message.parent_hash)
+                .get(&message.parent_hash)
                 .copied()
                 .unwrap_or_default(),
             allow_appending: merging.allow_appending,
             merge_orders,
-            execution_payload: payload_to_v3(&signed.execution_payload),
+            execution_payload,
         };
 
         // Hashed once up front: reused both to decide full-bytes-vs-reference
@@ -1434,7 +1453,7 @@ mod tests {
         let result = handle_merged_block(
             false,
             Token(0),
-            test_merged_block(5, base_block_hash),
+            test_merged_block(5, base_block_hash).into(),
             &mut slot,
             &mut stats,
             &blob_sidecars,
@@ -1462,7 +1481,7 @@ mod tests {
         let result = handle_merged_block(
             true,
             Token(0),
-            test_merged_block(5, base_block_hash),
+            test_merged_block(5, base_block_hash).into(),
             &mut slot,
             &mut stats,
             &blob_sidecars,

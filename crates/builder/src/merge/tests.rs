@@ -22,7 +22,7 @@ use flux::{
 };
 use helix_common::payment::multisend_paid_amount;
 use helix_tcp_types::merging::{
-    builder_to_relay::{MergedBlockV1, RejectCode, RejectV1},
+    builder_to_relay::{MergedBlockV1, MergedBlockV2, RejectCode, RejectV1},
     control::{BuilderCollateral, RelayConfigV1},
     order::{BundleOrderRef, MergeOrderRef, TxOrderRef, bundle_order_hash, order_id},
     relay_to_builder::{MergeableBlockV1, SlotStartV1},
@@ -30,7 +30,9 @@ use helix_tcp_types::merging::{
 use ssz::{Decode, Encode};
 
 use crate::{
-    convert::{b256, block_to_payload_v3, eaddr, payload_v3_to_block},
+    convert::{
+        Amsterdam, b256, block_to_payload_v3, decode_execution_requests, eaddr, payload_v3_to_block,
+    },
     merge::{
         Builder, EngineConfig, MergeEngine, STACK_SIZE,
         block::BlockMerger,
@@ -40,8 +42,8 @@ use crate::{
     },
     spine::{BuilderSpine, EventKind, FromEngine, OutputKind, ToEngine},
     testing::{
-        ETH, GWEI, TestSpine, deploy_payment_forwarder, dev_genesis_store_with, forwarder_calldata,
-        funded_signers, signed_call, signed_transfer,
+        ETH, GWEI, TestSpine, deploy_amsterdam_predeploys, deploy_payment_forwarder,
+        dev_genesis_store_with, forwarder_calldata, funded_signers, signed_call, signed_transfer,
     },
     utils::utcnow_ns,
 };
@@ -63,7 +65,7 @@ impl Tile<BuilderSpine> for Relay {
 }
 
 enum Output {
-    Merged(Box<MergedBlockV1>),
+    Merged(Box<MergedBlockV2>),
     Reject(RejectV1),
 }
 
@@ -119,7 +121,11 @@ impl Harness {
                 let DCacheRead::Ok((output, body)) = read else { panic!("engine output lost") };
                 outputs.push(match output.kind {
                     OutputKind::Merged => {
-                        Output::Merged(Box::new(MergedBlockV1::from_ssz_bytes(&body).unwrap()))
+                        let msg = MergedBlockV1::from_ssz_bytes(&body).unwrap();
+                        Output::Merged(Box::new(msg.into()))
+                    }
+                    OutputKind::MergedV2 => {
+                        Output::Merged(Box::new(MergedBlockV2::from_ssz_bytes(&body).unwrap()))
                     }
                     OutputKind::Reject => Output::Reject(RejectV1::from_ssz_bytes(&body).unwrap()),
                 });
@@ -157,6 +163,7 @@ struct Fixture {
     blockchain: Arc<Blockchain>,
     genesis_hash: ethrex_common::H256,
     genesis_timestamp: u64,
+    amsterdam: bool,
     chain_id: u64,
     gas_limit: u64,
     signers: Vec<PrivateKeySigner>,
@@ -166,6 +173,24 @@ struct Fixture {
 }
 
 impl Fixture {
+    /// Payees exist already: under Amsterdam a first payment to a new account needs far
+    /// more than a transfer's 21k gas.
+    async fn amsterdam() -> Self {
+        Self::new(|genesis| {
+            genesis.config.amsterdam_time = Some(0);
+            deploy_amsterdam_predeploys(genesis);
+            for payee in [Address::repeat_byte(0x77), Address::repeat_byte(0x55)] {
+                genesis.alloc.insert(eaddr(payee), GenesisAccount {
+                    code: Default::default(),
+                    storage: Default::default(),
+                    balance: ethrex_common::U256::one(),
+                    nonce: 0,
+                });
+            }
+        })
+        .await
+    }
+
     async fn new(edit: impl FnOnce(&mut Genesis)) -> Self {
         let (store, genesis) = dev_genesis_store_with(edit).await;
         let block = genesis.get_block();
@@ -191,6 +216,7 @@ impl Fixture {
             blockchain: Arc::new(blockchain),
             genesis_hash: block.hash(),
             genesis_timestamp: block.header.timestamp,
+            amsterdam: genesis.config.is_amsterdam_activated(block.header.timestamp),
             chain_id: genesis.config.chain_id,
             gas_limit: block.header.gas_limit,
             signers,
@@ -281,7 +307,7 @@ impl Fixture {
             random: ethrex_common::H256::zero(),
             withdrawals: Some(Vec::new()),
             beacon_root: Some(ethrex_common::H256::zero()),
-            slot_number: None,
+            slot_number: self.amsterdam.then_some(SLOT),
             version: 3,
             elasticity_multiplier: ELASTICITY_MULTIPLIER,
             gas_ceil: self.gas_limit,
@@ -330,11 +356,28 @@ impl Fixture {
         }
     }
 
-    fn assert_valid(&self, merged: &MergedBlockV1) {
-        let payload = &merged.execution_payload;
-        let block = payload_v3_to_block(payload, B256::ZERO, &merged.execution_requests, None);
-        self.blockchain.add_block(block.unwrap()).expect("merged block must import");
+    fn assert_valid(&self, merged: &MergedBlockV2) {
+        let block = block_of(merged, B256::ZERO, SLOT);
+        self.blockchain.add_block(block).expect("merged block must import");
     }
+}
+
+/// The merged block as ethrex imports it; an empty access list means a pre-Amsterdam block.
+fn block_of(merged: &MergedBlockV2, beacon_root: B256, slot: u64) -> ethrex_common::types::Block {
+    let encoded: Vec<_> = merged
+        .execution_requests
+        .iter()
+        .map(|r| ethrex_common::types::requests::EncodedRequests(r.clone().into()))
+        .collect();
+    let decoded = decode_execution_requests(&encoded).unwrap();
+    let requests = helix_types::requests_to_v4(&decoded.requests);
+    let amsterdam = (!merged.block_access_list.is_empty()).then_some(Amsterdam {
+        block_access_list: &merged.block_access_list,
+        slot,
+        builder_deposits: Some(&decoded.builder_deposits),
+        builder_exits: Some(&decoded.builder_exits),
+    });
+    payload_v3_to_block(&merged.execution_payload, beacon_root, &requests, amsterdam).unwrap()
 }
 
 fn ranked_base(pool: &mut Pool, pubkey: u8, value: u64) -> BaseBlock {
@@ -421,7 +464,7 @@ fn bundle(count: u16, reverting_txs: Vec<u16>, dropping_txs: Vec<u16>) -> Vec<Me
     })]
 }
 
-fn best(engine: &mut Harness) -> Box<MergedBlockV1> {
+fn best(engine: &mut Harness) -> Box<MergedBlockV2> {
     // In a debug build under CPU contention, the first merge can take longer
     // than one quiet window.
     let deadline = Instant::now() + Duration::from_secs(60);
@@ -429,7 +472,7 @@ fn best(engine: &mut Harness) -> Box<MergedBlockV1> {
     while outputs.is_empty() && Instant::now() < deadline {
         outputs = engine.settle(Duration::from_secs(3));
     }
-    let mut best: Option<Box<MergedBlockV1>> = None;
+    let mut best: Option<Box<MergedBlockV2>> = None;
     for output in outputs {
         let msg = match output {
             Output::Merged(msg) => msg,
@@ -446,7 +489,51 @@ fn best(engine: &mut Harness) -> Box<MergedBlockV1> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn merges_an_order_into_a_valid_block() {
-    let fixture = Fixture::new(|_| {}).await;
+    merges_an_order(Fixture::new(|_| {}).await).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn merges_an_order_into_a_valid_amsterdam_block() {
+    merges_an_order(Fixture::amsterdam().await).await;
+}
+
+/// The second base pays the order's sender first, so the order replays its first run's
+/// effect from a different pre-balance; the access list must still carry the right
+/// post-balances.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_replayed_order_keeps_a_valid_amsterdam_access_list() {
+    let fixture = Fixture::amsterdam().await;
+    let base = fixture.base();
+    let tx = fixture.transfer(3, fixture.signers[0].address(), U256::from(ETH / 5));
+    let order = fixture.orders(&base, 1, vec![tx], vec![tx_order(0)]);
+    let mut engine = fixture.start();
+    engine.block(&base);
+    engine.block(&order);
+    let first = best(&mut engine);
+    assert_eq!(first.included_order_ids.len(), 1);
+
+    let topup = fixture.transfer(1, fixture.signers[3].address(), U256::from(ETH));
+    let payment = signed_transfer(
+        &fixture.signers[0],
+        fixture.chain_id,
+        0,
+        fixture.proposer,
+        fixture.block_value + U256::from(1),
+        100 * GWEI,
+        0,
+    );
+    let mut richer = fixture.base_from_txs(vec![topup, payment]);
+    richer.block_value = fixture.block_value + U256::from(1);
+    engine.block(&richer);
+    let merged = best(&mut engine);
+    let richer_hash = richer.execution_payload.payload_inner.payload_inner.block_hash;
+    assert_eq!(merged.base_block_hash, richer_hash);
+    assert_eq!(merged.included_order_ids.len(), 1);
+    assert!(!merged.block_access_list.is_empty());
+    fixture.assert_valid(&merged);
+}
+
+async fn merges_an_order(fixture: Fixture) {
     let base = fixture.base();
     let value = U256::from(ETH / 5);
     let tx = fixture.transfer(3, fixture.signers[0].address(), value);
@@ -467,6 +554,7 @@ async fn merges_an_order_into_a_valid_block() {
     let added = merged.proposer_value - fixture.block_value;
     assert!(added > U256::ZERO);
     assert!(added <= inclusion.contribution / U256::from(4) + U256::from(1));
+    assert_eq!(merged.block_access_list.is_empty(), !fixture.amsterdam);
     fixture.assert_valid(&merged);
 }
 
@@ -697,9 +785,10 @@ async fn replay_recording() {
         .try_init();
     ethrex_crypto::kzg::warm_up_trusted_setup();
     let dir = std::path::PathBuf::from(std::env::var("REPLAY_DIR").expect("REPLAY_DIR"));
-    let (outputs, validator, beacon_root) = replay::slot(&dir).await;
+    let (outputs, validator, beacon_root, slot) = replay::slot(&dir).await;
 
     let mut first: rustc_hash::FxHashMap<B256, (u64, u64)> = Default::default();
+    let mut per_base: std::collections::BTreeMap<B256, (U256, B256, usize)> = Default::default();
     let mut rejects: std::collections::BTreeMap<String, usize> = Default::default();
     let mut merged = 0;
     let mut best = U256::ZERO;
@@ -710,6 +799,12 @@ async fn replay_recording() {
                 best = best.max(msg.proposer_value);
                 let t = msg.trace;
                 first.entry(msg.base_block_hash).or_insert((t.base_block_recv_ns, t.finalize_ns));
+                let txs = msg.execution_payload.payload_inner.payload_inner.transactions.len();
+                let hash = msg.execution_payload.payload_inner.payload_inner.block_hash;
+                let entry = per_base.entry(msg.base_block_hash).or_insert((U256::ZERO, hash, txs));
+                if msg.proposer_value > entry.0 {
+                    *entry = (msg.proposer_value, hash, txs);
+                }
             }
             Output::Reject(msg) => {
                 *rejects.entry(format!("{:?}", msg.code)).or_default() += 1;
@@ -724,6 +819,9 @@ async fn replay_recording() {
     println!("merged={merged} bases_emitted={} rejects={rejects:?}", first.len());
     println!("best proposer_value={best}");
     println!("first emit p50 {:.2}ms p90 {:.2}ms max {:.2}ms", q(0.5), q(0.9), q(1.0));
+    for (base, (value, hash, txs)) in &per_base {
+        println!("base={base:#x} best={value} merged={hash:#x} txs={txs}");
+    }
 
     for family in crate::metrics::BUILDER_METRICS_REGISTRY.gather() {
         let name = family.get_name();
@@ -739,7 +837,18 @@ async fn replay_recording() {
                 let h = metric.get_histogram();
                 let n = h.get_sample_count();
                 let mean_ms = h.get_sample_sum() / n.max(1) as f64 / 1e3;
-                println!("stage {stage:<18} n={n:<6} mean {mean_ms:>8.2}ms");
+                // Upper bound of the bucket holding the quantile, as read off a scrape.
+                let q = |p: f64| {
+                    let want = (n as f64 * p).ceil() as u64;
+                    let bucket = h.get_bucket().iter().find(|b| b.get_cumulative_count() >= want);
+                    bucket.map_or(f64::INFINITY, |b| b.get_upper_bound() / 1e3)
+                };
+                println!(
+                    "stage {stage:<18} n={n:<6} mean {mean_ms:>8.2}ms p50<={:.2}ms p90<={:.2}ms p99<={:.2}ms",
+                    q(0.5),
+                    q(0.9),
+                    q(0.99)
+                );
             }
         }
     }
@@ -752,9 +861,7 @@ async fn replay_recording() {
             Output::Reject(_) => None,
         });
         for msg in merged.step_by(every.max(1)) {
-            let requests = &msg.execution_requests;
-            let block = payload_v3_to_block(&msg.execution_payload, beacon_root, requests, None);
-            match validator.add_block(block.unwrap()) {
+            match validator.add_block(block_of(msg, beacon_root, slot)) {
                 Ok(()) => ok += 1,
                 Err(err) => {
                     *failed.entry(err.to_string().chars().take(120).collect()).or_default() += 1
@@ -798,7 +905,7 @@ mod replay {
     const SLOT_END: u8 = EventKind::SlotEnd as u8;
     const MERGEABLE: u8 = EventKind::MergeableBlock as u8;
 
-    pub async fn slot(dir: &Path) -> (Vec<Output>, Arc<Blockchain>, B256) {
+    pub async fn slot(dir: &Path) -> (Vec<Output>, Arc<Blockchain>, B256, u64) {
         let read = |name: &str| std::fs::read(dir.join(name)).unwrap();
         let meta: RecordMeta = serde_json::from_slice(&read("meta.json")).unwrap();
         let chain_config: ChainConfig = serde_json::from_slice(&read("chain_config.json")).unwrap();
@@ -917,7 +1024,7 @@ mod replay {
             engine.send(EventKind::SlotEnd, slot, &[]);
         }
         outputs.extend(engine.settle(Duration::from_millis(100)));
-        (outputs, blockchain, beacon_root)
+        (outputs, blockchain, beacon_root, replayed.unwrap_or_default())
     }
 
     async fn seeded_store(
