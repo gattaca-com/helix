@@ -113,6 +113,52 @@ pub struct NodeOptions {
     )]
     pub http_api: Vec<ethrex_rpc::RpcNamespace>,
     #[arg(
+        long = "rpc.gascap",
+        default_value_t = ethrex_rpc::DEFAULT_RPC_GAS_CAP,
+        value_name = "GAS",
+        help = "Gas cap for eth_call, eth_estimateGas, eth_createAccessList and debug_traceCall. 0 disables the cap.",
+        env = "ETHREX_RPC_GAS_CAP",
+        help_heading = "RPC options"
+    )]
+    pub rpc_gas_cap: u64,
+    #[arg(
+        long = "rpc.max-blocks-per-filter",
+        default_value_t = ethrex_rpc::DEFAULT_MAX_BLOCKS_PER_FILTER,
+        value_name = "BLOCKS",
+        help = "Maximum block range of a log query. 0 means no limit.",
+        env = "ETHREX_RPC_MAX_BLOCKS_PER_FILTER",
+        help_heading = "RPC options"
+    )]
+    pub rpc_max_blocks_per_filter: u64,
+    #[arg(
+        long = "rpc.max-logs-per-response",
+        default_value_t = ethrex_rpc::DEFAULT_MAX_LOGS_PER_RESPONSE,
+        value_name = "LOGS",
+        help = "Maximum logs returned by a log query. 0 means no limit.",
+        env = "ETHREX_RPC_MAX_LOGS_PER_RESPONSE",
+        help_heading = "RPC options"
+    )]
+    pub rpc_max_logs_per_response: u64,
+    #[arg(
+        long = "rpc.max-log-query-work",
+        default_value_t = ethrex_rpc::DEFAULT_MAX_LOG_QUERY_WORK,
+        value_name = "UNITS",
+        help = "Maximum scan work of a log query. 0 means no limit.",
+        env = "ETHREX_RPC_MAX_LOG_QUERY_WORK",
+        help_heading = "RPC options"
+    )]
+    pub rpc_max_log_query_work: u64,
+    #[arg(
+        long = "rpc.log-query-work-budget",
+        default_value_t = ethrex_rpc::DEFAULT_LOG_QUERY_WORK_BUDGET,
+        value_name = "UNITS",
+        value_parser = clap::value_parser!(u64).range(1..),
+        help = "Total scan work of the log queries running at once.",
+        env = "ETHREX_RPC_LOG_QUERY_WORK_BUDGET",
+        help_heading = "RPC options"
+    )]
+    pub rpc_log_query_work_budget: u64,
+    #[arg(
         long = "ws.enabled",
         action = clap::ArgAction::SetTrue,
         help = "Enable the websocket rpc server. Disabled by default.",
@@ -165,6 +211,18 @@ pub struct NodeOptions {
         help_heading = "RPC options"
     )]
     pub authrpc_jwtsecret: String,
+    #[arg(
+        long = "authrpc.max-inflight-body-size",
+        default_value_t = ethrex_rpc::DEFAULT_AUTHRPC_MAX_INFLIGHT_BODY_SIZE as u64,
+        value_name = "BYTES",
+        // Below one maximum-size body, the budget would lower the per-request cap and
+        // reject large payloads, silently stalling block import.
+        value_parser = clap::value_parser!(u64).range(ethrex_rpc::AUTHRPC_MAX_BODY_SIZE as u64..),
+        help = "Maximum request body bytes the authenticated rpc server holds at once.",
+        env = "ETHREX_AUTHRPC_MAX_INFLIGHT_BODY_SIZE",
+        help_heading = "RPC options"
+    )]
+    pub authrpc_max_inflight_body_size: u64,
 
     #[arg(long = "p2p.disabled", action = clap::ArgAction::SetTrue, help = "Disable devp2p (no discovery, no snap sync; the node then only advances via the Engine API).", env = "ETHREX_P2P_DISABLED", help_heading = "P2P options")]
     pub p2p_disabled: bool,
