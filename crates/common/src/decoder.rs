@@ -612,7 +612,15 @@ impl SubmissionDecoder {
                 GloasBidSubmission::from_ssz_bytes(bytes).map_err(DecoderError::SszDecode)?;
             self.decode_latency = start.elapsed().saturating_sub(self.decompress_latency);
             self.record_metrics();
-            return Ok((Submission::Full(SignedBidSubmission::Gloas(submission)), None, None));
+            let merging_data = (self.merge_type == MergeType::None && self.mark_all_txs_mergeable)
+                .then(|| {
+                    BlockMergingDataV2::allow_all(submission.fee_recipient(), submission.num_txs())
+                });
+            return Ok((
+                Submission::Full(SignedBidSubmission::Gloas(submission)),
+                merging_data,
+                None,
+            ));
         }
         let (submission, bid_adjustment) = if self.with_adjustments {
             let sub_with_adjustment: SignedBidSubmissionWithAdjustments = self._decode(body)?;

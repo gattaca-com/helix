@@ -32,6 +32,7 @@ pub enum MergingMsgId {
     RevokeOrderV1 = 0x13,
     SlotEndV1 = 0x15,
     MergedBlockV1 = 0x40,
+    MergedBlockV2 = 0x41,
     RejectV1 = 0x70,
     FatalV1 = 0x71,
 }
@@ -52,6 +53,7 @@ impl TryFrom<u8> for MergingMsgId {
             0x13 => Self::RevokeOrderV1,
             0x15 => Self::SlotEndV1,
             0x40 => Self::MergedBlockV1,
+            0x41 => Self::MergedBlockV2,
             0x70 => Self::RejectV1,
             0x71 => Self::FatalV1,
             other => return Err(other),

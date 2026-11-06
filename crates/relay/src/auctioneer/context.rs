@@ -423,6 +423,16 @@ impl<B: BidAdjustor> Context<B> {
 
     pub fn handle_merge_response(&mut self, response: &BlockMergeResponse) {
         let block_hash = response.execution_payload.block_hash;
+        if let Some(base) = self.gloas_payloads.get(&response.base_block_hash).cloned() {
+            let Some(merged) = self.block_merger.prepare_merged_gloas_payload(response, &base)
+            else {
+                warn!(%block_hash, "failed to prepare merged gloas payload for storage");
+                return;
+            };
+            let merged = GloasPayload::new(merged, base.fee_recipient, base.receive_ns);
+            self.gloas_payloads.insert(block_hash, merged);
+            return;
+        }
         let Some(original_payload) = self.payloads.get(&response.base_block_hash) else {
             warn!(%block_hash, "could not fetch original payload for merged block");
             return;

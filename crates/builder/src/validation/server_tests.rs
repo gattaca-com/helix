@@ -361,27 +361,24 @@ async fn an_unscheduled_fork_is_still_refused() {
 }
 
 #[tokio::test]
-async fn a_merged_gloas_request_is_refused() {
-    let fixture = Fixture::new().await;
+async fn a_merged_gloas_request_is_validated() {
+    let fixture = Fixture::amsterdam().await;
     let built = fixture.build_on(fixture.genesis_hash, fixture.genesis_timestamp + 12, 0);
-    let base = fixture.ssz_request(&built, true);
+    let base = fixture.gloas_ssz_request(&built);
     let request = SszMergedValidationRequest {
         apply_blacklist: base.apply_blacklist,
         registered_gas_limit: base.registered_gas_limit,
         parent_beacon_block_root: base.parent_beacon_block_root,
         inclusion_list: base.inclusion_list,
-        decoder_params: Some(params_for(helix_types::ForkName::Gloas)),
+        decoder_params: base.decoder_params,
         signed_bid_submission: base.signed_bid_submission,
-        base_payment_tx_index: 0,
+        base_payment_tx_index: built.payload.payload_inner.payload_inner.transactions.len() as u64 -
+            1,
     };
 
     let (status, body) = post(&fixture, "/validate_merged", request.as_ssz_bytes()).await;
 
-    assert_eq!(
-        status,
-        StatusCode::NOT_IMPLEMENTED,
-        "the merged route has no Gloas shape until step 5: {body}",
-    );
+    assert_eq!(status, StatusCode::OK, "{body}");
 }
 
 #[tokio::test]

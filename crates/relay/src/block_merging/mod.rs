@@ -14,12 +14,14 @@ use alloy_rlp::Decodable;
 use helix_common::metrics::MERGE_PIPE;
 use helix_tcp_types::merging::{
     MergingFrameHeader, MergingMsgId,
-    builder_to_relay::MergedBlockV1,
+    builder_to_relay::MergedBlockV2,
     order::{BundleOrderRef, MergeOrderRef, TxOrderRef, bundle_order_hash},
 };
 use helix_types::{
-    BlobWithMetadata, BlobsBundle, BuilderInclusionResult, ExecutionPayload, KzgCommitment,
-    MergedBlockTrace, OrderTxCodes, OrderV2, payload_from_v3, requests_from_v4,
+    BlobWithMetadata, BlobsBundle, BlockAccessListBytes, BuilderInclusionResult, DecodedRequests,
+    ExecutionPayload, GloasBidSubmission, GloasBidTrace, KzgCommitment, MergedBlockTrace,
+    OrderTxCodes, OrderV2, SignedBidSubmissionGloas, Slot, execution_requests_to_gloas,
+    payload_from_v3,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 use ssz::Encode;
@@ -125,11 +127,13 @@ fn order_ref_hash(order_ref: &MergeOrderRef, tx_hashes: &[B256]) -> B256 {
 /// slot); `None` if any referenced hash can't be resolved or the resolved set is
 /// invalid, since a merged block missing a blob sidecar can't be finalized.
 fn merged_block_to_response(
-    m: MergedBlockV1,
+    m: MergedBlockV2,
     blob_sidecars: &FxHashMap<B256, BlobWithMetadata>,
     max_blobs_per_block: usize,
 ) -> Option<BlockMergeResponse> {
     let execution_payload = payload_from_v3(m.execution_payload)?;
+    let requests =
+        DecodedRequests::from_entries(m.execution_requests.iter().map(|r| r.as_slice())).ok()?;
     let blobs_bundle =
         resolve_blobs_bundle(&execution_payload, blob_sidecars, max_blobs_per_block)?;
 
@@ -156,7 +160,9 @@ fn merged_block_to_response(
     Some(BlockMergeResponse {
         base_block_hash: m.base_block_hash,
         execution_payload: Arc::new(execution_payload),
-        execution_requests: Arc::new(requests_from_v4(m.execution_requests)?),
+        execution_requests: Arc::new(requests.requests),
+        builder_requests: Arc::new((requests.builder_deposits, requests.builder_exits)),
+        block_access_list: m.block_access_list.into(),
         blobs_bundle: Arc::new(blobs_bundle),
         proposer_value: m.proposer_value,
         base_builder_revenue: m.base_builder_revenue,
@@ -178,6 +184,27 @@ fn merged_block_to_response(
         base_read_ns: 0,
         accept_ns: 0,
     })
+}
+
+/// The merged block as the Gloas submission it is served and revealed as. `message`
+/// names the base's builder and proposer; the payload and lists come from the merge.
+pub fn merged_gloas_submission(
+    response: &BlockMergeResponse,
+    message: GloasBidTrace,
+) -> Option<GloasBidSubmission> {
+    let slot = Slot::new(message.trace.slot);
+    let bal = BlockAccessListBytes(response.block_access_list.clone().into());
+    let payload = response.execution_payload.to_lighthouse_gloas_payload(slot, &bal).ok()?;
+    let (deposits, exits) = &*response.builder_requests;
+    let requests = execution_requests_to_gloas(&response.execution_requests, deposits, exits);
+    let submission = SignedBidSubmissionGloas {
+        message,
+        execution_payload: Arc::new(payload),
+        blobs_bundle: response.blobs_bundle.clone(),
+        execution_requests: Arc::new(requests),
+        signature: Default::default(),
+    };
+    GloasBidSubmission::from_ssz_bytes(submission.as_ssz_bytes().into()).ok()
 }
 
 /// Every tx hash contributed by a merged-in order, across all builders -- as opposed to the
@@ -240,6 +267,8 @@ fn calculate_versioned_hash(commitment: Bytes48) -> B256 {
 
 #[cfg(test)]
 mod tests {
+    use helix_tcp_types::merging::builder_to_relay::MergedBlockV1;
+
     use super::*;
 
     fn order(start: u16, len: u8, flags: u8) -> OrderV2 {
@@ -414,8 +443,8 @@ mod tests {
             blob: Blob::default(),
         });
 
-        let response =
-            merged_block_to_response(merged, &blob_sidecars, 9).expect("known blob resolves");
+        let response = merged_block_to_response(merged.into(), &blob_sidecars, 9)
+            .expect("known blob resolves");
 
         assert_eq!(response.blobs_bundle.blobs.len(), 1);
         assert_eq!(response.blobs_bundle.commitments[0], commitment);
@@ -505,7 +534,7 @@ mod tests {
         });
 
         let response =
-            merged_block_to_response(merged, &blob_sidecars, 9).expect("both blobs resolve");
+            merged_block_to_response(merged.into(), &blob_sidecars, 9).expect("both blobs resolve");
 
         let commitments: Vec<_> = response.blobs_bundle.commitments.iter().copied().collect();
         assert_eq!(commitments.len(), 2);
@@ -595,7 +624,7 @@ mod tests {
         let merged = merged_block_with_txs(4, &[]);
         let blob_sidecars = FxHashMap::default();
 
-        let response = merged_block_to_response(merged, &blob_sidecars, 9).unwrap();
+        let response = merged_block_to_response(merged.into(), &blob_sidecars, 9).unwrap();
 
         assert_eq!(response.base_payment_tx_index, 2);
     }
@@ -608,7 +637,7 @@ mod tests {
         let merged = merged_block_with_txs(5, &appended);
         let blob_sidecars = FxHashMap::default();
 
-        let response = merged_block_to_response(merged, &blob_sidecars, 9).unwrap();
+        let response = merged_block_to_response(merged.into(), &blob_sidecars, 9).unwrap();
 
         assert_eq!(response.base_payment_tx_index, 1);
     }
@@ -621,6 +650,6 @@ mod tests {
         let merged = merged_block_with_txs(2, &appended);
         let blob_sidecars = FxHashMap::default();
 
-        assert!(merged_block_to_response(merged, &blob_sidecars, 9).is_none());
+        assert!(merged_block_to_response(merged.into(), &blob_sidecars, 9).is_none());
     }
 }

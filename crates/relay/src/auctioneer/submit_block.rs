@@ -190,7 +190,7 @@ impl<B: BidAdjustor> Context<B> {
             SignedBidSubmission::Gloas(submission) => {
                 let fee_recipient =
                     slot_data.registration_data.entry.registration.message.fee_recipient;
-                let entry = GloasPayload::new(submission, fee_recipient);
+                let entry = GloasPayload::new(submission, fee_recipient, trace.receive_ns.0);
                 self.record_submission(
                     SignedBidSubmission::Gloas(entry.submission.clone()),
                     trace,

@@ -42,7 +42,7 @@ fn empty_bundle() -> ethrex_common::types::BlobsBundle {
 }
 
 pub(crate) struct Built {
-    payload: ExecutionPayloadV3,
+    pub(crate) payload: ExecutionPayloadV3,
     requests: ExecutionRequestsV4,
     /// The encoded EIP-7928 list, as a Gloas submission would carry it. `None`
     /// before Amsterdam, which is what every pre-Gloas test wants.

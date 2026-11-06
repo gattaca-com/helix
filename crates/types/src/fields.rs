@@ -44,6 +44,54 @@ pub fn convert_transactions_to_progressive(
     )
 }
 
+/// Every execution request a node produced, split by EIP-7685 type prefix. The three
+/// pre-Gloas lists keep the shape a submission has always carried; EIP-8282's builder
+/// deposits and exits ride beside them.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct DecodedRequests {
+    pub requests: ExecutionRequests,
+    pub builder_deposits: BuilderDepositRequests,
+    pub builder_exits: BuilderExitRequests,
+}
+
+impl DecodedRequests {
+    /// Each entry is a one-byte type prefix followed by that type's SSZ list. This does not
+    /// go through alloy's `ExecutionRequestsV4`, which knows only prefixes 0 to 2.
+    pub fn from_entries<'a>(entries: impl IntoIterator<Item = &'a [u8]>) -> Result<Self, String> {
+        fn ssz_decode<T: ssz::Decode>(body: &[u8], what: &str) -> Result<T, String> {
+            T::from_ssz_bytes(body).map_err(|e| format!("{what}: {e:?}"))
+        }
+        let mut decoded = DecodedRequests::default();
+        for entry in entries {
+            let (prefix, body) = entry.split_first().ok_or("empty execution request")?;
+            let request_type = crate::RequestType::from_u8(*prefix)
+                .ok_or_else(|| format!("unknown request_type prefix: {prefix}"))?;
+            match request_type {
+                crate::RequestType::Deposit => {
+                    decoded.requests.deposits = ssz_decode(body, "deposits")?;
+                }
+                crate::RequestType::Withdrawal => {
+                    decoded.requests.withdrawals = ssz_decode(body, "withdrawals")?;
+                }
+                crate::RequestType::Consolidation => {
+                    decoded.requests.consolidations = ssz_decode(body, "consolidations")?;
+                }
+                crate::RequestType::BuilderDeposit => {
+                    decoded.builder_deposits = ssz_decode(body, "builder deposits")?;
+                }
+                crate::RequestType::BuilderExit => {
+                    decoded.builder_exits = ssz_decode(body, "builder exits")?;
+                }
+            }
+        }
+        Ok(decoded)
+    }
+
+    pub fn to_gloas(&self) -> ExecutionRequestsGloas {
+        execution_requests_to_gloas(&self.requests, &self.builder_deposits, &self.builder_exits)
+    }
+}
+
 /// Converts helix's Electra-shaped builder-submission execution requests, plus the EIP-8282
 /// builder lists a Gloas submission carries beside them, into the real Gloas shape.
 pub fn execution_requests_to_gloas(

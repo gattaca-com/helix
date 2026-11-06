@@ -296,12 +296,12 @@ impl<S: ssz::Encode> ssz::Encode for SszValidationRequestRef<'_, S> {
 }
 
 /// Encode-only form of [`SszMergedValidationRequest`]; see [`SszValidationRequestRef`].
-pub struct SszMergedValidationRequestRef<'a> {
-    pub base: SszValidationRequestRef<'a, SignedBidSubmissionFulu>,
+pub struct SszMergedValidationRequestRef<'a, S> {
+    pub base: SszValidationRequestRef<'a, S>,
     pub base_payment_tx_index: u64,
 }
 
-impl ssz::Encode for SszMergedValidationRequestRef<'_> {
+impl<S: ssz::Encode> ssz::Encode for SszMergedValidationRequestRef<'_, S> {
     fn is_ssz_fixed_len() -> bool {
         false
     }
