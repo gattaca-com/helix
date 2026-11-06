@@ -2861,7 +2861,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c54e03a951783e8b327515db3f2a2fd0e3bed362a96b066f341ce66ed49b4ead"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 3.0.3",
 ]
 
 [[package]]
@@ -3550,8 +3550,8 @@ dependencies = [
 
 [[package]]
 name = "ethrex-blockchain"
-version = "29.0.1"
-source = "git+https://github.com/gattaca-com/ethrex?rev=b70bba1684331e57749a4148352c6210cce43c7d#b70bba1684331e57749a4148352c6210cce43c7d"
+version = "31.0.0"
+source = "git+https://github.com/gattaca-com/ethrex?rev=50739d44bdc846c758f0f1804b1d270bc0730bc7#50739d44bdc846c758f0f1804b1d270bc0730bc7"
 dependencies = [
  "bytes",
  "crossbeam",
@@ -3575,8 +3575,8 @@ dependencies = [
 
 [[package]]
 name = "ethrex-common"
-version = "29.0.1"
-source = "git+https://github.com/gattaca-com/ethrex?rev=b70bba1684331e57749a4148352c6210cce43c7d#b70bba1684331e57749a4148352c6210cce43c7d"
+version = "31.0.0"
+source = "git+https://github.com/gattaca-com/ethrex?rev=50739d44bdc846c758f0f1804b1d270bc0730bc7#50739d44bdc846c758f0f1804b1d270bc0730bc7"
 dependencies = [
  "bytes",
  "crc32fast",
@@ -3584,6 +3584,7 @@ dependencies = [
  "ethrex-crypto",
  "ethrex-rlp",
  "ethrex-trie",
+ "foldhash 0.2.0",
  "hex",
  "hex-literal",
  "hex-simd",
@@ -3609,8 +3610,8 @@ dependencies = [
 
 [[package]]
 name = "ethrex-config"
-version = "29.0.1"
-source = "git+https://github.com/gattaca-com/ethrex?rev=b70bba1684331e57749a4148352c6210cce43c7d#b70bba1684331e57749a4148352c6210cce43c7d"
+version = "31.0.0"
+source = "git+https://github.com/gattaca-com/ethrex?rev=50739d44bdc846c758f0f1804b1d270bc0730bc7#50739d44bdc846c758f0f1804b1d270bc0730bc7"
 dependencies = [
  "ethrex-common",
  "ethrex-p2p",
@@ -3621,7 +3622,7 @@ dependencies = [
 
 [[package]]
 name = "ethrex-crypto"
-version = "29.0.1"
+version = "31.0.0"
 dependencies = [
  "ark-bn254",
  "ark-ec",
@@ -3644,8 +3645,8 @@ dependencies = [
 
 [[package]]
 name = "ethrex-guest-program"
-version = "29.0.1"
-source = "git+https://github.com/gattaca-com/ethrex?rev=b70bba1684331e57749a4148352c6210cce43c7d#b70bba1684331e57749a4148352c6210cce43c7d"
+version = "31.0.0"
+source = "git+https://github.com/gattaca-com/ethrex?rev=50739d44bdc846c758f0f1804b1d270bc0730bc7#50739d44bdc846c758f0f1804b1d270bc0730bc7"
 dependencies = [
  "bytes",
  "ethereum-types",
@@ -3667,8 +3668,8 @@ dependencies = [
 
 [[package]]
 name = "ethrex-l2-common"
-version = "29.0.1"
-source = "git+https://github.com/gattaca-com/ethrex?rev=b70bba1684331e57749a4148352c6210cce43c7d#b70bba1684331e57749a4148352c6210cce43c7d"
+version = "31.0.0"
+source = "git+https://github.com/gattaca-com/ethrex?rev=50739d44bdc846c758f0f1804b1d270bc0730bc7#50739d44bdc846c758f0f1804b1d270bc0730bc7"
 dependencies = [
  "bytes",
  "ethereum-types",
@@ -3685,15 +3686,14 @@ dependencies = [
 
 [[package]]
 name = "ethrex-levm"
-version = "29.0.1"
-source = "git+https://github.com/gattaca-com/ethrex?rev=b70bba1684331e57749a4148352c6210cce43c7d#b70bba1684331e57749a4148352c6210cce43c7d"
+version = "31.0.0"
+source = "git+https://github.com/gattaca-com/ethrex?rev=50739d44bdc846c758f0f1804b1d270bc0730bc7#50739d44bdc846c758f0f1804b1d270bc0730bc7"
 dependencies = [
  "bytes",
  "derive_more 1.0.0",
  "ethrex-common",
  "ethrex-crypto",
  "ethrex-rlp",
- "foldhash 0.2.0",
  "libssz",
  "malachite",
  "rayon",
@@ -3705,8 +3705,8 @@ dependencies = [
 
 [[package]]
 name = "ethrex-metrics"
-version = "29.0.1"
-source = "git+https://github.com/gattaca-com/ethrex?rev=b70bba1684331e57749a4148352c6210cce43c7d#b70bba1684331e57749a4148352c6210cce43c7d"
+version = "31.0.0"
+source = "git+https://github.com/gattaca-com/ethrex?rev=50739d44bdc846c758f0f1804b1d270bc0730bc7#50739d44bdc846c758f0f1804b1d270bc0730bc7"
 dependencies = [
  "axum 0.8.9",
  "ethrex-common",
@@ -3721,8 +3721,8 @@ dependencies = [
 
 [[package]]
 name = "ethrex-p2p"
-version = "29.0.1"
-source = "git+https://github.com/gattaca-com/ethrex?rev=b70bba1684331e57749a4148352c6210cce43c7d#b70bba1684331e57749a4148352c6210cce43c7d"
+version = "31.0.0"
+source = "git+https://github.com/gattaca-com/ethrex?rev=50739d44bdc846c758f0f1804b1d270bc0730bc7#50739d44bdc846c758f0f1804b1d270bc0730bc7"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -3765,8 +3765,8 @@ dependencies = [
 
 [[package]]
 name = "ethrex-rlp"
-version = "29.0.1"
-source = "git+https://github.com/gattaca-com/ethrex?rev=b70bba1684331e57749a4148352c6210cce43c7d#b70bba1684331e57749a4148352c6210cce43c7d"
+version = "31.0.0"
+source = "git+https://github.com/gattaca-com/ethrex?rev=50739d44bdc846c758f0f1804b1d270bc0730bc7#50739d44bdc846c758f0f1804b1d270bc0730bc7"
 dependencies = [
  "bytes",
  "ethereum-types",
@@ -3775,8 +3775,8 @@ dependencies = [
 
 [[package]]
 name = "ethrex-rpc"
-version = "29.0.1"
-source = "git+https://github.com/gattaca-com/ethrex?rev=b70bba1684331e57749a4148352c6210cce43c7d#b70bba1684331e57749a4148352c6210cce43c7d"
+version = "31.0.0"
+source = "git+https://github.com/gattaca-com/ethrex?rev=50739d44bdc846c758f0f1804b1d270bc0730bc7#50739d44bdc846c758f0f1804b1d270bc0730bc7"
 dependencies = [
  "axum 0.8.9",
  "axum-extra",
@@ -3792,6 +3792,7 @@ dependencies = [
  "ethrex-storage",
  "ethrex-trie",
  "ethrex-vm",
+ "futures",
  "hex",
  "hex-literal",
  "jsonwebtoken",
@@ -3815,8 +3816,8 @@ dependencies = [
 
 [[package]]
 name = "ethrex-storage"
-version = "29.0.1"
-source = "git+https://github.com/gattaca-com/ethrex?rev=b70bba1684331e57749a4148352c6210cce43c7d#b70bba1684331e57749a4148352c6210cce43c7d"
+version = "31.0.0"
+source = "git+https://github.com/gattaca-com/ethrex?rev=50739d44bdc846c758f0f1804b1d270bc0730bc7#50739d44bdc846c758f0f1804b1d270bc0730bc7"
 dependencies = [
  "anyhow",
  "bytes",
@@ -3839,8 +3840,8 @@ dependencies = [
 
 [[package]]
 name = "ethrex-trie"
-version = "29.0.1"
-source = "git+https://github.com/gattaca-com/ethrex?rev=b70bba1684331e57749a4148352c6210cce43c7d#b70bba1684331e57749a4148352c6210cce43c7d"
+version = "31.0.0"
+source = "git+https://github.com/gattaca-com/ethrex?rev=50739d44bdc846c758f0f1804b1d270bc0730bc7#50739d44bdc846c758f0f1804b1d270bc0730bc7"
 dependencies = [
  "anyhow",
  "bytes",
@@ -3859,8 +3860,8 @@ dependencies = [
 
 [[package]]
 name = "ethrex-vm"
-version = "29.0.1"
-source = "git+https://github.com/gattaca-com/ethrex?rev=b70bba1684331e57749a4148352c6210cce43c7d#b70bba1684331e57749a4148352c6210cce43c7d"
+version = "31.0.0"
+source = "git+https://github.com/gattaca-com/ethrex?rev=50739d44bdc846c758f0f1804b1d270bc0730bc7#50739d44bdc846c758f0f1804b1d270bc0730bc7"
 dependencies = [
  "bytes",
  "derive_more 1.0.0",
@@ -10836,7 +10837,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.52.0",

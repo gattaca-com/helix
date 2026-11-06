@@ -56,18 +56,18 @@ ethereum_ssz_derive = "0.10"
 # reth-mdbx-sys's exact `cc = 1.2.15` pin (via helix-simulator). The node is
 # assembled from the library crates instead, so `rayon` must be listed by hand:
 # the parallel BAL execution path is cfg-gated on it.
-ethrex-blockchain = { git = "https://github.com/gattaca-com/ethrex", rev = "b70bba1684331e57749a4148352c6210cce43c7d", default-features = false, features = ["secp256k1", "c-kzg", "metrics", "rayon"] }
-ethrex-common = { git = "https://github.com/gattaca-com/ethrex", rev = "b70bba1684331e57749a4148352c6210cce43c7d", default-features = false, features = ["secp256k1", "c-kzg", "rayon"] }
-ethrex-config = { git = "https://github.com/gattaca-com/ethrex", rev = "b70bba1684331e57749a4148352c6210cce43c7d" }
+ethrex-blockchain = { git = "https://github.com/gattaca-com/ethrex", rev = "50739d44bdc846c758f0f1804b1d270bc0730bc7", default-features = false, features = ["secp256k1", "c-kzg", "metrics", "rayon"] }
+ethrex-common = { git = "https://github.com/gattaca-com/ethrex", rev = "50739d44bdc846c758f0f1804b1d270bc0730bc7", default-features = false, features = ["secp256k1", "c-kzg", "rayon"] }
+ethrex-config = { git = "https://github.com/gattaca-com/ethrex", rev = "50739d44bdc846c758f0f1804b1d270bc0730bc7" }
 # default features minus `aws-lc-rs` (see note above); P-256 verify uses the portable fallback
-ethrex-crypto = { git = "https://github.com/gattaca-com/ethrex", rev = "b70bba1684331e57749a4148352c6210cce43c7d", default-features = false, features = ["std", "kzg-rs", "secp256k1", "blst", "c-kzg"] }
-ethrex-levm = { git = "https://github.com/gattaca-com/ethrex", rev = "b70bba1684331e57749a4148352c6210cce43c7d", default-features = false }
-ethrex-metrics = { git = "https://github.com/gattaca-com/ethrex", rev = "b70bba1684331e57749a4148352c6210cce43c7d" }
-ethrex-p2p = { git = "https://github.com/gattaca-com/ethrex", rev = "b70bba1684331e57749a4148352c6210cce43c7d", features = ["c-kzg", "rocksdb", "metrics"] }
-ethrex-rlp = { git = "https://github.com/gattaca-com/ethrex", rev = "b70bba1684331e57749a4148352c6210cce43c7d" }
-ethrex-rpc = { git = "https://github.com/gattaca-com/ethrex", rev = "b70bba1684331e57749a4148352c6210cce43c7d" }
-ethrex-storage = { git = "https://github.com/gattaca-com/ethrex", rev = "b70bba1684331e57749a4148352c6210cce43c7d", features = ["rocksdb"] }
-ethrex-vm = { git = "https://github.com/gattaca-com/ethrex", rev = "b70bba1684331e57749a4148352c6210cce43c7d", default-features = false, features = ["secp256k1", "c-kzg", "rayon"] }
+ethrex-crypto = { git = "https://github.com/gattaca-com/ethrex", rev = "50739d44bdc846c758f0f1804b1d270bc0730bc7", default-features = false, features = ["std", "kzg-rs", "secp256k1", "blst", "c-kzg"] }
+ethrex-levm = { git = "https://github.com/gattaca-com/ethrex", rev = "50739d44bdc846c758f0f1804b1d270bc0730bc7", default-features = false }
+ethrex-metrics = { git = "https://github.com/gattaca-com/ethrex", rev = "50739d44bdc846c758f0f1804b1d270bc0730bc7" }
+ethrex-p2p = { git = "https://github.com/gattaca-com/ethrex", rev = "50739d44bdc846c758f0f1804b1d270bc0730bc7", features = ["c-kzg", "rocksdb", "metrics"] }
+ethrex-rlp = { git = "https://github.com/gattaca-com/ethrex", rev = "50739d44bdc846c758f0f1804b1d270bc0730bc7" }
+ethrex-rpc = { git = "https://github.com/gattaca-com/ethrex", rev = "50739d44bdc846c758f0f1804b1d270bc0730bc7" }
+ethrex-storage = { git = "https://github.com/gattaca-com/ethrex", rev = "50739d44bdc846c758f0f1804b1d270bc0730bc7", features = ["rocksdb"] }
+ethrex-vm = { git = "https://github.com/gattaca-com/ethrex", rev = "50739d44bdc846c758f0f1804b1d270bc0730bc7", default-features = false, features = ["secp256k1", "c-kzg", "rayon"] }
 
 eyre = "0.6.12"
 clickhouse = "0.14.2"
