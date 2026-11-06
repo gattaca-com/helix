@@ -90,12 +90,20 @@ impl HttpClient {
         PendingResponse::new(State::Handshaking { handshake, req }, mio, Events::with_capacity(8))
     }
 
-    pub fn get(&self, url: &Url) -> Result<PendingResponse, HttpClientError> {
+    /// The request target and `Host` value for `url`. `send` writes the request as built, so a
+    /// request built from the absolute URL carries no `Host` header, and a Node server
+    /// (Lodestar) answers that with a bare 400.
+    pub fn origin_form(url: &Url) -> (String, String) {
         let host = url.host_str().unwrap_or_default().to_string();
         let path = match url.query() {
             Some(q) => format!("{}?{}", url.path(), q),
             None => url.path().to_string(),
         };
+        (path, host)
+    }
+
+    pub fn get(&self, url: &Url) -> Result<PendingResponse, HttpClientError> {
+        let (path, host) = Self::origin_form(url);
         let req = Request::get(&path).header("host", &host).body(Full::new(Bytes::new()))?;
         self.send(url, req)
     }
@@ -127,11 +135,7 @@ impl HttpClient {
     }
 
     fn post_request(url: &Url, body: Bytes) -> Result<Request<Full<Bytes>>, HttpClientError> {
-        let host = url.host_str().unwrap_or_default().to_string();
-        let path = match url.query() {
-            Some(q) => format!("{}?{}", url.path(), q),
-            None => url.path().to_string(),
-        };
+        let (path, host) = Self::origin_form(url);
         let len = body.len();
         let req = Request::post(&path)
             .header("host", &host)
@@ -226,4 +230,20 @@ fn client_test() -> Result<(), Box<dyn std::error::Error>> {
     };
     print!("{}", String::from_utf8_lossy(&bytes));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn origin_form_keeps_the_query_and_names_the_host() {
+        let url =
+            Url::parse("http://cl-1:4000/eth/v1/beacon/execution_payload_envelopes?a=b").unwrap();
+
+        let (path, host) = HttpClient::origin_form(&url);
+
+        assert_eq!(path, "/eth/v1/beacon/execution_payload_envelopes?a=b");
+        assert_eq!(host, "cl-1");
+    }
 }
