@@ -7,7 +7,6 @@ RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
 COPY --from=planner /app/recipe.json recipe.json
-COPY crates/vendored ./crates/vendored
 RUN cargo chef cook --release --recipe-path recipe.json -p helix-data-api --bin data_api
 
 COPY . .
