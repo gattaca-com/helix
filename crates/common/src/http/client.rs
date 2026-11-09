@@ -1,7 +1,9 @@
 use std::{
+    fmt,
     net::{SocketAddr, ToSocketAddrs},
     sync::Arc,
     task::Poll,
+    time::{Duration, Instant},
 };
 
 use eventsource_stream::Event;
@@ -9,7 +11,7 @@ use http_body_util::Full;
 use hyper::{Request, body::Bytes, client::conn::http1};
 use mio::{Events, Interest, Poll as MioPoll, Token, net::TcpStream};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, pki_types::ServerName};
-use url::Url;
+use url::{Position, Url};
 
 pub use crate::http::pending_response::PendingResponse;
 use crate::http::{
@@ -20,6 +22,14 @@ use crate::http::{
 };
 
 const CONN: Token = Token(0);
+
+/// SSE streams are polled from busy-spinning tiles, so without a delay a failing stream
+/// reconnects (and re-resolves DNS) on every loop iteration, flooding the node it is trying to
+/// reach. After an immediate first retry the delay doubles from the base up to the max, so a
+/// recovered node is picked up within a second, well inside a slot.
+const SSE_RECONNECT_BASE_DELAY: Duration = Duration::from_millis(50);
+const SSE_RECONNECT_MAX_DELAY: Duration = Duration::from_secs(1);
+const SSE_FAILURE_LOG_INTERVAL: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug)]
 pub struct HttpClient {
@@ -91,21 +101,17 @@ impl HttpClient {
     }
 
     pub fn get(&self, url: &Url) -> Result<PendingResponse, HttpClientError> {
-        let host = url.host_str().unwrap_or_default().to_string();
-        let path = match url.query() {
-            Some(q) => format!("{}?{}", url.path(), q),
-            None => url.path().to_string(),
-        };
-        let req = Request::get(&path).header("host", &host).body(Full::new(Bytes::new()))?;
+        let req = Request::get(&url[Position::BeforePath..Position::AfterQuery])
+            .header("host", url.host_str().unwrap_or_default())
+            .body(Full::new(Bytes::new()))?;
         self.send(url, req)
     }
 
     /// `get` asking for an SSZ body, as the beacon API serves on `Accept:
     /// application/octet-stream`.
     pub fn get_ssz(&self, url: &Url) -> Result<PendingResponse, HttpClientError> {
-        let host = url.host_str().unwrap_or_default().to_string();
         let req = Request::get(url.path())
-            .header("host", &host)
+            .header("host", url.host_str().unwrap_or_default())
             .header("accept", "application/octet-stream")
             .body(Full::new(Bytes::new()))?;
         self.send(url, req)
@@ -127,84 +133,98 @@ impl HttpClient {
     }
 
     fn post_request(url: &Url, body: Bytes) -> Result<Request<Full<Bytes>>, HttpClientError> {
-        let host = url.host_str().unwrap_or_default().to_string();
-        let path = match url.query() {
-            Some(q) => format!("{}?{}", url.path(), q),
-            None => url.path().to_string(),
-        };
-        let len = body.len();
-        let req = Request::post(&path)
-            .header("host", &host)
+        let req = Request::post(&url[Position::BeforePath..Position::AfterQuery])
+            .header("host", url.host_str().unwrap_or_default())
             .header("content-type", "application/json")
-            .header("content-length", len.to_string())
+            .header("content-length", body.len().to_string())
             .body(Full::new(body))?;
         Ok(req)
     }
 
     /// Create a reconnecting SSE stream. Call `poll()` once per loop iteration.
     pub fn sse_stream(&self, url: Url) -> SseStream {
-        SseStream { tls_config: self.tls_config.clone(), url, inner: None }
+        let now = Instant::now();
+        SseStream {
+            client: self.clone(),
+            url,
+            inner: None,
+            retry_delay: Duration::ZERO,
+            reconnect_at: now,
+            next_failure_log: now,
+        }
     }
 }
 
 /// Reconnecting SSE stream. Call `poll()` once per loop iteration; yields events indefinitely.
 pub struct SseStream {
-    tls_config: Arc<ClientConfig>,
+    client: HttpClient,
     url: Url,
     inner: Option<SseRequest>,
+    /// Zero until a failure, so the first retry is immediate. Only an event resets it: a node can
+    /// accept connections and drop them straight away, which must still back off.
+    retry_delay: Duration,
+    reconnect_at: Instant,
+    next_failure_log: Instant,
 }
 
 impl SseStream {
     pub fn poll(&mut self) -> Poll<Event> {
         if self.inner.is_none() {
-            let client = HttpClient { tls_config: self.tls_config.clone() };
-            match client.connect(&self.url) {
+            if Instant::now() < self.reconnect_at {
+                return Poll::Pending;
+            }
+            let attempt = self.client.connect(&self.url).and_then(|(transport, mio)| {
+                let req = Request::get(&self.url[Position::BeforePath..Position::AfterQuery])
+                    .header("host", self.url.host_str().unwrap_or_default())
+                    .header("accept", "text/event-stream")
+                    .header("cache-control", "no-cache")
+                    .body(Full::new(Bytes::new()))?;
+                let handshake = Box::pin(http1::handshake::<_, Full<Bytes>>(transport));
+                Ok(SseRequest {
+                    state: SseState::Handshaking { handshake, req },
+                    mio,
+                    events: Events::with_capacity(8),
+                    waker: noop_waker(),
+                })
+            });
+            match attempt {
+                Ok(request) => self.inner = Some(request),
                 Err(e) => {
-                    tracing::warn!(err = %e, url = %self.url, "SSE connect failed");
+                    self.record_failure(&e);
                     return Poll::Pending;
-                }
-                Ok((transport, mio)) => {
-                    let host = self.url.host_str().unwrap_or_default();
-                    let path = match self.url.query() {
-                        Some(q) => format!("{}?{}", self.url.path(), q),
-                        None => self.url.path().to_string(),
-                    };
-                    let req = match Request::get(&path)
-                        .header("host", host)
-                        .header("accept", "text/event-stream")
-                        .header("cache-control", "no-cache")
-                        .body(Full::new(Bytes::new()))
-                    {
-                        Ok(r) => r,
-                        Err(e) => {
-                            tracing::warn!(err = %e, url = %self.url, "SSE request build failed");
-                            return Poll::Pending;
-                        }
-                    };
-                    let handshake = Box::pin(http1::handshake::<_, Full<Bytes>>(transport));
-                    self.inner = Some(SseRequest {
-                        state: SseState::Handshaking { handshake, req },
-                        mio,
-                        events: Events::with_capacity(8),
-                        waker: noop_waker(),
-                    });
                 }
             }
         }
         match self.inner.as_mut().unwrap().poll() {
             Poll::Pending => Poll::Pending,
+            Poll::Ready(Some(Ok(event))) => {
+                if !self.retry_delay.is_zero() {
+                    tracing::info!(url = %self.url, "SSE reconnected");
+                    self.retry_delay = Duration::ZERO;
+                }
+                Poll::Ready(event)
+            }
             Poll::Ready(None) => {
-                tracing::warn!(url = %self.url, "SSE stream ended, will reconnect");
-                self.inner = None;
+                self.record_failure(&"stream ended by server");
                 Poll::Pending
             }
-            Poll::Ready(Some(Ok(event))) => Poll::Ready(event),
             Poll::Ready(Some(Err(e))) => {
-                tracing::warn!(err = %e, url = %self.url, "SSE error, will reconnect");
-                self.inner = None;
+                self.record_failure(&e);
                 Poll::Pending
             }
         }
+    }
+
+    fn record_failure(&mut self, err: &dyn fmt::Display) {
+        self.inner = None;
+        let now = Instant::now();
+        if self.retry_delay.is_zero() || now >= self.next_failure_log {
+            tracing::warn!(%err, url = %self.url, "SSE failed, will reconnect");
+            self.next_failure_log = now + SSE_FAILURE_LOG_INTERVAL;
+        }
+        self.reconnect_at = now + self.retry_delay;
+        self.retry_delay =
+            (self.retry_delay * 2).clamp(SSE_RECONNECT_BASE_DELAY, SSE_RECONNECT_MAX_DELAY);
     }
 }
 
@@ -212,7 +232,6 @@ impl SseStream {
 fn client_test() -> Result<(), Box<dyn std::error::Error>> {
     use std::{pin::Pin, task::Context};
 
-    use crate::http::pending_response::noop_waker;
     crate::utils::install_default_crypto_provider();
     let client = HttpClient::new()?;
     let url = Url::parse("https://ifconfig.me/")?;
@@ -226,4 +245,38 @@ fn client_test() -> Result<(), Box<dyn std::error::Error>> {
     };
     print!("{}", String::from_utf8_lossy(&bytes));
     Ok(())
+}
+
+#[test]
+fn sse_stream_backs_off_between_reconnects() {
+    use std::{
+        net::TcpListener,
+        sync::atomic::{AtomicUsize, Ordering},
+        thread,
+    };
+
+    crate::utils::install_default_crypto_provider();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url =
+        Url::parse(&format!("http://{}/eth/v1/events", listener.local_addr().unwrap())).unwrap();
+    let accepted = Arc::new(AtomicUsize::new(0));
+    let counter = accepted.clone();
+    // Accepts and closes every connection without an event, so connecting succeeds but each
+    // attempt still fails and must back off.
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            drop(stream);
+            counter.fetch_add(1, Ordering::Relaxed);
+        }
+    });
+
+    let mut sse = HttpClient::new().unwrap().sse_stream(url);
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_millis(500) {
+        let _ = sse.poll();
+    }
+
+    // Attempts at ~0, ~0 (immediate retry), 50, 150 and 350ms; the next is due at 750ms.
+    let attempts = accepted.load(Ordering::Relaxed);
+    assert!((4..=6).contains(&attempts), "{attempts} connection attempts in 500ms");
 }
