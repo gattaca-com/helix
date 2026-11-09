@@ -175,8 +175,16 @@ pub async fn start(opts: &NodeOptions) -> eyre::Result<NodeHandle> {
         client_version(),
         None,
         opts.gas_limit,
+        opts.rpc_gas_cap,
         opts.extra_data.clone(),
         opts.http_api.iter().copied().collect(),
+        ethrex_rpc::LogQueryLimits::new(
+            opts.rpc_max_blocks_per_filter,
+            opts.rpc_max_logs_per_response,
+            opts.rpc_max_log_query_work,
+            opts.rpc_log_query_work_budget,
+        ),
+        usize::try_from(opts.authrpc_max_inflight_body_size).unwrap_or(usize::MAX),
     )
     .await?;
     info!(%http_addr, %authrpc_addr, ?ws_addr, "RPC + Engine API bound");
