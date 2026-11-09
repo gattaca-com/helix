@@ -13,7 +13,6 @@ RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
 COPY --from=planner /app/recipe.json recipe.json
-COPY crates/vendored ./crates/vendored
 RUN cargo chef cook --profile release-prod --recipe-path recipe.json -p helix-relay -p helix-data-gatherer
 
 COPY . .
