@@ -54,6 +54,10 @@ impl<A: Api> ProposerApi<A> {
                 request_slot: params.slot,
             });
         }
+        super::check_request_auth_data(
+            &proposer_api.relay_config.request_auth_data,
+            &signed_request_auth,
+        )?;
 
         proposer_api
             .local_cache

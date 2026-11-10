@@ -146,6 +146,10 @@ pub enum ProposerApiError {
 
     #[error("invalid request: Date-Milliseconds and X-Timeout-Ms headers are required")]
     MissingTimingHeaders,
+    #[error(
+        "invalid SignedBuilderRequestAuth: auth.message.data does not match the value agreed with this builder"
+    )]
+    RequestAuthDataMismatch,
 
     #[error("the block is not signed by its slot's scheduled proposer")]
     InvalidProposerSignature,
@@ -213,6 +217,7 @@ impl ProposerApiError {
             ProposerApiError::RequestForPastSlot { .. } |
             ProposerApiError::RequestAuthSlotMismatch { .. } |
             ProposerApiError::MissingTimingHeaders |
+            ProposerApiError::RequestAuthDataMismatch |
             ProposerApiError::InvalidProposerSignature => StatusCode::BAD_REQUEST,
 
             // All authentication failures, kept indistinguishable by status
