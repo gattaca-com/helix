@@ -70,6 +70,10 @@ impl<A: Api> ProposerApi<A> {
             return Err(ProposerApiError::RequestWrongSlot { request_slot: params.slot, bid_slot });
         }
 
+        if self.chain_info.fork_at_slot(bid_slot.into()).gloas_enabled() {
+            return Err(ProposerApiError::NoBidPrepared);
+        }
+
         // Only return a bid if there is a proposer connected to this slot.
         let Some(duty) = duty else {
             debug!("proposer duty not found");
