@@ -308,10 +308,13 @@ impl SeenBlock {
 pub struct GloasPayload {
     pub submission: GloasBidSubmission,
     pub bid: Vec<u8>,
+    /// Relay receive time of the submission, or of a merge's base.
+    pub receive_ns: u64,
+    pub fee_recipient: Address,
 }
 
 impl GloasPayload {
-    pub fn new(submission: GloasBidSubmission, fee_recipient: Address) -> Self {
+    pub fn new(submission: GloasBidSubmission, fee_recipient: Address, receive_ns: u64) -> Self {
         // The proposer is paid in-block, so the enshrined `value` stays 0.
         let execution_payment =
             (submission.bid_trace().value / U256::from(WEI_PER_GWEI)).saturating_to::<u64>();
@@ -319,7 +322,7 @@ impl GloasPayload {
         // the proposer in-block, and consensus pays any enshrined amount to whatever
         // this names. Announcing the coinbase names the builder.
         let bid = submission.unsigned_bid(fee_recipient, execution_payment);
-        Self { submission, bid }
+        Self { submission, bid, receive_ns, fee_recipient }
     }
 
     pub fn has_bid_trace(&self, bid_trace: &BidTrace) -> bool {

@@ -8,6 +8,7 @@ use ethrex_rlp::encode::{RLPEncode, encode_length};
 
 use crate::{
     merge::{
+        bal::Fragment,
         pool::Range,
         state::{Account, BlockState, Checkpoint, KeyTable},
     },
@@ -22,10 +23,35 @@ const MAX_ACCOUNTS: usize = 1 << 17;
 const MAX_SLOTS: usize = 1 << 18;
 const MAX_LOGS: usize = 8 << 20;
 
+/// A transaction's gas: `spent` is post-refund and cumulates into receipts; `regular`
+/// and `state` are the EIP-8037 block dimensions, both pre-refund.
+#[derive(Clone, Copy, Default, PartialEq, Debug)]
+pub struct Gas {
+    pub spent: u64,
+    pub regular: u64,
+    pub state: u64,
+}
+
+impl Gas {
+    pub fn add(&mut self, gas: Gas) {
+        self.spent += gas.spent;
+        self.regular += gas.regular;
+        self.state += gas.state;
+    }
+
+    /// The block's gas used: the larger dimension, which is `spent` before Amsterdam.
+    pub fn block(&self) -> u64 {
+        self.regular.max(self.state)
+    }
+}
+
+pub type OwnReceipt = (Receipt, Bloom, Option<Fragment>);
+
 pub struct EffectCache {
     latest_by_tx: Vec<u32>,
     entries: Vec<Effect>,
     receipts: Vec<(Receipt, Bloom)>,
+    fragments: Vec<Option<Fragment>>,
     account_entries: Vec<(u32, AccountEntry)>,
     slot_entries: Vec<(u32, U256)>,
     logs_rlp: Vec<u8>,
@@ -42,7 +68,7 @@ struct Effect {
     slot_writes: u32,
     logs: Range,
     coinbase_fee: U256,
-    gas: u64,
+    gas: Gas,
     loads_coinbase: bool,
 }
 
@@ -80,6 +106,7 @@ impl Default for EffectCache {
             latest_by_tx: Vec::new(),
             entries: Vec::with_capacity(MAX_EFFECTS),
             receipts: Vec::with_capacity(MAX_EFFECTS),
+            fragments: Vec::with_capacity(MAX_EFFECTS),
             account_entries: Vec::with_capacity(MAX_ACCOUNTS),
             slot_entries: Vec::with_capacity(MAX_SLOTS),
             logs_rlp: Vec::with_capacity(MAX_LOGS),
@@ -103,6 +130,7 @@ impl EffectCache {
         }
         self.entries.clear();
         self.receipts.clear();
+        self.fragments.clear();
         self.account_entries.clear();
         self.slot_entries.clear();
         self.logs_rlp.clear();
@@ -149,7 +177,7 @@ impl EffectCache {
         keys: &KeyTable,
         state: &mut BlockState,
         coinbase: u32,
-    ) -> Option<u64> {
+    ) -> Option<Gas> {
         let effect = self.entries[ix as usize];
         let (writes, _) = effect.accounts.split_at(effect.account_writes);
         for &(id, write) in writes.slice(&self.account_entries) {
@@ -187,11 +215,15 @@ impl EffectCache {
         (receipt, bloom, self.entries[ix as usize].logs.slice(&self.logs_rlp))
     }
 
+    pub fn fragment(&self, ix: u32) -> Option<&Fragment> {
+        self.fragments[ix as usize].as_ref()
+    }
+
     #[expect(clippy::too_many_arguments)]
     pub fn record(
         &mut self,
         tx: u32,
-        gas: u64,
+        gas: Gas,
         keys: &mut KeyTable,
         state: &BlockState,
         at: Checkpoint,
@@ -199,7 +231,8 @@ impl EffectCache {
         coinbase: u32,
         before: U256,
         receipt: Receipt,
-        own: &mut Vec<(Receipt, Bloom)>,
+        fragment: Option<Fragment>,
+        own: &mut Vec<OwnReceipt>,
     ) -> u32 {
         let bloom = bloom_from_logs(&receipt.logs, &NativeCrypto);
         // Writes kept are of keys read, so a tx adds at most twice its reads.
@@ -211,7 +244,7 @@ impl EffectCache {
             metrics::rejection("merge_effects", "full");
         }
         if full || receipt.tx_type == TxType::Frame {
-            own.push((receipt, bloom));
+            own.push((receipt, bloom, fragment));
             return NO_EFFECT;
         }
         let (accounts, slots) = (self.account_entries.len(), self.slot_entries.len());
@@ -288,7 +321,7 @@ impl EffectCache {
         if !replayable {
             self.account_entries.truncate(accounts);
             self.slot_entries.truncate(slots);
-            own.push((receipt, bloom));
+            own.push((receipt, bloom, fragment));
             return NO_EFFECT;
         }
         let logs = self.logs_rlp.len();
@@ -312,6 +345,7 @@ impl EffectCache {
             loads_coinbase,
         });
         self.receipts.push((receipt, bloom));
+        self.fragments.push(fragment);
         ix
     }
 }

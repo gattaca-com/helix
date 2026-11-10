@@ -40,6 +40,78 @@ pub struct MergedBlockV1 {
     pub unmerged_txs: Vec<UnmergedTx>,
 }
 
+/// `MergedBlockV1` for an Amsterdam base: the same fields at the same offsets,
+/// plus what the Fulu-shaped payload cannot carry. Sent in place of V1 only
+/// when the block needs them.
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+pub struct MergedBlockV2 {
+    pub slot: u64,
+    pub response_id: u32,
+    pub base_block_hash: B256,
+    pub base_builder_pubkey: BlsPublicKey,
+    pub execution_payload: ExecutionPayloadV3,
+    /// EIP-7928 list as RLP, the exact bytes the header's hash commits to.
+    pub block_access_list: Vec<u8>,
+    /// Type-prefixed EIP-7685 entries, so EIP-8282's types 3 and 4 fit.
+    pub execution_requests: Vec<Vec<u8>>,
+    pub appended_blobs: Vec<B256>,
+    pub proposer_value: U256,
+    pub base_builder_revenue: U256,
+    pub relay_revenue: U256,
+    pub builder_inclusions: Vec<BuilderInclusion>,
+    pub included_order_ids: Vec<B256>,
+    pub trace: MergeTraceV1,
+    pub unmerged_txs: Vec<UnmergedTx>,
+}
+
+impl From<MergedBlockV1> for MergedBlockV2 {
+    fn from(m: MergedBlockV1) -> Self {
+        let requests = m.execution_requests.to_requests();
+        MergedBlockV2 {
+            slot: m.slot,
+            response_id: m.response_id,
+            base_block_hash: m.base_block_hash,
+            base_builder_pubkey: m.base_builder_pubkey,
+            execution_payload: m.execution_payload,
+            block_access_list: Vec::new(),
+            execution_requests: requests.iter().map(|r| r.to_vec()).collect(),
+            appended_blobs: m.appended_blobs,
+            proposer_value: m.proposer_value,
+            base_builder_revenue: m.base_builder_revenue,
+            relay_revenue: m.relay_revenue,
+            builder_inclusions: m.builder_inclusions,
+            included_order_ids: m.included_order_ids,
+            trace: m.trace,
+            unmerged_txs: m.unmerged_txs,
+        }
+    }
+}
+
+impl TryFrom<MergedBlockV2> for MergedBlockV1 {
+    type Error = alloy_rpc_types::beacon::requests::TryFromRequestsError;
+
+    fn try_from(m: MergedBlockV2) -> Result<Self, Self::Error> {
+        let requests = m.execution_requests.into_iter().map(Into::into).collect();
+        let requests = alloy_eips::eip7685::Requests::new(requests);
+        Ok(MergedBlockV1 {
+            slot: m.slot,
+            response_id: m.response_id,
+            base_block_hash: m.base_block_hash,
+            base_builder_pubkey: m.base_builder_pubkey,
+            execution_payload: m.execution_payload,
+            execution_requests: ExecutionRequestsV4::try_from(&requests)?,
+            appended_blobs: m.appended_blobs,
+            proposer_value: m.proposer_value,
+            base_builder_revenue: m.base_builder_revenue,
+            relay_revenue: m.relay_revenue,
+            builder_inclusions: m.builder_inclusions,
+            included_order_ids: m.included_order_ids,
+            trace: m.trace,
+            unmerged_txs: m.unmerged_txs,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Encode, Decode)]
 pub struct UnmergedTx {
     pub tx_hash: B256,

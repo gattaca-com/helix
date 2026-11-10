@@ -67,11 +67,6 @@ fn supported_fork(params: &Option<SubmissionDecoderParams>) -> bool {
         .is_none_or(|params| matches!(params.fork_name, ForkName::Fulu | ForkName::Gloas))
 }
 
-/// The merged route has no Gloas shape yet, so its fork list is shorter.
-fn supported_merged_fork(params: &Option<SubmissionDecoderParams>) -> bool {
-    params.as_ref().is_none_or(|params| matches!(params.fork_name, ForkName::Fulu))
-}
-
 /// 501, not 400: the relay maps a 400 body to `BlockValidationFailed`, which
 /// demotes the builder. This is helix's own limitation, not the builder's.
 fn unsupported_fork(params: &Option<SubmissionDecoderParams>) -> Response {
@@ -176,7 +171,7 @@ async fn validate_merged(State(state): State<ServerState>, body: axum::body::Byt
             return finish("validate_merged", "bad_request", start, bad_request(format!("{err:?}")))
         }
     };
-    if !supported_merged_fork(&request.decoder_params) {
+    if !supported_fork(&request.decoder_params) {
         return finish(
             "validate_merged",
             "unsupported_fork",
@@ -185,7 +180,7 @@ async fn validate_merged(State(state): State<ServerState>, body: axum::body::Byt
         );
     }
     let t = metrics::sim_lap("decode_request", start);
-    let (submission, _) =
+    let (submission, gloas) =
         match decode_submission(request.decoder_params, &request.signed_bid_submission) {
             Ok(Some(decoded)) => decoded,
             Ok(None) => {
@@ -216,7 +211,7 @@ async fn validate_merged(State(state): State<ServerState>, body: axum::body::Byt
             &eblobs(&submission.blobs_bundle),
             request.apply_blacklist,
             request.base_payment_tx_index,
-            None,
+            gloas.as_ref().map(amsterdam),
         )
     })
     .await

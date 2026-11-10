@@ -19,6 +19,8 @@ use ethrex_levm::{
 use ethrex_vm::Evm;
 use rustc_hash::FxHashMap;
 
+use crate::merge::bal::Fragment;
+
 // ~10x the most touched per slot measured: 2.2k accounts, 11.3k slots.
 const MAX_ACCOUNTS: usize = 1 << 15;
 const MAX_SLOTS: usize = 1 << 17;
@@ -165,6 +167,13 @@ impl KeyTable {
     pub fn parent_slot(&self, id: u32) -> (Address, H256, U256) {
         debug_assert!(id != 0 && (id as usize) < self.slots.len());
         self.slots[id as usize]
+    }
+
+    pub fn parent_balance(&self, address: Address) -> U256 {
+        match self.account_ids.get(&address) {
+            Some(&id) => self.accounts[id as usize].1.balance,
+            None => self.db.get_account_state(address).map(|s| s.balance).unwrap_or_default(),
+        }
     }
 }
 
@@ -484,6 +493,17 @@ impl EngineVm {
         state: &BlockState,
         f: impl FnOnce(&mut Evm) -> R,
     ) -> R {
+        self.run(keys, state, false, f).0
+    }
+
+    /// Runs `f` on `state`; with `record`, also returns its EIP-7928 accesses.
+    pub fn run<R>(
+        &mut self,
+        keys: &KeyTable,
+        state: &BlockState,
+        record: bool,
+        f: impl FnOnce(&mut Evm) -> R,
+    ) -> (R, Option<Fragment>) {
         struct UnbindView<'a>(&'a EvmView);
         impl Drop for UnbindView<'_> {
             fn drop(&mut self) {
@@ -498,9 +518,23 @@ impl EngineVm {
         db.code_metadata.clear();
         db.tx_backup = None;
         db.tx_reads = None;
+        if record {
+            db.enable_bal_recording();
+        }
         self.view.keys.set(keys);
         self.view.state.set(state);
         let _clear = UnbindView(&self.view);
-        f(&mut self.evm)
+        let out = f(&mut self.evm);
+        let (db, view) = (&mut self.evm.db, &self.view);
+        let bal = db.take_bal();
+        let fragment = bal.map(|bal| {
+            // The run's own first sight of the account is its pre-balance; an account the
+            // run never loaded holds whatever the engine state says.
+            Fragment::from_run(bal, |address| match db.initial_accounts_state.get(&address) {
+                Some(account) => account.info.balance,
+                None => view.get_account_state(address).map(|s| s.balance).unwrap_or_default(),
+            })
+        });
+        (out, fragment)
     }
 }

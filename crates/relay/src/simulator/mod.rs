@@ -24,9 +24,10 @@ use helix_common::{
 };
 use helix_tcp_types::merging::builder_to_relay::UnmergedTx;
 use helix_types::{
-    BidTrace, BlobsBundle, BlsPublicKeyBytes, BlsSignatureBytes, BuilderInclusionResult,
-    ExecutionPayload, ExecutionRequests, ForkName, MergedBlockTrace, SignedBidSubmission,
-    SignedBidSubmissionFulu, SubmissionVersion,
+    BidTrace, BlobsBundle, BlsPublicKeyBytes, BlsSignatureBytes, BuilderDepositRequests,
+    BuilderExitRequests, BuilderInclusionResult, ExecutionPayload, ExecutionRequests, ForkName,
+    GloasBidTrace, MergedBlockTrace, SignedBidSubmission, SignedBidSubmissionFulu,
+    SubmissionVersion,
 };
 use rustc_hash::FxHashMap;
 use ssz::Encode as _;
@@ -36,6 +37,7 @@ use uuid::Uuid;
 use crate::{
     SubmissionRef,
     auctioneer::Bid,
+    block_merging::merged_gloas_submission,
     simulator::client::SimulatorClient,
     spine::messages::{SimFinished, SimPreviousSlotDrops, SimStarted, SimTxIncluded},
 };
@@ -111,6 +113,12 @@ pub struct BlockMergeResponse {
     pub base_block_hash: B256,
     pub execution_payload: Arc<ExecutionPayload>,
     pub execution_requests: Arc<ExecutionRequests>,
+    /// The EIP-8282 lists beside `execution_requests`, and the EIP-7928 list the header
+    /// commits to: empty before Amsterdam, and what makes the block a Gloas one after.
+    #[serde(skip)]
+    pub builder_requests: Arc<(BuilderDepositRequests, BuilderExitRequests)>,
+    #[serde(skip)]
+    pub block_access_list: Bytes,
     /// The merged block's full blob set (base block's own blob txs plus any newly
     /// appended ones), re-attached from `BlockMergingTile`'s own cache of blobs seen in
     /// submissions this slot.
@@ -807,8 +815,26 @@ impl Simulators {
         let started = sim_started_event(submission_id, block_hash, true, false);
         spawn_tracked!(async move {
             let start_sim = Nanos::now();
-            let submission = match merged_block_to_submission(&response, &req) {
-                Ok(submission) => submission,
+            let gloas = !response.block_access_list.is_empty();
+            let submission = merged_block_to_submission(&response, &req);
+            // A Gloas block has only the SSZ route.
+            let gloas_bytes = match (gloas, &dispatch) {
+                (true, MergedSimDispatch::Ssz(..)) => {
+                    let message = GloasBidTrace {
+                        trace: submission.message.clone(),
+                        parent_block_root: B256::ZERO,
+                    };
+                    merged_gloas_submission(&response, message)
+                        .map(|s| s.as_bytes().to_vec())
+                        .ok_or(BlockSimError::UnsupportedFork(ForkName::Gloas))
+                }
+                (true, MergedSimDispatch::Json { .. }) => {
+                    Err(BlockSimError::UnsupportedFork(ForkName::Gloas))
+                }
+                (false, _) => Ok(Vec::new()),
+            };
+            let gloas_bytes = match gloas_bytes {
+                Ok(bytes) => bytes,
                 Err(err) => {
                     let inner = MergedSimulationResultInner {
                         result: Err(err),
@@ -831,18 +857,35 @@ impl Simulators {
             SimulatorMetrics::sim_count(false);
             let res = match dispatch {
                 MergedSimDispatch::Ssz(to_send, endpoint) => {
-                    let body = SszMergedValidationRequestRef {
-                        base: SszValidationRequestRef {
-                            apply_blacklist,
-                            registered_gas_limit,
-                            parent_beacon_block_root,
-                            inclusion_list: &req.inclusion_list,
-                            decoder_params: None,
-                            signed_bid_submission: &submission,
-                        },
-                        base_payment_tx_index,
-                    }
-                    .as_ssz_bytes();
+                    let body = if gloas {
+                        SszMergedValidationRequestRef {
+                            base: SszValidationRequestRef {
+                                apply_blacklist,
+                                registered_gas_limit,
+                                parent_beacon_block_root,
+                                inclusion_list: &req.inclusion_list,
+                                decoder_params: Some(SubmissionDecoderParams::plain(
+                                    ForkName::Gloas,
+                                )),
+                                signed_bid_submission: &gloas_bytes,
+                            },
+                            base_payment_tx_index,
+                        }
+                        .as_ssz_bytes()
+                    } else {
+                        SszMergedValidationRequestRef {
+                            base: SszValidationRequestRef {
+                                apply_blacklist,
+                                registered_gas_limit,
+                                parent_beacon_block_root,
+                                inclusion_list: &req.inclusion_list,
+                                decoder_params: None,
+                                signed_bid_submission: &submission,
+                            },
+                            base_payment_tx_index,
+                        }
+                        .as_ssz_bytes()
+                    };
                     SimulatorClient::do_sim_request(body.into(), false, to_send, &endpoint).await
                 }
                 MergedSimDispatch::Json { to_send, method } => {
@@ -1398,7 +1441,7 @@ fn sim_outcome(error: Option<&BlockSimError>) -> &'static str {
 fn merged_block_to_submission(
     response: &BlockMergeResponse,
     req: &MergedValidationRequest,
-) -> Result<SignedBidSubmissionFulu, BlockSimError> {
+) -> SignedBidSubmissionFulu {
     let payload = &response.execution_payload;
     let message = BidTrace {
         slot: req.slot,
@@ -1411,13 +1454,13 @@ fn merged_block_to_submission(
         gas_used: payload.gas_used,
         value: response.proposer_value,
     };
-    Ok(SignedBidSubmissionFulu {
+    SignedBidSubmissionFulu {
         message,
         execution_payload: payload.clone(),
         blobs_bundle: response.blobs_bundle.clone(),
         execution_requests: response.execution_requests.clone(),
         signature: BlsSignatureBytes::default(),
-    })
+    }
 }
 
 fn sim_started_event(

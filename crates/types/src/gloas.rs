@@ -1,4 +1,7 @@
-use alloy_primitives::{Address, B256};
+use std::sync::Arc;
+
+use alloy_primitives::{Address, B256, FixedBytes, U256};
+use alloy_rpc_types::engine::{ExecutionPayloadV1, ExecutionPayloadV2, ExecutionPayloadV3};
 use bytes::Bytes;
 use rand::Rng;
 use silver_crypto_simd::{
@@ -20,8 +23,8 @@ use ssz::{Decode, DecodeError};
 use tree_hash::TreeHash;
 
 use crate::{
-    BidTrace, BlockValidationError, GloasBidTrace, SszError, error::SigError,
-    execution_payload::withdrawals_root_of,
+    BidTrace, BlobsBundle, BlockValidationError, GloasBidTrace, KzgCommitments, SszError,
+    error::SigError, execution_payload::withdrawals_root_of,
 };
 
 const GLOAS_BID_TRACE_SIZE: usize = 268;
@@ -117,8 +120,12 @@ impl GloasBidSubmission {
         )
     }
 
+    pub fn num_blobs(&self) -> usize {
+        self.blobs().len() / BYTES_PER_BLOB
+    }
+
     pub fn validate_lengths(&self, max_blobs_per_block: usize) -> Result<(), BlockValidationError> {
-        let blobs = self.blobs().len() / BYTES_PER_BLOB;
+        let blobs = self.num_blobs();
         if blobs > max_blobs_per_block {
             return Err(BlockValidationError::SszError(SszError::InvalidByteCount {
                 given: blobs,
@@ -193,6 +200,82 @@ impl GloasBidSubmission {
     pub fn num_txs(&self) -> usize {
         let txs = ExecutionPayloadView::transactions(self.execution_payload());
         if txs.is_empty() { 0 } else { u32_at(txs, 0) / 4 }
+    }
+
+    fn withdrawals(&self) -> &[u8] {
+        let payload = self.execution_payload();
+        &payload[ExecutionPayloadView::withdrawals_offset(payload) as usize..
+            ExecutionPayloadView::block_access_list_offset(payload) as usize]
+    }
+
+    /// The payload in the merge builder's wire shape, which has no access list or slot.
+    pub fn payload_v3(&self) -> ExecutionPayloadV3 {
+        let payload = self.execution_payload();
+        let txs = ExecutionPayloadView::transactions(payload);
+        let count = self.num_txs();
+        let transactions = (0..count)
+            .map(|i| {
+                let start = u32_at(txs, 4 * i);
+                let end = if i + 1 < count { u32_at(txs, 4 * (i + 1)) } else { txs.len() };
+                alloy_primitives::Bytes::copy_from_slice(&txs[start..end])
+            })
+            .collect();
+        let withdrawals = self
+            .withdrawals()
+            .chunks_exact(WITHDRAWAL_SIZE)
+            .map(|w| {
+                let w = w.try_into().expect("one withdrawal");
+                alloy_eips::eip4895::Withdrawal {
+                    index: WithdrawalView::index(w),
+                    validator_index: WithdrawalView::validator_index(w),
+                    address: Address::from(*WithdrawalView::address(w)),
+                    amount: WithdrawalView::amount(w),
+                }
+            })
+            .collect();
+        ExecutionPayloadV3 {
+            payload_inner: ExecutionPayloadV2 {
+                payload_inner: ExecutionPayloadV1 {
+                    parent_hash: B256::from(*ExecutionPayloadView::parent_hash(payload)),
+                    fee_recipient: self.fee_recipient(),
+                    state_root: B256::from(*ExecutionPayloadView::state_root(payload)),
+                    receipts_root: B256::from(*ExecutionPayloadView::receipts_root(payload)),
+                    logs_bloom: alloy_primitives::Bloom::from(*ExecutionPayloadView::logs_bloom(
+                        payload,
+                    )),
+                    prev_randao: *self.prev_randao(),
+                    block_number: self.block_number(),
+                    gas_limit: ExecutionPayloadView::gas_limit(payload),
+                    gas_used: ExecutionPayloadView::gas_used(payload),
+                    timestamp: self.timestamp(),
+                    extra_data: alloy_primitives::Bytes::copy_from_slice(
+                        ExecutionPayloadView::extra_data(payload),
+                    ),
+                    base_fee_per_gas: U256::from_le_bytes(*ExecutionPayloadView::base_fee_per_gas(
+                        payload,
+                    )),
+                    block_hash: self.message.trace.block_hash,
+                    transactions,
+                },
+                withdrawals,
+            },
+            blob_gas_used: ExecutionPayloadView::blob_gas_used(payload),
+            excess_blob_gas: ExecutionPayloadView::excess_blob_gas(payload),
+        }
+    }
+
+    /// The sidecars as the typed bundle, copying the blobs out.
+    pub fn bundle(&self) -> BlobsBundle {
+        let commitments = self.commitments().chunks_exact(BYTES_PER_KZG_COMMITMENT);
+        let proofs = self.proofs().chunks_exact(BYTES_PER_KZG_PROOF);
+        let blobs = self.blobs().chunks_exact(BYTES_PER_BLOB);
+        let bytes48 = |b: &[u8]| FixedBytes::<48>::from_slice(b);
+        BlobsBundle {
+            commitments: KzgCommitments::new(commitments.map(bytes48).collect())
+                .unwrap_or_default(),
+            proofs: proofs.map(bytes48).collect(),
+            blobs: blobs.map(|b| Arc::new(alloy_consensus::Blob::from_slice(b))).collect(),
+        }
     }
 
     pub fn withdrawals_root(&self) -> B256 {

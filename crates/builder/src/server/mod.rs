@@ -227,12 +227,16 @@ impl MergingServerTile {
         let frame = &mut self.output_frame;
         frame.clear();
         match output.kind {
-            OutputKind::Merged => {
+            OutputKind::Merged | OutputKind::MergedV2 => {
                 let response_id = session.next_response_id();
                 body[MERGED_RESPONSE_ID].copy_from_slice(&response_id.to_le_bytes());
                 let slot = u64::from_le_bytes(body[..8].try_into().expect("8 bytes"));
                 debug!(slot, response_id, len = body.len(), "sending merged block");
-                append_body_frame(frame, MergingMsgId::MergedBlockV1, body, session.zstd());
+                let msg_id = match output.kind {
+                    OutputKind::MergedV2 => MergingMsgId::MergedBlockV2,
+                    _ => MergingMsgId::MergedBlockV1,
+                };
+                append_body_frame(frame, msg_id, body, session.zstd());
             }
             OutputKind::Reject => {
                 debug!(len = body.len(), "sending reject");

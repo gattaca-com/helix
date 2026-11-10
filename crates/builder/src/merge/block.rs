@@ -8,6 +8,7 @@ use ethrex_common::{
     constants::GAS_PER_BLOB,
     types::{
         BlockHeader, ChainConfig, ELASTICITY_MULTIPLIER, Receipt, Transaction, TxKind,
+        block_access_list::BlockAccessList,
         bloom_from_logs, calc_excess_blob_gas, calculate_base_fee_per_gas,
         compute_withdrawals_root,
         requests::{EncodedRequests, compute_requests_hash},
@@ -15,18 +16,20 @@ use ethrex_common::{
 };
 use ethrex_crypto::native::NativeCrypto;
 use ethrex_levm::db::{CachingDatabase, Database, gen_db::TxReads};
+use ethrex_rlp::encode::RLPEncode;
 use ethrex_storage::Store;
 use ethrex_vm::DynVmDatabase;
 use helix_tcp_types::merging::{
-    builder_to_relay::{BuilderInclusion, MergeTraceV1, MergedBlockV1, UnmergedReason, UnmergedTx},
+    builder_to_relay::{BuilderInclusion, MergeTraceV1, MergedBlockV2, UnmergedReason, UnmergedTx},
     control::RelayConfigV1,
 };
 use rustc_hash::FxHashSet;
 
 use crate::{
-    convert::{aaddr, au256, b256, eaddr, h256, payload_v3, requests_to_v4},
+    convert::{aaddr, au256, b256, eaddr, h256, payload_v3},
     merge::{
-        effects::{EffectCache, NO_EFFECT, put_receipt},
+        bal::{self, Fragment},
+        effects::{EffectCache, Gas, NO_EFFECT, OwnReceipt, put_receipt},
         lists::ListRoot,
         payment::{self, Revenue, SafePayment},
         pool::{BaseBlock, Order, Pool, Tx},
@@ -91,10 +94,12 @@ pub struct BlockMerger {
     order_gas_cap: u64,
     max_blobs: u64,
     blobs_used: u64,
-    gas_used: u64,
+    gas: Gas,
+    amsterdam: bool,
+    system_fragment: Option<Fragment>,
     appended_txs: Vec<u32>,
     receipt_refs: Vec<(u32, u64)>,
-    unrecorded: Vec<(Receipt, Bloom)>,
+    unrecorded: Vec<OwnReceipt>,
     in_block: Vec<u64>,
     order_marks: Vec<OrderMark>,
     effects: EffectCache,
@@ -148,7 +153,9 @@ impl BlockMerger {
             order_gas_cap: 0,
             max_blobs: 0,
             blobs_used: 0,
-            gas_used: 0,
+            gas: Gas::default(),
+            amsterdam: false,
+            system_fragment: None,
             appended_txs: Vec::with_capacity(256),
             receipt_refs: Vec::with_capacity(1024),
             unrecorded: Vec::with_capacity(1024),
@@ -197,9 +204,7 @@ impl BlockMerger {
         if header.gas_limit.saturating_sub(header.gas_used) <= reserve {
             return Err("no_distribution_headroom");
         }
-        if chain.is_amsterdam_activated(header.timestamp) {
-            return Err("amsterdam");
-        }
+        let amsterdam = chain.is_amsterdam_activated(header.timestamp);
         let schedule = chain.get_fork_blob_schedule(header.timestamp);
         let max_blobs = schedule.map(|s| s.max as u64).unwrap_or_default();
         let txs = pool.txs_of(base.txs);
@@ -236,25 +241,29 @@ impl BlockMerger {
         let base_gas_used = header.gas_used;
 
         self.live = false;
+        self.amsterdam = amsterdam;
         self.base.copy_from(base);
         let header = &mut self.base.header;
         header.withdrawals_root = Some(compute_withdrawals_root(&base.withdrawals, &NativeCrypto));
         header.blob_gas_used = Some(0);
         header.parent_beacon_block_root = Some(h256(cx.beacon_root));
+        header.slot_number = amsterdam.then_some(cx.slot);
         let gas_limit = self.base.header.gas_limit;
         self.state.reset();
         self.coinbase_id = keys.intern_account(coinbase)?;
         let proposer = keys.intern_account(proposer)?;
         let header = &self.base.header;
-        let ran = scratch.vm.with_state(keys, &self.state, |evm| evm.apply_system_calls(header));
+        let (ran, fragment) =
+            scratch.vm.run(keys, &self.state, amsterdam, |evm| evm.apply_system_calls(header));
         ran.map_err(|_| "system_calls")?;
+        self.system_fragment = fragment;
         self.state.absorb_run(keys, &scratch.vm.evm.db)?;
         self.state.clear_undo();
 
         self.effects.reset_for(&self.base.header);
         self.receipt_refs.clear();
         self.unrecorded.clear();
-        self.gas_used = 0;
+        self.gas = Gas::default();
         let mut paid_before = ethrex_common::U256::zero();
         let last = txs.len() - 1;
         for (i, &ix) in txs.iter().enumerate() {
@@ -262,7 +271,7 @@ impl BlockMerger {
             if cx.blacklist.is_some_and(|list| calls_blacklisted(list, tx)) {
                 return Err("blacklisted");
             }
-            if pool.tx_fit(ix).0 > gas_limit.saturating_sub(self.gas_used) {
+            if pool.tx_fit(ix).0 > gas_limit.saturating_sub(self.gas.block()) {
                 return Err("gas_allowance");
             }
             if i == last {
@@ -279,7 +288,7 @@ impl BlockMerger {
             }
             self.state.clear_undo();
         }
-        if self.gas_used != base_gas_used {
+        if self.gas.block() != base_gas_used {
             return Err("gas_used_mismatch");
         }
         // The proposer's balance delta across the last tx proves the bid.
@@ -385,7 +394,7 @@ impl BlockMerger {
             gas += tx_gas;
             blobs += tx_blobs;
         }
-        if gas > self.order_gas_cap - self.gas_used || blobs > self.max_blobs - self.blobs_used {
+        if gas > self.order_gas_cap - self.gas.block() || blobs > self.max_blobs - self.blobs_used {
             return Err(UnmergedReason::OutOfSpace);
         }
         Ok(())
@@ -409,26 +418,26 @@ impl BlockMerger {
         }
         let coinbase = self.coinbase_id;
         let paid_before = self.state.account(keys, coinbase).balance;
-        let gas_left = self.order_gas_cap - self.gas_used;
         let blobs_left = self.max_blobs - self.blobs_used;
         let (cumulative, receipts, start) =
-            (self.gas_used, self.receipt_refs.len(), self.state.checkpoint());
-        let (mut gas, mut blobs, mut kept) = (0, 0, 0u32);
+            (self.gas, self.receipt_refs.len(), self.state.checkpoint());
+        let (mut blobs, mut kept) = (0, 0u32);
         let mut failed = None;
         for (i, &ix) in txs.iter().enumerate() {
             let (tx_gas_limit, tx_blobs) = pool.tx_fit(ix);
             let bit = 1u32 << i;
             let (can_drop, can_revert) = (order.may_drop & bit != 0, order.may_revert & bit != 0);
-            if tx_gas_limit > gas_left - gas || tx_blobs > blobs_left - blobs {
+            if tx_gas_limit > self.order_gas_cap - self.gas.block() || tx_blobs > blobs_left - blobs
+            {
                 if can_drop {
                     continue;
                 }
                 failed = Some(UnmergedReason::OutOfSpace);
                 break;
             }
-            let (at, mark) = (self.gas_used, self.state.checkpoint());
-            let Some((tx_gas, succeeded)) = self.apply_tx(ix, pool, keys, scratch) else {
-                self.gas_used = at;
+            let (at, mark) = (self.gas, self.state.checkpoint());
+            let Some(succeeded) = self.apply_tx(ix, pool, keys, scratch) else {
+                self.gas = at;
                 if can_drop || can_revert {
                     continue;
                 }
@@ -442,7 +451,7 @@ impl BlockMerger {
                 Some((UnmergedReason::Invalid, false))
             } else if !succeeded && !can_revert {
                 Some((UnmergedReason::Invalid, can_drop))
-            } else if gas + tx_gas > gas_left {
+            } else if self.gas.block() > self.order_gas_cap {
                 Some((UnmergedReason::OutOfSpace, can_drop))
             } else {
                 None
@@ -450,14 +459,13 @@ impl BlockMerger {
             if let Some((reason, droppable)) = reason {
                 self.state.undo_to(mark);
                 self.truncate_receipts(self.receipt_refs.len() - 1);
-                self.gas_used = at;
+                self.gas = at;
                 if droppable {
                     continue;
                 }
                 failed = Some(reason);
                 break;
             }
-            gas += tx_gas;
             blobs += tx_blobs;
             kept |= bit;
         }
@@ -468,7 +476,7 @@ impl BlockMerger {
         if !keep || failed.is_some() {
             self.state.undo_to(start);
             self.truncate_receipts(receipts);
-            self.gas_used = cumulative;
+            self.gas = cumulative;
         } else {
             self.state.clear_undo();
         }
@@ -493,8 +501,8 @@ impl BlockMerger {
         pool: &Pool,
         keys: &mut KeyTable,
         scratch: &mut MergeScratch,
-    ) -> Option<(u64, bool)> {
-        let (at, cumulative) = (self.state.checkpoint(), self.gas_used);
+    ) -> Option<bool> {
+        let (at, cumulative) = (self.state.checkpoint(), self.gas);
         let (vm, reads) = (&mut scratch.vm, &mut scratch.tx_reads);
         if let Some(effect) = self.effects.find_replayable(ix, keys, &self.state, self.coinbase_id)
         {
@@ -505,9 +513,9 @@ impl BlockMerger {
             };
             #[cfg(debug_assertions)]
             self.check_replay(ix, pool, keys, vm, at, gas);
-            self.gas_used += gas;
-            self.receipt_refs.push((effect, self.gas_used));
-            return Some((gas, self.effects.receipt(effect).0.succeeded));
+            self.gas.add(gas);
+            self.receipt_refs.push((effect, self.gas.spent));
+            return Some(self.effects.receipt(effect).0.succeeded);
         }
         let tx = pool.tx(ix);
         let before = self.state.account(keys, self.coinbase_id).balance;
@@ -516,21 +524,34 @@ impl BlockMerger {
         reads.balances.clear();
         reads.floors.clear();
         reads.coinbase_address = false;
-        let (header, gas_used) = (&self.base.header, &mut self.gas_used);
-        let ran = vm.with_state(keys, &self.state, |evm| {
+        let (header, spent) = (&self.base.header, &mut self.gas.spent);
+        let (ran, fragment) = vm.run(keys, &self.state, self.amsterdam, |evm| {
             evm.db.tx_reads = Some(std::mem::take(reads));
-            let ran = evm.execute_tx(&tx.tx, header, gas_used, tx.sender);
+            if let Some(recorder) = evm.db.bal_recorder_mut() {
+                recorder.record_touched_address(tx.sender);
+            }
+            let ran = evm.execute_tx(&tx.tx, header, spent, tx.sender);
             *reads = evm.db.tx_reads.take().unwrap_or_default();
             ran
         });
-        let (receipt, report) = ran.ok()?;
+        let Ok((receipt, report)) = ran else {
+            self.gas = cumulative;
+            return None;
+        };
         if let Err(reason) = self.state.absorb_run(keys, &vm.evm.db) {
             metrics::rejection("merge_state", reason);
             self.state.undo_to(at);
-            self.gas_used = cumulative;
+            self.gas = cumulative;
             return None;
         }
-        let (gas, succeeded) = (report.gas_spent, receipt.succeeded);
+        let gas = Gas {
+            spent: report.gas_spent,
+            regular: report.gas_used.saturating_sub(report.state_gas_used),
+            state: report.state_gas_used,
+        };
+        self.gas.regular += gas.regular;
+        self.gas.state += gas.state;
+        let succeeded = receipt.succeeded;
         let (state, own) = (&self.state, &mut self.unrecorded);
         let effect = self.effects.record(
             ix,
@@ -542,10 +563,11 @@ impl BlockMerger {
             self.coinbase_id,
             before,
             receipt,
+            fragment,
             own,
         );
-        self.receipt_refs.push((effect, self.gas_used));
-        Some((gas, succeeded))
+        self.receipt_refs.push((effect, self.gas.spent));
+        Some(succeeded)
     }
 
     #[cfg(debug_assertions)]
@@ -556,7 +578,7 @@ impl BlockMerger {
         keys: &mut KeyTable,
         vm: &mut EngineVm,
         at: Checkpoint,
-        gas: u64,
+        gas: Gas,
     ) {
         let state = &self.state;
         let mut replayed: Vec<_> =
@@ -585,7 +607,7 @@ impl BlockMerger {
         for list in [&mut replayed_slots, &mut run_slots] {
             list.sort_unstable_by_key(|w| w.0);
         }
-        assert_eq!(report.gas_spent, gas, "replayed gas, tx {ix}");
+        assert_eq!(report.gas_spent, gas.spent, "replayed gas, tx {ix}");
         assert_eq!(replayed, run, "replayed account writes, tx {ix}");
         assert_eq!(replayed_slots, run_slots, "replayed slot writes, tx {ix}");
     }
@@ -615,7 +637,7 @@ impl BlockMerger {
         keys: &mut KeyTable,
         nodes: &mut NodeArena,
         scratch: &mut MergeScratch,
-    ) -> Result<Option<MergedBlockV1>, &'static str> {
+    ) -> Result<Option<MergedBlockV2>, &'static str> {
         let total: U256 = self.revenues.iter().map(|r| r.paid).sum();
         let base_fee = self.base.header.base_fee_per_gas.unwrap_or_default();
         let cost = U256::from(base_fee) * U256::from(cx.relay.distribution_gas_limit);
@@ -661,39 +683,59 @@ impl BlockMerger {
         let payment = Transaction::decode_canonical(&encoded).map_err(|_| "payment_decode")?;
 
         let header = &self.base.header;
-        // The distribution, requests and withdrawals are folded in only for the state root.
+        // The distribution, requests and withdrawals are folded in only for the state root
+        // and the access list.
         let prague = cx.parent.chain.is_prague_activated(header.timestamp);
+        let amsterdam = self.amsterdam;
         let deposits = &mut scratch.deposit_receipts;
         deposits.clear();
         let deposit = cx.parent.chain.deposit_contract_address;
+        let has_deposit = |receipt: &Receipt| receipt.logs.iter().any(|log| log.address == deposit);
         for (receipt, ..) in block_receipts(&self.receipt_refs, &self.unrecorded, &self.effects) {
-            if prague && receipt.logs.iter().any(|log| log.address == deposit) {
+            if prague && has_deposit(receipt) {
                 deposits.push(receipt.clone());
             }
         }
         let withdrawals = &self.base.withdrawals;
-        let mut cumulative = self.gas_used;
-        let ran = scratch.vm.with_state(keys, &self.state, |evm| {
-            let (receipt, _) = evm
+        let mut cumulative = self.gas.spent;
+        let vm = &mut scratch.vm;
+        let (ran, payment_fragment) = vm.run(keys, &self.state, amsterdam, |evm| {
+            if let Some(recorder) = evm.db.bal_recorder_mut() {
+                recorder.record_touched_address(signer);
+            }
+            let (receipt, report) = evm
                 .execute_tx(&payment, header, &mut cumulative, signer)
                 .map_err(|_| "payment_invalid")?;
             if !receipt.succeeded {
                 return Err("payment_reverted");
             }
-            deposits.push(receipt);
-            let requests = match prague {
-                true => evm.extract_requests(deposits, header).map_err(|_| "requests"),
-                false => Ok(Vec::new()),
-            };
-            let receipt = deposits.pop().ok_or("requests")?;
-            let requests: Vec<EncodedRequests> = requests?.iter().map(|r| r.encode()).collect();
-            evm.process_withdrawals(withdrawals).map_err(|_| "withdrawals")?;
-            Ok((receipt, requests))
+            Ok((receipt, report))
         });
-        let (receipt, requests) = ran?;
         let at = self.state.checkpoint();
-        let folded = self.state.absorb_run(keys, &scratch.vm.evm.db);
-        let state_root = folded.and_then(|()| {
+        let mut post_fragment = None;
+        let folded = ran.and_then(|(receipt, report)| {
+            self.state.absorb_run(keys, &vm.evm.db)?;
+            if prague && has_deposit(&receipt) {
+                deposits.push(receipt.clone());
+            }
+            let (ran, fragment) = vm.run(keys, &self.state, amsterdam, |evm| {
+                let requests = match prague {
+                    true => evm.extract_requests(deposits, header).map_err(|_| "requests")?,
+                    false => Vec::new(),
+                };
+                let requests: Vec<EncodedRequests> = requests.iter().map(|r| r.encode()).collect();
+                if let Some(recorder) = evm.db.bal_recorder_mut() {
+                    recorder.extend_touched_addresses(withdrawals.iter().map(|w| w.address));
+                }
+                evm.process_withdrawals(withdrawals).map_err(|_| "withdrawals")?;
+                Ok::<_, &'static str>(requests)
+            });
+            post_fragment = fragment;
+            let requests = ran?;
+            self.state.absorb_run(keys, &vm.evm.db)?;
+            Ok((receipt, report, requests))
+        });
+        let state_root = folded.as_ref().map_err(|e| *e).and_then(|_| {
             let (store, db) = (cx.store, cx.parent.db.as_ref());
             let parent_root = cx.parent.header.state_root;
             let tries = &mut self.state_tries;
@@ -715,6 +757,18 @@ impl BlockMerger {
         });
         self.state.undo_to(at);
         let state_root = state_root?;
+        let (receipt, report, requests) = folded?;
+        let access_list = amsterdam.then(|| {
+            let system = self.system_fragment.iter().map(|f| (0, f));
+            let txs = block_fragments(&self.receipt_refs, &self.unrecorded, &self.effects)
+                .enumerate()
+                .filter_map(|(i, f)| f.map(|f| (i as u32 + 1, f)));
+            let next = self.receipt_refs.len() as u32 + 1;
+            let tail = [(next, payment_fragment.as_ref()), (next + 1, post_fragment.as_ref())];
+            let tail = tail.into_iter().filter_map(|(i, f)| f.map(|f| (i, f)));
+            let list = bal::assemble(system.chain(txs).chain(tail), |a| keys.parent_balance(a));
+            list.encode_to_vec()
+        });
 
         let base = pool.txs_of(self.base.txs).iter();
         let mut txs = Vec::with_capacity(self.receipt_refs.len() + 1);
@@ -744,11 +798,15 @@ impl BlockMerger {
         header.transactions_root = self.list_root.compute(txs.len(), |i| &txs[i]);
         header.receipts_root = self.list_root.compute(at.len() - 1, |i| &bytes[at[i]..at[i + 1]]);
         header.logs_bloom = logs_bloom;
-        header.gas_used = cumulative;
+        let regular = self.gas.regular + report.gas_used.saturating_sub(report.state_gas_used);
+        header.gas_used = regular.max(self.gas.state + report.state_gas_used);
         header.blob_gas_used = Some(self.blobs_used * u64::from(GAS_PER_BLOB));
         if prague {
             header.requests_hash = Some(compute_requests_hash(&requests));
         }
+        header.block_access_list_hash = access_list
+            .as_ref()
+            .map(|bytes| BlockAccessList::hash_of_canonical_encoding(bytes, &NativeCrypto));
         let execution_payload = payload_v3(&header, txs, &self.base.withdrawals);
 
         let inclusions = self
@@ -791,13 +849,18 @@ impl BlockMerger {
         self.trace.finalize_ns = utcnow_ns();
         self.best_value = proposer_value;
         self.emissions += 1;
-        Ok(Some(MergedBlockV1 {
+        Ok(Some(MergedBlockV2 {
             slot: cx.slot,
             response_id: 0,
             base_block_hash: self.base.hash,
             base_builder_pubkey: pool.submitters[self.base.submitter as usize].pubkey,
             execution_payload,
-            execution_requests: requests_to_v4(&requests).map_err(|_| "requests")?,
+            block_access_list: access_list.unwrap_or_default(),
+            execution_requests: requests
+                .iter()
+                .filter(|r| !r.is_empty())
+                .map(|r| r.0.to_vec())
+                .collect(),
             appended_blobs: self
                 .appended_txs
                 .iter()
@@ -820,19 +883,31 @@ impl BlockMerger {
 
 fn block_receipts<'a>(
     receipts: &'a [(u32, u64)],
-    own: &'a [(Receipt, Bloom)],
+    own: &'a [OwnReceipt],
     effects: &'a EffectCache,
 ) -> impl Iterator<Item = (&'a Receipt, u64, &'a Bloom, Option<&'a [u8]>)> {
     let mut own = own.iter();
     receipts.iter().map(move |&(effect, gas)| match effect {
         NO_EFFECT => {
-            let (receipt, bloom) = own.next().expect("an own receipt per NO_EFFECT");
+            let (receipt, bloom, _) = own.next().expect("an own receipt per NO_EFFECT");
             (receipt, gas, bloom, None)
         }
         _ => {
             let (receipt, bloom, logs) = effects.receipt(effect);
             (receipt, gas, bloom, Some(logs))
         }
+    })
+}
+
+fn block_fragments<'a>(
+    receipts: &'a [(u32, u64)],
+    own: &'a [OwnReceipt],
+    effects: &'a EffectCache,
+) -> impl Iterator<Item = Option<&'a Fragment>> {
+    let mut own = own.iter();
+    receipts.iter().map(move |&(effect, _)| match effect {
+        NO_EFFECT => own.next().expect("an own receipt per NO_EFFECT").2.as_ref(),
+        _ => effects.fragment(effect),
     })
 }
 

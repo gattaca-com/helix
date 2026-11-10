@@ -17,7 +17,7 @@ use ethrex_common::{
     },
 };
 use ethrex_crypto::NativeCrypto;
-use helix_types::{BuilderDepositRequests, BuilderExitRequests, ExecutionRequests, RequestType};
+use helix_types::{BuilderDepositRequests, BuilderExitRequests, RequestType};
 use ssz::Encode;
 
 use crate::validation::error::ValidationError;
@@ -234,8 +234,9 @@ fn encoded_requests_all(
     list
 }
 
-/// Converts ethrex's encoded EIP-7685 requests into the wire
-/// `ExecutionRequestsV4`, dropping empty requests per the EIP.
+pub use helix_types::DecodedRequests;
+
+#[cfg(test)]
 pub fn requests_to_v4(encoded: &[EncodedRequests]) -> Result<ExecutionRequestsV4, String> {
     let requests = alloy_eips::eip7685::Requests::new(
         encoded.iter().filter(|r| !r.is_empty()).map(|r| r.0.clone().to_vec().into()).collect(),
@@ -243,54 +244,9 @@ pub fn requests_to_v4(encoded: &[EncodedRequests]) -> Result<ExecutionRequestsV4
     ExecutionRequestsV4::try_from(&requests).map_err(|e| e.to_string())
 }
 
-/// Every execution request the node produced, split by EIP-7685 type prefix.
-/// The three pre-Gloas lists keep the shape a submission has always carried;
-/// EIP-8282's builder deposits and exits ride beside them.
-#[derive(Debug, Default, Clone, PartialEq)]
-pub struct DecodedRequests {
-    pub requests: ExecutionRequests,
-    pub builder_deposits: BuilderDepositRequests,
-    pub builder_exits: BuilderExitRequests,
-}
-
-/// Decodes the node's flat EIP-7685 list. Each entry is a one-byte type prefix
-/// followed by the SSZ list for that type.
-///
-/// This does not go through alloy's `ExecutionRequestsV4`: that type knows only
-/// prefixes 0 to 2 and rejects EIP-8282's 3 and 4, which cost the builder every
-/// block carrying one.
+/// Decodes the node's flat EIP-7685 list.
 pub fn decode_execution_requests(encoded: &[EncodedRequests]) -> Result<DecodedRequests, String> {
-    let mut decoded = DecodedRequests::default();
-
-    for entry in encoded.iter().filter(|r| !r.is_empty()) {
-        let (prefix, body) = entry.0.split_first().ok_or("empty execution request")?;
-        let request_type = RequestType::from_u8(*prefix)
-            .ok_or_else(|| format!("unknown request_type prefix: {prefix}"))?;
-
-        match request_type {
-            RequestType::Deposit => {
-                decoded.requests.deposits = ssz_decode(body, "deposits")?;
-            }
-            RequestType::Withdrawal => {
-                decoded.requests.withdrawals = ssz_decode(body, "withdrawals")?;
-            }
-            RequestType::Consolidation => {
-                decoded.requests.consolidations = ssz_decode(body, "consolidations")?;
-            }
-            RequestType::BuilderDeposit => {
-                decoded.builder_deposits = ssz_decode(body, "builder deposits")?;
-            }
-            RequestType::BuilderExit => {
-                decoded.builder_exits = ssz_decode(body, "builder exits")?;
-            }
-        }
-    }
-
-    Ok(decoded)
-}
-
-fn ssz_decode<T: ssz::Decode>(body: &[u8], what: &str) -> Result<T, String> {
-    T::from_ssz_bytes(body).map_err(|e| format!("{what}: {e:?}"))
+    DecodedRequests::from_entries(encoded.iter().filter(|r| !r.is_empty()).map(|r| r.0.as_ref()))
 }
 
 #[cfg(test)]

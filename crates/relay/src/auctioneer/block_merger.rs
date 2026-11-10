@@ -12,13 +12,19 @@ use helix_common::{
     },
     utils::utcnow_ns,
 };
-use helix_types::{BlsPublicKeyBytes, MergedBlock, PayloadAndBlobs, PayloadBidData, Transactions};
+use helix_types::{
+    BidTrace, BlsPublicKeyBytes, GloasBidSubmission, GloasBidTrace, MergedBlock, PayloadAndBlobs,
+    PayloadBidData, Transactions,
+};
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use tracing::{debug, error, info, trace, warn};
 
 use crate::{
-    auctioneer::{BlockMergeResponse, types::PayloadEntry},
-    block_merging::observe_pipe,
+    auctioneer::{
+        BlockMergeResponse,
+        types::{GloasPayload, PayloadEntry},
+    },
+    block_merging::{merged_gloas_submission, observe_pipe},
 };
 
 type BlockHash = B256;
@@ -41,6 +47,7 @@ pub struct BlockMerger {
     config: RelayConfig,
     local_cache: LocalCache,
     best_merged_blocks: FxHashMap<Address, BestMergedBlock>,
+    best_merged_gloas: FxHashMap<Address, BestMergedGloas>,
     /// Base block hashes for which `get_header` found that the merged bid only differed
     /// from the original in the payment tx (and lost out on value because of it). Checked
     /// again in `prepare_merged_payload_for_storage` so we can log when the same original
@@ -55,6 +62,7 @@ impl BlockMerger {
             config,
             local_cache,
             best_merged_blocks: FxHashMap::with_capacity_and_hasher(16, Default::default()),
+            best_merged_gloas: FxHashMap::with_capacity_and_hasher(16, Default::default()),
             flagged_payment_tx_only_blocks: FxHashSet::with_capacity_and_hasher(16, FxBuildHasher),
         }
     }
@@ -65,6 +73,7 @@ impl BlockMerger {
         info!(old_slot = %self.curr_bid_slot, new_slot = %bid_slot, "resetting block merger slot");
         self.curr_bid_slot = bid_slot;
         self.best_merged_blocks.clear();
+        self.best_merged_gloas.clear();
         self.flagged_payment_tx_only_blocks.clear();
     }
 
@@ -97,8 +106,8 @@ impl BlockMerger {
         };
 
         if !merged_bid_higher(
-            &entry.bid,
-            original_bid,
+            (*entry.bid.value(), *entry.bid.block_hash()),
+            (*original_bid.value(), *original_bid.block_hash()),
             entry.base_block_receive_ns,
             original_bid_receive_ns,
             entry.max_merged_bid_age_ms,
@@ -152,13 +161,7 @@ impl BlockMerger {
         }
 
         let builder_pubkey = entry.bid.bid_data_ref().builder_pubkey;
-        let allowlisted = self
-            .config
-            .block_merging_config
-            .serve_merged_headers_allowlist
-            .contains(builder_pubkey);
-
-        if !allowlisted && !self.local_cache.merged_headers_enabled() {
+        if !self.serving_enabled(builder_pubkey) {
             info!(%builder_pubkey, "merged header serving disabled, not returning merged header");
 
             let state_root = entry.bid.execution_payload().state_root;
@@ -181,6 +184,126 @@ impl BlockMerger {
         }
 
         Some(entry.bid.clone())
+    }
+
+    fn serving_enabled(&self, builder_pubkey: &BlsPublicKeyBytes) -> bool {
+        let allowlist = &self.config.block_merging_config.serve_merged_headers_allowlist;
+        allowlist.contains(builder_pubkey) || self.local_cache.merged_headers_enabled()
+    }
+
+    /// The merged block to serve in place of the sorter's `original` Gloas bid, if any.
+    pub fn gloas_header(&self, original: &GloasPayload) -> Option<B256> {
+        let trace = original.submission.bid_trace();
+        let Some(entry) = self.best_merged_gloas.get(&original.submission.fee_recipient()) else {
+            MERGED_BID_DECISION.with_label_values(&["no_block_for_builder"]).inc();
+            return None;
+        };
+        if !merged_bid_higher(
+            (entry.value, entry.block_hash),
+            (trace.value, trace.block_hash),
+            entry.base_block_receive_ns,
+            original.receive_ns,
+            entry.max_merged_bid_age_ms,
+        ) {
+            return None;
+        }
+        if entry.parent_hash != trace.parent_hash {
+            MERGED_BID_DECISION.with_label_values(&["parent_mismatch"]).inc();
+            return None;
+        }
+        if !self.serving_enabled(&entry.builder_pubkey) {
+            return None;
+        }
+        MERGED_BID_DECISION.with_label_values(&["served"]).inc();
+        Some(entry.block_hash)
+    }
+
+    /// The merged block as a Gloas submission in the base's name, recorded and remembered
+    /// as the base coinbase's best merge.
+    pub fn prepare_merged_gloas_payload(
+        &mut self,
+        response: &BlockMergeResponse,
+        base: &GloasPayload,
+    ) -> Option<GloasBidSubmission> {
+        let trace = base.submission.bid_trace();
+        if response.proposer_value <= trace.value {
+            MERGE_STORE.with_label_values(&["not_valuable"]).inc();
+            return None;
+        }
+        let payload = &response.execution_payload;
+        let message = GloasBidTrace {
+            trace: BidTrace {
+                slot: trace.slot,
+                parent_hash: payload.parent_hash,
+                block_hash: payload.block_hash,
+                builder_pubkey: trace.builder_pubkey,
+                proposer_pubkey: trace.proposer_pubkey,
+                proposer_fee_recipient: trace.proposer_fee_recipient,
+                gas_limit: payload.gas_limit,
+                gas_used: payload.gas_used,
+                value: response.proposer_value,
+            },
+            parent_block_root: base.submission.message.parent_block_root,
+        };
+        let merged = merged_gloas_submission(response, message)?;
+        self.record_merged_block(response, trace.value, Original {
+            tx_count: base.submission.num_txs(),
+            blob_count: base.submission.num_blobs(),
+            gas_used: trace.gas_used,
+        });
+        self.best_merged_gloas.insert(base.submission.fee_recipient(), BestMergedGloas {
+            base_block_receive_ns: base.receive_ns,
+            max_merged_bid_age_ms: self.max_merged_bid_age_ms(&trace.builder_pubkey),
+            block_hash: payload.block_hash,
+            parent_hash: payload.parent_hash,
+            value: response.proposer_value,
+            builder_pubkey: trace.builder_pubkey,
+        });
+        MERGE_STORE.with_label_values(&["stored"]).inc();
+        MERGE_STORE_DELTA.observe(gwei(response.proposer_value.saturating_sub(trace.value)));
+        Some(merged)
+    }
+
+    fn max_merged_bid_age_ms(&self, builder_pubkey: &BlsPublicKeyBytes) -> u64 {
+        // Only `builder_id` is read here; it keys the per-builder staleness override.
+        let builder_id =
+            self.local_cache.get_builder_info(builder_pubkey).and_then(|i| i.builder_id);
+        self.config.block_merging_config.max_merged_bid_age_ms_for(builder_id.as_deref())
+    }
+
+    fn record_merged_block(
+        &self,
+        response: &BlockMergeResponse,
+        original_value: U256,
+        original: Original,
+    ) {
+        let mut trace = response.trace.clone();
+        trace.finalize_time_ns = utcnow_ns();
+        let total_merged_value = response
+            .builder_inclusions
+            .values()
+            .fold(U256::ZERO, |acc, inclusion| acc + inclusion.contribution);
+        self.local_cache.save_merged_block(MergedBlock {
+            slot: self.curr_bid_slot,
+            block_number: response.execution_payload.block_number,
+            original_block_hash: response.base_block_hash,
+            block_hash: response.execution_payload.block_hash,
+            original_value,
+            proposer_value: response.proposer_value,
+            total_merged_value,
+            base_builder_revenue: response.base_builder_revenue,
+            relay_revenue: response.relay_revenue,
+            original_tx_count: original.tx_count,
+            merged_tx_count: response.execution_payload.transactions.len(),
+            original_blob_count: original.blob_count,
+            merged_blob_count: response.blobs_bundle.blobs.len(),
+            original_gas_used: original.gas_used,
+            merged_gas_used: response.execution_payload.gas_used,
+            builder_inclusions: response.builder_inclusions.clone(),
+            trace,
+            unmerged_txs: response.unmerged_txs.clone(),
+            tx_builders: response.tx_builders.clone(),
+        });
     }
 
     #[timed]
@@ -208,8 +331,6 @@ impl BlockMerger {
             });
         }
 
-        let bid_slot = self.curr_bid_slot;
-
         let original_block_hash = original_payload.execution_payload.block_hash;
         if self.flagged_payment_tx_only_blocks.remove(&original_block_hash) {
             info!(
@@ -223,34 +344,10 @@ impl BlockMerger {
         let block_hash = response.execution_payload.block_hash;
         let response_value = response.proposer_value;
 
-        let mut trace = response.trace;
-        trace.finalize_time_ns = utcnow_ns();
-
-        let total_merged_value = response
-            .builder_inclusions
-            .values()
-            .fold(U256::ZERO, |acc, inclusion| acc + inclusion.contribution);
-
-        self.local_cache.save_merged_block(MergedBlock {
-            slot: bid_slot,
-            block_number: response.execution_payload.block_number,
-            original_block_hash: response.base_block_hash,
-            block_hash,
-            original_value,
-            proposer_value: response.proposer_value,
-            total_merged_value,
-            base_builder_revenue: response.base_builder_revenue,
-            relay_revenue: response.relay_revenue,
-            original_tx_count: original_payload.execution_payload.transactions.len(),
-            merged_tx_count: response.execution_payload.transactions.len(),
-            original_blob_count: original_payload.blobs_bundle.blobs.len(),
-            merged_blob_count: response.blobs_bundle.blobs.len(),
-            original_gas_used: original_payload.execution_payload.gas_used,
-            merged_gas_used: response.execution_payload.gas_used,
-            builder_inclusions: response.builder_inclusions,
-            trace,
-            unmerged_txs: response.unmerged_txs,
-            tx_builders: response.tx_builders,
+        self.record_merged_block(&response, original_value, Original {
+            tx_count: original_payload.execution_payload.transactions.len(),
+            blob_count: original_payload.blobs_bundle.blobs.len(),
+            gas_used: original_payload.execution_payload.gas_used,
         });
 
         trace!(%block_hash, "stored merged block in local cache");
@@ -278,11 +375,7 @@ impl BlockMerger {
         // address of the base block the merge was built from, so that a merge for one
         // builder's block can never be served in place of another builder's original bid.
         let coinbase = original_payload.execution_payload.fee_recipient;
-        // Only `builder_id` is read here; it keys the per-builder staleness override.
-        let builder_id =
-            self.local_cache.get_builder_info(&builder_pubkey).and_then(|i| i.builder_id);
-        let max_merged_bid_age_ms =
-            self.config.block_merging_config.max_merged_bid_age_ms_for(builder_id.as_deref());
+        let max_merged_bid_age_ms = self.max_merged_bid_age_ms(&builder_pubkey);
         self.best_merged_blocks.insert(coinbase, BestMergedBlock {
             base_block_receive_ns,
             max_merged_bid_age_ms,
@@ -319,6 +412,23 @@ struct BestMergedBlock {
     /// does not repeat the lookup per request.
     max_merged_bid_age_ms: u64,
     bid: PayloadEntry,
+}
+
+/// `BestMergedBlock` for a Gloas base; the payload itself sits in the auctioneer's store.
+struct BestMergedGloas {
+    base_block_receive_ns: u64,
+    max_merged_bid_age_ms: u64,
+    block_hash: B256,
+    parent_hash: B256,
+    value: U256,
+    builder_pubkey: BlsPublicKeyBytes,
+}
+
+/// What the merged block's record keeps of the base it improved on.
+struct Original {
+    tx_count: usize,
+    blob_count: usize,
+    gas_used: u64,
 }
 
 /// Checks whether the merged block kept the original builder's tx ordering completely
@@ -367,9 +477,10 @@ fn gwei(v: U256) -> f64 {
     wei / 1e9
 }
 
+/// Bids are `(value, block hash)`.
 fn merged_bid_higher(
-    merged_bid: &PayloadEntry,
-    original_bid: &PayloadEntry,
+    merged_bid: (U256, B256),
+    original_bid: (U256, B256),
     base_block_receive_ns: u64,
     original_bid_receive_ns: u64,
     max_merged_bid_age_ms: u64,
@@ -379,23 +490,20 @@ fn merged_bid_higher(
     let base_lag_ms = original_bid_receive_ns.saturating_sub(base_block_receive_ns) / 1_000_000;
     // Recorded for every decision, so the margin distribution shows both the
     // edge we win by and the ratchet we lose to.
-    let (direction, margin) = if merged_bid.value() > original_bid.value() {
-        ("ahead", *merged_bid.value() - *original_bid.value())
+    let (direction, margin) = if merged_bid.0 > original_bid.0 {
+        ("ahead", merged_bid.0 - original_bid.0)
     } else {
-        ("behind", *original_bid.value() - *merged_bid.value())
+        ("behind", original_bid.0 - merged_bid.0)
     };
     MERGED_BID_MARGIN.with_label_values(&[direction]).observe(gwei(margin));
 
     // If the current best bid has equal or higher value, we use that
-    if merged_bid.value() <= original_bid.value() {
+    if merged_bid.0 <= original_bid.0 {
         MERGED_BID_DECISION.with_label_values(&["not_higher"]).inc();
         MERGED_BID_AGE.with_label_values(&["not_higher"]).observe(base_lag_ms as f64);
         debug!(
             "merged bid {:?} with value {:?} is not higher than regular bid, using regular bid, value = {:?}, block_hash = {:?}",
-            merged_bid.block_hash(),
-            merged_bid.value(),
-            original_bid.value(),
-            original_bid.block_hash()
+            merged_bid.1, merged_bid.0, original_bid.0, original_bid.1
         );
         return false;
     }
@@ -405,21 +513,13 @@ fn merged_bid_higher(
         MERGED_BID_AGE.with_label_values(&["stale"]).observe(base_lag_ms as f64);
         debug!(
             "merged bid {:?} with value {:?} is based on a block {} ms older than the regular bid, using regular bid with value {:?}, block hash {:?}",
-            merged_bid.block_hash(),
-            merged_bid.value(),
-            base_lag_ms,
-            original_bid.value(),
-            original_bid.block_hash()
+            merged_bid.1, merged_bid.0, base_lag_ms, original_bid.0, original_bid.1
         );
         return false;
     }
 
     MERGED_BID_AGE.with_label_values(&["higher"]).observe(base_lag_ms as f64);
-    debug!(
-        "using merged bid, value = {:?}, block_hash = {:?}",
-        merged_bid.value(),
-        merged_bid.block_hash()
-    );
+    debug!("using merged bid, value = {:?}, block_hash = {:?}", merged_bid.0, merged_bid.1);
     true
 }
 
@@ -460,16 +560,19 @@ mod tests {
         let original_bid = bid(1);
         let base_receive_ns = 1_000_000_000;
 
+        let merged_bid = (*merged_bid.value(), *merged_bid.block_hash());
+        let original_bid = (*original_bid.value(), *original_bid.block_hash());
+
         assert!(merged_bid_higher(
-            &merged_bid,
-            &original_bid,
+            merged_bid,
+            original_bid,
             base_receive_ns,
             base_receive_ns + 250_000_000,
             250,
         ));
         assert!(!merged_bid_higher(
-            &merged_bid,
-            &original_bid,
+            merged_bid,
+            original_bid,
             base_receive_ns,
             base_receive_ns + 251_000_000,
             250,

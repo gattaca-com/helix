@@ -291,7 +291,6 @@ impl DecoderTile {
         // resolves tx bytes and caches blob sidecars itself when forwarding to the merge
         // builder — no need to do that work here on the submission hot path.
         let merging_data = if config.block_merging_config.is_enabled &&
-            !matches!(submission, Submission::Full(SignedBidSubmission::Gloas(_))) &&
             header.merge_type != MergeType::Pause &&
             !merge_data_denied
         {
