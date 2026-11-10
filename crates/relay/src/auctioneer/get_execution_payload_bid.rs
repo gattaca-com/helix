@@ -27,7 +27,14 @@ impl<B: BidAdjustor> Context<B> {
                 .block_merger
                 .gloas_header(entry)
                 .and_then(|block_hash| self.gloas_payloads.get(&block_hash));
-            self.gloas_builder_identity.sign_bid(&merged.unwrap_or(entry).bid, &self.chain_info)
+            let max_execution_payment = self
+                .builder_preferences
+                .max_execution_payment(&params.proposer_pubkey, params.slot);
+            self.gloas_builder_identity.sign_bid(
+                &merged.unwrap_or(entry).bid,
+                max_execution_payment,
+                &self.chain_info,
+            )
         });
         let _ = res_tx.send(result);
     }
@@ -233,7 +240,7 @@ mod tests {
         let identity = bid_identity(7);
 
         let signed_bid = <helix_types::SignedExecutionPayloadBid as ssz::Decode>::from_ssz_bytes(
-            &identity.sign_bid(&entry.bid, &chain_info).unwrap(),
+            &identity.sign_bid(&entry.bid, None, &chain_info).unwrap(),
         )
         .expect("the signed bid decodes as the consensus type");
 

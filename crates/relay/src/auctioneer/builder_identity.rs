@@ -50,6 +50,7 @@ impl GloasBuilderIdentity {
     pub fn sign_bid(
         &self,
         unsigned_bid: &[u8],
+        max_execution_payment: Option<u64>,
         chain_info: &ChainInfo,
     ) -> Result<Vec<u8>, ProposerApiError> {
         let mut bid = unsigned_bid.to_vec();
@@ -57,6 +58,9 @@ impl GloasBuilderIdentity {
             &mut bid,
             self.builder_index().ok_or(ProposerApiError::NoBidPrepared)?,
         );
+        if let Some(max_execution_payment) = max_execution_payment {
+            gloas::cap_bid_execution_payment(&mut bid, max_execution_payment);
+        }
         Ok(self.sign(gloas::bid_root(&bid), gloas::bid_slot(&bid), &bid, chain_info))
     }
 }

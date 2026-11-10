@@ -90,8 +90,6 @@ impl<A: Api> ProposerApi<A> {
             return Err(ProposerApiError::InternalServerError);
         };
 
-        // TODO(gloas): honor max_execution_payment when getExecutionPayloadBid serves a real
-        // bid; not consumed anywhere yet.
         match rx.await {
             Ok(res) => res.map(|()| StatusCode::ACCEPTED),
             Err(err) => {

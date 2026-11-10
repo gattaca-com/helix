@@ -531,6 +531,11 @@ pub fn set_bid_builder_index(bid: &mut [u8], builder_index: u64) {
     bid[156..164].copy_from_slice(&builder_index.to_le_bytes());
 }
 
+pub fn cap_bid_execution_payment(bid: &mut [u8], max_execution_payment: u64) {
+    let payment = ExecutionPayloadBidView::execution_payment(bid).min(max_execution_payment);
+    bid[180..188].copy_from_slice(&payment.to_le_bytes());
+}
+
 pub struct GloasBlock<'a>(&'a [u8]);
 
 impl<'a> GloasBlock<'a> {
