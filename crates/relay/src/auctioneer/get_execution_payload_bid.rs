@@ -7,7 +7,7 @@ use crate::{
     auctioneer::{
         bid_adjustor::BidAdjustor,
         context::Context,
-        types::{GetExecutionPayloadBidResult, SlotData},
+        types::{GetExecutionPayloadBidResult, ServedGloasBid, SlotData},
     },
 };
 
@@ -27,7 +27,14 @@ impl<B: BidAdjustor> Context<B> {
                 .block_merger
                 .gloas_header(entry)
                 .and_then(|block_hash| self.gloas_payloads.get(&block_hash));
-            self.gloas_builder_identity.sign_bid(&merged.unwrap_or(entry).bid, &self.chain_info)
+            let served = merged.unwrap_or(entry);
+            let signed_bid = self.gloas_builder_identity.sign_bid(&served.bid, &self.chain_info)?;
+            Ok(ServedGloasBid {
+                signed_bid,
+                trace: served.submission.bid_trace().clone(),
+                block_number: served.submission.block_number(),
+                extra_data: served.submission.extra_data().to_vec(),
+            })
         });
         let _ = res_tx.send(result);
     }

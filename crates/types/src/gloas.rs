@@ -197,6 +197,10 @@ impl GloasBidSubmission {
         Address::from(*ExecutionPayloadView::fee_recipient(self.execution_payload()))
     }
 
+    pub fn extra_data(&self) -> &[u8] {
+        ExecutionPayloadView::extra_data(self.execution_payload())
+    }
+
     pub fn num_txs(&self) -> usize {
         let txs = ExecutionPayloadView::transactions(self.execution_payload());
         if txs.is_empty() { 0 } else { u32_at(txs, 0) / 4 }
