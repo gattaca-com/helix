@@ -34,7 +34,6 @@ pub const PATH_GET_PAYLOAD: &str = "/blinded_blocks";
 
 // Gloas (ePBS) builder-API additions, per
 // https://github.com/ethereum/builder-specs/blob/main/specs/gloas/builder.md.
-// TODO(gloas): not yet wired to the auctioneer; see gattaca-com/helix#489.
 pub const PATH_GET_EXECUTION_PAYLOAD_BID: &str =
     "/execution_payload_bid/{slot}/{parent_hash}/{parent_root}/{proposer_pubkey}";
 pub const PATH_SUBMIT_BUILDER_PREFERENCES: &str = "/builder_preferences/{proposer_pubkey}";
