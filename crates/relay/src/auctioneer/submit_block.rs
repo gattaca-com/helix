@@ -307,9 +307,18 @@ impl<B: BidAdjustor> Context<B> {
         submission_id: uuid::Uuid,
         producers: &mut HelixSpineProducers,
     ) {
-        let block_hash = *entry.block_hash();
+        self.record_entry(&entry, is_optimistic, submission_id, producers);
+        self.payloads.insert(*entry.block_hash(), entry);
+    }
 
-        if let PayloadEntry::Submission(s) = &entry {
+    fn record_entry(
+        &mut self,
+        entry: &PayloadEntry,
+        is_optimistic: bool,
+        submission_id: uuid::Uuid,
+        producers: &mut HelixSpineProducers,
+    ) {
+        if let PayloadEntry::Submission(s) = entry {
             self.record_submission(
                 SignedBidSubmission::Fulu(s.signed_bid_submission.clone()),
                 s.submission_trace,
@@ -319,8 +328,6 @@ impl<B: BidAdjustor> Context<B> {
                 producers,
             );
         }
-
-        self.payloads.insert(block_hash, entry);
     }
 
     fn record_submission(
