@@ -537,6 +537,9 @@ impl State {
                 }) && ctx.sort_simulation_result(&mut result, producers);
 
                 ctx.handle_simulation_result(result, already_sent, producers);
+                if let Some(state) = Self::maybe_start_broacasting(ctx, slot_data) {
+                    *self = state;
+                }
             }
 
             // gossiped payload
@@ -810,8 +813,8 @@ impl State {
     }
 
     /// Check whether we received the payload we were waiting for the pending get_payload, this
-    /// makes sense to be called only when we add a new payload ie. when receiving a new submission
-    /// or from gossip
+    /// makes sense to be called only when we add a new payload ie. when receiving a new submission,
+    /// on a passing simulation of a quarantined one, or from gossip
     fn maybe_start_broacasting<B: BidAdjustor>(
         ctx: &mut Context<B>,
         slot_data: &SlotData,

@@ -71,6 +71,17 @@ impl BidTrace {
     pub fn slot(&self) -> Slot {
         Slot::from(self.slot)
     }
+
+    pub fn eq_except_builder(&self, other: &BidTrace) -> bool {
+        self.slot == other.slot &&
+            self.parent_hash == other.parent_hash &&
+            self.block_hash == other.block_hash &&
+            self.proposer_pubkey == other.proposer_pubkey &&
+            self.proposer_fee_recipient == other.proposer_fee_recipient &&
+            self.gas_limit == other.gas_limit &&
+            self.gas_used == other.gas_used &&
+            self.value == other.value
+    }
 }
 
 #[allow(clippy::large_enum_variant)]

@@ -46,7 +46,8 @@ use crate::{
         builder_preferences::BuilderPreferencesStore,
         seen_blocks::SeenBlocks,
         types::{
-            GloasPayload, PayloadEntry, PendingPayload, SlotData, SubmissionRef, SubmissionRefKind,
+            GloasPayload, PayloadEntry, PendingPayload, QuarantinedPayload, SlotData,
+            SubmissionRef, SubmissionRefKind,
         },
     },
     simulator::{
@@ -64,6 +65,9 @@ pub struct SlotContext {
     pub hydration_cache: HydrationCache,
     pub payloads: FxHashMap<B256, PayloadEntry>,
     pub gloas_payloads: PayloadStore<GloasPayload>,
+    /// Quarantined payloads awaiting simulation. Keyed with the block hash too, since an
+    /// adjusted block may be simulated under its base submission's id.
+    pub quarantined_payloads: FxHashMap<(Uuid, B256), QuarantinedPayload>,
     pub block_merger: BlockMerger,
 }
 
@@ -189,6 +193,10 @@ impl<B: BidAdjustor> Context<B> {
                 Default::default(),
             ),
             gloas_payloads: PayloadStore::with_capacity(EXPECTED_PAYLOADS_PER_SLOT),
+            quarantined_payloads: FxHashMap::with_capacity_and_hasher(
+                EXPECTED_PAYLOADS_PER_SLOT,
+                Default::default(),
+            ),
             block_merger,
         };
 
@@ -337,7 +345,10 @@ impl<B: BidAdjustor> Context<B> {
         self.auctioneer_handle.clear_inflight_payloads();
         self.decoded.clear();
 
-        if !self.payloads.is_empty() || !self.gloas_payloads.is_empty() {
+        if !self.payloads.is_empty() ||
+            !self.gloas_payloads.is_empty() ||
+            !self.quarantined_payloads.is_empty()
+        {
             // here we need to deallocate a lot of data, taking more than 1s on busy slots
             // this is not a big issue since it 's only at the beginning of the slot, but it blocks
             // the full event loop, which is not ideal. An alternative would be to use a
@@ -350,6 +361,10 @@ impl<B: BidAdjustor> Context<B> {
                 FxHashMap::with_capacity_and_hasher(EXPECTED_PAYLOADS_PER_SLOT, Default::default()),
             );
             let gloas_payloads_to_drop = self.gloas_payloads.rotate(EXPECTED_PAYLOADS_PER_SLOT);
+            let quarantined_to_drop = std::mem::replace(
+                &mut self.quarantined_payloads,
+                FxHashMap::with_capacity_and_hasher(EXPECTED_PAYLOADS_PER_SLOT, Default::default()),
+            );
             let dealloc_core = self.config.cores.dealloc;
             std::thread::spawn(move || {
                 // Unpinned, this lands on whatever core the OS picks -- including a
@@ -357,10 +372,13 @@ impl<B: BidAdjustor> Context<B> {
                 if let Some(core) = dealloc_core {
                     helix_common::utils::pin_thread_to_core(core);
                 }
-                let to_drop = payloads_to_drop.len() + gloas_payloads_to_drop.len();
+                let to_drop = payloads_to_drop.len() +
+                    gloas_payloads_to_drop.len() +
+                    quarantined_to_drop.len();
                 let start = Instant::now();
                 drop(payloads_to_drop);
                 drop(gloas_payloads_to_drop);
+                drop(quarantined_to_drop);
                 info!("dropped {} payloads in {:?}", to_drop, start.elapsed())
             });
         }
