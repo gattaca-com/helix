@@ -328,10 +328,7 @@ impl GloasPayload {
     }
 }
 
-/// A payload from an unknown builder, or from a known one claiming another builder's block
-/// hash, held until the simulator has recomputed the hash: the relay never does, and anyone
-/// can claim a leaked hash. Stored only on a passing simulation, so such a claim never sits
-/// behind another builder's bid.
+/// Payload whose block hash is unverified, stored only once it passes simulation.
 #[allow(clippy::large_enum_variant)]
 pub enum QuarantinedPayload {
     Fulu(PayloadEntry),
@@ -380,11 +377,8 @@ impl PayloadEntry {
         matches!(self, Self::Submission(s) if s.bid_adjustment_data.is_some())
     }
 
-    /// Whether `bid_trace` may share this entry's block hash. The builder key may differ: one
-    /// builder can submit the same block under several keys, and who may claim a stored hash
-    /// is decided when choosing whether to process a submission optimistically. A gossiped or
-    /// merged payload keeps only the value and builder of its bid, so only the value is
-    /// compared.
+    /// Whether `bid_trace` may share this entry's block hash: only the builder key may differ.
+    /// Gossiped and merged entries keep only the value.
     pub fn matches_bid_trace(&self, bid_trace: &BidTrace) -> bool {
         match self {
             Self::Submission(s) => s.signed_bid_submission.bid_trace().eq_except_builder(bid_trace),
@@ -662,8 +656,6 @@ mod tests {
         }
     }
 
-    /// Only the builder key may differ from the stored trace; the value in particular is
-    /// served from the stored entry.
     #[test]
     fn a_stored_payload_answers_only_to_its_own_bid_trace() {
         let submission = SignedBidSubmissionFulu::test_random();

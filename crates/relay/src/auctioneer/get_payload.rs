@@ -72,8 +72,7 @@ impl<B: BidAdjustor> Context<B> {
         maybe_block_hash
     }
 
-    /// This should be called only when a payload is stored: a new submission, a passing
-    /// simulation of a quarantined one, or a gossiped payload
+    /// Call only when a payload is stored (submission, released quarantine, gossip)
     #[must_use]
     pub(super) fn maybe_try_unblind(&mut self, slot_data: &SlotData) -> Option<B256> {
         let pending = self.pending_payload.take()?;

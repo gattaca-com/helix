@@ -26,9 +26,7 @@ impl<B: BidAdjustor> Context<B> {
             });
         }
 
-        // Stored entries serve their own trace, so a resubmission of the block may differ only
-        // in builder key. The previous Gloas generation counts too, since its payloads are
-        // still revealed.
+        // The previous Gloas generation counts too, since its payloads are still revealed.
         let bid_trace = submission.bid_trace();
         let trace_mismatch = match submission {
             Submission::Full(SignedBidSubmission::Gloas(_)) => self

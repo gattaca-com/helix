@@ -78,10 +78,8 @@ impl<B: BidAdjustor> Context<B> {
         let mut trace = submission_data.trace;
         let bid = Bid::from_submission_data(submission_data, payload_attributes.parent_root());
 
-        // Anyone can claim a leaked block hash and only the simulator recomputes it. A known
-        // builder is bound by its builder id and trusted not to overwrite its own bids with bad
-        // data, so its payload is stored at once unless another builder stored the hash first.
-        // Every other payload is quarantined until it passes simulation.
+        // Block hashes leak and only the simulator checks them. Known builders may claim an
+        // unclaimed or own-builder_id hash; everything else is quarantined until simulated.
         let stored_builder = match &submission_data.submission {
             Submission::Full(SignedBidSubmission::Gloas(_)) => self
                 .gloas_payloads
@@ -320,7 +318,7 @@ impl<B: BidAdjustor> Context<B> {
             Ok(trace) => {
                 let bid = result.bid.as_mut().expect("bid always Some on Ok path");
                 let block_hash = bid.block_hash;
-                // The simulator recomputed the block hash, so the payload may now back a bid.
+                // Block hash verified: release from quarantine.
                 match quarantined {
                     Some(QuarantinedPayload::Fulu(entry)) => {
                         self.payloads.insert(block_hash, entry);

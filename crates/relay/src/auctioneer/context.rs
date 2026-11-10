@@ -65,8 +65,7 @@ pub struct SlotContext {
     pub hydration_cache: HydrationCache,
     pub payloads: FxHashMap<B256, PayloadEntry>,
     pub gloas_payloads: PayloadStore<GloasPayload>,
-    /// Quarantined payloads awaiting simulation. Keyed with the block hash too, since an
-    /// adjusted block may be simulated under its base submission's id.
+    /// Awaiting simulation. Block hash in the key: adjustments may reuse the submission id.
     pub quarantined_payloads: FxHashMap<(Uuid, B256), QuarantinedPayload>,
     pub block_merger: BlockMerger,
 }
