@@ -1,13 +1,20 @@
-use std::sync::Arc;
+use std::{net::SocketAddr, sync::Arc};
 
-use axum::{Extension, extract::Path, http::HeaderMap, response::IntoResponse};
+use axum::{
+    Extension,
+    extract::{ConnectInfo, Path},
+    http::HeaderMap,
+    response::IntoResponse,
+};
 use helix_common::{
+    GetHeaderTrace, RequestTimings,
     api::{
-        HEADER_START_TIME_UNIX_MS, HEADER_TIMEOUT_MS, proposer_api::GetExecutionPayloadBidParams,
+        HEADER_START_TIME_UNIX_MS, HEADER_TIMEOUT_MS,
+        proposer_api::{GetExecutionPayloadBidParams, GetHeaderParams},
     },
-    api_provider::header_u64,
+    api_provider::{ApiProvider, header_ip_addr, header_u64},
     decoder::{Encoding, HEADER_SSZ},
-    utils::extract_request_id,
+    utils::{extract_request_id, utcnow_ns},
 };
 use helix_types::{ForkName, SignedBuilderRequestAuth, Slot, ssz_json};
 use http::{HeaderValue, header::CONTENT_TYPE};
@@ -15,9 +22,12 @@ use ssz::Decode;
 use tracing::{info, warn};
 
 use super::{ProposerApi, get_payload::fork_name_from_header};
-use crate::api::{
-    Api,
-    proposer::{CONSENSUS_VERSION_HEADER, error::ProposerApiError},
+use crate::{
+    api::{
+        Api,
+        proposer::{CONSENSUS_VERSION_HEADER, error::ProposerApiError},
+    },
+    spine::messages::GetHeaderServed,
 };
 
 impl<A: Api> ProposerApi<A> {
@@ -27,6 +37,8 @@ impl<A: Api> ProposerApi<A> {
     #[tracing::instrument(skip_all, err(level = tracing::Level::TRACE), fields(id =% extract_request_id(&headers), slot = params.slot))]
     pub async fn get_execution_payload_bid(
         Extension(proposer_api): Extension<Arc<ProposerApi<A>>>,
+        Extension(timings): Extension<RequestTimings>,
+        ConnectInfo(peer): ConnectInfo<SocketAddr>,
         headers: HeaderMap,
         Path(params): Path<GetExecutionPayloadBidParams>,
         body: bytes::Bytes,
@@ -63,6 +75,11 @@ impl<A: Api> ProposerApi<A> {
                     .verify_signature(&key, proposer_api.chain_info.request_auth_domain)
             })
             .map_err(|_| ProposerApiError::InvalidRequestAuthSignature)?;
+        let mut trace = GetHeaderTrace {
+            receive: timings.on_receive_ns,
+            validation_complete: utcnow_ns(),
+            ..Default::default()
+        };
 
         let (auth_slot, auth_data_len, auth_data) = super::auth_summary(&signed_request_auth);
         info!(
@@ -80,13 +97,47 @@ impl<A: Api> ProposerApi<A> {
             return Err(ProposerApiError::InternalServerError);
         };
 
-        let signed_bid = match rx.await {
+        let bid = match rx.await {
             Ok(res) => res?,
             Err(err) => {
                 warn!(%err, "failed to get execution payload bid from auctioneer");
                 return Err(ProposerApiError::InternalServerError);
             }
         };
+        trace.best_bid_fetched = utcnow_ns();
+
+        let served = GetHeaderServed {
+            slot: params.slot,
+            receive_ns: trace.receive,
+            best_bid_fetched_ns: trace.best_bid_fetched,
+            block_hash: bid.trace.block_hash,
+            value: bid.trace.value,
+            builder_pubkey: bid.trace.builder_pubkey,
+            proposer_ip: GetHeaderServed::ip_octets(header_ip_addr(&headers)),
+            is_mev_boost: false,
+            streamed: false,
+            proposer_pubkey: params.proposer_pubkey,
+            _pad: [0; 6],
+        };
+        proposer_api.api_provider.on_header_served(served, peer, &proposer_api.header_served);
+        proposer_api.db.save_get_header_call(
+            GetHeaderParams {
+                slot: params.slot,
+                parent_hash: params.parent_hash,
+                pubkey: params.proposer_pubkey,
+            },
+            bid.trace.block_hash,
+            bid.trace.value,
+            trace,
+            false,
+            proposer_api.api_provider.get_metadata(&headers),
+            bid.trace.builder_pubkey,
+            bid.trace.proposer_fee_recipient,
+            bid.block_number,
+            bid.extra_data,
+        );
+        info!(block_hash =% bid.trace.block_hash, value =? bid.trace.value, "delivering bid");
+        let signed_bid = bid.signed_bid;
 
         match Encoding::from_accept(&headers) {
             Encoding::Json => {

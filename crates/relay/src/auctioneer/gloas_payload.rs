@@ -2,8 +2,12 @@ use std::{sync::Arc, time::Duration};
 
 use alloy_primitives::B256;
 use bytes::Bytes;
-use helix_common::{beacon::MultiBeaconClient, chain_info::ChainInfo, spawn_tracked};
-use helix_types::{ForkName, GloasBidSubmission, Slot};
+use helix_common::{
+    Filtering, GetPayloadTrace, beacon::MultiBeaconClient, chain_info::ChainInfo, spawn_tracked,
+    utils::utcnow_ns,
+};
+use helix_database::types::SavePayloadParams;
+use helix_types::{ForkName, GloasBidSubmission, PayloadAndBlobs, Slot, payload_from_v3};
 use tracing::{error, info, warn};
 
 use crate::auctioneer::{
@@ -67,6 +71,36 @@ impl<B: BidAdjustor> Context<B> {
             &self.chain_info,
         );
         spawn_tracked!(reveal_envelope(self.beacon_client.clone(), envelope.into(), slot));
+
+        let submission = entry.submission.clone();
+        let proposer_fee_recipient = entry.fee_recipient;
+        let db = self.db.clone();
+        spawn_tracked!(async move {
+            let Some(execution_payload) = payload_from_v3(submission.payload_v3()) else {
+                error!(%slot, bid_block_hash = %block.bid_block_hash, "revealed payload does not convert for storage");
+                return;
+            };
+            let trace = submission.bid_trace();
+            let now = utcnow_ns();
+            db.save_delivered_payload(SavePayloadParams {
+                slot: slot.as_u64(),
+                builder_pub_key: trace.builder_pubkey,
+                proposer_pub_key: trace.proposer_pubkey,
+                value: trace.value,
+                proposer_fee_recipient,
+                payload: PayloadAndBlobs {
+                    execution_payload: Arc::new(execution_payload),
+                    blobs_bundle: Arc::new(submission.bundle()),
+                },
+                latency_trace: GetPayloadTrace {
+                    receive: now,
+                    on_deliver_payload: now,
+                    ..Default::default()
+                },
+                user_agent: None,
+                filtering: Filtering::default(),
+            });
+        });
     }
 }
 

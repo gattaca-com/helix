@@ -76,7 +76,14 @@ impl SubmissionRef {
 
 pub type GetHeaderResult = Result<PayloadEntry, ProposerApiError>;
 pub type GetPayloadResult = Result<GetPayloadResultData, ProposerApiError>;
-pub type GetExecutionPayloadBidResult = Result<Vec<u8>, ProposerApiError>;
+pub type GetExecutionPayloadBidResult = Result<ServedGloasBid, ProposerApiError>;
+
+pub struct ServedGloasBid {
+    pub signed_bid: Vec<u8>,
+    pub trace: BidTrace,
+    pub block_number: u64,
+    pub extra_data: Vec<u8>,
+}
 pub type SubmitBuilderPreferencesResult = Result<(), ProposerApiError>;
 
 versioned_struct!(InternalBidSubmissionHeader =>
