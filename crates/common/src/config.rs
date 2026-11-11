@@ -766,11 +766,8 @@ pub enum Route {
     MergedTxs,
     PromoteBuilder,
     Blacklist,
-    /// Gloas (ePBS): not yet wired to the auctioneer, see docs/gloas-support-plan.md.
     GetExecutionPayloadBid,
-    /// Gloas (ePBS): not yet wired to the auctioneer, see docs/gloas-support-plan.md.
     SubmitBuilderPreferences,
-    /// Gloas (ePBS): not yet wired to the auctioneer, see docs/gloas-support-plan.md.
     SubmitSignedBeaconBlock,
 }
 
