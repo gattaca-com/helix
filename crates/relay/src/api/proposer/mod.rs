@@ -117,6 +117,17 @@ pub(crate) fn auth_summary(auth: &helix_types::SignedBuilderRequestAuth) -> (u64
     (auth.message.slot, data.len(), rendered)
 }
 
+pub(crate) fn check_request_auth_data(
+    accepted: &[String],
+    auth: &helix_types::SignedBuilderRequestAuth,
+) -> Result<(), ProposerApiError> {
+    if accepted.is_empty() || accepted.iter().any(|d| d.as_bytes() == &auth.message.data[..]) {
+        Ok(())
+    } else {
+        Err(ProposerApiError::RequestAuthDataMismatch)
+    }
+}
+
 const CONSENSUS_VERSION_HEADER: &str = "Eth-Consensus-Version";
 
 #[cfg(test)]
