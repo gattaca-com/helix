@@ -537,6 +537,9 @@ impl State {
                 }) && ctx.sort_simulation_result(&mut result, producers);
 
                 ctx.handle_simulation_result(result, already_sent, producers);
+                if let Some(state) = Self::maybe_start_broacasting(ctx, slot_data) {
+                    *self = state;
+                }
             }
 
             // gossiped payload

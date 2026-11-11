@@ -18,7 +18,7 @@ use crate::{
         bid_adjustor::BidAdjustor,
         bid_sorter::Bid,
         context::{Context, send_submission_result},
-        types::{GloasPayload, PayloadEntry, SlotData, SubmissionData},
+        types::{GloasPayload, PayloadEntry, QuarantinedPayload, SlotData, SubmissionData},
     },
     simulator::{SimPriority, ValidationRequest, ValidationResult},
     spine::{
@@ -78,10 +78,31 @@ impl<B: BidAdjustor> Context<B> {
         let mut trace = submission_data.trace;
         let bid = Bid::from_submission_data(submission_data, payload_attributes.parent_root());
 
+        // Block hashes leak and only the simulator checks them. Known builders may claim an
+        // unclaimed or own-builder_id hash; everything else is quarantined until simulated.
+        let stored_builder = match &submission_data.submission {
+            Submission::Full(SignedBidSubmission::Gloas(_)) => self
+                .gloas_payloads
+                .get_for_reveal(&bid.block_hash)
+                .map(|stored| stored.submission.bid_trace().builder_pubkey),
+            _ => self
+                .payloads
+                .get(&bid.block_hash)
+                .map(|stored| *stored.bid_data_ref().builder_pubkey),
+        };
+        let is_trusted_claim = builder_info.builder_id.is_some() &&
+            stored_builder.is_none_or(|stored| {
+                stored == bid.builder_pubkey ||
+                    self.cache
+                        .get_builder_info(&stored)
+                        .is_some_and(|s| s.builder_id == builder_info.builder_id)
+            });
+
         // Sorted before hydrating so the top bid update does not wait on the
         // payload: `validate_submission` already checked it can be hydrated.
         let (optimistic_version, is_top_bid) = if self.sims.accept_optimistic() &&
             !self.failsafe_triggered.load(Ordering::Relaxed) &&
+            is_trusted_claim &&
             self.should_process_optimistically(
                 is_pessimistic,
                 bid.value,
@@ -185,7 +206,15 @@ impl<B: BidAdjustor> Context<B> {
                 );
 
                 self.try_adjustments_dry_run(&entry, slot_data, producers);
-                self.store_data(entry, is_optimistic, submission_id, producers);
+                if is_trusted_claim {
+                    self.store_data(entry, is_optimistic, submission_id, producers);
+                } else {
+                    self.record_entry(&entry, is_optimistic, submission_id, producers);
+                    self.quarantined_payloads.insert(
+                        (submission_id, *entry.block_hash()),
+                        QuarantinedPayload::Fulu(entry),
+                    );
+                }
             }
             SignedBidSubmission::Gloas(submission) => {
                 let fee_recipient =
@@ -199,7 +228,13 @@ impl<B: BidAdjustor> Context<B> {
                     submission_id,
                     producers,
                 );
-                self.gloas_payloads.insert(entry.submission.bid_trace().block_hash, entry);
+                let block_hash = entry.submission.bid_trace().block_hash;
+                if is_trusted_claim {
+                    self.gloas_payloads.insert(block_hash, entry);
+                } else {
+                    self.quarantined_payloads
+                        .insert((submission_id, block_hash), QuarantinedPayload::Gloas(entry));
+                }
             }
         }
     }
@@ -246,6 +281,9 @@ impl<B: BidAdjustor> Context<B> {
         let Some(result) = &mut result.1 else {
             return false;
         };
+        let quarantined = result.bid.as_ref().and_then(|bid| {
+            self.quarantined_payloads.remove(&(result.submission_id, bid.block_hash))
+        });
 
         let need_send_result = !result.optimistic_version.is_optimistic();
         match &mut result.result {
@@ -280,6 +318,16 @@ impl<B: BidAdjustor> Context<B> {
             Ok(trace) => {
                 let bid = result.bid.as_mut().expect("bid always Some on Ok path");
                 let block_hash = bid.block_hash;
+                // Block hash verified: release from quarantine.
+                match quarantined {
+                    Some(QuarantinedPayload::Fulu(entry)) => {
+                        self.payloads.insert(block_hash, entry);
+                    }
+                    Some(QuarantinedPayload::Gloas(entry)) => {
+                        self.gloas_payloads.insert(block_hash, entry);
+                    }
+                    None => {}
+                }
                 self.bid_sorter.sort(*bid, trace, false, producers);
 
                 if need_send_result {
@@ -307,9 +355,18 @@ impl<B: BidAdjustor> Context<B> {
         submission_id: uuid::Uuid,
         producers: &mut HelixSpineProducers,
     ) {
-        let block_hash = *entry.block_hash();
+        self.record_entry(&entry, is_optimistic, submission_id, producers);
+        self.payloads.insert(*entry.block_hash(), entry);
+    }
 
-        if let PayloadEntry::Submission(s) = &entry {
+    fn record_entry(
+        &mut self,
+        entry: &PayloadEntry,
+        is_optimistic: bool,
+        submission_id: uuid::Uuid,
+        producers: &mut HelixSpineProducers,
+    ) {
+        if let PayloadEntry::Submission(s) = entry {
             self.record_submission(
                 SignedBidSubmission::Fulu(s.signed_bid_submission.clone()),
                 s.submission_trace,
@@ -319,8 +376,6 @@ impl<B: BidAdjustor> Context<B> {
                 producers,
             );
         }
-
-        self.payloads.insert(block_hash, entry);
     }
 
     fn record_submission(

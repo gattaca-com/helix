@@ -332,9 +332,17 @@ impl GloasPayload {
         Self { submission, bid, receive_ns, fee_recipient }
     }
 
-    pub fn has_bid_trace(&self, bid_trace: &BidTrace) -> bool {
-        self.submission.bid_trace() == bid_trace
+    /// See [`PayloadEntry::matches_bid_trace`].
+    pub fn matches_bid_trace(&self, bid_trace: &BidTrace) -> bool {
+        self.submission.bid_trace().eq_except_builder(bid_trace)
     }
+}
+
+/// Payload whose block hash is unverified, stored only once it passes simulation.
+#[allow(clippy::large_enum_variant)]
+pub enum QuarantinedPayload {
+    Fulu(PayloadEntry),
+    Gloas(GloasPayload),
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -379,15 +387,12 @@ impl PayloadEntry {
         matches!(self, Self::Submission(s) if s.bid_adjustment_data.is_some())
     }
 
-    /// Whether `bid_trace` describes this entry's bid. A gossiped or merged payload keeps
-    /// only the value and builder of its bid, so only those are compared.
-    pub fn has_bid_trace(&self, bid_trace: &BidTrace) -> bool {
+    /// Whether `bid_trace` may share this entry's block hash: only the builder key may differ.
+    /// Gossiped and merged entries keep only the value.
+    pub fn matches_bid_trace(&self, bid_trace: &BidTrace) -> bool {
         match self {
-            Self::Submission(s) => s.signed_bid_submission.bid_trace() == bid_trace,
-            Self::Gossip(s) => {
-                s.bid_data.value == bid_trace.value &&
-                    s.bid_data.builder_pubkey == bid_trace.builder_pubkey
-            }
+            Self::Submission(s) => s.signed_bid_submission.bid_trace().eq_except_builder(bid_trace),
+            Self::Gossip(s) => s.bid_data.value == bid_trace.value,
         }
     }
 
@@ -661,8 +666,6 @@ mod tests {
         }
     }
 
-    /// The relay does not recompute block hashes, so only the stored trace vouches for the
-    /// stored payload.
     #[test]
     fn a_stored_payload_answers_only_to_its_own_bid_trace() {
         let submission = SignedBidSubmissionFulu::test_random();
@@ -677,11 +680,11 @@ mod tests {
             None,
         );
 
-        assert!(entry.has_bid_trace(&stored), "a resubmission of the same block");
+        assert!(entry.matches_bid_trace(&stored), "a resubmission of the same block");
         let raised = BidTrace { value: stored.value ^ U256::from(1), ..stored.clone() };
-        assert!(!entry.has_bid_trace(&raised));
-        let mut rebranded = stored;
-        rebranded.builder_pubkey.0[0] ^= 1;
-        assert!(!entry.has_bid_trace(&rebranded));
+        assert!(!entry.matches_bid_trace(&raised));
+        let mut other_key = stored;
+        other_key.builder_pubkey.0[0] ^= 1;
+        assert!(entry.matches_bid_trace(&other_key), "the same block under another builder key");
     }
 }
