@@ -59,6 +59,9 @@ pub struct HelixSpine {
     /// Proposer API → DataGatherer: every header sent to a proposer.
     #[queue(size(2usize.pow(12)))]
     pub get_header_served: SpineQueue<messages::GetHeaderServed>,
+
+    #[queue(size(2usize.pow(12)))]
+    pub get_header_timed_out: SpineQueue<messages::GetHeaderTimedOut>,
 }
 
 #[derive(Deserialize)]

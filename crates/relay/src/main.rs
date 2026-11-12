@@ -237,6 +237,8 @@ async fn run(
             spine.spine.standalone_dcache_producer_for(TileName::from_str_truncate("Api"));
         let header_served =
             spine.spine.standalone_producer_for(TileName::from_str_truncate("ProposerApi"));
+        let header_timed_out =
+            spine.spine.standalone_producer_for(TileName::from_str_truncate("ProposerApi"));
 
         start_api_service::<ApiProd>(
             config.clone(),
@@ -255,6 +257,7 @@ async fn run(
             registrations_handle,
             bid_producer,
             header_served,
+            header_timed_out,
             future_results.clone(),
             web_socket_send,
             alert_manager.clone(),
