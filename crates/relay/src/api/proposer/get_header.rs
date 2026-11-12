@@ -14,7 +14,11 @@ use axum::{
     http::HeaderMap,
     response::IntoResponse,
 };
-use flux::{spine::StandaloneProducer, timing::IngestionTime, utils::ArrayStr};
+use flux::{
+    spine::StandaloneProducer,
+    timing::{IngestionTime, Nanos},
+    utils::ArrayStr,
+};
 use helix_common::{
     GET_HEADER_REQUEST_CUTOFF_MS, GetHeaderTrace, RequestTimings, ValidatorPreferences,
     api::proposer_api::GetHeaderParams,
@@ -152,7 +156,6 @@ impl<A: Api> ProposerApi<A> {
         timing_guard.timed_out = Some((
             GetHeaderTimedOut {
                 slot: params.slot,
-                receive_ns: timings.on_receive_ns,
                 planned_hold_ms: sleep_time.map_or(0, |hold| hold.as_millis() as u64),
                 deadline_ms: timeout_ms.unwrap_or(0),
                 proposer_pubkey: params.pubkey,
@@ -164,6 +167,7 @@ impl<A: Api> ProposerApi<A> {
                     .unwrap_or_default(),
                 ..Default::default()
             },
+            Nanos(timings.on_receive_ns),
             proposer_api.header_timed_out.clone(),
         ));
 
@@ -295,7 +299,7 @@ struct TimeoutGuard<A: Api> {
     done_fetch: bool,
     started: Instant,
     reporter: Option<(IpAddr, Arc<A::ApiProvider>)>,
-    timed_out: Option<(GetHeaderTimedOut, Arc<StandaloneProducer<GetHeaderTimedOut>>)>,
+    timed_out: Option<(GetHeaderTimedOut, Nanos, Arc<StandaloneProducer<GetHeaderTimedOut>>)>,
 }
 
 impl<A: Api> TimeoutGuard<A> {
@@ -330,9 +334,10 @@ impl<A: Api> Drop for TimeoutGuard<A> {
             }
             return;
         }
-        if let Some((mut timed_out, producer)) = self.timed_out.take() {
+        if let Some((mut timed_out, received, producer)) = self.timed_out.take() {
             timed_out.hold_completed = self.done_sleep;
-            producer.produce_with_ingestion(timed_out, IngestionTime::now());
+            let received = IngestionTime::from_real_at(received, IngestionTime::now());
+            producer.produce_with_ingestion(timed_out, received);
         }
     }
 }
