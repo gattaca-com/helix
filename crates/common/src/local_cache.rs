@@ -18,7 +18,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use uuid::Uuid;
 
 use crate::{
-    BuilderConfig, BuilderInfo, PromotionMode, ProposerDuty, SignedValidatorRegistrationEntry,
+    BuilderConfig, BuilderInfo, Filtering, PromotionMode, ProposerDuty,
+    SignedValidatorRegistrationEntry,
     api::{
         builder_api::{
             BuilderGetValidatorsResponseEntry, InclusionListWithKey, InclusionListWithMetadata,
@@ -496,6 +497,7 @@ impl LocalCache {
         &self,
         registration: &SignedValidatorRegistration,
         api_key: Option<Uuid>,
+        filtering: Filtering,
         headers: &HeaderMap,
         api_provider: &impl ApiProvider,
     ) -> RegistrationUpdate {
@@ -521,11 +523,16 @@ impl LocalCache {
             return RegistrationUpdate::Unchanged;
         }
 
+        let stored = &existing_entry.registration_info.preferences;
+        // A validator registering through both regional and global URLs is taken as not caring
+        // about filtering, so global replaces regional; regional never replaces global until the
+        // validator re-signs.
         let update_needed = existing.timestamp <
             new.timestamp.saturating_sub(VALIDATOR_REGISTRATION_UPDATE_INTERVAL) ||
             fee_recipient_changed ||
             gas_limit_changed ||
-            existing_entry.registration_info.preferences.api_key != api_key;
+            stored.api_key != api_key ||
+            (stored.filtering == Filtering::Regional && filtering == Filtering::Global);
         // Validators re-post the same registration every epoch; only ask the provider about
         // one that would change something, so those re-posts are skipped, not refused.
         if !update_needed {
@@ -585,7 +592,7 @@ mod tests {
     use helix_types::{ValidatorRegistration, get_fixed_pubkey_bytes, get_fixed_secret};
 
     use super::*;
-    use crate::{BuilderConfig, api_provider::DefaultApiProvider};
+    use crate::{BuilderConfig, ValidatorPreferences, api_provider::DefaultApiProvider};
 
     #[test]
     fn scheduled_keys_give_bls_verify_verdicts() {
@@ -822,6 +829,7 @@ mod tests {
             cache.registration_update(
                 &registration,
                 api_key,
+                Filtering::Global,
                 &HeaderMap::new(),
                 &DefaultApiProvider,
             )
@@ -836,6 +844,47 @@ mod tests {
             RegistrationUpdate::Rejected
         );
         assert_eq!(update(registration(101, other), None), RegistrationUpdate::Required);
+    }
+
+    /// A re-post through the global URL asks to replace a stored regional preference; a re-post
+    /// through the regional URL never replaces a stored global one.
+    #[test]
+    fn registration_update_global_replaces_regional() {
+        let cache = LocalCache::new();
+        let [regional, global] = [BlsPublicKeyBytes::random(), BlsPublicKeyBytes::random()];
+        let registration = |pubkey| SignedValidatorRegistration {
+            message: ValidatorRegistration {
+                fee_recipient: Address::repeat_byte(1),
+                gas_limit: 60_000_000,
+                timestamp: 100,
+                pubkey,
+            },
+            signature: Default::default(),
+        };
+        cache.save_validator_registrations(
+            [(regional, Filtering::Regional), (global, Filtering::Global)].into_iter().map(
+                |(pubkey, filtering)| ValidatorRegistrationInfo {
+                    registration: registration(pubkey),
+                    preferences: ValidatorPreferences { filtering, ..Default::default() },
+                },
+            ),
+            None,
+        );
+        let update = |pubkey, filtering| {
+            cache.registration_update(
+                &registration(pubkey),
+                None,
+                filtering,
+                &HeaderMap::new(),
+                &DefaultApiProvider,
+            )
+        };
+
+        assert_eq!(update(regional, Filtering::Regional), RegistrationUpdate::Unchanged);
+        // Reaches the provider, which decides; the default one refuses unsigned changes.
+        assert_eq!(update(regional, Filtering::Global), RegistrationUpdate::Rejected);
+        assert_eq!(update(global, Filtering::Regional), RegistrationUpdate::Unchanged);
+        assert_eq!(update(global, Filtering::Global), RegistrationUpdate::Unchanged);
     }
 
     #[tokio::test]

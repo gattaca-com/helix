@@ -93,6 +93,7 @@ impl<A: Api> ProposerApi<A> {
                     match proposer_api.local_cache.registration_update(
                         reg,
                         validator_preferences.api_key,
+                        validator_preferences.filtering,
                         &headers,
                         proposer_api.api_provider.as_ref(),
                     ) {
