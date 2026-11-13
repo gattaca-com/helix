@@ -1,7 +1,7 @@
 use std::{ops::Deref, sync::Arc};
 
 use alloy_primitives::{B256, Bytes};
-use helix_types::Slot;
+use helix_types::{BlsPublicKeyBytes, Slot};
 use parking_lot::RwLock;
 use rustc_hash::FxHashMap;
 use tracing::{error, info};
@@ -53,10 +53,35 @@ pub struct SlotDuties {
     pub new_duties: Option<Vec<BuilderGetValidatorsResponseEntry>>,
 }
 
+#[derive(Default)]
+struct ProposerDuties {
+    entries: Vec<BuilderGetValidatorsResponse>,
+    max_execution_payments: FxHashMap<(BlsPublicKeyBytes, u64), u64>,
+}
+
+impl ProposerDuties {
+    fn serialize(&mut self) -> Option<Bytes> {
+        for entry in &mut self.entries {
+            entry.preferences.max_execution_payment = self
+                .max_execution_payments
+                .get(&(entry.entry.message.pubkey, entry.slot.as_u64()))
+                .copied();
+        }
+        match serde_json::to_vec(&self.entries) {
+            Ok(duty_bytes) => Some(Bytes::from(duty_bytes)),
+            Err(err) => {
+                error!(%err, "failed to serialize proposer duties to JSON");
+                None
+            }
+        }
+    }
+}
+
 /// All information that is refreshed every slot. Thread-safe and cheaply cloneable.
 #[derive(Clone)]
 pub struct CurrentSlotInfo {
     curr_slot_info: Arc<RwLock<(u64, Option<BuilderGetValidatorsResponseEntry>)>>,
+    proposer_duties: Arc<RwLock<ProposerDuties>>,
     proposer_duties_response: Arc<RwLock<Option<Bytes>>>,
     payload_attributes: Arc<RwLock<FxHashMap<(B256, Slot), PayloadAttributesUpdate>>>,
 }
@@ -71,6 +96,7 @@ impl CurrentSlotInfo {
     pub fn new() -> Self {
         Self {
             curr_slot_info: Arc::new(RwLock::new((0, None))),
+            proposer_duties: Arc::new(RwLock::new(ProposerDuties::default())),
             proposer_duties_response: Arc::new(RwLock::new(None)),
             payload_attributes: Arc::new(RwLock::new(FxHashMap::default())),
         }
@@ -110,19 +136,23 @@ impl CurrentSlotInfo {
 
         *self.curr_slot_info.write() = (slot_update.slot.as_u64(), slot_update.next_duty);
 
+        let mut duties = self.proposer_duties.write();
+        duties.max_execution_payments.retain(|(_, slot), _| *slot > slot_update.slot.as_u64());
         if let Some(new_duties) = slot_update.new_duties {
-            let response: Vec<BuilderGetValidatorsResponse> =
-                new_duties.into_iter().map(|duty| duty.into()).collect();
-            match serde_json::to_vec(&response) {
-                Ok(duty_bytes) => {
-                    *self.proposer_duties_response.write() = Some(Bytes::from(duty_bytes))
-                }
-                Err(err) => {
-                    error!(%err, "failed to serialize proposer duties to JSON");
-                    *self.proposer_duties_response.write() = None;
-                }
-            }
+            duties.entries = new_duties.into_iter().map(|duty| duty.into()).collect();
+            *self.proposer_duties_response.write() = duties.serialize();
         }
+    }
+
+    pub fn set_max_execution_payment(
+        &self,
+        proposer_pubkey: BlsPublicKeyBytes,
+        slot: u64,
+        max: u64,
+    ) {
+        let mut duties = self.proposer_duties.write();
+        duties.max_execution_payments.insert((proposer_pubkey, slot), max);
+        *self.proposer_duties_response.write() = duties.serialize();
     }
 
     pub fn handle_new_payload_attributes(&self, payload_attributes: PayloadAttributesUpdate) {
