@@ -254,9 +254,11 @@ execution rather than as a hash mismatch.
   Gloas. Tracked in #576. This is a missing capability, not a broken one: the
   role refuses rather than merging into a block whose hash it cannot reproduce.
 - **The reth simulator.** No Amsterdam support; tracked in #518.
-- **Bid adjustments on Gloas, and dehydrated or mergeable Gloas submissions.**
-  Each is refused explicitly rather than decoded into a Fulu shape that would
-  drop the access list.
+- **Bid adjustments on Gloas, mergeable Gloas submissions, and dehydrated
+  Gloas submissions over HTTP.** Each is refused explicitly rather than decoded
+  into a Fulu shape that would drop the access list. Dehydrated Gloas
+  submissions are accepted over TCP with the `DEHYDRATED_V2` flag, in the v2
+  field order with the Gloas payload and requests.
 - **Inclusion lists** in the ethrex simulation role. A block violating a
   submitted list passes here and fails in `crates/simulator`.
 

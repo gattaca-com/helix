@@ -117,6 +117,16 @@ impl Submission {
         &self.bid_trace().parent_hash
     }
 
+    pub fn parent_block_root(&self) -> Option<B256> {
+        match self {
+            Submission::Full(SignedBidSubmission::Gloas(s)) => Some(s.message.parent_block_root),
+            Submission::Dehydrated(DehydratedBidSubmission::Gloas(s)) => {
+                Some(s.parent_block_root())
+            }
+            _ => None,
+        }
+    }
+
     pub fn slot(&self) -> Slot {
         Slot::from(self.bid_slot())
     }

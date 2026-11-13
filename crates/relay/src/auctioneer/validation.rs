@@ -1,7 +1,7 @@
 use alloy_primitives::B256;
 use flux_profiler::timed;
 use helix_common::{BuilderInfo, ForkKey, PayloadAttributesUpdate, is_local_dev};
-use helix_types::{BlockValidationError, ForkName, SignedBidSubmission, Submission};
+use helix_types::{BlockValidationError, ForkName, Submission};
 
 use crate::auctioneer::{
     bid_adjustor::BidAdjustor,
@@ -28,28 +28,26 @@ impl<B: BidAdjustor> Context<B> {
 
         // The previous Gloas generation counts too, since its payloads are still revealed.
         let bid_trace = submission.bid_trace();
-        let trace_mismatch = match submission {
-            Submission::Full(SignedBidSubmission::Gloas(_)) => self
-                .gloas_payloads
+        let trace_mismatch = if submission.fork_name() == ForkName::Gloas {
+            self.gloas_payloads
                 .get_for_reveal(&bid_trace.block_hash)
-                .is_some_and(|stored| !stored.matches_bid_trace(bid_trace)),
-            _ => self
-                .payloads
+                .is_some_and(|stored| !stored.matches_bid_trace(bid_trace))
+        } else {
+            self.payloads
                 .get(&bid_trace.block_hash)
-                .is_some_and(|stored| !stored.matches_bid_trace(bid_trace)),
+                .is_some_and(|stored| !stored.matches_bid_trace(bid_trace))
         };
         if trace_mismatch {
             return Err(BlockValidationError::BidTraceMismatch { block_hash: bid_trace.block_hash });
         }
 
-        let payload_attributes = match submission {
-            Submission::Full(SignedBidSubmission::Gloas(gloas)) => {
-                slot_data.payload_attributes_map.get(&ForkKey {
-                    parent_hash: *submission.parent_hash(),
-                    parent_root: gloas.message.parent_block_root,
-                })
+        let payload_attributes = match submission.parent_block_root() {
+            Some(parent_root) => slot_data
+                .payload_attributes_map
+                .get(&ForkKey { parent_hash: *submission.parent_hash(), parent_root }),
+            None => {
+                slot_data.attrs_for_submission(submission.parent_hash(), submission.prev_randao())
             }
-            _ => slot_data.attrs_for_submission(submission.parent_hash(), submission.prev_randao()),
         };
         let Some(payload_attributes) = payload_attributes else {
             return Err(BlockValidationError::UknnownParentHash {

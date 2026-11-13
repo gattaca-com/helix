@@ -1,0 +1,299 @@
+use alloy_primitives::{Address, B256};
+use bytes::Bytes;
+use silver_ssz::ssz_view::{EXECUTION_PAYLOAD_FIXED_GLOAS, ExecutionPayloadView};
+use ssz::{Decode, DecodeError, Encode};
+use ssz_derive::Decode;
+
+use super::{
+    Cache, DehydratedBlobsFuluV2, HydratedData, HydrationError, NEXT_FULL_ITEM, TX_KEY_SIZE,
+    cache_new_blob, cache_withdrawals, refs_resolvable, tx_cache_key,
+};
+use crate::{
+    BidTrace, BlockValidationError, BlsPublicKeyBytes, BlsSignatureBytes, GloasBidSubmission,
+    GloasBidTrace, SignedBidSubmission, Transaction, Withdrawals,
+    gloas::{
+        SUBMISSION_FIXED, payload_layout_ok, transaction_slices, validate_gloas_payload,
+        withdrawals_root_of_bytes,
+    },
+};
+
+const TRANSACTIONS_OFFSET_AT: usize = 504;
+const WITHDRAWALS_OFFSET_AT: usize = 508;
+const BLOCK_ACCESS_LIST_OFFSET_AT: usize = 528;
+
+#[derive(Debug, Clone)]
+pub struct DehydratedBidSubmissionGloas(Parts);
+
+#[derive(Debug, Clone, Decode)]
+struct Parts {
+    message: GloasBidTrace,
+    execution_payload: Vec<u8>,
+    blobs_bundle: DehydratedBlobsFuluV2,
+    execution_requests: Vec<u8>,
+    signature: BlsSignatureBytes,
+    tx_root: Option<B256>,
+    tx_refs: Vec<u64>,
+    withdrawals_ref: u64,
+}
+
+impl Decode for DehydratedBidSubmissionGloas {
+    fn is_ssz_fixed_len() -> bool {
+        false
+    }
+
+    fn from_ssz_bytes(bytes: &[u8]) -> Result<Self, DecodeError> {
+        let parts = Parts::from_ssz_bytes(bytes)?;
+        if !payload_layout_ok(&parts.execution_payload) {
+            return Err(DecodeError::BytesInvalid("execution payload layout".to_string()));
+        }
+        Ok(Self(parts))
+    }
+}
+
+impl DehydratedBidSubmissionGloas {
+    fn payload(&self) -> &[u8] {
+        &self.0.execution_payload
+    }
+
+    pub fn bid_trace(&self) -> &BidTrace {
+        &self.0.message.trace
+    }
+
+    pub fn parent_block_root(&self) -> B256 {
+        self.0.message.parent_block_root
+    }
+
+    pub fn fee_recipient(&self) -> Address {
+        Address::from(*ExecutionPayloadView::fee_recipient(self.payload()))
+    }
+
+    pub fn timestamp(&self) -> u64 {
+        ExecutionPayloadView::timestamp(self.payload())
+    }
+
+    pub fn block_number(&self) -> u64 {
+        ExecutionPayloadView::block_number(self.payload())
+    }
+
+    pub fn prev_randao(&self) -> &B256 {
+        <&B256>::from(ExecutionPayloadView::prev_randao(self.payload()))
+    }
+
+    pub fn num_txs(&self) -> usize {
+        self.0.tx_refs.len()
+    }
+
+    pub fn withdrawals_ref(&self) -> u64 {
+        self.0.withdrawals_ref
+    }
+
+    pub fn withdrawal_root(&self) -> Option<B256> {
+        (self.0.withdrawals_ref == 0).then(|| withdrawals_root_of_bytes(self.withdrawals()))
+    }
+
+    pub fn validate(&self) -> Result<(), BlockValidationError> {
+        validate_gloas_payload(self.bid_trace(), self.payload())
+    }
+
+    pub fn set_builder_pubkey_for_test(&mut self, pubkey: BlsPublicKeyBytes) {
+        self.0.message.trace.builder_pubkey = pubkey;
+    }
+
+    fn withdrawals(&self) -> &[u8] {
+        let payload = self.payload();
+        &payload[ExecutionPayloadView::withdrawals_offset(payload) as usize..
+            ExecutionPayloadView::block_access_list_offset(payload) as usize]
+    }
+
+    fn full_txs(&self) -> impl ExactSizeIterator<Item = &[u8]> {
+        transaction_slices(ExecutionPayloadView::transactions(self.payload()))
+    }
+
+    pub(super) fn can_hydrate(&self, cache: &Cache, max_blobs_per_block: usize) -> bool {
+        refs_resolvable(
+            &self.0.tx_refs,
+            self.full_txs().map(|tx| tx.len()),
+            &self.0.blobs_bundle,
+            self.0.withdrawals_ref,
+            cache,
+            max_blobs_per_block,
+        )
+    }
+
+    pub(super) fn feed(&self, cache: &mut Cache) {
+        if self.0.withdrawals_ref == 0 &&
+            let Ok(withdrawals) = Withdrawals::from_ssz_bytes(self.withdrawals())
+        {
+            cache_withdrawals(&mut cache.withdrawals, &withdrawals);
+        }
+        for tx in self.full_txs() {
+            if tx.len() >= TX_KEY_SIZE {
+                let tx = Transaction(Bytes::copy_from_slice(tx).into());
+                cache.transactions.insert(tx_cache_key(&tx), tx);
+            }
+        }
+        for item in &self.0.blobs_bundle.new_items {
+            cache_new_blob(&mut cache.blobs_fulu, item.clone());
+        }
+    }
+
+    pub(super) fn hydrate(
+        self,
+        cache: &mut Cache,
+        max_blobs_per_block: usize,
+    ) -> Result<HydratedData, HydrationError> {
+        let Parts {
+            message,
+            execution_payload,
+            blobs_bundle,
+            execution_requests,
+            signature,
+            tx_root,
+            tx_refs,
+            withdrawals_ref,
+        } = self.0;
+        let dehydrated = execution_payload.as_slice();
+        let withdrawals_offset = ExecutionPayloadView::withdrawals_offset(dehydrated) as usize;
+        let block_access_list_offset =
+            ExecutionPayloadView::block_access_list_offset(dehydrated) as usize;
+        let mut last_err = Ok(());
+
+        let withdrawals = if withdrawals_ref != 0 {
+            match cache.withdrawals.get(&withdrawals_ref) {
+                Some((withdrawals, _)) => withdrawals.as_ssz_bytes(),
+                None => {
+                    last_err = Err(HydrationError::UnknownWithdrawals { key: withdrawals_ref });
+                    Vec::new()
+                }
+            }
+        } else {
+            let inline = &dehydrated[withdrawals_offset..block_access_list_offset];
+            if let Ok(withdrawals) = Withdrawals::from_ssz_bytes(inline) {
+                cache_withdrawals(&mut cache.withdrawals, &withdrawals);
+            }
+            inline.to_vec()
+        };
+
+        let mut full = transaction_slices(ExecutionPayloadView::transactions(dehydrated));
+        let table = 4 * tx_refs.len();
+        let mut tx_list = Vec::with_capacity(table);
+        let mut tx_body = Vec::new();
+        let mut tx_cache_hits = 0;
+        for (index, &tx_ref) in tx_refs.iter().enumerate() {
+            let tx: &[u8] = if tx_ref == NEXT_FULL_ITEM {
+                let Some(tx) = full.next() else {
+                    last_err = Err(HydrationError::MissingFullTx { index });
+                    continue;
+                };
+                if tx.len() < TX_KEY_SIZE {
+                    last_err = Err(HydrationError::InvalidTxLength { length: tx.len(), index });
+                } else {
+                    let cached = Transaction(Bytes::copy_from_slice(tx).into());
+                    cache.transactions.insert(tx_cache_key(&cached), cached);
+                }
+                tx
+            } else if let Some(cached) = cache.transactions.get(&tx_ref) {
+                tx_cache_hits += 1;
+                cached
+            } else {
+                last_err = Err(HydrationError::UnknownTxHash { index, hash: tx_ref });
+                continue;
+            };
+            tx_list.extend_from_slice(&((table + tx_body.len()) as u32).to_le_bytes());
+            tx_body.extend_from_slice(tx);
+        }
+        tx_list.extend_from_slice(&tx_body);
+
+        let mut new_keys = Vec::with_capacity(blobs_bundle.new_items.len());
+        for (index, item) in blobs_bundle.new_items.into_iter().enumerate() {
+            let proofs = item.proof.len();
+            match cache_new_blob(&mut cache.blobs_fulu, item) {
+                Some(key) => new_keys.push(key),
+                None => last_err = Err(HydrationError::InvalidBlobProofs { index, proofs }),
+            }
+        }
+        let num_blobs = blobs_bundle.refs.len();
+        if num_blobs > max_blobs_per_block {
+            last_err =
+                Err(HydrationError::TooManyBlobs { blobs: num_blobs, max: max_blobs_per_block });
+        }
+        last_err?;
+
+        let mut commitments = Vec::with_capacity(num_blobs * 48);
+        let mut proofs = Vec::new();
+        let mut blobs = Vec::new();
+        let mut new_keys = new_keys.into_iter();
+        let mut blob_cache_hits = 0;
+        for (index, &blob_ref) in blobs_bundle.refs.iter().enumerate() {
+            let key = if blob_ref == NEXT_FULL_ITEM {
+                new_keys.next().ok_or(HydrationError::MissingNewBlob { index })?
+            } else {
+                blob_cache_hits += 1;
+                blob_ref
+            };
+            let Some((commitment, cell_proofs, blob)) = cache.blobs_fulu.get(&key) else {
+                return Err(HydrationError::UnknownBlobHashFulu { key, index });
+            };
+            commitments.extend_from_slice(commitment.as_slice());
+            for proof in cell_proofs {
+                proofs.extend_from_slice(proof.as_slice());
+            }
+            blobs.extend_from_slice(blob.as_slice());
+        }
+        let proofs_offset = 12 + commitments.len();
+        let blobs_offset = proofs_offset + proofs.len();
+        let mut bundle = Vec::with_capacity(blobs_offset + blobs.len());
+        bundle.extend_from_slice(&12u32.to_le_bytes());
+        bundle.extend_from_slice(&(proofs_offset as u32).to_le_bytes());
+        bundle.extend_from_slice(&(blobs_offset as u32).to_le_bytes());
+        bundle.extend_from_slice(&commitments);
+        bundle.extend_from_slice(&proofs);
+        bundle.extend_from_slice(&blobs);
+
+        let extra_data = ExecutionPayloadView::extra_data(dehydrated);
+        let block_access_list = &dehydrated[block_access_list_offset..];
+        let mut payload = Vec::with_capacity(
+            EXECUTION_PAYLOAD_FIXED_GLOAS +
+                extra_data.len() +
+                tx_list.len() +
+                withdrawals.len() +
+                block_access_list.len(),
+        );
+        payload.extend_from_slice(&dehydrated[..EXECUTION_PAYLOAD_FIXED_GLOAS]);
+        payload.extend_from_slice(extra_data);
+        let transactions_offset = payload.len() as u32;
+        payload.extend_from_slice(&tx_list);
+        let withdrawals_offset = payload.len() as u32;
+        payload.extend_from_slice(&withdrawals);
+        let block_access_list_offset = payload.len() as u32;
+        payload.extend_from_slice(block_access_list);
+        for (at, offset) in [
+            (TRANSACTIONS_OFFSET_AT, transactions_offset),
+            (WITHDRAWALS_OFFSET_AT, withdrawals_offset),
+            (BLOCK_ACCESS_LIST_OFFSET_AT, block_access_list_offset),
+        ] {
+            payload[at..at + 4].copy_from_slice(&offset.to_le_bytes());
+        }
+
+        let blobs_offset = SUBMISSION_FIXED + payload.len();
+        let requests_offset = blobs_offset + bundle.len();
+        let mut submission = Vec::with_capacity(requests_offset + execution_requests.len());
+        message.ssz_append(&mut submission);
+        submission.extend_from_slice(&(SUBMISSION_FIXED as u32).to_le_bytes());
+        submission.extend_from_slice(&(blobs_offset as u32).to_le_bytes());
+        submission.extend_from_slice(&(requests_offset as u32).to_le_bytes());
+        submission.extend_from_slice(signature.as_slice());
+        submission.extend_from_slice(&payload);
+        submission.extend_from_slice(&bundle);
+        submission.extend_from_slice(&execution_requests);
+        let submission = GloasBidSubmission::from_ssz_bytes(Bytes::from(submission))
+            .map_err(HydrationError::Hydrated)?;
+
+        Ok(HydratedData {
+            submission: SignedBidSubmission::Gloas(submission),
+            tx_cache_hits,
+            blob_cache_hits,
+            tx_root,
+        })
+    }
+}

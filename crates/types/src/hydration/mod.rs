@@ -10,6 +10,10 @@ use ssz::{Decode, DecodeError};
 use ssz_derive::{Decode, Encode};
 use tracing::trace;
 
+mod gloas;
+
+pub use gloas::DehydratedBidSubmissionGloas;
+
 use crate::{
     BidTrace, Blob, BlobsBundle, BlockMergingData, BlockValidationError, BlsPublicKeyBytes,
     BlsSignatureBytes, ExecutionPayload, SignedBidSubmission, SignedBidSubmissionFulu, TestRandom,
@@ -23,6 +27,8 @@ use crate::{
 #[serde(untagged)]
 pub enum DehydratedBidSubmission {
     Fulu(DehydratedBidSubmissionFulu),
+    #[serde(skip)]
+    Gloas(DehydratedBidSubmissionGloas),
 }
 
 impl ForkVersionDecode for DehydratedBidSubmission {
@@ -34,8 +40,7 @@ impl ForkVersionDecode for DehydratedBidSubmission {
             ForkName::Capella |
             ForkName::Deneb |
             ForkName::Electra |
-            ForkName::Heze => Err(DecodeError::NoMatchingVariant),
-            // TODO: dehydrated Gloas submissions
+            ForkName::Heze |
             ForkName::Gloas => Err(DecodeError::NoMatchingVariant),
             ForkName::Fulu => DehydratedBidSubmissionFuluV1::from_ssz_bytes(bytes)
                 .map(|v1| DehydratedBidSubmission::Fulu(v1.into())),
@@ -52,32 +57,28 @@ pub struct HydratedData {
 
 impl DehydratedBidSubmission {
     pub fn slot(&self) -> u64 {
-        match self {
-            DehydratedBidSubmission::Fulu(s) => s.message.slot,
-        }
+        self.bid_trace().slot
     }
 
     pub fn block_hash(&self) -> &B256 {
-        match self {
-            DehydratedBidSubmission::Fulu(s) => &s.message.block_hash,
-        }
+        &self.bid_trace().block_hash
     }
 
     pub fn builder_pubkey(&self) -> &BlsPublicKeyBytes {
-        match self {
-            DehydratedBidSubmission::Fulu(s) => &s.message.builder_pubkey,
-        }
+        &self.bid_trace().builder_pubkey
     }
 
     pub fn fee_recipient(&self) -> Address {
         match self {
             DehydratedBidSubmission::Fulu(s) => s.execution_payload.fee_recipient,
+            DehydratedBidSubmission::Gloas(s) => s.fee_recipient(),
         }
     }
 
     pub fn num_txs(&self) -> usize {
         match self {
             DehydratedBidSubmission::Fulu(s) => s.tx_refs.len(),
+            DehydratedBidSubmission::Gloas(s) => s.num_txs(),
         }
     }
 
@@ -88,48 +89,50 @@ impl DehydratedBidSubmission {
             DehydratedBidSubmission::Fulu(s) => {
                 (s.withdrawals_ref == 0).then(|| s.execution_payload.withdrawals_root())
             }
+            DehydratedBidSubmission::Gloas(s) => s.withdrawal_root(),
         }
     }
 
     pub fn parent_hash(&self) -> &B256 {
-        match self {
-            DehydratedBidSubmission::Fulu(s) => &s.message.parent_hash,
-        }
+        &self.bid_trace().parent_hash
     }
 
     pub fn fork_name(&self) -> lh_types::ForkName {
         match self {
             DehydratedBidSubmission::Fulu(_) => lh_types::ForkName::Fulu,
+            DehydratedBidSubmission::Gloas(_) => lh_types::ForkName::Gloas,
         }
     }
 
     pub fn timestamp(&self) -> u64 {
         match self {
             DehydratedBidSubmission::Fulu(s) => s.execution_payload.timestamp,
+            DehydratedBidSubmission::Gloas(s) => s.timestamp(),
         }
     }
 
     pub fn prev_randao(&self) -> &B256 {
         match self {
             DehydratedBidSubmission::Fulu(s) => &s.execution_payload.prev_randao,
+            DehydratedBidSubmission::Gloas(s) => s.prev_randao(),
         }
     }
 
     pub fn proposer_fee_recipient(&self) -> &Address {
-        match self {
-            DehydratedBidSubmission::Fulu(s) => &s.message.proposer_fee_recipient,
-        }
+        &self.bid_trace().proposer_fee_recipient
     }
 
     pub fn block_number(&self) -> u64 {
         match self {
             DehydratedBidSubmission::Fulu(s) => s.execution_payload.block_number,
+            DehydratedBidSubmission::Gloas(s) => s.block_number(),
         }
     }
 
     pub fn bid_trace(&self) -> &BidTrace {
         match self {
             DehydratedBidSubmission::Fulu(s) => &s.message,
+            DehydratedBidSubmission::Gloas(s) => s.bid_trace(),
         }
     }
 
@@ -167,6 +170,7 @@ impl DehydratedBidSubmission {
                 }
                 Ok(())
             }
+            DehydratedBidSubmission::Gloas(s) => s.validate(),
         }
     }
 }
@@ -750,21 +754,25 @@ impl HydrationCache {
         };
         match submission {
             DehydratedBidSubmission::Fulu(s) => s.can_hydrate_inner(cache, max_blobs_per_block),
+            DehydratedBidSubmission::Gloas(s) => s.can_hydrate(cache, max_blobs_per_block),
         }
     }
 
     /// Root of the cached withdrawals a keyed submission refers to; `None`
     /// when the list is inline (the decoder computed it) or unknown.
     pub fn cached_withdrawals_root(&self, submission: &DehydratedBidSubmission) -> Option<B256> {
-        match submission {
-            DehydratedBidSubmission::Fulu(s) if s.withdrawals_ref != 0 => self
-                .caches
-                .get(&s.message.builder_pubkey)?
-                .withdrawals
-                .get(&s.withdrawals_ref)
-                .map(|(_, root)| *root),
-            DehydratedBidSubmission::Fulu(_) => None,
+        let withdrawals_ref = match submission {
+            DehydratedBidSubmission::Fulu(s) => s.withdrawals_ref,
+            DehydratedBidSubmission::Gloas(s) => s.withdrawals_ref(),
+        };
+        if withdrawals_ref == 0 {
+            return None;
         }
+        self.caches
+            .get(submission.builder_pubkey())?
+            .withdrawals
+            .get(&withdrawals_ref)
+            .map(|(_, root)| *root)
     }
 
     #[timed]
@@ -776,6 +784,7 @@ impl HydrationCache {
         let cache = self.caches.entry(*submission.builder_pubkey()).or_default();
         match submission {
             DehydratedBidSubmission::Fulu(s) => s.hydrate_inner(cache, max_blobs_per_block),
+            DehydratedBidSubmission::Gloas(s) => s.hydrate(cache, max_blobs_per_block),
         }
     }
 
@@ -785,6 +794,7 @@ impl HydrationCache {
         let cache = self.caches.entry(*submission.builder_pubkey()).or_default();
         match submission {
             DehydratedBidSubmission::Fulu(s) => s.feed_inner(cache),
+            DehydratedBidSubmission::Gloas(s) => s.feed(cache),
         }
     }
 
@@ -842,6 +852,9 @@ pub enum HydrationError {
 
     #[error("new blob {index} has {proofs} proofs, expected {CELLS_PER_EXT_BLOB}")]
     InvalidBlobProofs { index: usize, proofs: usize },
+
+    #[error("hydrated submission does not decode: {0:?}")]
+    Hydrated(DecodeError),
 }
 
 /// Test helpers. These live here because `DehydratedBidSubmissionFulu`'s fields are
@@ -869,6 +882,7 @@ impl DehydratedBidSubmission {
     pub fn set_builder_pubkey_for_test(&mut self, pubkey: BlsPublicKeyBytes) {
         match self {
             DehydratedBidSubmission::Fulu(s) => s.message.builder_pubkey = pubkey,
+            DehydratedBidSubmission::Gloas(s) => s.set_builder_pubkey_for_test(pubkey),
         }
     }
 }

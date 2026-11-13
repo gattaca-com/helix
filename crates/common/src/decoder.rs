@@ -13,11 +13,11 @@ use helix_types::{
     DehydratedBidSubmission, DehydratedBidSubmissionFulu, DehydratedBidSubmissionFuluV1,
     DehydratedBidSubmissionFuluWithAdjustments,
     DehydratedBidSubmissionFuluWithAdjustmentsAndMergingData,
-    DehydratedBidSubmissionFuluWithMergingData, ForkName, ForkVersionDecode, GloasBidSubmission,
-    MergeType, SignedBidSubmission, SignedBidSubmissionFulu, SignedBidSubmissionGloas,
-    SignedBidSubmissionWithAdjustments, SignedBidSubmissionWithAdjustmentsAndMergingData,
-    SignedBidSubmissionWithMergingData, Submission, WithAdjustments, WithAdjustmentsAndMergingData,
-    WithMergingData,
+    DehydratedBidSubmissionFuluWithMergingData, DehydratedBidSubmissionGloas, ForkName,
+    ForkVersionDecode, GloasBidSubmission, MergeType, SignedBidSubmission, SignedBidSubmissionFulu,
+    SignedBidSubmissionGloas, SignedBidSubmissionWithAdjustments,
+    SignedBidSubmissionWithAdjustmentsAndMergingData, SignedBidSubmissionWithMergingData,
+    Submission, WithAdjustments, WithAdjustmentsAndMergingData, WithMergingData,
 };
 use http::{
     HeaderMap, HeaderValue, StatusCode,
@@ -412,27 +412,38 @@ impl SubmissionDecoder {
     #[timed]
     fn decode_v2(&mut self, body: &[u8]) -> Result<DecodedParts, DecoderError> {
         let mergeable = self.merge_type == MergeType::Mergeable;
+        let gloas = self.fork_name == ForkName::Gloas;
         if !matches!(self.encoding, Encoding::Ssz) ||
-            self.fork_name != ForkName::Fulu ||
+            !(self.fork_name == ForkName::Fulu || (gloas && self.dehydrated_v2)) ||
             (self.merging_v2 && !mergeable)
         {
             return Err(DecoderError::V2Unsupported);
         }
+        if gloas && (mergeable || self.with_adjustments) {
+            return Err(DecoderError::UnsupportedCombination(
+                "dehydrated Gloas with merging data or adjustments",
+            ));
+        }
 
-        let (submission, adjustments, merging) = match (self.dehydrated_v2, self.is_dehydrated) {
-            (true, _) => {
-                let (s, a, m) = self.v2_parts::<DehydratedBidSubmissionFulu>(body)?;
-                (Submission::Dehydrated(DehydratedBidSubmission::Fulu(s)), a, m)
-            }
-            (false, true) => {
-                let (s, a, m) = self.v2_parts::<DehydratedBidSubmissionFuluV1>(body)?;
-                (Submission::Dehydrated(DehydratedBidSubmission::Fulu(s.into())), a, m)
-            }
-            (false, false) => {
-                let (s, a, m) = self.v2_parts::<SignedBidSubmissionFulu>(body)?;
-                (Submission::Full(SignedBidSubmission::Fulu(s)), a, m)
-            }
-        };
+        let (submission, adjustments, merging) =
+            match (self.dehydrated_v2, self.is_dehydrated, gloas) {
+                (true, _, true) => {
+                    let (s, a, m) = self.v2_parts::<DehydratedBidSubmissionGloas>(body)?;
+                    (Submission::Dehydrated(DehydratedBidSubmission::Gloas(s)), a, m)
+                }
+                (true, _, false) => {
+                    let (s, a, m) = self.v2_parts::<DehydratedBidSubmissionFulu>(body)?;
+                    (Submission::Dehydrated(DehydratedBidSubmission::Fulu(s)), a, m)
+                }
+                (false, true, _) => {
+                    let (s, a, m) = self.v2_parts::<DehydratedBidSubmissionFuluV1>(body)?;
+                    (Submission::Dehydrated(DehydratedBidSubmission::Fulu(s.into())), a, m)
+                }
+                (false, false, _) => {
+                    let (s, a, m) = self.v2_parts::<SignedBidSubmissionFulu>(body)?;
+                    (Submission::Full(SignedBidSubmission::Fulu(s)), a, m)
+                }
+            };
 
         let merging_data = match self.merge_type {
             MergeType::Mergeable => merging,
@@ -492,7 +503,7 @@ impl SubmissionDecoder {
         // a Gloas submission into one would drop it and simulate a block the
         // builder never committed to.
         if self.fork_name == ForkName::Gloas {
-            return Err(DecoderError::UnsupportedCombination("dehydrated Gloas"));
+            return Err(DecoderError::UnsupportedCombination("dehydrated Gloas v1"));
         }
         if self.merge_type == MergeType::Mergeable {
             if self.with_adjustments {
