@@ -27,16 +27,80 @@ use crate::{
     error::SigError, execution_payload::withdrawals_root_of,
 };
 
-const GLOAS_BID_TRACE_SIZE: usize = 268;
-const SUBMISSION_FIXED: usize = GLOAS_BID_TRACE_SIZE + 3 * 4 + 96;
-const WITHDRAWAL_SIZE: usize = 44;
+pub(crate) const GLOAS_BID_TRACE_SIZE: usize = 268;
+pub(crate) const SUBMISSION_FIXED: usize = GLOAS_BID_TRACE_SIZE + 3 * 4 + 96;
+pub(crate) const WITHDRAWAL_SIZE: usize = 44;
 const BID_FIXED: usize = 224;
 const ENVELOPE_FIXED: usize = 80;
 const SIGNED_FIXED: usize = 100;
 const BLS_DST: &[u8] = b"BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_";
 
-fn u32_at(buf: &[u8], at: usize) -> usize {
+pub(crate) fn u32_at(buf: &[u8], at: usize) -> usize {
     u32::from_le_bytes(buf[at..at + 4].try_into().expect("4 bytes")) as usize
+}
+
+pub(crate) fn transaction_slices(txs: &[u8]) -> impl ExactSizeIterator<Item = &[u8]> {
+    let count = if txs.is_empty() { 0 } else { u32_at(txs, 0) / 4 };
+    (0..count).map(move |i| {
+        let start = u32_at(txs, 4 * i);
+        let end = if i + 1 < count { u32_at(txs, 4 * (i + 1)) } else { txs.len() };
+        &txs[start..end]
+    })
+}
+
+pub(crate) fn validate_gloas_payload(
+    trace: &BidTrace,
+    payload: &[u8],
+) -> Result<(), BlockValidationError> {
+    let parent_hash = B256::from(*ExecutionPayloadView::parent_hash(payload));
+    let block_hash = B256::from(*ExecutionPayloadView::block_hash(payload));
+    if trace.parent_hash != parent_hash {
+        return Err(BlockValidationError::ParentHashMismatch {
+            message: trace.parent_hash,
+            payload: parent_hash,
+        });
+    }
+    if trace.block_hash != block_hash {
+        return Err(BlockValidationError::BlockHashMismatch {
+            message: trace.block_hash,
+            payload: block_hash,
+        });
+    }
+    if trace.gas_limit != ExecutionPayloadView::gas_limit(payload) {
+        return Err(BlockValidationError::GasLimitMismatch {
+            message: trace.gas_limit,
+            payload: ExecutionPayloadView::gas_limit(payload),
+        });
+    }
+    if trace.gas_used != ExecutionPayloadView::gas_used(payload) {
+        return Err(BlockValidationError::GasUsedMismatch {
+            message: trace.gas_used,
+            payload: ExecutionPayloadView::gas_used(payload),
+        });
+    }
+    if trace.slot != ExecutionPayloadView::slot_number(payload) {
+        return Err(BlockValidationError::SlotMismatch {
+            got: ExecutionPayloadView::slot_number(payload),
+            expected: trace.slot,
+        });
+    }
+    if trace.value.is_zero() {
+        return Err(BlockValidationError::ZeroValueBlock);
+    }
+    Ok(())
+}
+
+pub(crate) fn withdrawals_root_of_bytes(withdrawals: &[u8]) -> B256 {
+    withdrawals_root_of(withdrawals.chunks_exact(WITHDRAWAL_SIZE).map(|w| {
+        let w = w.try_into().expect("one withdrawal");
+        let address = WithdrawalView::address(w);
+        (
+            WithdrawalView::index(w),
+            WithdrawalView::validator_index(w),
+            address,
+            WithdrawalView::amount(w),
+        )
+    }))
 }
 
 fn invalid(what: &str) -> DecodeError {
@@ -141,44 +205,7 @@ impl GloasBidSubmission {
     }
 
     pub fn validate(&self) -> Result<(), BlockValidationError> {
-        let trace = &self.message.trace;
-        let payload = self.execution_payload();
-        let parent_hash = B256::from(*ExecutionPayloadView::parent_hash(payload));
-        let block_hash = B256::from(*ExecutionPayloadView::block_hash(payload));
-        if trace.parent_hash != parent_hash {
-            return Err(BlockValidationError::ParentHashMismatch {
-                message: trace.parent_hash,
-                payload: parent_hash,
-            });
-        }
-        if trace.block_hash != block_hash {
-            return Err(BlockValidationError::BlockHashMismatch {
-                message: trace.block_hash,
-                payload: block_hash,
-            });
-        }
-        if trace.gas_limit != ExecutionPayloadView::gas_limit(payload) {
-            return Err(BlockValidationError::GasLimitMismatch {
-                message: trace.gas_limit,
-                payload: ExecutionPayloadView::gas_limit(payload),
-            });
-        }
-        if trace.gas_used != ExecutionPayloadView::gas_used(payload) {
-            return Err(BlockValidationError::GasUsedMismatch {
-                message: trace.gas_used,
-                payload: ExecutionPayloadView::gas_used(payload),
-            });
-        }
-        if trace.slot != ExecutionPayloadView::slot_number(payload) {
-            return Err(BlockValidationError::SlotMismatch {
-                got: ExecutionPayloadView::slot_number(payload),
-                expected: trace.slot,
-            });
-        }
-        if trace.value.is_zero() {
-            return Err(BlockValidationError::ZeroValueBlock);
-        }
-        Ok(())
+        validate_gloas_payload(&self.message.trace, self.execution_payload())
     }
 
     pub fn prev_randao(&self) -> &B256 {
@@ -202,8 +229,7 @@ impl GloasBidSubmission {
     }
 
     pub fn num_txs(&self) -> usize {
-        let txs = ExecutionPayloadView::transactions(self.execution_payload());
-        if txs.is_empty() { 0 } else { u32_at(txs, 0) / 4 }
+        transaction_slices(ExecutionPayloadView::transactions(self.execution_payload())).len()
     }
 
     fn withdrawals(&self) -> &[u8] {
@@ -215,14 +241,8 @@ impl GloasBidSubmission {
     /// The payload in the merge builder's wire shape, which has no access list or slot.
     pub fn payload_v3(&self) -> ExecutionPayloadV3 {
         let payload = self.execution_payload();
-        let txs = ExecutionPayloadView::transactions(payload);
-        let count = self.num_txs();
-        let transactions = (0..count)
-            .map(|i| {
-                let start = u32_at(txs, 4 * i);
-                let end = if i + 1 < count { u32_at(txs, 4 * (i + 1)) } else { txs.len() };
-                alloy_primitives::Bytes::copy_from_slice(&txs[start..end])
-            })
+        let transactions = transaction_slices(ExecutionPayloadView::transactions(payload))
+            .map(alloy_primitives::Bytes::copy_from_slice)
             .collect();
         let withdrawals = self
             .withdrawals()
@@ -283,20 +303,7 @@ impl GloasBidSubmission {
     }
 
     pub fn withdrawals_root(&self) -> B256 {
-        let payload = self.execution_payload();
-        let withdrawals = &payload[ExecutionPayloadView::withdrawals_offset(payload) as usize..
-            ExecutionPayloadView::block_access_list_offset(payload) as usize];
-        // `from_ssz_bytes` validates complete 44-byte entries and at most 16 withdrawals.
-        withdrawals_root_of(withdrawals.chunks_exact(WITHDRAWAL_SIZE).map(|w| {
-            let w = w.try_into().expect("one withdrawal");
-            let address = WithdrawalView::address(w);
-            (
-                WithdrawalView::index(w),
-                WithdrawalView::validator_index(w),
-                address,
-                WithdrawalView::amount(w),
-            )
-        }))
+        withdrawals_root_of_bytes(self.withdrawals())
     }
 
     fn bundle_section(&self, i: usize) -> &[u8] {
@@ -579,7 +586,7 @@ impl<'a> GloasBlock<'a> {
     }
 }
 
-fn payload_layout_ok(d: &[u8]) -> bool {
+pub(crate) fn payload_layout_ok(d: &[u8]) -> bool {
     if d.len() < EXECUTION_PAYLOAD_FIXED_GLOAS {
         return false;
     }

@@ -12,9 +12,8 @@ use tracing::trace;
 
 use crate::{
     BidTrace, Blob, BlobsBundle, BlockMergingData, BlockValidationError, BlsPublicKeyBytes,
-    BlsSignatureBytes, ExecutionPayload, SignedBidSubmissionFulu, TestRandom,
+    BlsSignatureBytes, ExecutionPayload, SignedBidSubmission, SignedBidSubmissionFulu, TestRandom,
     bid_adjustment_data::{BidAdjData, BidAdjustmentData, BidAdjustmentDataV1},
-    bid_submission,
     fields::{ExecutionRequests, KzgCommitment, KzgProof, Transaction, Transactions, Withdrawals},
     withdrawals_root,
 };
@@ -45,7 +44,7 @@ impl ForkVersionDecode for DehydratedBidSubmission {
 }
 
 pub struct HydratedData {
-    pub submission: bid_submission::SignedBidSubmissionFulu,
+    pub submission: SignedBidSubmission,
     pub tx_cache_hits: usize,
     pub blob_cache_hits: usize,
     pub tx_root: Option<B256>,
@@ -504,48 +503,75 @@ pub fn blob_cache_key(commitment: &KzgCommitment) -> u64 {
     hasher.finish()
 }
 
+fn refs_resolvable(
+    tx_refs: &[u64],
+    full_tx_lens: impl ExactSizeIterator<Item = usize>,
+    blobs_bundle: &DehydratedBlobsFuluV2,
+    withdrawals_ref: u64,
+    cache: &Cache,
+    max_blobs_per_block: usize,
+) -> bool {
+    let new_items = &blobs_bundle.new_items;
+    // v1 conversion keys new blobs by hash rather than `0`, so a ref may
+    // point at an item in `new_items` that is not cached yet. Hydrating
+    // caches new items first, so they win over a cached entry's proofs.
+    let is_new = |r: u64| new_items.iter().any(|b| blob_cache_key(&b.commitment) == r);
+    let has_all_cells = |proofs: &[KzgProof]| proofs.len() == CELLS_PER_EXT_BLOB;
+    let next_full_refs = |refs: &[u64]| refs.iter().filter(|&&r| r == NEXT_FULL_ITEM).count();
+    let n_full = full_tx_lens.len();
+
+    tx_refs.len() <= <MainnetEthSpec as EthSpec>::max_transactions_per_payload() &&
+        blobs_bundle.refs.len() <= max_blobs_per_block &&
+        (withdrawals_ref == 0 || cache.withdrawals.contains_key(&withdrawals_ref)) &&
+        full_tx_lens.into_iter().all(|len| len >= TX_KEY_SIZE) &&
+        next_full_refs(tx_refs) <= n_full &&
+        tx_refs.iter().all(|&r| r == NEXT_FULL_ITEM || cache.transactions.contains_key(&r)) &&
+        new_items.iter().all(|b| has_all_cells(&b.proof)) &&
+        next_full_refs(&blobs_bundle.refs) <= new_items.len() &&
+        blobs_bundle.refs.iter().all(|&r| {
+            r == NEXT_FULL_ITEM ||
+                is_new(r) ||
+                cache.blobs_fulu.get(&r).is_some_and(|(_, proofs, _)| has_all_cells(proofs))
+        })
+}
+
+fn cache_new_blob(blobs: &mut FxHashMap<u64, CachedBlob>, item: BlobItemFulu) -> Option<u64> {
+    if item.proof.len() != CELLS_PER_EXT_BLOB {
+        return None;
+    }
+    let key = blob_cache_key(&item.commitment);
+    blobs.insert(key, (item.commitment, item.proof, item.blob));
+    Some(key)
+}
+
+fn cache_withdrawals(withdrawals: &mut FxHashMap<u64, CachedWithdrawals>, w: &Withdrawals) {
+    if w.is_empty() {
+        return;
+    }
+    withdrawals.entry(withdrawals_key(w)).or_insert_with(|| (w.clone(), withdrawals_root(w)));
+}
+
 impl DehydratedBidSubmissionFulu {
     #[timed]
-    fn can_hydrate_inner(
-        &self,
-        txs: &FxHashMap<u64, Transaction>,
-        blobs: &FxHashMap<u64, CachedBlob>,
-        withdrawals: &FxHashMap<u64, CachedWithdrawals>,
-        max_blobs_per_block: usize,
-    ) -> bool {
-        let full_txs = &self.execution_payload.transactions;
-        let new_items = &self.blobs_bundle.new_items;
-        // v1 conversion keys new blobs by hash rather than `0`, so a ref may
-        // point at an item in `new_items` that is not cached yet. Hydrating
-        // caches new items first, so they win over a cached entry's proofs.
-        let is_new = |r: u64| new_items.iter().any(|b| blob_cache_key(&b.commitment) == r);
-        let has_all_cells = |proofs: &[KzgProof]| proofs.len() == CELLS_PER_EXT_BLOB;
-        let next_full_refs = |refs: &[u64]| refs.iter().filter(|&&r| r == NEXT_FULL_ITEM).count();
-
-        self.tx_refs.len() <= <MainnetEthSpec as EthSpec>::max_transactions_per_payload() &&
-            self.blobs_bundle.refs.len() <= max_blobs_per_block &&
-            self.execution_payload.validate_ssz_lengths().is_ok() &&
-            (self.withdrawals_ref == 0 || withdrawals.contains_key(&self.withdrawals_ref)) &&
-            full_txs.iter().all(|tx| tx.len() >= TX_KEY_SIZE) &&
-            next_full_refs(&self.tx_refs) <= full_txs.len() &&
-            self.tx_refs.iter().all(|&r| r == NEXT_FULL_ITEM || txs.contains_key(&r)) &&
-            new_items.iter().all(|b| has_all_cells(&b.proof)) &&
-            next_full_refs(&self.blobs_bundle.refs) <= new_items.len() &&
-            self.blobs_bundle.refs.iter().all(|&r| {
-                r == NEXT_FULL_ITEM ||
-                    is_new(r) ||
-                    blobs.get(&r).is_some_and(|(_, proofs, _)| has_all_cells(proofs))
-            })
+    fn can_hydrate_inner(&self, cache: &Cache, max_blobs_per_block: usize) -> bool {
+        self.execution_payload.validate_ssz_lengths().is_ok() &&
+            refs_resolvable(
+                &self.tx_refs,
+                self.execution_payload.transactions.iter().map(|tx| tx.len()),
+                &self.blobs_bundle,
+                self.withdrawals_ref,
+                cache,
+                max_blobs_per_block,
+            )
     }
 
     #[timed]
     fn hydrate_inner(
         mut self,
-        txs: &mut FxHashMap<u64, Transaction>,
-        blobs: &mut FxHashMap<u64, CachedBlob>,
-        withdrawals: &mut FxHashMap<u64, CachedWithdrawals>,
+        cache: &mut Cache,
         max_blobs_per_block: usize,
     ) -> Result<HydratedData, HydrationError> {
+        let Cache { transactions: txs, blobs_fulu: blobs, withdrawals } = cache;
         // avoid short-circuiting the loop to maximize cache population
         let mut last_err = Ok(());
         let mut tx_cache_hits = 0;
@@ -557,11 +583,8 @@ impl DehydratedBidSubmissionFulu {
                     last_err = Err(HydrationError::UnknownWithdrawals { key: self.withdrawals_ref })
                 }
             }
-        } else if !self.execution_payload.withdrawals.is_empty() {
-            let w = &self.execution_payload.withdrawals;
-            withdrawals
-                .entry(withdrawals_key(w))
-                .or_insert_with(|| (w.clone(), withdrawals_root(w)));
+        } else {
+            cache_withdrawals(withdrawals, &self.execution_payload.withdrawals);
         }
 
         let full: Vec<Transaction> =
@@ -598,16 +621,11 @@ impl DehydratedBidSubmissionFulu {
         let new_blobs = self.blobs_bundle.new_items.len();
         let mut new_keys = Vec::with_capacity(new_blobs);
         for (index, blob_item) in self.blobs_bundle.new_items.into_iter().enumerate() {
-            // A cached blob is sliced as `CELLS_PER_EXT_BLOB` proofs wherever its bundle is
-            // read, and not every caller runs `can_hydrate` first.
-            if blob_item.proof.len() != CELLS_PER_EXT_BLOB {
-                last_err =
-                    Err(HydrationError::InvalidBlobProofs { index, proofs: blob_item.proof.len() });
-                continue;
+            let proofs = blob_item.proof.len();
+            match cache_new_blob(blobs, blob_item) {
+                Some(key) => new_keys.push(key),
+                None => last_err = Err(HydrationError::InvalidBlobProofs { index, proofs }),
             }
-            let key = blob_cache_key(&blob_item.commitment);
-            new_keys.push(key);
-            blobs.insert(key, (blob_item.commitment, blob_item.proof, blob_item.blob));
         }
 
         let num_blobs = self.blobs_bundle.refs.len();
@@ -641,13 +659,13 @@ impl DehydratedBidSubmissionFulu {
 
         blob_cache_hits = blob_cache_hits.saturating_sub(new_blobs);
 
-        let submission = SignedBidSubmissionFulu {
+        let submission = SignedBidSubmission::Fulu(SignedBidSubmissionFulu {
             message: self.message,
             execution_payload: Arc::new(self.execution_payload),
             blobs_bundle: Arc::new(sidecar),
             execution_requests: self.execution_requests,
             signature: self.signature,
-        };
+        });
 
         Ok(HydratedData { submission, tx_cache_hits, blob_cache_hits, tx_root: self.tx_root })
     }
@@ -656,31 +674,17 @@ impl DehydratedBidSubmissionFulu {
     /// cache without building the hydrated payload, so later dehydrated
     /// submissions can resolve their references even when this one is
     /// otherwise dropped.
-    fn feed_inner(
-        &self,
-        txs: &mut FxHashMap<u64, Transaction>,
-        blobs: &mut FxHashMap<u64, CachedBlob>,
-        withdrawals: &mut FxHashMap<u64, CachedWithdrawals>,
-    ) {
-        if self.withdrawals_ref == 0 && !self.execution_payload.withdrawals.is_empty() {
-            let w = &self.execution_payload.withdrawals;
-            withdrawals
-                .entry(withdrawals_key(w))
-                .or_insert_with(|| (w.clone(), withdrawals_root(w)));
+    fn feed_inner(&self, cache: &mut Cache) {
+        if self.withdrawals_ref == 0 {
+            cache_withdrawals(&mut cache.withdrawals, &self.execution_payload.withdrawals);
         }
         for tx in &self.execution_payload.transactions {
             if tx.len() >= TX_KEY_SIZE {
-                txs.insert(tx_cache_key(tx), tx.clone());
+                cache.transactions.insert(tx_cache_key(tx), tx.clone());
             }
         }
         for blob_item in &self.blobs_bundle.new_items {
-            if blob_item.proof.len() != CELLS_PER_EXT_BLOB {
-                continue;
-            }
-            blobs.insert(
-                blob_cache_key(&blob_item.commitment),
-                (blob_item.commitment, blob_item.proof.clone(), blob_item.blob.clone()),
-            );
+            cache_new_blob(&mut cache.blobs_fulu, blob_item.clone());
         }
     }
 }
@@ -692,6 +696,14 @@ struct Cache {
 }
 
 impl Cache {
+    fn empty() -> Self {
+        Self {
+            transactions: FxHashMap::default(),
+            blobs_fulu: FxHashMap::default(),
+            withdrawals: FxHashMap::default(),
+        }
+    }
+
     fn new() -> Self {
         Self {
             transactions: FxHashMap::with_capacity_and_hasher(10_000, Default::default()),
@@ -728,21 +740,16 @@ impl HydrationCache {
         submission: &DehydratedBidSubmission,
         max_blobs_per_block: usize,
     ) -> bool {
+        let empty;
+        let cache = match self.caches.get(submission.builder_pubkey()) {
+            Some(cache) => cache,
+            None => {
+                empty = Cache::empty();
+                &empty
+            }
+        };
         match submission {
-            DehydratedBidSubmission::Fulu(s) => match self.caches.get(&s.message.builder_pubkey) {
-                Some(c) => s.can_hydrate_inner(
-                    &c.transactions,
-                    &c.blobs_fulu,
-                    &c.withdrawals,
-                    max_blobs_per_block,
-                ),
-                None => s.can_hydrate_inner(
-                    &FxHashMap::default(),
-                    &FxHashMap::default(),
-                    &FxHashMap::default(),
-                    max_blobs_per_block,
-                ),
-            },
+            DehydratedBidSubmission::Fulu(s) => s.can_hydrate_inner(cache, max_blobs_per_block),
         }
     }
 
@@ -766,32 +773,18 @@ impl HydrationCache {
         submission: DehydratedBidSubmission,
         max_blobs_per_block: usize,
     ) -> Result<HydratedData, HydrationError> {
+        let cache = self.caches.entry(*submission.builder_pubkey()).or_default();
         match submission {
-            DehydratedBidSubmission::Fulu(s) => {
-                let pubkey = s.message.builder_pubkey;
-                let entry = self.caches.entry(pubkey).or_default();
-                s.hydrate_inner(
-                    &mut entry.transactions,
-                    &mut entry.blobs_fulu,
-                    &mut entry.withdrawals,
-                    max_blobs_per_block,
-                )
-            }
+            DehydratedBidSubmission::Fulu(s) => s.hydrate_inner(cache, max_blobs_per_block),
         }
     }
 
     /// Inserts the submission's full transactions and new blobs into the
     /// builder's cache without building the hydrated payload.
     pub fn feed(&mut self, submission: &DehydratedBidSubmission) {
+        let cache = self.caches.entry(*submission.builder_pubkey()).or_default();
         match submission {
-            DehydratedBidSubmission::Fulu(s) => {
-                let entry = self.caches.entry(s.message.builder_pubkey).or_default();
-                s.feed_inner(
-                    &mut entry.transactions,
-                    &mut entry.blobs_fulu,
-                    &mut entry.withdrawals,
-                );
-            }
+            DehydratedBidSubmission::Fulu(s) => s.feed_inner(cache),
         }
     }
 

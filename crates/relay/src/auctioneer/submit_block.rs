@@ -454,9 +454,9 @@ impl<B: BidAdjustor> Context<B> {
                     .with_label_values(&["blob"])
                     .inc_by(hydrated.blob_cache_hits as u64);
 
-                hydrated.submission.validate_payload_ssz_lengths(max_blobs_per_block)?;
+                hydrated.submission.validate_lengths(max_blobs_per_block)?;
 
-                Ok((SignedBidSubmission::Fulu(hydrated.submission), hydrated.tx_root))
+                Ok((hydrated.submission, hydrated.tx_root))
             }
         }
     }
