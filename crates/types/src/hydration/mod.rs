@@ -12,7 +12,10 @@ use tracing::trace;
 
 mod gloas;
 
-pub use gloas::{DehydratedBidSubmissionGloas, bal_entry_key};
+pub use gloas::{
+    DehydratedBidSubmissionGloas, DehydratedBidSubmissionGloasV1,
+    DehydratedBidSubmissionGloasV1WithMergingData, bal_entry_key,
+};
 
 use crate::{
     BidTrace, Blob, BlobsBundle, BlockMergingData, BlockValidationError, BlsPublicKeyBytes,

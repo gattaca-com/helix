@@ -3,18 +3,22 @@ use std::hash::Hasher;
 use alloy_primitives::{Address, B256};
 use alloy_rlp::Header;
 use bytes::Bytes;
+use lh_types::{ForkName, ForkVersionDecode};
 use rustc_hash::FxHasher;
-use silver_ssz::ssz_view::{EXECUTION_PAYLOAD_FIXED_GLOAS, ExecutionPayloadView};
+use serde::{Deserialize, Serialize};
+use silver_ssz::ssz_view::ExecutionPayloadView;
 use ssz::{Decode, DecodeError, Encode};
-use ssz_derive::Decode;
+use ssz_derive::{Decode, Encode};
 
 use super::{
-    Cache, DehydratedBlobsFuluV2, HydratedData, HydrationError, NEXT_FULL_ITEM, TX_KEY_SIZE,
-    cache_new_blob, cache_withdrawals, refs_resolvable, tx_cache_key,
+    Cache, DehydratedBidSubmission, DehydratedBlobsFulu, DehydratedBlobsFuluV2, HydratedData,
+    HydrationError, NEXT_FULL_ITEM, TX_KEY_SIZE, blob_cache_key, cache_new_blob, cache_withdrawals,
+    refs_resolvable, tx_cache_key,
 };
 use crate::{
-    BidTrace, BlockValidationError, BlsPublicKeyBytes, BlsSignatureBytes, GloasBidSubmission,
-    GloasBidTrace, SignedBidSubmission, Transaction, Withdrawals,
+    BidTrace, BlockMergingData, BlockValidationError, BlsPublicKeyBytes, BlsSignatureBytes,
+    ExecutionPayloadGloas, ExecutionRequestsGloas, GloasBidSubmission, GloasBidTrace,
+    SignedBidSubmission, Transaction, Withdrawals,
     gloas::{
         SUBMISSION_FIXED, payload_layout_ok, transaction_slices, validate_gloas_payload,
         withdrawals_root_of_bytes,
@@ -73,6 +77,130 @@ fn bal_entries(list: &[u8]) -> Option<impl Iterator<Item = &[u8]>> {
         rest = tail;
         Some(entry)
     }))
+}
+
+fn assemble_payload(head: &[u8], tx_list: &[u8], withdrawals: &[u8], bal: &[u8]) -> Vec<u8> {
+    let mut payload =
+        Vec::with_capacity(head.len() + tx_list.len() + withdrawals.len() + bal.len());
+    payload.extend_from_slice(head);
+    let transactions_offset = payload.len() as u32;
+    payload.extend_from_slice(tx_list);
+    let withdrawals_offset = payload.len() as u32;
+    payload.extend_from_slice(withdrawals);
+    let block_access_list_offset = payload.len() as u32;
+    payload.extend_from_slice(bal);
+    for (at, offset) in [
+        (TRANSACTIONS_OFFSET_AT, transactions_offset),
+        (WITHDRAWALS_OFFSET_AT, withdrawals_offset),
+        (BLOCK_ACCESS_LIST_OFFSET_AT, block_access_list_offset),
+    ] {
+        payload[at..at + 4].copy_from_slice(&offset.to_le_bytes());
+    }
+    payload
+}
+
+/// v1 wire shape (HTTP JSON/SSZ): a cached tx is its 8-byte key inline in
+/// `transactions`, a cached blob its commitment; withdrawals and the access
+/// list are inline. Converted into [`DehydratedBidSubmissionGloas`] on decode.
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
+#[serde(deny_unknown_fields)]
+pub struct DehydratedBidSubmissionGloasV1 {
+    message: GloasBidTrace,
+    execution_payload: ExecutionPayloadGloas,
+    blobs_bundle: DehydratedBlobsFulu,
+    execution_requests: ExecutionRequestsGloas,
+    signature: BlsSignatureBytes,
+    tx_root: Option<B256>,
+}
+
+impl ForkVersionDecode for DehydratedBidSubmissionGloasV1 {
+    fn from_ssz_bytes_by_fork(bytes: &[u8], fork: ForkName) -> Result<Self, DecodeError> {
+        match fork {
+            ForkName::Gloas => Self::from_ssz_bytes(bytes),
+            _ => Err(DecodeError::NoMatchingVariant),
+        }
+    }
+}
+
+impl From<DehydratedBidSubmissionGloasV1> for DehydratedBidSubmissionGloas {
+    fn from(v1: DehydratedBidSubmissionGloasV1) -> Self {
+        let payload = v1.execution_payload.as_ssz_bytes();
+        let transactions_offset = ExecutionPayloadView::transactions_offset(&payload) as usize;
+        let withdrawals_offset = ExecutionPayloadView::withdrawals_offset(&payload) as usize;
+        let bal_offset = ExecutionPayloadView::block_access_list_offset(&payload) as usize;
+        let transactions = ExecutionPayloadView::transactions(&payload);
+        let table =
+            4 * transaction_slices(transactions).filter(|tx| tx.len() != size_of::<u64>()).count();
+        let txs = transaction_slices(transactions);
+        let mut tx_refs = Vec::with_capacity(txs.len());
+        let mut tx_list = Vec::with_capacity(table);
+        let mut tx_body = Vec::new();
+        for tx in txs {
+            match <[u8; 8]>::try_from(tx) {
+                Ok(key) => tx_refs.push(u64::from_le_bytes(key)),
+                Err(_) => {
+                    tx_refs.push(NEXT_FULL_ITEM);
+                    tx_list.extend_from_slice(&((table + tx_body.len()) as u32).to_le_bytes());
+                    tx_body.extend_from_slice(tx);
+                }
+            }
+        }
+        tx_list.extend_from_slice(&tx_body);
+        let bal = &payload[bal_offset..];
+        Self(Parts {
+            message: v1.message,
+            execution_payload: assemble_payload(
+                &payload[..transactions_offset],
+                &tx_list,
+                &payload[withdrawals_offset..bal_offset],
+                bal,
+            ),
+            blobs_bundle: DehydratedBlobsFuluV2 {
+                refs: v1.blobs_bundle.commitments.iter().map(blob_cache_key).collect(),
+                new_items: v1.blobs_bundle.new_items,
+            },
+            execution_requests: v1.execution_requests.as_ssz_bytes(),
+            signature: v1.signature,
+            tx_root: v1.tx_root,
+            tx_refs,
+            withdrawals_ref: 0,
+            bal_refs: vec![NEXT_FULL_ITEM; bal_entries(bal).map_or(0, Iterator::count)],
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
+pub struct DehydratedBidSubmissionGloasV1WithMergingData {
+    message: GloasBidTrace,
+    execution_payload: ExecutionPayloadGloas,
+    blobs_bundle: DehydratedBlobsFulu,
+    execution_requests: ExecutionRequestsGloas,
+    signature: BlsSignatureBytes,
+    tx_root: Option<B256>,
+    merging_data: BlockMergingData,
+}
+
+impl DehydratedBidSubmissionGloasV1WithMergingData {
+    pub fn split(self) -> (DehydratedBidSubmission, BlockMergingData) {
+        let v1 = DehydratedBidSubmissionGloasV1 {
+            message: self.message,
+            execution_payload: self.execution_payload,
+            blobs_bundle: self.blobs_bundle,
+            execution_requests: self.execution_requests,
+            signature: self.signature,
+            tx_root: self.tx_root,
+        };
+        (DehydratedBidSubmission::Gloas(v1.into()), self.merging_data)
+    }
+}
+
+impl ForkVersionDecode for DehydratedBidSubmissionGloasV1WithMergingData {
+    fn from_ssz_bytes_by_fork(bytes: &[u8], fork: ForkName) -> Result<Self, DecodeError> {
+        match fork {
+            ForkName::Gloas => Self::from_ssz_bytes(bytes),
+            _ => Err(DecodeError::NoMatchingVariant),
+        }
+    }
 }
 
 impl Decode for DehydratedBidSubmissionGloas {
@@ -332,29 +460,12 @@ impl DehydratedBidSubmissionGloas {
         bundle.extend_from_slice(&proofs);
         bundle.extend_from_slice(&blobs);
 
-        let extra_data = ExecutionPayloadView::extra_data(dehydrated);
-        let mut payload = Vec::with_capacity(
-            EXECUTION_PAYLOAD_FIXED_GLOAS +
-                extra_data.len() +
-                tx_list.len() +
-                withdrawals.len() +
-                block_access_list.len(),
+        let payload = assemble_payload(
+            &dehydrated[..ExecutionPayloadView::transactions_offset(dehydrated) as usize],
+            &tx_list,
+            &withdrawals,
+            &block_access_list,
         );
-        payload.extend_from_slice(&dehydrated[..EXECUTION_PAYLOAD_FIXED_GLOAS]);
-        payload.extend_from_slice(extra_data);
-        let transactions_offset = payload.len() as u32;
-        payload.extend_from_slice(&tx_list);
-        let withdrawals_offset = payload.len() as u32;
-        payload.extend_from_slice(&withdrawals);
-        let block_access_list_offset = payload.len() as u32;
-        payload.extend_from_slice(&block_access_list);
-        for (at, offset) in [
-            (TRANSACTIONS_OFFSET_AT, transactions_offset),
-            (WITHDRAWALS_OFFSET_AT, withdrawals_offset),
-            (BLOCK_ACCESS_LIST_OFFSET_AT, block_access_list_offset),
-        ] {
-            payload[at..at + 4].copy_from_slice(&offset.to_le_bytes());
-        }
 
         let blobs_offset = SUBMISSION_FIXED + payload.len();
         let requests_offset = blobs_offset + bundle.len();

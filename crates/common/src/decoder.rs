@@ -13,7 +13,8 @@ use helix_types::{
     DehydratedBidSubmission, DehydratedBidSubmissionFulu, DehydratedBidSubmissionFuluV1,
     DehydratedBidSubmissionFuluWithAdjustments,
     DehydratedBidSubmissionFuluWithAdjustmentsAndMergingData,
-    DehydratedBidSubmissionFuluWithMergingData, DehydratedBidSubmissionGloas, ForkName,
+    DehydratedBidSubmissionFuluWithMergingData, DehydratedBidSubmissionGloas,
+    DehydratedBidSubmissionGloasV1, DehydratedBidSubmissionGloasV1WithMergingData, ForkName,
     ForkVersionDecode, GloasBidSubmission, MergeType, SignedBidSubmission, SignedBidSubmissionFulu,
     SignedBidSubmissionGloas, SignedBidSubmissionWithAdjustments,
     SignedBidSubmissionWithAdjustmentsAndMergingData, SignedBidSubmissionWithMergingData,
@@ -499,11 +500,9 @@ impl SubmissionDecoder {
 
     #[timed]
     fn decode_dehydrated(&mut self, body: &[u8]) -> Result<DecodedParts, DecoderError> {
-        // Every shape below is Fulu's, which has no block access list. Decoding
-        // a Gloas submission into one would drop it and simulate a block the
-        // builder never committed to.
-        if self.fork_name == ForkName::Gloas {
-            return Err(DecoderError::UnsupportedCombination("dehydrated Gloas v1"));
+        let gloas = self.fork_name == ForkName::Gloas;
+        if gloas && self.with_adjustments {
+            return Err(DecoderError::UnsupportedCombination("Gloas with bid adjustments"));
         }
         if self.merge_type == MergeType::Mergeable {
             if self.with_adjustments {
@@ -518,9 +517,15 @@ impl SubmissionDecoder {
                 ));
             }
 
-            let sub_with_merging: DehydratedBidSubmissionFuluWithMergingData =
-                self.decode_by_fork(body, self.fork_name)?;
-            let (submission, merging_data) = sub_with_merging.split();
+            let (submission, merging_data) = if gloas {
+                let sub: DehydratedBidSubmissionGloasV1WithMergingData =
+                    self.decode_by_fork(body, self.fork_name)?;
+                sub.split()
+            } else {
+                let sub: DehydratedBidSubmissionFuluWithMergingData =
+                    self.decode_by_fork(body, self.fork_name)?;
+                sub.split()
+            };
 
             return Ok((Submission::Dehydrated(submission), Some(merging_data.into()), None));
         }
@@ -531,6 +536,10 @@ impl SubmissionDecoder {
             let (sub, adjustment_data) = sub_with_adjustment.split();
 
             (sub, Some(adjustment_data))
+        } else if gloas {
+            let sub: DehydratedBidSubmissionGloasV1 = self.decode_by_fork(body, self.fork_name)?;
+
+            (DehydratedBidSubmission::Gloas(sub.into()), None)
         } else {
             let submission: DehydratedBidSubmission = self.decode_by_fork(body, self.fork_name)?;
 
@@ -1126,25 +1135,19 @@ mod tests {
 
     /// Both wire shapes below are Fulu's, with no room for a block access list.
     #[test]
-    fn gloas_with_the_other_submission_types_is_refused() {
+    fn gloas_with_mergeable_data_is_refused() {
         let body = gloas_body();
+        let mut params = SubmissionDecoderParams::plain(ForkName::Gloas);
+        params.with_mergeable_data = true;
+        let mut buf = Vec::new();
+        let err = SubmissionDecoder::new(&params)
+            .decode(&body, &mut buf)
+            .expect_err("the combination has no wire shape");
 
-        for adjust in [
-            |params: &mut SubmissionDecoderParams| params.is_dehydrated = true,
-            |params: &mut SubmissionDecoderParams| params.with_mergeable_data = true,
-        ] {
-            let mut params = SubmissionDecoderParams::plain(ForkName::Gloas);
-            adjust(&mut params);
-            let mut buf = Vec::new();
-            let err = SubmissionDecoder::new(&params)
-                .decode(&body, &mut buf)
-                .expect_err("the combination has no wire shape");
-
-            assert!(
-                matches!(err, DecoderError::UnsupportedCombination(_)),
-                "refused explicitly, not decoded into a shape that drops the list: {err}",
-            );
-        }
+        assert!(
+            matches!(err, DecoderError::UnsupportedCombination(_)),
+            "refused explicitly, not decoded into a shape that drops the list: {err}",
+        );
     }
 
     #[test]
