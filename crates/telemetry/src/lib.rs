@@ -223,7 +223,7 @@ impl GetHeaderServed {
 
 versioned_telemetry!(GetHeaderTimedOut, persist = "Helix.Header.TimedOut" =>
     #[derive(Default)]
-    #[type_hash_lock(hash = 2311762756165240824)]
+    #[type_hash_lock(hash = 14463837957652986541)]
     GetHeaderTimedOutV1 {
         pub slot: u64,
         pub request_receive_ns: u64,
@@ -232,6 +232,7 @@ versioned_telemetry!(GetHeaderTimedOut, persist = "Helix.Header.TimedOut" =>
         pub proposer_pubkey: BlsPublicKeyBytes,
         pub proposer_ip: [u8; 16],
         pub user_agent: ArrayStr<32>,
+        pub deadline_source: ArrayStr<24>,
         pub hold_completed: bool,
         pub _pad: [u8; 7],
     }

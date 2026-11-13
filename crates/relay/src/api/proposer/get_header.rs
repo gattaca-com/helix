@@ -55,6 +55,7 @@ pub(super) struct ValidatedHeaderRequest {
     pub is_mev_boost: bool,
     pub sleep_time: Option<Duration>,
     pub timeout_ms: Option<u64>,
+    pub timeout_source: &'static str,
     pub preferences: ValidatorPreferences,
     pub ip_addr: Option<IpAddr>,
 }
@@ -96,7 +97,7 @@ impl<A: Api> ProposerApi<A> {
         let user_agent = self.api_provider.get_metadata(headers);
         let ip_addr = header_ip_addr(headers);
 
-        let TimingResult { is_mev_boost, sleep_time, timeout_ms } = self
+        let TimingResult { is_mev_boost, sleep_time, timeout_ms, timeout_source } = self
             .api_provider
             .get_timing(params, headers, &duty.entry.preferences, ms_into_slot)
             .map_err(ProposerApiError::InvalidGetHeader)?;
@@ -108,6 +109,7 @@ impl<A: Api> ProposerApi<A> {
             is_mev_boost,
             sleep_time,
             timeout_ms,
+            timeout_source,
             preferences: duty.entry.preferences,
             ip_addr,
         })
@@ -141,6 +143,7 @@ impl<A: Api> ProposerApi<A> {
             is_mev_boost,
             sleep_time,
             timeout_ms,
+            timeout_source,
             ip_addr,
             ..
         } = proposer_api.validate_header_request(&params, &headers, &terminating)?;
@@ -159,6 +162,7 @@ impl<A: Api> ProposerApi<A> {
                 request_receive_ns: timings.on_receive_ns,
                 planned_hold_ms: sleep_time.map_or(0, |hold| hold.as_millis() as u64),
                 deadline_ms: timeout_ms.unwrap_or(0),
+                deadline_source: ArrayStr::from_str_truncate(timeout_source),
                 proposer_pubkey: params.pubkey,
                 proposer_ip: GetHeaderServed::ip_octets(ip_addr),
                 user_agent: headers
