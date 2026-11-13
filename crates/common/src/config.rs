@@ -96,7 +96,8 @@ pub struct RelayConfig {
     #[serde(default)]
     pub operator_config: Option<OperatorConfig>,
     pub blacklist_provider: Option<Url>,
-    /// Accepted Gloas `auth.message.data` values, normally our hostnames; empty disables the check.
+    /// Accepted Gloas `auth.message.data` values, normally our hostnames; empty disables the
+    /// check.
     #[serde(default)]
     pub request_auth_data: Vec<String>,
 }

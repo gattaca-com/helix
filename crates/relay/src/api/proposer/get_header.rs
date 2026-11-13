@@ -14,6 +14,11 @@ use axum::{
     http::HeaderMap,
     response::IntoResponse,
 };
+use flux::{
+    spine::StandaloneProducer,
+    timing::{IngestionTime, Nanos},
+    utils::ArrayStr,
+};
 use helix_common::{
     GET_HEADER_REQUEST_CUTOFF_MS, GetHeaderTrace, RequestTimings, ValidatorPreferences,
     api::proposer_api::GetHeaderParams,
@@ -26,7 +31,10 @@ use helix_common::{
     utils::{extract_request_id, utcnow_ms, utcnow_ns},
 };
 use helix_types::{BuilderBid, ForkName, GetHeaderResponse, SignedBuilderBid};
-use http::{HeaderValue, header::CONTENT_TYPE};
+use http::{
+    HeaderValue,
+    header::{CONTENT_TYPE, USER_AGENT},
+};
 use ssz::Encode;
 use tracing::{Instrument, debug, error, info, trace, warn};
 
@@ -37,7 +45,7 @@ use crate::{
         proposer::{CONSENSUS_VERSION_HEADER, error::ProposerApiError},
         router::Terminating,
     },
-    spine::messages::GetHeaderServed,
+    spine::messages::{GetHeaderServed, GetHeaderTimedOut},
 };
 
 pub(super) struct ValidatedHeaderRequest {
@@ -47,6 +55,7 @@ pub(super) struct ValidatedHeaderRequest {
     pub is_mev_boost: bool,
     pub sleep_time: Option<Duration>,
     pub timeout_ms: Option<u64>,
+    pub timeout_source: &'static str,
     pub preferences: ValidatorPreferences,
     pub ip_addr: Option<IpAddr>,
 }
@@ -88,7 +97,7 @@ impl<A: Api> ProposerApi<A> {
         let user_agent = self.api_provider.get_metadata(headers);
         let ip_addr = header_ip_addr(headers);
 
-        let TimingResult { is_mev_boost, sleep_time, timeout_ms } = self
+        let TimingResult { is_mev_boost, sleep_time, timeout_ms, timeout_source } = self
             .api_provider
             .get_timing(params, headers, &duty.entry.preferences, ms_into_slot)
             .map_err(ProposerApiError::InvalidGetHeader)?;
@@ -100,6 +109,7 @@ impl<A: Api> ProposerApi<A> {
             is_mev_boost,
             sleep_time,
             timeout_ms,
+            timeout_source,
             preferences: duty.entry.preferences,
             ip_addr,
         })
@@ -132,6 +142,8 @@ impl<A: Api> ProposerApi<A> {
             user_agent,
             is_mev_boost,
             sleep_time,
+            timeout_ms,
+            timeout_source,
             ip_addr,
             ..
         } = proposer_api.validate_header_request(&params, &headers, &terminating)?;
@@ -144,6 +156,24 @@ impl<A: Api> ProposerApi<A> {
 
         let mut timing_guard =
             TimeoutGuard::<A>::new(ip_addr.map(|ip| (ip, proposer_api.api_provider.clone())));
+        timing_guard.timed_out = Some((
+            GetHeaderTimedOut {
+                slot: params.slot,
+                planned_hold_ms: sleep_time.map_or(0, |hold| hold.as_millis() as u64),
+                deadline_ms: timeout_ms.unwrap_or(0),
+                deadline_source: ArrayStr::from_str_truncate(timeout_source),
+                proposer_pubkey: params.pubkey,
+                proposer_ip: GetHeaderServed::ip_octets(ip_addr),
+                user_agent: headers
+                    .get(USER_AGENT)
+                    .and_then(|agent| agent.to_str().ok())
+                    .map(ArrayStr::from_str_truncate)
+                    .unwrap_or_default(),
+                ..Default::default()
+            },
+            Nanos(timings.on_receive_ns),
+            proposer_api.header_timed_out.clone(),
+        ));
 
         if let Some(sleep_time) = sleep_time {
             debug!(
@@ -163,6 +193,7 @@ impl<A: Api> ProposerApi<A> {
 
         let Ok(rx) = proposer_api.auctioneer_handle.get_header(params, is_mev_boost) else {
             error!("failed to send get_header to auctioneer");
+            timing_guard.timed_out = None;
             return Err(ProposerApiError::InternalServerError);
         };
 
@@ -170,6 +201,7 @@ impl<A: Api> ProposerApi<A> {
             Ok(res) => res.inspect_err(|_| timing_guard.done_fetch = true)?,
             Err(err) => {
                 warn!(%err, "failed to get header from auctioneer");
+                timing_guard.timed_out = None;
                 return Err(ProposerApiError::InternalServerError);
             }
         };
@@ -271,13 +303,20 @@ struct TimeoutGuard<A: Api> {
     done_fetch: bool,
     started: Instant,
     reporter: Option<(IpAddr, Arc<A::ApiProvider>)>,
+    timed_out: Option<(GetHeaderTimedOut, Nanos, Arc<StandaloneProducer<GetHeaderTimedOut>>)>,
 }
 
 impl<A: Api> TimeoutGuard<A> {
     /// Never derive or use `Default` here: a `..Default::default()` base outlives the update
     /// expression and fires `Drop`, reporting a bogus abandon for every request.
     fn new(reporter: Option<(IpAddr, Arc<A::ApiProvider>)>) -> Self {
-        Self { done_sleep: false, done_fetch: false, started: Instant::now(), reporter }
+        Self {
+            done_sleep: false,
+            done_fetch: false,
+            started: Instant::now(),
+            reporter,
+            timed_out: None,
+        }
     }
 }
 
@@ -293,8 +332,16 @@ impl<A: Api> Drop for TimeoutGuard<A> {
         } else if !self.done_fetch {
             HEADER_TIMEOUT_FETCH.inc();
             warn!("didn't complete fetch")
-        } else if let Some((ip, provider)) = &self.reporter {
-            provider.on_request_completed(*ip, elapsed_ms);
+        } else {
+            if let Some((ip, provider)) = &self.reporter {
+                provider.on_request_completed(*ip, elapsed_ms);
+            }
+            return;
+        }
+        if let Some((mut timed_out, received, producer)) = self.timed_out.take() {
+            timed_out.hold_completed = self.done_sleep;
+            let received = IngestionTime::from_real_at(received, IngestionTime::now());
+            producer.produce_with_ingestion(timed_out, received);
         }
     }
 }

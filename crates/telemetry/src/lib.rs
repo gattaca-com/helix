@@ -8,6 +8,7 @@ use std::net::{IpAddr, Ipv6Addr};
 use alloy_primitives::{Address, B256, FixedBytes, U256};
 use bytes::Bytes;
 use flux::{timing::Nanos, type_hash_derive::type_hash_lock};
+use flux_utils::ArrayStr;
 use flux_versioned_types::{ByteStable, TelemetrySchema, VersionedLeaves, versioned_telemetry};
 use serde::{Deserialize, Serialize};
 use ssz::Encode;
@@ -219,6 +220,22 @@ impl GetHeaderServed {
         (self.proposer_ip != [0; 16]).then(|| Ipv6Addr::from(self.proposer_ip).to_canonical())
     }
 }
+
+versioned_telemetry!(GetHeaderTimedOut, persist = "Helix.Header.TimedOut" =>
+    #[derive(Default)]
+    #[type_hash_lock(hash = 15080204562971561971)]
+    GetHeaderTimedOutV1 {
+        pub slot: u64,
+        pub planned_hold_ms: u64,
+        pub deadline_ms: u64,
+        pub proposer_pubkey: BlsPublicKeyBytes,
+        pub proposer_ip: [u8; 16],
+        pub user_agent: ArrayStr<32>,
+        pub deadline_source: ArrayStr<24>,
+        pub hold_completed: bool,
+        pub _pad: [u8; 7],
+    }
+);
 
 #[derive(Clone, Copy)]
 pub enum TopBidPrecision {
