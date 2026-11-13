@@ -9,7 +9,7 @@ use helix_common::{
     metrics::{BID_ADJUSTMENT_LATENCY, HYDRATION_CACHE_HITS, SUBMISSION_REJECTS},
     record_submission_step,
 };
-use helix_types::{SignedBidSubmission, Submission};
+use helix_types::{ForkName, SignedBidSubmission, Submission};
 use tracing::{error, trace};
 
 use crate::{
@@ -80,15 +80,12 @@ impl<B: BidAdjustor> Context<B> {
 
         // Block hashes leak and only the simulator checks them. Known builders may claim an
         // unclaimed or own-builder_id hash; everything else is quarantined until simulated.
-        let stored_builder = match &submission_data.submission {
-            Submission::Full(SignedBidSubmission::Gloas(_)) => self
-                .gloas_payloads
+        let stored_builder = if submission_data.submission.fork_name() == ForkName::Gloas {
+            self.gloas_payloads
                 .get_for_reveal(&bid.block_hash)
-                .map(|stored| stored.submission.bid_trace().builder_pubkey),
-            _ => self
-                .payloads
-                .get(&bid.block_hash)
-                .map(|stored| *stored.bid_data_ref().builder_pubkey),
+                .map(|stored| stored.submission.bid_trace().builder_pubkey)
+        } else {
+            self.payloads.get(&bid.block_hash).map(|stored| *stored.bid_data_ref().builder_pubkey)
         };
         let is_trusted_claim = builder_info.builder_id.is_some() &&
             stored_builder.is_none_or(|stored| {
@@ -443,6 +440,7 @@ impl<B: BidAdjustor> Context<B> {
                 trace!(
                     tx_cache_hits = hydrated.tx_cache_hits,
                     blob_cache_hits = hydrated.blob_cache_hits,
+                    bal_cache_hits = hydrated.bal_cache_hits,
                     "hydration done"
                 );
                 record_submission_step("hydration", start.elapsed());
@@ -453,10 +451,13 @@ impl<B: BidAdjustor> Context<B> {
                 HYDRATION_CACHE_HITS
                     .with_label_values(&["blob"])
                     .inc_by(hydrated.blob_cache_hits as u64);
+                HYDRATION_CACHE_HITS
+                    .with_label_values(&["bal_entry"])
+                    .inc_by(hydrated.bal_cache_hits as u64);
 
-                hydrated.submission.validate_payload_ssz_lengths(max_blobs_per_block)?;
+                hydrated.submission.validate_lengths(max_blobs_per_block)?;
 
-                Ok((SignedBidSubmission::Fulu(hydrated.submission), hydrated.tx_root))
+                Ok((hydrated.submission, hydrated.tx_root))
             }
         }
     }
