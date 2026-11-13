@@ -1,5 +1,9 @@
+use std::hash::Hasher;
+
 use alloy_primitives::{Address, B256};
+use alloy_rlp::Header;
 use bytes::Bytes;
+use rustc_hash::FxHasher;
 use silver_ssz::ssz_view::{EXECUTION_PAYLOAD_FIXED_GLOAS, ExecutionPayloadView};
 use ssz::{Decode, DecodeError, Encode};
 use ssz_derive::Decode;
@@ -34,6 +38,41 @@ struct Parts {
     tx_root: Option<B256>,
     tx_refs: Vec<u64>,
     withdrawals_ref: u64,
+    /// Block order of the access list entries as cache keys, [`NEXT_FULL_ITEM`]
+    /// meaning the next entry of the inline list.
+    bal_refs: Vec<u64>,
+}
+
+/// Access list entry cache key: FxHash of the entry's RLP bytes. Mirrored by
+/// the builder for `bal_refs`.
+pub fn bal_entry_key(entry: &[u8]) -> u64 {
+    let mut hasher = FxHasher::default();
+    hasher.write(entry);
+    hasher.finish()
+}
+
+fn split_rlp_item(bytes: &[u8]) -> Option<(&[u8], &[u8])> {
+    let mut rest = bytes;
+    let header = Header::decode(&mut rest).ok()?;
+    bytes.split_at_checked(bytes.len() - rest.len() + header.payload_length)
+}
+
+/// Entries of an RLP-encoded access list, `None` when the encoding is malformed.
+fn bal_entries(list: &[u8]) -> Option<impl Iterator<Item = &[u8]>> {
+    let mut rest = list;
+    let header = Header::decode(&mut rest).ok()?;
+    if !header.list || rest.len() != header.payload_length {
+        return None;
+    }
+    let mut check = rest;
+    while !check.is_empty() {
+        check = split_rlp_item(check)?.1;
+    }
+    Some(std::iter::from_fn(move || {
+        let (entry, tail) = split_rlp_item(rest)?;
+        rest = tail;
+        Some(entry)
+    }))
 }
 
 impl Decode for DehydratedBidSubmissionGloas {
@@ -109,7 +148,16 @@ impl DehydratedBidSubmissionGloas {
         transaction_slices(ExecutionPayloadView::transactions(self.payload()))
     }
 
+    fn block_access_list(&self) -> &[u8] {
+        let payload = self.payload();
+        &payload[ExecutionPayloadView::block_access_list_offset(payload) as usize..]
+    }
+
     pub(super) fn can_hydrate(&self, cache: &Cache, max_blobs_per_block: usize) -> bool {
+        let Some(inline) = bal_entries(self.block_access_list()) else {
+            return false;
+        };
+        let bal_refs = &self.0.bal_refs;
         refs_resolvable(
             &self.0.tx_refs,
             self.full_txs().map(|tx| tx.len()),
@@ -117,10 +165,16 @@ impl DehydratedBidSubmissionGloas {
             self.0.withdrawals_ref,
             cache,
             max_blobs_per_block,
-        )
+        ) && bal_refs.iter().filter(|&&r| r == NEXT_FULL_ITEM).count() <= inline.count() &&
+            bal_refs.iter().all(|&r| r == NEXT_FULL_ITEM || cache.bal_entries.contains_key(&r))
     }
 
     pub(super) fn feed(&self, cache: &mut Cache) {
+        if let Some(entries) = bal_entries(self.block_access_list()) {
+            for entry in entries {
+                cache.bal_entries.insert(bal_entry_key(entry), entry.to_vec());
+            }
+        }
         if self.0.withdrawals_ref == 0 &&
             let Ok(withdrawals) = Withdrawals::from_ssz_bytes(self.withdrawals())
         {
@@ -151,6 +205,7 @@ impl DehydratedBidSubmissionGloas {
             tx_root,
             tx_refs,
             withdrawals_ref,
+            bal_refs,
         } = self.0;
         let dehydrated = execution_payload.as_slice();
         let withdrawals_offset = ExecutionPayloadView::withdrawals_offset(dehydrated) as usize;
@@ -204,6 +259,33 @@ impl DehydratedBidSubmissionGloas {
         }
         tx_list.extend_from_slice(&tx_body);
 
+        let mut inline = bal_entries(&dehydrated[block_access_list_offset..]);
+        if inline.is_none() {
+            last_err = Err(HydrationError::InvalidBlockAccessList);
+        }
+        let mut bal_body = Vec::new();
+        let mut bal_cache_hits = 0;
+        for (index, &bal_ref) in bal_refs.iter().enumerate() {
+            let entry: &[u8] = if bal_ref == NEXT_FULL_ITEM {
+                let Some(entry) = inline.as_mut().and_then(Iterator::next) else {
+                    last_err = Err(HydrationError::MissingFullBalEntry { index });
+                    continue;
+                };
+                cache.bal_entries.insert(bal_entry_key(entry), entry.to_vec());
+                entry
+            } else if let Some(cached) = cache.bal_entries.get(&bal_ref) {
+                bal_cache_hits += 1;
+                cached
+            } else {
+                last_err = Err(HydrationError::UnknownBalEntry { index, key: bal_ref });
+                continue;
+            };
+            bal_body.extend_from_slice(entry);
+        }
+        let mut block_access_list = Vec::with_capacity(bal_body.len() + 9);
+        Header { list: true, payload_length: bal_body.len() }.encode(&mut block_access_list);
+        block_access_list.extend_from_slice(&bal_body);
+
         let mut new_keys = Vec::with_capacity(blobs_bundle.new_items.len());
         for (index, item) in blobs_bundle.new_items.into_iter().enumerate() {
             let proofs = item.proof.len();
@@ -251,7 +333,6 @@ impl DehydratedBidSubmissionGloas {
         bundle.extend_from_slice(&blobs);
 
         let extra_data = ExecutionPayloadView::extra_data(dehydrated);
-        let block_access_list = &dehydrated[block_access_list_offset..];
         let mut payload = Vec::with_capacity(
             EXECUTION_PAYLOAD_FIXED_GLOAS +
                 extra_data.len() +
@@ -266,7 +347,7 @@ impl DehydratedBidSubmissionGloas {
         let withdrawals_offset = payload.len() as u32;
         payload.extend_from_slice(&withdrawals);
         let block_access_list_offset = payload.len() as u32;
-        payload.extend_from_slice(block_access_list);
+        payload.extend_from_slice(&block_access_list);
         for (at, offset) in [
             (TRANSACTIONS_OFFSET_AT, transactions_offset),
             (WITHDRAWALS_OFFSET_AT, withdrawals_offset),
@@ -293,6 +374,7 @@ impl DehydratedBidSubmissionGloas {
             submission: SignedBidSubmission::Gloas(submission),
             tx_cache_hits,
             blob_cache_hits,
+            bal_cache_hits,
             tx_root,
         })
     }

@@ -440,6 +440,7 @@ impl<B: BidAdjustor> Context<B> {
                 trace!(
                     tx_cache_hits = hydrated.tx_cache_hits,
                     blob_cache_hits = hydrated.blob_cache_hits,
+                    bal_cache_hits = hydrated.bal_cache_hits,
                     "hydration done"
                 );
                 record_submission_step("hydration", start.elapsed());
@@ -450,6 +451,9 @@ impl<B: BidAdjustor> Context<B> {
                 HYDRATION_CACHE_HITS
                     .with_label_values(&["blob"])
                     .inc_by(hydrated.blob_cache_hits as u64);
+                HYDRATION_CACHE_HITS
+                    .with_label_values(&["bal_entry"])
+                    .inc_by(hydrated.bal_cache_hits as u64);
 
                 hydrated.submission.validate_lengths(max_blobs_per_block)?;
 

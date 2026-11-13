@@ -12,7 +12,7 @@ use tracing::trace;
 
 mod gloas;
 
-pub use gloas::DehydratedBidSubmissionGloas;
+pub use gloas::{DehydratedBidSubmissionGloas, bal_entry_key};
 
 use crate::{
     BidTrace, Blob, BlobsBundle, BlockMergingData, BlockValidationError, BlsPublicKeyBytes,
@@ -52,6 +52,7 @@ pub struct HydratedData {
     pub submission: SignedBidSubmission,
     pub tx_cache_hits: usize,
     pub blob_cache_hits: usize,
+    pub bal_cache_hits: usize,
     pub tx_root: Option<B256>,
 }
 
@@ -575,7 +576,7 @@ impl DehydratedBidSubmissionFulu {
         cache: &mut Cache,
         max_blobs_per_block: usize,
     ) -> Result<HydratedData, HydrationError> {
-        let Cache { transactions: txs, blobs_fulu: blobs, withdrawals } = cache;
+        let Cache { transactions: txs, blobs_fulu: blobs, withdrawals, .. } = cache;
         // avoid short-circuiting the loop to maximize cache population
         let mut last_err = Ok(());
         let mut tx_cache_hits = 0;
@@ -671,7 +672,13 @@ impl DehydratedBidSubmissionFulu {
             signature: self.signature,
         });
 
-        Ok(HydratedData { submission, tx_cache_hits, blob_cache_hits, tx_root: self.tx_root })
+        Ok(HydratedData {
+            submission,
+            tx_cache_hits,
+            blob_cache_hits,
+            bal_cache_hits: 0,
+            tx_root: self.tx_root,
+        })
     }
 
     /// Inserts this submission's full transactions and new blobs into the
@@ -697,6 +704,8 @@ struct Cache {
     transactions: FxHashMap<u64, Transaction>,
     blobs_fulu: FxHashMap<u64, CachedBlob>,
     withdrawals: FxHashMap<u64, CachedWithdrawals>,
+    /// Gloas block access list entries, keyed by [`bal_entry_key`].
+    bal_entries: FxHashMap<u64, Vec<u8>>,
 }
 
 impl Cache {
@@ -705,6 +714,7 @@ impl Cache {
             transactions: FxHashMap::default(),
             blobs_fulu: FxHashMap::default(),
             withdrawals: FxHashMap::default(),
+            bal_entries: FxHashMap::default(),
         }
     }
 
@@ -713,6 +723,7 @@ impl Cache {
             transactions: FxHashMap::with_capacity_and_hasher(10_000, Default::default()),
             blobs_fulu: FxHashMap::with_capacity_and_hasher(1_000, Default::default()),
             withdrawals: FxHashMap::with_capacity_and_hasher(4, Default::default()),
+            bal_entries: FxHashMap::with_capacity_and_hasher(4_000, Default::default()),
         }
     }
 
@@ -720,6 +731,7 @@ impl Cache {
         self.transactions.clear();
         self.blobs_fulu.clear();
         self.withdrawals.clear();
+        self.bal_entries.clear();
     }
 }
 
@@ -852,6 +864,15 @@ pub enum HydrationError {
 
     #[error("new blob {index} has {proofs} proofs, expected {CELLS_PER_EXT_BLOB}")]
     InvalidBlobProofs { index: usize, proofs: usize },
+
+    #[error("unknown block access list entry: index {index}, key {key}")]
+    UnknownBalEntry { index: usize, key: u64 },
+
+    #[error("block access list ref {index} expects a full entry but none remain")]
+    MissingFullBalEntry { index: usize },
+
+    #[error("block access list is not a well-formed rlp list")]
+    InvalidBlockAccessList,
 
     #[error("hydrated submission does not decode: {0:?}")]
     Hydrated(DecodeError),

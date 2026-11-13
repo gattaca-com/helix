@@ -258,7 +258,8 @@ execution rather than as a hash mismatch.
   Gloas submissions over HTTP.** Each is refused explicitly rather than decoded
   into a Fulu shape that would drop the access list. Dehydrated Gloas
   submissions are accepted over TCP with the `DEHYDRATED_V2` flag, in the v2
-  field order with the Gloas payload and requests.
+  field order with the Gloas payload and requests, plus `bal_refs` keying the
+  access list entries like `tx_refs` key transactions.
 - **Inclusion lists** in the ethrex simulation role. A block violating a
   submitted list passes here and fails in `crates/simulator`.
 
