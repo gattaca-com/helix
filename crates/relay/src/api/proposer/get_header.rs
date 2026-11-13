@@ -159,7 +159,6 @@ impl<A: Api> ProposerApi<A> {
         timing_guard.timed_out = Some((
             GetHeaderTimedOut {
                 slot: params.slot,
-                request_receive_ns: timings.on_receive_ns,
                 planned_hold_ms: sleep_time.map_or(0, |hold| hold.as_millis() as u64),
                 deadline_ms: timeout_ms.unwrap_or(0),
                 deadline_source: ArrayStr::from_str_truncate(timeout_source),
