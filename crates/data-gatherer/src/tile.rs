@@ -8,7 +8,7 @@ use helix_common::{api::builder_api::TopBidUpdate, config::DataGatherConfig, gat
 use helix_relay::{HelixSpine, NewBidSubmission, NewTcpBidSubmission, read_spine_epoch};
 use helix_telemetry::{
     BidUpdate, DecodedSubmission, GetHeaderServed, GetHeaderTimedOut, MergedBlockMsg,
-    SimPreviousSlotDrops, SimUpdate, SlotMsg,
+    ProposerRequest, SimPreviousSlotDrops, SimUpdate, SlotMsg,
 };
 use tracing::info;
 
@@ -234,6 +234,9 @@ impl Tile<HelixSpine> for DataGatherer {
             self.cache.push(msg);
         });
         adapter.consume_internal_message(|msg: &mut InternalMessage<GetHeaderTimedOut>, _| {
+            self.cache.push(msg);
+        });
+        adapter.consume_internal_message(|msg: &mut InternalMessage<ProposerRequest>, _| {
             self.cache.push(msg);
         });
 

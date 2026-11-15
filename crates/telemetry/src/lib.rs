@@ -237,6 +237,139 @@ versioned_telemetry!(GetHeaderTimedOut, persist = "Helix.Header.TimedOut" =>
     }
 );
 
+/// Proposer API call a `ProposerRequest` describes.
+#[repr(u8)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    TypeHash,
+    ByteStable,
+    TelemetrySchema,
+)]
+#[byte_stable(crate = "::flux_versioned_types::byte_stable")]
+pub enum ProposerRequestKind {
+    #[default]
+    GetHeader = 0,
+    GetPayload = 1,
+    GetPayloadV2 = 2,
+}
+
+/// HTTP version the client spoke, as opposed to the one a load balancer forwarded with.
+#[repr(u8)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    TypeHash,
+    ByteStable,
+    TelemetrySchema,
+)]
+#[byte_stable(crate = "::flux_versioned_types::byte_stable")]
+pub enum ClientHttpVersion {
+    #[default]
+    Unknown = 0,
+    Http10 = 1,
+    Http11 = 2,
+    Http2 = 3,
+}
+
+/// TLS version of the client's connection; `Plaintext` when it had none.
+#[repr(u8)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    TypeHash,
+    ByteStable,
+    TelemetrySchema,
+)]
+#[byte_stable(crate = "::flux_versioned_types::byte_stable")]
+pub enum ClientTlsVersion {
+    #[default]
+    Unknown = 0,
+    Plaintext = 1,
+    Tls12 = 2,
+    Tls13 = 3,
+    Other = 4,
+}
+
+/// How the request reached the load balancer.
+#[repr(u8)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    TypeHash,
+    ByteStable,
+    TelemetrySchema,
+)]
+#[byte_stable(crate = "::flux_versioned_types::byte_stable")]
+pub enum ClientPath {
+    #[default]
+    Unknown = 0,
+    Direct = 1,
+    Cdn = 2,
+}
+
+versioned_telemetry!(ProposerRequest, persist = "Helix.Proposer.Request" =>
+    /// A `getHeader` or `getPayload` request as it arrived, whatever its outcome. The
+    /// `conn_*`, `tls_*`, `http_version` and `path` fields describe the client's own
+    /// connection and come from the load balancer in front of the relay; they are zero or
+    /// `Unknown` when it reported nothing.
+    #[derive(Default)]
+    #[type_hash_lock(hash = 2614670059783541007)]
+    ProposerRequestV1 {
+        /// Zero when the request named no slot that could be read.
+        pub slot: u64,
+        pub receive_ns: u64,
+        /// Unix ns at which the client's TCP connection was accepted, on the clock of the
+        /// host that accepted it, which need not be this one. With `proposer_ip` it identifies
+        /// the connection across its requests.
+        pub conn_accepted_ns: u64,
+        /// How long the connection had seen no handshake or request when this one arrived.
+        pub conn_idle_us: u64,
+        pub tls_handshake_us: u64,
+        /// Zero for `getPayload`, whose proposer is only known by index.
+        pub proposer_pubkey: BlsPublicKeyBytes,
+        /// IPv4 addresses are stored IPv6-mapped; all zeros when unknown.
+        pub proposer_ip: [u8; 16],
+        pub user_agent: ArrayStr<64>,
+        /// 1-based index of the request on its connection, counting every request the
+        /// connection carried and not only the ones reported here.
+        pub conn_request: u32,
+        /// Kernel smoothed round trip of the client's connection and its variance.
+        pub conn_srtt_us: u32,
+        pub conn_rttvar_us: u32,
+        pub kind: ProposerRequestKind,
+        pub http_version: ClientHttpVersion,
+        pub tls_version: ClientTlsVersion,
+        pub path: ClientPath,
+        pub tls_resumed: bool,
+        pub _pad: [u8; 7],
+    }
+);
+
 #[derive(Clone, Copy)]
 pub enum TopBidPrecision {
     Millis,

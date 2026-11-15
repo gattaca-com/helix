@@ -45,7 +45,7 @@ use crate::{
         proposer::{CONSENSUS_VERSION_HEADER, error::ProposerApiError},
         router::Terminating,
     },
-    spine::messages::{GetHeaderServed, GetHeaderTimedOut},
+    spine::messages::{GetHeaderServed, GetHeaderTimedOut, ProposerRequestKind},
 };
 
 pub(super) struct ValidatedHeaderRequest {
@@ -135,6 +135,14 @@ impl<A: Api> ProposerApi<A> {
         Path(params): Path<GetHeaderParams>,
     ) -> Result<impl IntoResponse, ProposerApiError> {
         trace!("starting call");
+
+        proposer_api.report_request(
+            ProposerRequestKind::GetHeader,
+            params.slot,
+            params.pubkey,
+            timings.on_receive_ns,
+            &headers,
+        );
 
         let ValidatedHeaderRequest {
             ms_into_slot,

@@ -33,6 +33,7 @@ use crate::{
     },
     auctioneer::{GetPayloadKind, GetPayloadResultData},
     gossip::{BroadcastGetPayloadParams, BroadcastPayloadParams},
+    spine::messages::ProposerRequestKind,
 };
 
 const GET_PAYLOAD_REQUEST_CUTOFF_MS: i64 = 4000;
@@ -66,6 +67,7 @@ struct ParsedGetPayload {
 impl<A: Api> ProposerApi<A> {
     fn parse_get_payload_request(
         &self,
+        kind: ProposerRequestKind,
         timings: RequestTimings,
         headers: &HeaderMap,
         body: &bytes::Bytes,
@@ -88,20 +90,32 @@ impl<A: Api> ProposerApi<A> {
         let encoding = Encoding::from_content_type(headers);
 
         // TODO: move decoding to worker
-        let signed_blinded_block: SignedBlindedBeaconBlock = match (fork, encoding) {
+        let decoded: Result<SignedBlindedBeaconBlock, ProposerApiError> = match (fork, encoding) {
             (ForkName::Fulu, Encoding::Json) => {
-                let b: SignedBlindedBeaconBlockFulu = serde_json::from_slice(body)
-                    .inspect_err(|err| warn!(%err, "failed to deserialize signed block"))?;
-                b.into()
+                serde_json::from_slice::<SignedBlindedBeaconBlockFulu>(body)
+                    .inspect_err(|err| warn!(%err, "failed to deserialize signed block"))
+                    .map(Into::into)
+                    .map_err(Into::into)
             }
             (ForkName::Fulu, Encoding::Ssz) => SignedBlindedBeaconBlockFulu::from_ssz_bytes(body)
-                .inspect_err(|err| warn!(?err, "failed to deserialize signed block"))?
-                .into(),
-            (_, _) => return Err(ProposerApiError::InvalidFork),
+                .inspect_err(|err| warn!(?err, "failed to deserialize signed block"))
+                .map(Into::into)
+                .map_err(Into::into),
+            (_, _) => Err(ProposerApiError::InvalidFork),
         };
+        trace.decode = utcnow_ns();
+
+        // A request that does not decode is still reported, with slot 0.
+        self.report_request(
+            kind,
+            decoded.as_ref().map_or(0, |block| block.slot().as_u64()),
+            BlsPublicKeyBytes::ZERO,
+            trace.receive,
+            headers,
+        );
+        let signed_blinded_block = decoded?;
 
         tracing::Span::current().record("slot", signed_blinded_block.slot().as_u64());
-        trace.decode = utcnow_ns();
 
         let block_hash = signed_blinded_block
             .message()
@@ -150,7 +164,12 @@ impl<A: Api> ProposerApi<A> {
             mut trace,
             user_agent,
             request_id,
-        } = proposer_api.parse_get_payload_request(timings, &headers, &body)?;
+        } = proposer_api.parse_get_payload_request(
+            ProposerRequestKind::GetPayload,
+            timings,
+            &headers,
+            &body,
+        )?;
 
         let gossiper = proposer_api.gossiper.clone();
         let params = BroadcastGetPayloadParams {
@@ -226,7 +245,12 @@ impl<A: Api> ProposerApi<A> {
             user_agent,
             request_id,
             ..
-        } = proposer_api.parse_get_payload_request(timings, &headers, &body)?;
+        } = proposer_api.parse_get_payload_request(
+            ProposerRequestKind::GetPayloadV2,
+            timings,
+            &headers,
+            &body,
+        )?;
 
         proposer_api
             .gossiper
