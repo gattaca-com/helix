@@ -19,7 +19,7 @@ use tracing::trace;
 use crate::{
     api::proposer::{ProposerApiError, get_payload::ProposerApiVersion},
     auctioneer::types::{
-        Event, GetExecutionPayloadBidResult, GetHeaderResult, GetPayloadResult,
+        Event, GetExecutionPayloadBidResult, GetHeaderResult, GetPayloadResult, Reply,
         SubmitBuilderPreferencesResult,
     },
     gossip::BroadcastPayloadParams,
@@ -63,16 +63,25 @@ impl AuctioneerHandle {
         is_mev_boost: bool,
     ) -> Result<oneshot::Receiver<GetHeaderResult>, ChannelFull> {
         let (tx, rx) = oneshot::channel();
+        self.get_header_reply(params, is_mev_boost, Reply::Task(tx))?;
+        Ok(rx)
+    }
+
+    pub fn get_header_reply(
+        &self,
+        params: GetHeaderParams,
+        is_mev_boost: bool,
+        res_tx: Reply<GetHeaderResult>,
+    ) -> Result<(), ChannelFull> {
         trace!("sending to auctioneer");
         self.auctioneer
             .try_send(Event::GetHeader {
                 params,
-                res_tx: tx,
+                res_tx,
                 span: tracing::Span::current(),
                 is_mev_boost,
             })
-            .map_err(|_| ChannelFull)?;
-        Ok(rx)
+            .map_err(|_| ChannelFull)
     }
 
     pub fn get_execution_payload_bid(

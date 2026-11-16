@@ -14,13 +14,14 @@ use governor::{
     DefaultKeyedRateLimiter, Quota, RateLimiter,
     clock::{Clock, DefaultClock},
 };
-use helix_common::{Route, RouterConfig, metrics::ApiMetrics};
+use helix_common::{Route, RouterConfig, metrics::ApiMetrics, utils::utcnow_ns};
 use http::{HeaderMap, HeaderName, HeaderValue};
 use rustc_hash::FxHashMap;
 use tracing::info;
 use uuid::Uuid;
 
 const X_REQUEST_ID: &str = "x-request-id";
+const TEXT: (&str, &str) = ("content-type", "text/plain; charset=utf-8");
 /// Headers a handler may add to a response, besides the request id.
 const MAX_RESPONSE_HEADERS: usize = 3;
 const LIMITER_PRUNE_INTERVAL: Duration = Duration::from_secs(60);
@@ -60,6 +61,11 @@ pub(crate) struct Responder {
 
 pub(crate) struct Inbound {
     pub route: Route,
+    pub peer: SocketAddr,
+    pub received_ns: u64,
+    pub headers: HeaderMap,
+    /// The path's parameter segments, `/`-separated.
+    pub params: String,
     pub responder: Responder,
 }
 
@@ -128,8 +134,11 @@ impl ApiServer {
     }
 
     /// Appends the requests that arrived to `requests` and answers those no route
-    /// takes. Returns whether anything happened.
-    pub fn poll(&mut self, requests: &mut Vec<Inbound>) -> bool {
+    /// takes. `closed` gets the connections that went away, which may include the
+    /// caller of one of this call's requests: a request can arrive together with its
+    /// connection's close. Tokens are never reused, so the two lists need no order.
+    /// Returns whether anything happened.
+    pub fn poll(&mut self, requests: &mut Vec<Inbound>, closed: &mut Vec<Token>) -> bool {
         let http = &mut self.http;
         let mut worked = self.net.poll_with(|event| {
             http.on_event(&event);
@@ -144,8 +153,10 @@ impl ApiServer {
             }
             HttpEvent::Disconnected { token } => {
                 peers.remove(&token);
+                closed.push(token);
             }
             HttpEvent::Request { token, request } => {
+                let received_ns = utcnow_ns();
                 let Some(peer) = peers.get(&token).copied() else { return };
                 let headers = header_map(&request);
                 let request_id = headers
@@ -161,9 +172,7 @@ impl ApiServer {
 
                 let mut status = 404;
                 for served in routes {
-                    if served.params_of(path).is_none() {
-                        continue;
-                    }
+                    let Some(params) = served.params_of(path) else { continue };
                     // A route that answers GET answers HEAD; the listener drops the body.
                     let head = served.method == "GET" && request.method == "HEAD";
                     if served.method != request.method && !head {
@@ -184,7 +193,14 @@ impl ApiServer {
                         refused.push((responder, 429, wait.as_secs()));
                         return;
                     }
-                    requests.push(Inbound { route: served.route, responder });
+                    requests.push(Inbound {
+                        route: served.route,
+                        peer,
+                        received_ns,
+                        headers,
+                        params: params.to_owned(),
+                        responder,
+                    });
                     return;
                 }
                 refused.push((Responder { token, request_id, metrics: None }, status, 0));
@@ -231,6 +247,10 @@ impl ApiServer {
             let no_body = Duration::ZERO;
             metrics.record(&status.to_string(), 0, no_body, no_body, no_body);
         }
+    }
+
+    pub fn respond_text(&mut self, responder: Responder, status: u16, body: &str) {
+        self.respond(responder, status, &[TEXT], body.as_bytes());
     }
 }
 
@@ -285,7 +305,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             assert!(Instant::now() < deadline, "no response to {raw:?}");
-            server.poll(&mut requests);
+            server.poll(&mut requests, &mut Vec::new());
             for request in requests.drain(..) {
                 server.respond(request.responder, 200, &[], &[]);
             }
