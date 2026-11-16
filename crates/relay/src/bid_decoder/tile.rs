@@ -65,7 +65,15 @@ pub struct DecoderTile {
 #[derive(Clone, Copy)]
 pub enum Lane {
     All,
+    HttpOnly,
     TcpOnly,
+}
+
+impl Lane {
+    /// Workers share both lanes only when there are no TCP-only workers.
+    pub fn for_shared_core(has_tcp_only_workers: bool) -> Self {
+        if has_tcp_only_workers { Self::HttpOnly } else { Self::All }
+    }
 }
 
 impl Borrow<NewBidSubmission> for NewTcpBidSubmission {
@@ -83,6 +91,7 @@ impl Tile<HelixSpine> for DecoderTile {
                 self.consume::<NewTcpBidSubmission>(adapter);
                 self.consume::<NewBidSubmission>(adapter);
             }
+            Lane::HttpOnly => self.consume::<NewBidSubmission>(adapter),
             Lane::TcpOnly => self.consume::<NewTcpBidSubmission>(adapter),
         }
     }
@@ -93,6 +102,7 @@ impl Tile<HelixSpine> for DecoderTile {
                 adapter.set_collaborative_group_dcache::<NewTcpBidSubmission>("decoder_tcp_only");
                 adapter.set_collaborative_group_dcache::<NewBidSubmission>("decoder");
             }
+            Lane::HttpOnly => adapter.set_collaborative_group_dcache::<NewBidSubmission>("decoder"),
             Lane::TcpOnly => {
                 adapter.set_collaborative_group_dcache::<NewTcpBidSubmission>("decoder_tcp_only")
             }

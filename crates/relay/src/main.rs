@@ -285,7 +285,8 @@ async fn run(
 
         if config.is_submission_instance {
             let tcp_lane = &config.cores.decoder_tcp_only;
-            let decoders = config.cores.decoder.iter().map(|c| (*c, Lane::All));
+            let shared_lane = Lane::for_shared_core(!tcp_lane.is_empty());
+            let decoders = config.cores.decoder.iter().map(|c| (*c, shared_lane));
             for (core, lane) in decoders.chain(tcp_lane.iter().map(|c| (*c, Lane::TcpOnly))) {
                 let decoder_tile = DecoderTile::new(
                     local_cache.as_ref().clone(),
