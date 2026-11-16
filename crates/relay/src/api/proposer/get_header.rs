@@ -116,7 +116,7 @@ impl<A: Api> ProposerApi<A> {
         })
     }
 
-    fn timeout_guard(
+    pub(super) fn timeout_guard(
         &self,
         params: &GetHeaderParams,
         headers: &HeaderMap,
@@ -150,7 +150,7 @@ impl<A: Api> ProposerApi<A> {
     }
 
     /// Records the bid as served and signs it for the proposer.
-    fn serve_bid(
+    pub(super) fn serve_bid(
         self: &Arc<Self>,
         bid: PayloadEntry,
         params: GetHeaderParams,
@@ -347,12 +347,13 @@ impl<A: Api> ProposerApi<A> {
     }
 }
 
-struct TimeoutGuard<A: Api> {
-    done_sleep: bool,
-    done_fetch: bool,
+pub(super) struct TimeoutGuard<A: Api> {
+    pub(super) done_sleep: bool,
+    pub(super) done_fetch: bool,
     started: Instant,
     reporter: Option<(IpAddr, Arc<A::ApiProvider>)>,
-    timed_out: Option<(GetHeaderTimedOut, Nanos, Arc<StandaloneProducer<GetHeaderTimedOut>>)>,
+    pub(super) timed_out:
+        Option<(GetHeaderTimedOut, Nanos, Arc<StandaloneProducer<GetHeaderTimedOut>>)>,
 }
 
 impl<A: Api> TimeoutGuard<A> {

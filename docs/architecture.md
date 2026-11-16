@@ -32,6 +32,7 @@ These are the channels that connect tasks. Each is created once at startup.
 | `network_broadcast` | `tokio broadcast` | 100 | RelayNetworkManager | Peer WS handlers |
 | `api_events` | `tokio mpsc` | 100 | RelayNetworkManager API | Network Event Handler |
 | `block_submissions` | `tokio mpsc` | 10,000 | Auctioneer (DB writes) | Block Submission Flusher |
+| `header_replies` | `crossbeam unbounded` | - | Auctioneer | Proposer API tile |
 | `sim_jobs` | `crossbeam unbounded` | - | Auctioneer (simulator pool) | Simulator tile |
 | `sim_events` | `crossbeam unbounded` | - | Simulator tile | Auctioneer (simulator pool) |
 
@@ -252,6 +253,14 @@ move here one at a time and stay on the API server until traffic is switched ove
 ids and request metrics.
 
 - `GET /eth/v1/builder/status`
+- `GET /eth/v1/builder/header/:slot/:parent/:pubkey`: held here for its timing-game
+  delay, then asked of the Auctioneer over the `event` channel. The answer comes back
+  on `header_replies`, and the tile signs and sends it.
+
+```
+Proposers ===[HTTP]==> this --[event crossbeam]----------> Auctioneer
+                            <--[header_replies crossbeam]--
+```
 
 #### 11. Admin Server (:4050)
 
