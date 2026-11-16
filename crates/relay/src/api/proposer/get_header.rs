@@ -45,6 +45,7 @@ use crate::{
         proposer::{CONSENSUS_VERSION_HEADER, error::ProposerApiError},
         router::Terminating,
     },
+    auctioneer::PayloadEntry,
     spine::messages::{GetHeaderServed, GetHeaderTimedOut, ProposerRequestKind},
 };
 
@@ -115,6 +116,123 @@ impl<A: Api> ProposerApi<A> {
         })
     }
 
+    fn timeout_guard(
+        &self,
+        params: &GetHeaderParams,
+        headers: &HeaderMap,
+        ip_addr: Option<IpAddr>,
+        sleep_time: Option<Duration>,
+        timeout_ms: Option<u64>,
+        timeout_source: &'static str,
+        receive_ns: u64,
+    ) -> TimeoutGuard<A> {
+        let mut timing_guard =
+            TimeoutGuard::<A>::new(ip_addr.map(|ip| (ip, self.api_provider.clone())));
+        timing_guard.timed_out = Some((
+            GetHeaderTimedOut {
+                slot: params.slot,
+                planned_hold_ms: sleep_time.map_or(0, |hold| hold.as_millis() as u64),
+                deadline_ms: timeout_ms.unwrap_or(0),
+                deadline_source: ArrayStr::from_str_truncate(timeout_source),
+                proposer_pubkey: params.pubkey,
+                proposer_ip: GetHeaderServed::ip_octets(ip_addr),
+                user_agent: headers
+                    .get(USER_AGENT)
+                    .and_then(|agent| agent.to_str().ok())
+                    .map(ArrayStr::from_str_truncate)
+                    .unwrap_or_default(),
+                ..Default::default()
+            },
+            Nanos(receive_ns),
+            self.header_timed_out.clone(),
+        ));
+        timing_guard
+    }
+
+    /// Records the bid as served and signs it for the proposer.
+    fn serve_bid(
+        self: &Arc<Self>,
+        bid: PayloadEntry,
+        params: GetHeaderParams,
+        mut trace: GetHeaderTrace,
+        is_mev_boost: bool,
+        user_agent: Option<String>,
+        ip_addr: Option<IpAddr>,
+        peer: SocketAddr,
+    ) -> (GetHeaderResponse, ForkName) {
+        let now_ns = utcnow_ns();
+        trace.best_bid_fetched = now_ns;
+        debug!(trace = ?trace, "best bid fetched");
+
+        let bid_block_hash = *bid.block_hash();
+        let value = *bid.value();
+        let ep = bid.execution_payload();
+        let builder_pubkey = *bid.bid_data_ref().builder_pubkey;
+        let proposer_fee_recipient = ep.fee_recipient;
+        let block_number = ep.block_number;
+        let extra_data = ep.extra_data.to_vec();
+
+        let served = GetHeaderServed {
+            slot: params.slot,
+            receive_ns: trace.receive,
+            best_bid_fetched_ns: trace.best_bid_fetched,
+            block_hash: bid_block_hash,
+            value,
+            builder_pubkey,
+            proposer_ip: GetHeaderServed::ip_octets(ip_addr),
+            is_mev_boost,
+            streamed: false,
+            proposer_pubkey: params.pubkey,
+            _pad: [0; 6],
+        };
+        self.api_provider.on_header_served(served, peer, &self.header_served);
+
+        self.db.save_get_header_call(
+            params,
+            bid_block_hash,
+            value,
+            trace,
+            is_mev_boost,
+            user_agent,
+            builder_pubkey,
+            proposer_fee_recipient,
+            block_number,
+            extra_data,
+        );
+
+        let fork = self.chain_info.fork_at_slot(params.slot.into());
+        let payload_and_blobs = bid.payload_and_blobs();
+        let bid_data = bid.bid_data_ref().to_owned();
+        let bid = bid.into_builder_bid_slow();
+        let signed_bid = resign_builder_bid(bid, &self.signing_context, fork);
+
+        if self.relay_config.gossip_payload_on_header && is_mev_boost {
+            let ip_gate =
+                ip_addr.map(|ip| self.ip_tracker.increment(params.slot, &ip)).unwrap_or_default();
+            let proposer_api = self.clone();
+            spawn_tracked!(
+                async move {
+                    info!("gossiping payload");
+                    proposer_api
+                        .gossip_payload(
+                            params.slot.into(),
+                            &params.pubkey,
+                            Cow::Owned(payload_and_blobs),
+                            fork,
+                            Cow::Owned(bid_data),
+                            ip_gate < proposer_api.relay_config.ip_frequency_threshold,
+                        )
+                        .await;
+                }
+                .in_current_span()
+            );
+        }
+
+        info!(block_hash =% bid_block_hash, ?value, "delivering bid");
+
+        (signed_bid, fork)
+    }
+
     /// Retrieves the best bid header for the specified slot, parent hash, and public key.
     ///
     /// This function accepts a slot number, parent hash and public_key.
@@ -157,32 +275,21 @@ impl<A: Api> ProposerApi<A> {
             ..
         } = proposer_api.validate_header_request(&params, &headers, &terminating)?;
 
-        let mut trace = GetHeaderTrace {
+        let trace = GetHeaderTrace {
             receive: timings.on_receive_ns,
             validation_complete: validation_complete_ns,
             ..Default::default()
         };
 
-        let mut timing_guard =
-            TimeoutGuard::<A>::new(ip_addr.map(|ip| (ip, proposer_api.api_provider.clone())));
-        timing_guard.timed_out = Some((
-            GetHeaderTimedOut {
-                slot: params.slot,
-                planned_hold_ms: sleep_time.map_or(0, |hold| hold.as_millis() as u64),
-                deadline_ms: timeout_ms.unwrap_or(0),
-                deadline_source: ArrayStr::from_str_truncate(timeout_source),
-                proposer_pubkey: params.pubkey,
-                proposer_ip: GetHeaderServed::ip_octets(ip_addr),
-                user_agent: headers
-                    .get(USER_AGENT)
-                    .and_then(|agent| agent.to_str().ok())
-                    .map(ArrayStr::from_str_truncate)
-                    .unwrap_or_default(),
-                ..Default::default()
-            },
-            Nanos(timings.on_receive_ns),
-            proposer_api.header_timed_out.clone(),
-        ));
+        let mut timing_guard = proposer_api.timeout_guard(
+            &params,
+            &headers,
+            ip_addr,
+            sleep_time,
+            timeout_ms,
+            timeout_source,
+            timings.on_receive_ns,
+        );
 
         if let Some(sleep_time) = sleep_time {
             debug!(
@@ -215,75 +322,8 @@ impl<A: Api> ProposerApi<A> {
             }
         };
 
-        let now_ns = utcnow_ns();
-        trace.best_bid_fetched = now_ns;
-        debug!(trace = ?trace, "best bid fetched");
-
-        let bid_block_hash = *bid.block_hash();
-        let value = *bid.value();
-        let ep = bid.execution_payload();
-        let builder_pubkey = *bid.bid_data_ref().builder_pubkey;
-        let proposer_fee_recipient = ep.fee_recipient;
-        let block_number = ep.block_number;
-        let extra_data = ep.extra_data.to_vec();
-
-        let served = GetHeaderServed {
-            slot: params.slot,
-            receive_ns: trace.receive,
-            best_bid_fetched_ns: trace.best_bid_fetched,
-            block_hash: bid_block_hash,
-            value,
-            builder_pubkey,
-            proposer_ip: GetHeaderServed::ip_octets(ip_addr),
-            is_mev_boost,
-            streamed: false,
-            proposer_pubkey: params.pubkey,
-            _pad: [0; 6],
-        };
-        proposer_api.api_provider.on_header_served(served, peer, &proposer_api.header_served);
-
-        proposer_api.db.save_get_header_call(
-            params,
-            bid_block_hash,
-            value,
-            trace,
-            is_mev_boost,
-            user_agent,
-            builder_pubkey,
-            proposer_fee_recipient,
-            block_number,
-            extra_data,
-        );
-
-        let fork = proposer_api.chain_info.fork_at_slot(params.slot.into());
-        let payload_and_blobs = bid.payload_and_blobs();
-        let bid_data = bid.bid_data_ref().to_owned();
-        let bid = bid.into_builder_bid_slow();
-        let signed_bid = resign_builder_bid(bid, &proposer_api.signing_context, fork);
-
-        if proposer_api.relay_config.gossip_payload_on_header && is_mev_boost {
-            let ip_gate = ip_addr
-                .map(|ip| proposer_api.ip_tracker.increment(params.slot, &ip))
-                .unwrap_or_default();
-            spawn_tracked!(
-                async move {
-                    info!("gossiping payload");
-                    proposer_api
-                        .gossip_payload(
-                            params.slot.into(),
-                            &params.pubkey,
-                            Cow::Owned(payload_and_blobs),
-                            fork,
-                            Cow::Owned(bid_data),
-                            ip_gate < proposer_api.relay_config.ip_frequency_threshold,
-                        )
-                        .await;
-                }
-                .in_current_span()
-            );
-        }
-
-        info!(block_hash =% bid_block_hash, ?value, "delivering bid");
+        let (signed_bid, fork) =
+            proposer_api.serve_bid(bid, params, trace, is_mev_boost, user_agent, ip_addr, peer);
 
         timing_guard.done_fetch = true;
 
