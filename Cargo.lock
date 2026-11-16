@@ -5190,6 +5190,7 @@ dependencies = [
  "num-format",
  "parking_lot",
  "pin-project-lite",
+ "prometheus 0.13.4",
  "prost 0.12.6",
  "rand 0.9.5",
  "refinery",

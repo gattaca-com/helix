@@ -1,9 +1,17 @@
-use std::{sync::Arc, time::Duration};
+use std::{
+    net::SocketAddr,
+    sync::Arc,
+    task::Poll,
+    time::{Duration, Instant},
+};
 
 use alloy_primitives::B256;
 use bytes::Bytes;
 use helix_common::{
-    Filtering, GetPayloadTrace, beacon::MultiBeaconClient, chain_info::ChainInfo, spawn_tracked,
+    Filtering, GetPayloadTrace,
+    beacon::{MultiBeaconClient, beacon_client::BeaconClient, error::BeaconClientError},
+    chain_info::ChainInfo,
+    http::client::PendingResponse,
     utils::utcnow_ns,
 };
 use helix_database::types::SavePayloadParams;
@@ -70,24 +78,19 @@ impl<B: BidAdjustor> Context<B> {
             &self.gloas_builder_identity,
             &self.chain_info,
         );
-        spawn_tracked!(reveal_envelope(self.beacon_client.clone(), envelope.into(), slot));
+        let reveal =
+            EnvelopeReveal::start(&self.beacon_client, &self.beacon_addrs, envelope.into(), slot);
 
-        let submission = entry.submission.clone();
-        let proposer_fee_recipient = entry.fee_recipient;
-        let db = self.db.clone();
-        spawn_tracked!(async move {
-            let Some(execution_payload) = payload_from_v3(submission.payload_v3()) else {
-                error!(%slot, bid_block_hash = %block.bid_block_hash, "revealed payload does not convert for storage");
-                return;
-            };
+        let submission = &entry.submission;
+        let delivered = payload_from_v3(submission.payload_v3()).map(|execution_payload| {
             let trace = submission.bid_trace();
             let now = utcnow_ns();
-            db.save_delivered_payload(SavePayloadParams {
+            SavePayloadParams {
                 slot: slot.as_u64(),
                 builder_pub_key: trace.builder_pubkey,
                 proposer_pub_key: trace.proposer_pubkey,
                 value: trace.value,
-                proposer_fee_recipient,
+                proposer_fee_recipient: entry.fee_recipient,
                 payload: PayloadAndBlobs {
                     execution_payload: Arc::new(execution_payload),
                     blobs_bundle: Arc::new(submission.bundle()),
@@ -99,8 +102,22 @@ impl<B: BidAdjustor> Context<B> {
                 },
                 user_agent: None,
                 filtering: Filtering::default(),
-            });
+            }
         });
+
+        self.reveals.push(reveal);
+        match delivered {
+            Some(params) => self.db.save_delivered_payload(params),
+            None => {
+                error!(%slot, bid_block_hash = %block.bid_block_hash, "revealed payload does not convert for storage")
+            }
+        }
+    }
+
+    pub fn poll_reveals(&mut self) {
+        let beacon_client = &self.beacon_client;
+        let beacon_addrs = &self.beacon_addrs;
+        self.reveals.retain_mut(|reveal| !reveal.poll(beacon_client, beacon_addrs));
     }
 }
 
@@ -120,35 +137,113 @@ fn signed_envelope_contents(
 
 /// Offers the envelope to the beacon nodes until one takes it. A node rejects it
 /// until it has imported the block it names.
-async fn reveal_envelope(beacon_client: Arc<MultiBeaconClient>, envelope: Bytes, slot: Slot) {
-    for attempt in 0..PUBLISH_ATTEMPTS {
-        match beacon_client
-            .publish_execution_payload_envelope(envelope.clone(), ForkName::Gloas)
-            .await
-        {
-            Ok(()) => {
-                info!(%slot, attempt, "revealed the payload");
-                return;
-            }
-            Err(err) => {
-                warn!(%err, attempt, "could not reveal the payload yet");
-                tokio::time::sleep(PUBLISH_RETRY_INTERVAL).await;
+pub struct EnvelopeReveal {
+    envelope: Bytes,
+    slot: Slot,
+    attempt: u32,
+    /// The requests of the attempt that is out, one per beacon node.
+    pending: Vec<PendingResponse>,
+    taken: bool,
+    last_error: Option<BeaconClientError>,
+    /// Set between attempts.
+    retry_at: Option<Instant>,
+}
+
+impl EnvelopeReveal {
+    fn start(
+        beacon_client: &MultiBeaconClient,
+        beacon_addrs: &[Option<SocketAddr>],
+        envelope: Bytes,
+        slot: Slot,
+    ) -> Self {
+        let mut reveal = Self {
+            envelope,
+            slot,
+            attempt: 0,
+            pending: Vec::with_capacity(beacon_addrs.len()),
+            taken: false,
+            last_error: None,
+            retry_at: None,
+        };
+        reveal.send(beacon_client, beacon_addrs);
+        reveal
+    }
+
+    fn send(&mut self, beacon_client: &MultiBeaconClient, beacon_addrs: &[Option<SocketAddr>]) {
+        for (client, addr) in beacon_client.beacon_clients.iter().zip(beacon_addrs) {
+            let Some(addr) = *addr else { continue };
+            match client.send_execution_payload_envelope(
+                addr,
+                self.envelope.clone(),
+                ForkName::Gloas,
+            ) {
+                Ok(pending) => self.pending.push(pending),
+                Err(err) => self.last_error = Some(err),
             }
         }
     }
 
-    error!(%slot, "gave up revealing the payload after {PUBLISH_ATTEMPTS} attempts");
+    /// Returns whether the reveal is over, either way.
+    fn poll(
+        &mut self,
+        beacon_client: &MultiBeaconClient,
+        beacon_addrs: &[Option<SocketAddr>],
+    ) -> bool {
+        if let Some(at) = self.retry_at {
+            if Instant::now() < at {
+                return false;
+            }
+            self.retry_at = None;
+            self.send(beacon_client, beacon_addrs);
+        }
+
+        let taken = &mut self.taken;
+        let last_error = &mut self.last_error;
+        self.pending.retain_mut(|pending| {
+            let Poll::Ready(res) = pending.poll_bytes() else { return true };
+            let res = res
+                .map_err(BeaconClientError::from)
+                .and_then(|(status, body)| BeaconClient::envelope_outcome(status, &body));
+            match res {
+                Ok(_) => *taken = true,
+                Err(err) => *last_error = Some(err),
+            }
+            false
+        });
+        if !self.pending.is_empty() {
+            return false;
+        }
+
+        let slot = self.slot;
+        let attempt = self.attempt;
+        if self.taken {
+            info!(%slot, attempt, "revealed the payload");
+            return true;
+        }
+        let err = self.last_error.take().unwrap_or(BeaconClientError::BeaconNodeUnavailable);
+        warn!(%err, attempt, "could not reveal the payload yet");
+        self.attempt += 1;
+        if self.attempt == PUBLISH_ATTEMPTS {
+            error!(%slot, "gave up revealing the payload after {PUBLISH_ATTEMPTS} attempts");
+            return true;
+        }
+        self.retry_at = Some(Instant::now() + PUBLISH_RETRY_INTERVAL);
+        false
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use helix_common::utils::install_default_crypto_provider;
+    use helix_common::{
+        BeaconClientConfig, http::client::HttpClient, utils::install_default_crypto_provider,
+    };
     use helix_types::{
         BeaconBlockGloas, BidTrace, BlsKeypair, EmptyBlock, EthSpec, ExecutionBlockHash,
         ExecutionPayloadGloas, GloasBidTrace, MainnetEthSpec, SignedBeaconBlockGloas,
         SignedBidSubmissionGloas, SignedExecutionPayloadEnvelope, TestRandomSeed,
         gloas::GloasBlock,
     };
+    use httpmock::{Method::POST, Mock, MockServer};
     use ssz::{Decode, Encode};
     use tree_hash::TreeHash;
 
@@ -233,5 +328,73 @@ mod tests {
             chain_info.genesis_validators_root,
             &chain_info.spec,
         ));
+    }
+
+    const ENVELOPES: &str = "/eth/v1/beacon/execution_payload_envelopes";
+
+    fn answering(server: &MockServer, status: u16) -> Mock<'_> {
+        server.mock(|when, then| {
+            when.method(POST).path(ENVELOPES);
+            then.status(status).json_body(serde_json::json!({ "code": status, "message": "" }));
+        })
+    }
+
+    fn nodes(servers: &[&MockServer]) -> (MultiBeaconClient, Vec<Option<SocketAddr>>) {
+        install_default_crypto_provider();
+        let urls = servers.iter().map(|server| server.url("/").parse().unwrap());
+        let clients: Vec<_> =
+            urls.map(|url| Arc::new(BeaconClient::new(BeaconClientConfig { url }))).collect();
+        let addrs =
+            clients.iter().map(|client| HttpClient::resolve(&client.config.url).ok()).collect();
+        (MultiBeaconClient::new(clients), addrs)
+    }
+
+    fn start(client: &MultiBeaconClient, addrs: &[Option<SocketAddr>]) -> EnvelopeReveal {
+        EnvelopeReveal::start(client, addrs, Bytes::from_static(&[0u8; 12]), Slot::new(1))
+    }
+
+    #[test]
+    fn one_node_taking_the_envelope_ends_the_reveal() {
+        let (refusing, taking) = (MockServer::start(), MockServer::start());
+        answering(&refusing, 500);
+        answering(&taking, 200);
+        let (client, addrs) = nodes(&[&refusing, &taking]);
+
+        let mut reveal = start(&client, &addrs);
+        while !reveal.poll(&client, &addrs) {}
+
+        assert!(reveal.taken);
+        assert_eq!(reveal.attempt, 0);
+    }
+
+    #[test]
+    fn a_refused_envelope_is_offered_again() {
+        let server = MockServer::start();
+        let mut refusal = answering(&server, 500);
+        let (client, addrs) = nodes(&[&server]);
+
+        let mut reveal = start(&client, &addrs);
+        while reveal.attempt == 0 {
+            assert!(!reveal.poll(&client, &addrs));
+        }
+        refusal.delete();
+        answering(&server, 200);
+        while !reveal.poll(&client, &addrs) {}
+
+        assert!(reveal.taken);
+        assert_eq!(reveal.attempt, 1);
+    }
+
+    #[test]
+    fn the_reveal_gives_up_after_the_last_attempt() {
+        let server = MockServer::start();
+        answering(&server, 500);
+        let (client, addrs) = nodes(&[&server]);
+
+        let mut reveal = start(&client, &addrs);
+        while !reveal.poll(&client, &addrs) {}
+
+        assert!(!reveal.taken);
+        assert_eq!(reveal.attempt, PUBLISH_ATTEMPTS);
     }
 }

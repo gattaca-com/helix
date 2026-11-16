@@ -44,6 +44,7 @@ use crate::{
         bid_sorter::BidSorter,
         block_merger::BlockMerger,
         builder_preferences::BuilderPreferencesStore,
+        gloas_payload::EnvelopeReveal,
         seen_blocks::SeenBlocks,
         types::{
             GloasPayload, PayloadEntry, PendingPayload, QuarantinedPayload, SlotData,
@@ -143,6 +144,10 @@ pub struct Context<B: BidAdjustor> {
     pub builder_preferences: BuilderPreferencesStore,
     pub gloas_builder_identity: Arc<GloasBuilderIdentity>,
     pub beacon_client: Arc<MultiBeaconClient>,
+    /// The beacon nodes' addresses, in `beacon_client` order, resolved once so that
+    /// a reveal never blocks the event loop on DNS. `None` for one that did not resolve.
+    pub beacon_addrs: Vec<Option<SocketAddr>>,
+    pub reveals: Vec<EnvelopeReveal>,
     pub seen_blocks: SeenBlocks,
 }
 
@@ -225,6 +230,16 @@ impl<B: BidAdjustor> Context<B> {
             pending_alert: None,
             builder_preferences: BuilderPreferencesStore::default(),
             gloas_builder_identity,
+            beacon_addrs: beacon_client
+                .beacon_clients
+                .iter()
+                .map(|client| {
+                    HttpClient::resolve(&client.config.url)
+                        .inspect_err(|err| error!(%err, "failed to resolve beacon node"))
+                        .ok()
+                })
+                .collect(),
+            reveals: Vec::new(),
             beacon_client,
             seen_blocks: SeenBlocks::default(),
         }
