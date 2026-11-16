@@ -18,6 +18,7 @@ pub mod extract;
 pub mod middleware;
 pub mod proposer;
 pub mod router;
+pub(crate) mod server;
 pub mod service;
 
 pub type FutureBidSubmissionResult = helix_common::api::builder_api::FutureBidSubmissionResult<
