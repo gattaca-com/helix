@@ -7,6 +7,7 @@ mod ip_tracker;
 mod register;
 mod submit_builder_preferences;
 mod submit_signed_beacon_block;
+mod tile;
 
 use std::sync::{Arc, atomic::Ordering};
 
@@ -31,6 +32,7 @@ use http::{
     header::{CONTENT_LENGTH, HOST, USER_AGENT},
 };
 use hyper::StatusCode;
+pub use tile::ProposerApiTile;
 use uuid::Uuid;
 
 use crate::{

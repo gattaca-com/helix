@@ -240,6 +240,19 @@ Builders/Proposers ===[HTTP]==> this --[sub_worker crossbeam]--> SubWorkers
                                      --[DB queries]------------> PostgreSQL
 ```
 
+#### 10a. Proposer API tile (:API_TILE_PORT)
+
+**Spawned by**: `spine.start` via `attach_tile`, when `api_tile_port` is set
+**Runs on**: Flux tile thread, pinned to `cores.proposer_api` when set
+**File**: `api/proposer/tile.rs`, `api/server.rs`
+
+Serves proposer routes over Flux's poll-driven HTTP listener instead of tokio. Routes
+move here one at a time and stay on the API server until traffic is switched over.
+`api/server.rs` holds what every route needs: routing, per-caller rate limits, request
+ids and request metrics.
+
+- `GET /eth/v1/builder/status`
+
 #### 11. Admin Server (:4050)
 
 **Spawned by**: `start_admin_service`

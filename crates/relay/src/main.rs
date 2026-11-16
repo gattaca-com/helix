@@ -28,10 +28,10 @@ use helix_relay::{
     Api, Auctioneer, AuctioneerHandle, BidSorter, BidSubmissionTcpListener, BlockMergeResponse,
     BlockMergingTile, BroadcastPayloadParams, DbHandle, DecoderTile, DefaultBidAdjustor,
     FutureBidSubmissionResult, GloasBuilderIdentity, GossipedMessage, HelixSpine, HelixSpineConfig,
-    HousekeeperTile, Lane, NewTcpBidSubmission, RegWorkerHandle, RegistrationTile, RelayConfigExt,
-    RelayNetworkManager, Simulators, SlotUpdate, SubmissionDataWithSpan, TopBidTile, UdpTopBidTile,
-    spawn_tokio_monitoring, spine_epoch_path, start_admin_service, start_api_service,
-    start_db_service,
+    HousekeeperTile, Lane, NewTcpBidSubmission, ProposerApiTile, RegWorkerHandle, RegistrationTile,
+    RelayConfigExt, RelayNetworkManager, Simulators, SlotUpdate, SubmissionDataWithSpan,
+    TopBidTile, UdpTopBidTile, spawn_tokio_monitoring, spine_epoch_path, start_admin_service,
+    start_api_service, start_db_service,
 };
 use helix_types::BlsKeypair;
 use tikv_jemallocator::Jemalloc;
@@ -277,6 +277,20 @@ async fn run(
             gossip_sender,
             gossip_receiver,
         );
+
+        if let Some(port) = config.api_tile_port {
+            let tile = ProposerApiTile::new(
+                &config.bind_addrs(port),
+                &config.router_config,
+                terminating.clone(),
+            );
+            attach_tile(tile, spine, match config.cores.proposer_api {
+                Some(core) => config.cores.tile(core),
+                None => {
+                    TileConfig::background(None, Some(flux::timing::Duration::from_micros(100)))
+                }
+            });
+        }
 
         if config.is_registration_instance {
             for core in config.cores.reg_workers.clone() {

@@ -5176,6 +5176,7 @@ dependencies = [
  "flux-utils 0.12.0",
  "flux-versioned-types",
  "futures",
+ "governor 0.8.1",
  "helix-common",
  "helix-data-api",
  "helix-database",

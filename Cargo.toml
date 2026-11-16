@@ -91,6 +91,7 @@ type-hash = { git = "https://github.com/gattaca-com/flux", rev = "bd1ae8f27362c0
 type-hash-derive = { git = "https://github.com/gattaca-com/flux", rev = "bd1ae8f27362c0f2bd49a5f988abe030f7b46e1f" }
 
 futures = "0.3"
+governor = "0.8"
 futures-util = { version = "0.3", features = ["compat"] }
 helix-builder = { path = "crates/builder" }
 helix-common = { path = "crates/common" }
