@@ -239,6 +239,8 @@ async fn run(
             spine.spine.standalone_producer_for(TileName::from_str_truncate("ProposerApi"));
         let header_timed_out =
             spine.spine.standalone_producer_for(TileName::from_str_truncate("ProposerApi"));
+        let payload_answered =
+            spine.spine.standalone_producer_for(TileName::from_str_truncate("ProposerApi"));
 
         start_api_service::<ApiProd>(
             config.clone(),
@@ -258,6 +260,7 @@ async fn run(
             bid_producer,
             header_served,
             header_timed_out,
+            payload_answered,
             future_results.clone(),
             web_socket_send,
             alert_manager.clone(),

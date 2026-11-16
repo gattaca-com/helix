@@ -237,6 +237,35 @@ versioned_telemetry!(GetHeaderTimedOut, persist = "Helix.Header.TimedOut" =>
     }
 );
 
+versioned_telemetry!(GetPayloadAnswered, persist = "Helix.Payload.Answered" =>
+    /// A `getPayload` request the relay answered, delivered or refused. The body is the blinded
+    /// block the proposer signed, so the address of a delivered one is the proposer's own, or
+    /// its mev-boost's. A request that fails to decode is not recorded, nor is one gossiped
+    /// from another relay instance.
+    #[derive(Default)]
+    #[type_hash_lock(hash = 14537568400076302684)]
+    GetPayloadAnsweredV1 {
+        pub slot: u64,
+        pub receive_ns: u64,
+        pub answered_ns: u64,
+        pub block_hash: B256,
+        /// IPv4 addresses are stored IPv6-mapped; all zeros when unknown.
+        pub proposer_ip: [u8; 16],
+        pub user_agent: ArrayStr<32>,
+        /// The HTTP status of the answer: 200 or 202 where the payload was delivered.
+        pub status: u16,
+        /// Whether the request came on the v2 endpoint, which answers without the payload.
+        pub v2: bool,
+        pub _pad: [u8; 5],
+    }
+);
+
+impl GetPayloadAnswered {
+    pub fn proposer_ip(&self) -> Option<IpAddr> {
+        (self.proposer_ip != [0; 16]).then(|| Ipv6Addr::from(self.proposer_ip).to_canonical())
+    }
+}
+
 #[derive(Clone, Copy)]
 pub enum TopBidPrecision {
     Millis,

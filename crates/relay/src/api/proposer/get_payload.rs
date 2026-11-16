@@ -2,6 +2,8 @@ use std::{borrow::Cow, str::FromStr, sync::Arc, time::Duration};
 
 use alloy_primitives::{Address, B256};
 use axum::{Extension, http::HeaderMap, response::IntoResponse};
+use flux::timing::{IngestionTime, Nanos};
+use flux_utils::ArrayStr;
 use helix_common::{
     Filtering, GetPayloadTrace, RequestTimings,
     api::HEADER_API_KEY,
@@ -18,7 +20,10 @@ use helix_types::{
     BlsPublicKeyBytes, ExecPayload, ForkName, GetPayloadResponse, Payload, PayloadAndBlobs,
     PayloadBidData, SignedBlindedBeaconBlock, SignedBlindedBeaconBlockFulu, Slot, SlotClockTrait,
 };
-use http::{HeaderValue, StatusCode, header::CONTENT_TYPE};
+use http::{
+    HeaderValue, StatusCode,
+    header::{CONTENT_TYPE, USER_AGENT},
+};
 use ssz::{Decode, Encode};
 use tokio::time::{sleep, timeout};
 use tracing::{Instrument, error, info, warn};
@@ -33,6 +38,7 @@ use crate::{
     },
     auctioneer::{GetPayloadKind, GetPayloadResultData},
     gossip::{BroadcastGetPayloadParams, BroadcastPayloadParams},
+    spine::messages::{GetHeaderServed, GetPayloadAnswered},
 };
 
 const GET_PAYLOAD_REQUEST_CUTOFF_MS: i64 = 4000;
@@ -167,10 +173,20 @@ impl<A: Api> ProposerApi<A> {
         );
 
         let response_encoding = Encoding::from_accept(&headers);
-        match proposer_api
+        let receive_ns = trace.receive;
+        let result = proposer_api
             ._get_payload(signed_blinded_block, &mut trace, user_agent, ProposerApiVersion::V1)
-            .await
-        {
+            .await;
+        let status = result.as_ref().map_or_else(ProposerApiError::status_code, |_| StatusCode::OK);
+        proposer_api.record_payload_answered(
+            &headers,
+            slot,
+            block_hash,
+            receive_ns,
+            ProposerApiVersion::V1,
+            status,
+        );
+        match result {
             Ok(get_payload_response) => {
                 confirm_proposer_ip(&proposer_api, &headers);
                 match response_encoding {
@@ -236,10 +252,21 @@ impl<A: Api> ProposerApi<A> {
             })
             .await;
 
-        match proposer_api
+        let receive_ns = trace.receive;
+        let result = proposer_api
             ._get_payload(signed_blinded_block, &mut trace, user_agent, ProposerApiVersion::V2)
-            .await
-        {
+            .await;
+        let status =
+            result.as_ref().map_or_else(ProposerApiError::status_code, |_| StatusCode::ACCEPTED);
+        proposer_api.record_payload_answered(
+            &headers,
+            slot,
+            block_hash,
+            receive_ns,
+            ProposerApiVersion::V2,
+            status,
+        );
+        match result {
             Ok(_) => {
                 confirm_proposer_ip(&proposer_api, &headers);
                 Ok(StatusCode::ACCEPTED)
@@ -254,6 +281,34 @@ impl<A: Api> ProposerApi<A> {
                 Err(err)
             }
         }
+    }
+
+    fn record_payload_answered(
+        &self,
+        headers: &HeaderMap,
+        slot: Slot,
+        block_hash: B256,
+        receive_ns: u64,
+        api_version: ProposerApiVersion,
+        status: StatusCode,
+    ) {
+        let answered = GetPayloadAnswered {
+            slot: slot.as_u64(),
+            receive_ns,
+            answered_ns: utcnow_ns(),
+            block_hash,
+            proposer_ip: GetHeaderServed::ip_octets(header_ip_addr(headers)),
+            user_agent: headers
+                .get(USER_AGENT)
+                .and_then(|agent| agent.to_str().ok())
+                .map(ArrayStr::from_str_truncate)
+                .unwrap_or_default(),
+            status: status.as_u16(),
+            v2: matches!(api_version, ProposerApiVersion::V2),
+            _pad: [0; 5],
+        };
+        let received = IngestionTime::from_real_at(Nanos(receive_ns), IngestionTime::now());
+        self.payload_answered.produce_with_ingestion(answered, received);
     }
 
     pub async fn _get_payload(

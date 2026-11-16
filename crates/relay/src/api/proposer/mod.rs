@@ -27,7 +27,7 @@ use crate::{
     auctioneer::AuctioneerHandle,
     gossip::GrpcGossiperClientManager,
     registration::RegWorkerHandle,
-    spine::messages::{GetHeaderServed, GetHeaderTimedOut},
+    spine::messages::{GetHeaderServed, GetHeaderTimedOut, GetPayloadAnswered},
 };
 
 #[derive(Clone)]
@@ -50,6 +50,7 @@ pub struct ProposerApi<A: Api> {
     pub ip_tracker: IpTracker,
     pub header_served: Arc<StandaloneProducer<GetHeaderServed>>,
     pub header_timed_out: Arc<StandaloneProducer<GetHeaderTimedOut>>,
+    pub payload_answered: Arc<StandaloneProducer<GetPayloadAnswered>>,
 }
 
 impl<A: Api> ProposerApi<A> {
@@ -70,6 +71,7 @@ impl<A: Api> ProposerApi<A> {
         operator_api: Option<Arc<OperatorPubSub>>,
         header_served: StandaloneProducer<GetHeaderServed>,
         header_timed_out: StandaloneProducer<GetHeaderTimedOut>,
+        payload_answered: StandaloneProducer<GetPayloadAnswered>,
     ) -> Self {
         Self {
             local_cache,
@@ -89,6 +91,7 @@ impl<A: Api> ProposerApi<A> {
             ip_tracker: IpTracker::default(),
             header_served: Arc::new(header_served),
             header_timed_out: Arc::new(header_timed_out),
+            payload_answered: Arc::new(payload_answered),
         }
     }
 }
