@@ -21,12 +21,12 @@ use std::{
 
 use alloy_primitives::{Address, B256, U256};
 use alloy_signer_local::PrivateKeySigner;
-use dashmap::DashSet;
 use ethrex_storage::Store;
 use flux::{
     spine::{DCacheRead, SpineAdapter, SpineDCacheConsumer, SpineProducers},
     tile::Tile,
 };
+use helix_common::FxDashSet;
 use helix_tcp_types::merging::{
     builder_to_relay::{MergedBlockV1, RejectCode, RejectSubject, RejectV1},
     control::RelayConfigV1,
@@ -66,7 +66,7 @@ pub struct EngineConfig {
     pub max_base_age: Duration,
     // Run each builder's first base once, unsent, to pay its cold costs.
     pub warmup: bool,
-    pub blacklist: Arc<DashSet<Address>>,
+    pub blacklist: Arc<FxDashSet<Address>>,
     pub record: Option<RecordConfig>,
 }
 

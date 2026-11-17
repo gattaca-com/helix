@@ -5,7 +5,6 @@ use alloy_rpc_types::{
     beacon::{relay::BidTrace, requests::ExecutionRequestsV4},
     engine::ExecutionPayloadV3,
 };
-use dashmap::DashSet;
 use ethrex_blockchain::{
     Blockchain, BlockchainOptions, BlockchainType,
     fork_choice::apply_fork_choice,
@@ -14,7 +13,7 @@ use ethrex_blockchain::{
 use ethrex_common::{H256, types::ELASTICITY_MULTIPLIER};
 use ethrex_rlp::encode::RLPEncode;
 use ethrex_storage::Store;
-use helix_common::simulator::BlockSimError;
+use helix_common::{FxDashSet, simulator::BlockSimError};
 use tokio::sync::watch;
 
 use crate::{
@@ -74,7 +73,7 @@ pub(crate) struct Fixture {
     pub(crate) signers: Vec<alloy_signer_local::PrivateKeySigner>,
     pub(crate) proposer: Address,
     head: watch::Sender<HeadInfo>,
-    disallow: Arc<DashSet<Address>>,
+    disallow: Arc<FxDashSet<Address>>,
     is_amsterdam: bool,
 }
 
@@ -146,7 +145,7 @@ impl Fixture {
             gas_limit: genesis_block.header.gas_limit,
             proposer: signers[3].address(),
             signers,
-            disallow: Arc::new(DashSet::new()),
+            disallow: Arc::new(FxDashSet::default()),
             is_amsterdam: genesis.config.is_amsterdam_activated(genesis_block.header.timestamp),
         }
     }

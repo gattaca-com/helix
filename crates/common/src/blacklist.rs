@@ -1,7 +1,8 @@
 use alloy_primitives::Address;
-use dashmap::DashSet;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+
+use crate::FxDashSet;
 
 /// A blacklist payload, either a bare array of addresses or one wrapped in `items`.
 #[derive(Debug, Deserialize)]
@@ -35,7 +36,7 @@ pub fn parse_disallow_list(list: Vec<String>) -> Vec<Address> {
 ///
 /// Entries are sorted first because `DashSet` iteration order is not stable. Mirrors reth's
 /// `hash_disallow_list` so the digests are comparable against reth-based builders.
-pub fn hash_disallow_list(disallow: &DashSet<Address>) -> String {
+pub fn hash_disallow_list(disallow: &FxDashSet<Address>) -> String {
     let mut sorted: Vec<Address> = disallow.iter().map(|addr| *addr).collect();
     sorted.sort_unstable();
 
@@ -49,7 +50,7 @@ pub fn hash_disallow_list(disallow: &DashSet<Address>) -> String {
 
 /// Returns the disallow list's digest, or `None` when it still matches `previous`.
 pub fn changed_disallow_hash(
-    disallow: &DashSet<Address>,
+    disallow: &FxDashSet<Address>,
     previous: Option<&str>,
 ) -> Option<String> {
     let hash = hash_disallow_list(disallow);
@@ -99,8 +100,8 @@ mod blacklist_tests {
     const ADDR_A: Address = address!("0x722122dF12D4e14e13Ac3b6895a86e84145b6967");
     const ADDR_B: Address = address!("0x8589427373D6D84E98730D7795D8f6f8731FDA16");
 
-    fn disallow_set(addrs: &[Address]) -> DashSet<Address> {
-        let set = DashSet::new();
+    fn disallow_set(addrs: &[Address]) -> FxDashSet<Address> {
+        let set = FxDashSet::default();
         for addr in addrs {
             set.insert(*addr);
         }

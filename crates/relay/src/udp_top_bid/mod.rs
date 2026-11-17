@@ -1,12 +1,11 @@
 use std::{net::SocketAddr, sync::Arc};
 
-use dashmap::DashMap;
 use flux::{
     tile::Tile,
     timing::{Duration, Instant},
 };
 use flux_network::{Event, Network, Token, UdpConfig, UdpGroupConfig};
-use helix_common::{BuilderConfig, api::builder_api::TopBidUpdate, is_local_dev};
+use helix_common::{BuilderConfig, FxDashMap, api::builder_api::TopBidUpdate, is_local_dev};
 use helix_tcp_types::RegistrationMsg;
 use ssz::{Decode, Encode};
 use tracing::info;
@@ -41,7 +40,7 @@ struct Stats {
 
 pub struct UdpTopBidTile {
     driver: Network,
-    api_key_cache: Arc<DashMap<String, Vec<BuilderConfig>>>,
+    api_key_cache: Arc<FxDashMap<String, Vec<BuilderConfig>>>,
     max_per_key: usize,
 
     /// Authenticated peers, the only tokens an update is written to.
@@ -60,7 +59,7 @@ pub struct UdpTopBidTile {
 impl UdpTopBidTile {
     pub fn new(
         listener_addrs: &[SocketAddr],
-        api_key_cache: Arc<DashMap<String, Vec<BuilderConfig>>>,
+        api_key_cache: Arc<FxDashMap<String, Vec<BuilderConfig>>>,
         max_per_key: usize,
     ) -> Self {
         let udp = UdpConfig {
@@ -121,7 +120,7 @@ impl UdpTopBidTile {
 }
 
 fn can_connect(
-    cache: &DashMap<String, Vec<BuilderConfig>>,
+    cache: &FxDashMap<String, Vec<BuilderConfig>>,
     msg: &RegistrationMsg,
     api_key: &str,
     registered: &[(Token, [u8; 16])],

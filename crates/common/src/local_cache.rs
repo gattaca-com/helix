@@ -8,7 +8,6 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
-use dashmap::{DashMap, DashSet};
 use helix_types::{
     BlockValidationError, BlsPublicKeyBytes, CryptoError, G1Point, MergedBlock, SigError,
     SignedValidatorRegistration, Slot, SubmissionVersion, gloas,
@@ -18,7 +17,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use uuid::Uuid;
 
 use crate::{
-    BuilderConfig, BuilderInfo, PromotionMode, ProposerDuty, SignedValidatorRegistrationEntry,
+    BuilderConfig, BuilderInfo, FxDashMap, FxDashSet, PromotionMode, ProposerDuty,
+    SignedValidatorRegistrationEntry,
     api::{
         builder_api::{
             BuilderGetValidatorsResponseEntry, InclusionListWithKey, InclusionListWithMetadata,
@@ -126,17 +126,17 @@ pub struct PoolStatus {
 pub struct LocalCache {
     // TODO: this should be an ArcSwap
     pub inclusion_list: Arc<RwLock<Option<InclusionListWithKey>>>,
-    builder_info_cache: Arc<DashMap<BlsPublicKeyBytes, BuilderInfo>>,
-    pub api_key_cache: Arc<DashMap<String, Vec<BuilderConfig>>>,
+    builder_info_cache: Arc<FxDashMap<BlsPublicKeyBytes, BuilderInfo>>,
+    pub api_key_cache: Arc<FxDashMap<String, Vec<BuilderConfig>>>,
     /// Derived view, written by the operator task and read on the submission path once
     /// `promotion_mode` applies. Split so the shared budget is stored once per pool rather than
     /// replicated per member. An absent binding or view means the pool has not been recovered.
-    pool_binding: Arc<DashMap<BlsPublicKeyBytes, PoolBinding>>,
-    pool_view: Arc<DashMap<u32, PoolView>>,
+    pool_binding: Arc<FxDashMap<BlsPublicKeyBytes, PoolBinding>>,
+    pool_view: Arc<FxDashMap<u32, PoolView>>,
     promotion_mode: Arc<RwLock<PromotionMode>>,
     // /// Api key -> builder pubkey
-    // pub api_key_cache: Arc<DashMap<String, Vec<BlsPublicKeyBytes>>>,
-    primev_proposers: Arc<DashSet<BlsPublicKeyBytes>>,
+    // pub api_key_cache: Arc<FxDashMap<String, Vec<BlsPublicKeyBytes>>>,
+    primev_proposers: Arc<FxDashSet<BlsPublicKeyBytes>>,
     kill_switch: Arc<AtomicBool>,
     /// Production safety valve: whether `get_header` serves merged blocks to the proposer.
     /// Seeded at startup from `BlockMergingConfig::serve_merged_headers`, but can also be
@@ -148,31 +148,42 @@ pub struct LocalCache {
     /// `proposer_duties` contains only registered proposers.
     #[allow(clippy::type_complexity)]
     proposer_schedule: Arc<RwLock<Vec<(ProposerDuty, Option<G1Point>)>>>,
-    merged_blocks: Arc<DashMap<B256, MergedBlock>>,
+    merged_blocks: Arc<FxDashMap<B256, MergedBlock>>,
     pub validator_registration_cache:
-        Arc<DashMap<BlsPublicKeyBytes, SignedValidatorRegistrationEntry>>,
-    pub pending_validator_registrations: Arc<DashSet<BlsPublicKeyBytes>>,
+        Arc<FxDashMap<BlsPublicKeyBytes, SignedValidatorRegistrationEntry>>,
+    pub pending_validator_registrations: Arc<FxDashSet<BlsPublicKeyBytes>>,
     pub known_validators_cache: Arc<RwLock<FxHashSet<BlsPublicKeyBytes>>>,
     pub adjustments_enabled: Arc<AtomicBool>,
     pub adjustments_failsafe_trigger: Arc<AtomicBool>,
     /// builder -> (slot, version)
-    pub submission_versions: Arc<DashMap<BlsPublicKeyBytes, (u64, SubmissionVersion)>>,
+    pub submission_versions: Arc<FxDashMap<BlsPublicKeyBytes, (u64, SubmissionVersion)>>,
 }
 
 impl LocalCache {
     pub fn new() -> Self {
-        let builder_info_cache =
-            Arc::new(DashMap::with_capacity(ESTIMATED_BUILDER_INFOS_UPPER_BOUND));
-        let pool_binding = Arc::new(DashMap::with_capacity(ESTIMATED_BUILDER_INFOS_UPPER_BOUND));
-        let pool_view = Arc::new(DashMap::default());
-        let api_key_cache = Arc::new(DashMap::with_capacity(ESTIMATED_BUILDER_INFOS_UPPER_BOUND));
-        let primev_proposers = Arc::new(DashSet::with_capacity(MAX_PRIMEV_PROPOSERS));
+        let builder_info_cache = Arc::new(FxDashMap::with_capacity_and_hasher(
+            ESTIMATED_BUILDER_INFOS_UPPER_BOUND,
+            Default::default(),
+        ));
+        let pool_binding = Arc::new(FxDashMap::with_capacity_and_hasher(
+            ESTIMATED_BUILDER_INFOS_UPPER_BOUND,
+            Default::default(),
+        ));
+        let pool_view = Arc::new(FxDashMap::default());
+        let api_key_cache = Arc::new(FxDashMap::with_capacity_and_hasher(
+            ESTIMATED_BUILDER_INFOS_UPPER_BOUND,
+            Default::default(),
+        ));
+        let primev_proposers =
+            Arc::new(FxDashSet::with_capacity_and_hasher(MAX_PRIMEV_PROPOSERS, Default::default()));
         let kill_switch = Arc::new(AtomicBool::new(false));
         let serve_merged_headers = Arc::new(AtomicBool::new(true));
         let proposer_duties = Arc::new(RwLock::new(Vec::with_capacity(1000)));
-        let merged_blocks = Arc::new(DashMap::with_capacity(1000));
-        let validator_registration_cache = Arc::new(DashMap::with_capacity(1_800_000));
-        let pending_validator_registrations = Arc::new(DashSet::with_capacity(20_000));
+        let merged_blocks = Arc::new(FxDashMap::with_capacity_and_hasher(1000, Default::default()));
+        let validator_registration_cache =
+            Arc::new(FxDashMap::with_capacity_and_hasher(1_800_000, Default::default()));
+        let pending_validator_registrations =
+            Arc::new(FxDashSet::with_capacity_and_hasher(20_000, Default::default()));
         let known_validators_cache = Arc::new(RwLock::new(FxHashSet::with_capacity_and_hasher(
             1_200_000,
             Default::default(),
@@ -198,7 +209,10 @@ impl LocalCache {
             known_validators_cache,
             adjustments_enabled,
             adjustments_failsafe_trigger,
-            submission_versions: Arc::new(DashMap::with_capacity(200)),
+            submission_versions: Arc::new(FxDashMap::with_capacity_and_hasher(
+                200,
+                Default::default(),
+            )),
         }
     }
 

@@ -81,7 +81,7 @@ fn main() -> eyre::Result<()> {
         runtime.spawn(metrics::serve(port));
     }
 
-    let disallow = std::sync::Arc::new(dashmap::DashSet::new());
+    let disallow = std::sync::Arc::new(helix_common::FxDashSet::default());
     let blacklist_endpoint = roles
         .simulation()
         .map(|config| config.blacklist_endpoint.clone())

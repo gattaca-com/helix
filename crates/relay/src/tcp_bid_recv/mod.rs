@@ -1,6 +1,5 @@
 use std::{net::SocketAddr, sync::Arc};
 
-use dashmap::DashMap;
 use flux::{
     tile::Tile,
     timing::{Duration, Instant, Nanos},
@@ -8,7 +7,7 @@ use flux::{
 use flux_network::{Event, Network, TcpGroupConfig, Token};
 use flux_utils::{DCachePtr, SharedVector};
 use helix_common::{
-    BuilderConfig, SubmissionTrace, api::builder_api::MAX_PAYLOAD_LENGTH, is_local_dev,
+    BuilderConfig, FxDashMap, SubmissionTrace, api::builder_api::MAX_PAYLOAD_LENGTH, is_local_dev,
     metrics::SUB_CLIENT_TO_SERVER_LATENCY, utils::utcnow_ns,
 };
 use helix_tcp_types::BID_SUB_HEADER_SIZE;
@@ -66,7 +65,7 @@ struct Stats {
 pub struct BidSubmissionTcpListener {
     listener: Network,
 
-    api_key_cache: Arc<DashMap<String, Vec<BuilderConfig>>>,
+    api_key_cache: Arc<FxDashMap<String, Vec<BuilderConfig>>>,
 
     to_disconnect: Vec<Token>,
     registered: FxHashMap<Token, BlsPublicKeyBytes>,
@@ -86,7 +85,7 @@ pub struct BidSubmissionTcpListener {
 impl BidSubmissionTcpListener {
     pub fn new(
         listener_addrs: &[SocketAddr],
-        api_key_cache: Arc<DashMap<String, Vec<BuilderConfig>>>,
+        api_key_cache: Arc<FxDashMap<String, Vec<BuilderConfig>>>,
         max_connections: usize,
         dcache_ptr: DCachePtr,
         slot_events: Arc<SharedVector<SlotUpdate>>,
