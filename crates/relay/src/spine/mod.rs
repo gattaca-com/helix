@@ -63,9 +63,22 @@ pub struct HelixSpine {
     #[queue(size(2usize.pow(12)))]
     pub get_header_timed_out: SpineQueue<messages::GetHeaderTimedOut>,
 
-    /// Proposer API → DataGatherer: every `getHeader` and `getPayload` request.
+    /// Proposer API → DataGatherer: every `getHeader`, `getPayload` and `registerValidator`
+    /// request.
     #[queue(size(2usize.pow(12)))]
     pub proposer_request: SpineQueue<messages::ProposerRequest>,
+
+    /// Proposer API → DataGatherer: the answer to each `getPayload` request.
+    #[queue(size(2usize.pow(10)))]
+    pub get_payload_answered: SpineQueue<messages::GetPayloadAnswered>,
+
+    /// Proposer API → DataGatherer: the answer to each `registerValidator` request.
+    #[queue(size(2usize.pow(12)))]
+    pub registrations_answered: SpineQueue<messages::RegistrationsAnswered>,
+
+    /// Proposer API → DataGatherer: each registration of a validator with a scheduled proposal.
+    #[queue(size(2usize.pow(12)))]
+    pub proposer_registered: SpineQueue<messages::ProposerRegistered>,
 }
 
 #[derive(Deserialize)]

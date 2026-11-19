@@ -95,9 +95,9 @@ pub trait ApiProvider: Send + Sync + Clone + 'static {
     ) {
     }
 
-    /// A `getHeader` or `getPayload` request arrived. `request` holds what the relay knows
-    /// itself; a provider behind a load balancer adds what the balancer said in `headers`
-    /// about the client's connection.
+    /// A `getHeader`, `getPayload` or `registerValidator` request arrived. `request` holds what the
+    /// relay knows itself; a provider behind a load balancer adds what the balancer said in
+    /// `headers` about the client's connection.
     fn on_proposer_request(
         &self,
         request: ProposerRequest,

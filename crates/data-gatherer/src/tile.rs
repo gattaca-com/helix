@@ -7,8 +7,9 @@ use flux_utils::ArrayStr;
 use helix_common::{api::builder_api::TopBidUpdate, config::DataGatherConfig, gather::GatherMeta};
 use helix_relay::{HelixSpine, NewBidSubmission, NewTcpBidSubmission, read_spine_epoch};
 use helix_telemetry::{
-    BidUpdate, DecodedSubmission, GetHeaderServed, GetHeaderTimedOut, MergedBlockMsg,
-    ProposerRequest, SimPreviousSlotDrops, SimUpdate, SlotMsg,
+    BidUpdate, DecodedSubmission, GetHeaderServed, GetHeaderTimedOut, GetPayloadAnswered,
+    MergedBlockMsg, ProposerRegistered, ProposerRequest, RegistrationsAnswered,
+    SimPreviousSlotDrops, SimUpdate, SlotMsg,
 };
 use tracing::info;
 
@@ -237,6 +238,15 @@ impl Tile<HelixSpine> for DataGatherer {
             self.cache.push(msg);
         });
         adapter.consume_internal_message(|msg: &mut InternalMessage<ProposerRequest>, _| {
+            self.cache.push(msg);
+        });
+        adapter.consume_internal_message(|msg: &mut InternalMessage<GetPayloadAnswered>, _| {
+            self.cache.push(msg);
+        });
+        adapter.consume_internal_message(|msg: &mut InternalMessage<RegistrationsAnswered>, _| {
+            self.cache.push(msg);
+        });
+        adapter.consume_internal_message(|msg: &mut InternalMessage<ProposerRegistered>, _| {
             self.cache.push(msg);
         });
 

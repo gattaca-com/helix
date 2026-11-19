@@ -447,6 +447,18 @@ impl LocalCache {
         schedule.iter().find(|(duty, _)| duty.slot == slot).map(|(duty, _)| duty.pubkey)
     }
 
+    /// Scheduled proposers with a proposal after `head_slot`, each with the first such slot.
+    pub fn scheduled_proposers(&self, head_slot: Slot) -> FxHashMap<BlsPublicKeyBytes, Slot> {
+        let mut proposers = FxHashMap::default();
+        for (duty, _) in self.proposer_schedule.read().iter() {
+            if duty.slot > head_slot {
+                let slot: &mut Slot = proposers.entry(duty.pubkey).or_insert(duty.slot);
+                *slot = (*slot).min(duty.slot);
+            }
+        }
+        proposers
+    }
+
     /// Returns the admitted point for `pubkey`, reusing the schedule only when
     /// both slot and compressed key match. Other keys are decoded on demand.
     /// Schedule membership is not an authorization check performed by this method.
@@ -626,6 +638,29 @@ mod tests {
                 assert_eq!(verdict.is_ok(), valid, "{case}, slot {slot}");
             }
         }
+    }
+
+    #[test]
+    fn scheduled_proposers_keep_the_first_slot_after_the_head() {
+        let twice = get_fixed_pubkey_bytes(0);
+        let once = get_fixed_pubkey_bytes(1);
+        let past = get_fixed_pubkey_bytes(2);
+        let duty =
+            |slot, pubkey| ProposerDuty { pubkey, validator_index: slot, slot: Slot::new(slot) };
+        let cache = LocalCache::new();
+        cache.update_proposer_schedule(vec![
+            duty(9, twice),
+            duty(10, past),
+            duty(14, twice),
+            duty(12, twice),
+            duty(11, once),
+        ]);
+
+        let scheduled = cache.scheduled_proposers(Slot::new(10));
+
+        assert_eq!(scheduled.len(), 2);
+        assert_eq!(scheduled[&twice], Slot::new(12));
+        assert_eq!(scheduled[&once], Slot::new(11));
     }
 
     #[tokio::test]

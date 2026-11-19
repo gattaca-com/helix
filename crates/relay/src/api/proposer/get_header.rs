@@ -141,6 +141,7 @@ impl<A: Api> ProposerApi<A> {
             params.slot,
             params.pubkey,
             timings.on_receive_ns,
+            extract_request_id(&headers),
             &headers,
         );
 
