@@ -116,7 +116,7 @@ impl<A: Api> ProposerApiTile<A> {
                 Err(error) => return self.respond_error(request.responder, error),
             };
 
-        let guard = self.api.timeout_guard(
+        let mut guard = self.api.timeout_guard(
             &params,
             &request.headers,
             validated.ip_addr,
@@ -125,6 +125,9 @@ impl<A: Api> ProposerApiTile<A> {
             validated.timeout_source,
             request.received_ns,
         );
+        // With no hold there is no sleep to interrupt: a caller that hangs up before the
+        // auctioneer is asked gave up on the fetch, as on `api_port`.
+        guard.done_sleep = validated.sleep_time.is_none();
         if let Some(sleep_time) = validated.sleep_time {
             debug!(
                 ?sleep_time,
@@ -270,8 +273,9 @@ impl<A: Api> Tile<HelixSpine> for ProposerApiTile<A> {
             self.headers.retain(|pending| pending.responder.token != token);
         }
 
-        worked |= self.advance_headers();
+        // Answers first: one that is already here must not lose to the timeout sweep.
         worked |= self.deliver_bids();
+        worked |= self.advance_headers();
         if worked {
             adapter.mark_work();
         }
