@@ -100,9 +100,9 @@ struct Simulator {
 struct Endpoint {
     http: HttpNetwork,
     pool: HttpPool,
-    /// Flux queues a request for a pool with no live connection and starts its
-    /// deadline only once it is written, so a request for a simulator that is
-    /// down would never be answered. Tracking the live connections lets such a
+    /// Flux queues a request for a pool with no live connection until its
+    /// request timeout, so a request for a simulator that is down would wait
+    /// that long for an answer. Tracking the live connections lets such a
     /// request fail at once instead.
     connected: Vec<Token>,
     host: String,
@@ -514,8 +514,8 @@ impl SimulatorTile {
             }
         }
 
-        // With no connection left, whatever is still here is waiting in the Flux queue with
-        // no deadline. Flux may still send it after a reconnect; that answer finds no entry.
+        // With no connection left, whatever is still here is waiting in the Flux queue. Flux
+        // may still send it after a reconnect, until its timeout; that answer finds no entry.
         let down = endpoint.connected.is_empty();
         while let Some(i) = self.in_flight.iter().position(|entry| {
             entry.sim == id &&
