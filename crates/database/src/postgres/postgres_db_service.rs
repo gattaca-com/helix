@@ -25,7 +25,7 @@ use helix_common::{
     expect_env_var,
     local_cache::LocalCache,
     metrics::{CACHE_SIZE, DbMetricRecord},
-    utils::{send_alert, utcnow_ms},
+    utils::send_alert,
 };
 use helix_types::{BlsPublicKeyBytes, Demotion, MergedBlock, Promotion, SignedBidSubmission, Slot};
 use rustc_hash::FxHashSet;
@@ -65,6 +65,7 @@ pub enum DbRequest {
         builders: Vec<BuilderInfoDocument>,
     },
     DbDemoteBuilder {
+        ts_ms: u64,
         slot: u64,
         builder_pub_key: BlsPublicKeyBytes,
         block_hash: B256,
@@ -607,6 +608,7 @@ impl PostgresDatabaseService {
                 }
             }
             DbRequest::DbDemoteBuilder {
+                ts_ms,
                 slot,
                 builder_pub_key,
                 block_hash,
@@ -617,6 +619,7 @@ impl PostgresDatabaseService {
             } => {
                 if let Err(err) = self
                     .db_demote_builder(
+                        ts_ms,
                         slot,
                         &builder_pub_key,
                         &block_hash,
@@ -2000,10 +2003,12 @@ impl PostgresDatabaseService {
         Ok(demotions)
     }
 
+    /// `ts_ms` is when the report was made; retention compares it against the pool's promotion.
     #[instrument(skip_all)]
     #[allow(clippy::too_many_arguments)]
     pub async fn db_demote_builder(
         &self,
+        ts_ms: u64,
         slot: u64,
         builder_pub_key: &BlsPublicKeyBytes,
         block_hash: &B256,
@@ -2027,7 +2032,6 @@ impl PostgresDatabaseService {
             )
             .await?;
 
-        let timestamp = utcnow_ms();
         transaction
             .execute(
                 "
@@ -2040,7 +2044,7 @@ impl PostgresDatabaseService {
                 &[
                     &(builder_pub_key.as_slice()),
                     &(block_hash.as_slice()),
-                    &(timestamp as i64),
+                    &(ts_ms as i64),
                     &(reason),
                     &(slot as i32),
                     &collateral_id,

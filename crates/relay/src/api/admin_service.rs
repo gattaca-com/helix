@@ -168,7 +168,15 @@ async fn demote_builder(
     let collateral_id =
         auctioneer.get_builder_info(&pubkey).and_then(|info| info.builder_id).unwrap_or_default();
     if let Err(err) = db
-        .db_demote_builder(0, &pubkey, &Default::default(), &collateral_id, U256::ZERO, reason)
+        .db_demote_builder(
+            utcnow_ms(),
+            0,
+            &pubkey,
+            &Default::default(),
+            &collateral_id,
+            U256::ZERO,
+            reason,
+        )
         .await
     {
         error!(%pubkey, %err, "failed to persist builder demotion");

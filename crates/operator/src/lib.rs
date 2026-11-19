@@ -230,6 +230,7 @@ where
                                 // them, and each contributes to its own slot's reservation.
                                 // Duplicates are already filtered by pool state before forwarding.
                                 db_handle.db_demote_builder(
+                                    demotion.ts_ms,
                                     demotion.slot,
                                     demotion.builder_pubkey,
                                     demotion.block_hash,

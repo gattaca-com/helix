@@ -105,9 +105,11 @@ impl DbHandle {
         }
     }
 
+    /// `ts_ms` is when the report was made.
     #[allow(clippy::too_many_arguments)]
     pub fn db_demote_builder(
         &self,
+        ts_ms: u64,
         slot: u64,
         builder_pub_key: BlsPublicKeyBytes,
         block_hash: B256,
@@ -117,6 +119,7 @@ impl DbHandle {
         failsafe_triggered: Arc<AtomicBool>,
     ) {
         if let Err(err) = self.sender.try_send(DbRequest::DbDemoteBuilder {
+            ts_ms,
             slot,
             builder_pub_key,
             block_hash,
