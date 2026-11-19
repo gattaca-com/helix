@@ -538,10 +538,12 @@ impl<B: BidAdjustor> Context<B> {
             let builder_id =
                 self.cache.get_builder_info(&builder_pubkey).and_then(|i| i.builder_id);
             let collateral_id = builder_id.clone().unwrap_or_default();
+            // Shared by the broadcast report and the stored row.
+            let ts_ms = utcnow_ms();
 
             if let Some(operator_api) = self.operator_api.as_ref() &&
                 let Err(e) = operator_api.try_send(OperatorMessage::Demotion(Demotion {
-                    ts_ms: utcnow_ms(),
+                    ts_ms,
                     slot: slot_u64,
                     collateral_id: collateral_id.clone().into_bytes(),
                     builder_pubkey,
@@ -560,6 +562,7 @@ impl<B: BidAdjustor> Context<B> {
             let r = reason.clone();
             spawn_tracked!(async move {
                 db.db_demote_builder(
+                    ts_ms,
                     slot_u64,
                     builder_pubkey,
                     block_hash,
