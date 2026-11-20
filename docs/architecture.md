@@ -32,6 +32,8 @@ These are the channels that connect tasks. Each is created once at startup.
 | `network_broadcast` | `tokio broadcast` | 100 | RelayNetworkManager | Peer WS handlers |
 | `api_events` | `tokio mpsc` | 100 | RelayNetworkManager API | Network Event Handler |
 | `block_submissions` | `tokio mpsc` | 10,000 | Auctioneer (DB writes) | Block Submission Flusher |
+| `sim_jobs` | `crossbeam unbounded` | - | Auctioneer (simulator pool) | Simulator tile |
+| `sim_events` | `crossbeam unbounded` | - | Simulator tile | Auctioneer (simulator pool) |
 
 ## Tasks
 
@@ -194,11 +196,28 @@ channel.
                              --{LocalCache}----------------> (updates best bids)
 ```
 
+#### 9. Simulator
+
+**Spawned by**: `spine.start` via `attach_tile`
+**Runs on**: Flux tile thread, pinned to `cores.simulator` when set
+**File**: `simulator/tile.rs`
+
+Does the I/O for the auctioneer's simulator pool. The pool, inside the Auctioneer,
+decides which simulator runs what and when; this tile encodes each request (SSZ or
+JSON-RPC), exchanges it with the simulator over Flux's poll-driven HTTP client, and
+polls every simulator's sync status once a second. Keeping the encoding here keeps it
+off the Auctioneer's core.
+
+```
+Auctioneer --[sim_jobs crossbeam]--> this ===[HTTP]==> Simulators
+           <--[sim_events crossbeam]--
+```
+
 ### API Layer
 
 HTTP servers that accept external requests.
 
-#### 9. API Server (:API_PORT)
+#### 10. API Server (:API_PORT)
 
 **Spawned by**: `run_api_service`
 **Runs on**: tokio (axum/hyper accept loop)
@@ -221,7 +240,7 @@ Builders/Proposers ===[HTTP]==> this --[sub_worker crossbeam]--> SubWorkers
                                      --[DB queries]------------> PostgreSQL
 ```
 
-#### 10. Admin Server (:4050)
+#### 11. Admin Server (:4050)
 
 **Spawned by**: `start_admin_service`
 **Runs on**: tokio (axum accept loop)
@@ -234,7 +253,7 @@ halts block submissions.
 Admin ===[HTTP]==> this --{LocalCache kill_switch}--> API handlers (read on each request)
 ```
 
-#### 11. Metrics Server (:9500)
+#### 12. Metrics Server (:9500)
 
 **Spawned by**: `start_metrics_server`
 **Runs on**: tokio (axum accept loop)
@@ -248,7 +267,7 @@ it on each scrape.
 All tasks --{RELAY_METRICS_REGISTRY}--> this ===[HTTP]==> Prometheus
 ```
 
-#### 12. Top Bid WebSocket (x N connections)
+#### 13. Top Bid WebSocket (x N connections)
 
 **Spawned by**: per-connection when a builder connects to the top bid WS endpoint
 **Runs on**: tokio
@@ -266,7 +285,7 @@ to the connected builder. Sends ping every 10 seconds for keepalive.
 
 Background tasks that batch and flush data to PostgreSQL.
 
-#### 13. Registration Flusher
+#### 14. Registration Flusher
 
 **Spawned by**: `start_registration_processor`
 **Runs on**: tokio
@@ -280,7 +299,7 @@ RegWorker writes between flushes.
 --{pending_validator_registrations DashMap}--> this ===[SQL]==> PostgreSQL
 ```
 
-#### 14. Block Submission Flusher
+#### 15. Block Submission Flusher
 
 **Spawned by**: `start_block_submission_processor`
 **Runs on**: tokio
@@ -294,7 +313,7 @@ off the Auctioneer's hot path.
 --[block_submissions mpsc]--> this ===[SQL]==> PostgreSQL
 ```
 
-#### 15. Known Validators Reload
+#### 16. Known Validators Reload
 
 **Spawned by**: `start_db_service` (non-submission instances only)
 **Runs on**: tokio
@@ -308,7 +327,7 @@ instead.
 PostgreSQL ===[SQL]==> this --{known_validators cache}--> API handlers
 ```
 
-#### 16. DB Init Retry
+#### 17. DB Init Retry
 
 **Spawned by**: `start_db_service`
 **Runs on**: tokio (blocks startup until success)
@@ -322,7 +341,7 @@ since it is technically a retry loop.
 
 Inter-relay communication for geographic distribution.
 
-#### 17. gRPC Gossip Server (:50051)
+#### 18. gRPC Gossip Server (:50051)
 
 **Spawned by**: `gossiper.start_server` inside `run_api_service`
 **Runs on**: tokio (tonic accept loop)
@@ -340,7 +359,7 @@ channel.
 Other Relays ===[gRPC]==> this --[gossip mpsc]--> Gossip Processor
 ```
 
-#### 18. Gossip Processor
+#### 19. Gossip Processor
 
 **Spawned by**: `run_api_service`
 **Runs on**: tokio
@@ -356,7 +375,7 @@ payload delivery.
                         --> ProposerApi::process_gossiped_get_payload
 ```
 
-#### 19. Gossip Client Connect (x N relays)
+#### 20. Gossip Client Connect (x N relays)
 
 **Spawned by**: `GrpcGossiperClientManager::new`
 **Runs on**: tokio
@@ -378,7 +397,7 @@ this ===[gRPC connect]==> Remote Relay
 WebSocket-based relay-to-relay protocol (separate from gRPC gossip). Used for
 inclusion list consensus between geographically distributed instances.
 
-#### 20. Peer Message Handler (x N peers)
+#### 21. Peer Message Handler (x N peers)
 
 **Spawned by**: `RelayNetworkManager::new`
 **Runs on**: tokio
@@ -397,7 +416,7 @@ Messages are signed and verified using relay BLS keys.
 Peer Relay ===[WebSocket]==> this --[api_events mpsc]--> Network Event Handler
 ```
 
-#### 21. Network Event Handler
+#### 22. Network Event Handler
 
 **Spawned by**: `RelayNetworkManager::new`
 **Runs on**: tokio
@@ -412,20 +431,6 @@ returns the result via a oneshot channel to the caller (Housekeeper).
 ```
 
 ### Simulation
-
-#### 22. Simulator Health Check
-
-**Spawned by**: `SimulatorManager::new` (inside Auctioneer init)
-**Runs on**: tokio
-**File**: `auctioneer/simulator/manager.rs`
-
-Polls each configured block simulation backend (Reth instances) for sync status
-every 2 seconds via gRPC. Updates the simulator's availability so the Auctioneer
-only dispatches to healthy simulators.
-
-```
-Simulators ===[gRPC]==> this --{simulator sync state}--> Auctioneer (reads on dispatch)
-```
 
 #### 23. Simulator DB Health Check
 
