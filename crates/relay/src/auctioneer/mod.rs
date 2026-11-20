@@ -45,8 +45,8 @@ use helix_types::Slot;
 use rustc_hash::FxHashMap;
 use tracing::{debug, error, info, trace, warn};
 pub use types::{
-    Event, GetPayloadResultData, InternalBidSubmissionHeader, PayloadEntry, SeenBlock, SlotData,
-    SubmissionData, SubmissionPayload,
+    Event, GetHeaderResult, GetPayloadResultData, InternalBidSubmissionHeader, PayloadEntry, Reply,
+    SeenBlock, SlotData, SubmissionData, SubmissionPayload,
 };
 
 use crate::{
@@ -139,6 +139,7 @@ impl<B: BidAdjustor> Tile<HelixSpine> for Auctioneer<B> {
         }
 
         self.ctx.poll_alert();
+        self.ctx.poll_reveals();
 
         let mut started = Vec::new();
         while let Some(done) = self.ctx.sims.next_done(&mut started) {
@@ -457,19 +458,19 @@ impl State {
                 trace!("received in auctioneer");
 
                 if slot_data.bid_slot != params.slot {
-                    let _ = res_tx.send(Err(ProposerApiError::RequestWrongSlot {
+                    res_tx.send(Err(ProposerApiError::RequestWrongSlot {
                         request_slot: params.slot,
                         bid_slot: slot_data.bid_slot.into(),
                     }));
                 } else if slot_data.fork_for_parent_hash(&params.parent_hash).is_none() {
                     // proposer is on a different fork
                     warn!(req =% params.parent_hash, have =? slot_data.payload_attributes_map.keys(), "get header for unknown parent hash");
-                    let _ = res_tx.send(Err(ProposerApiError::NoBidPrepared));
+                    res_tx.send(Err(ProposerApiError::NoBidPrepared));
                 } else if slot_data.registration_data.entry.registration.message.pubkey !=
                     params.pubkey
                 {
                     warn!(req =% params.pubkey, this =% slot_data.registration_data.entry.registration.message.pubkey, "get header for mismatched proposer");
-                    let _ = res_tx.send(Err(ProposerApiError::NoBidPrepared));
+                    res_tx.send(Err(ProposerApiError::NoBidPrepared));
                 } else {
                     ctx.handle_get_header(params, slot_data, res_tx, producers, is_mev_boost)
                 }
@@ -592,7 +593,7 @@ impl State {
 
             // late get_header
             (State::Broadcasting { .. }, Event::GetHeader { res_tx, .. }) => {
-                let _ = res_tx.send(Err(ProposerApiError::DeliveringPayload));
+                res_tx.send(Err(ProposerApiError::DeliveringPayload));
             }
 
             // late get_execution_payload_bid
@@ -665,9 +666,9 @@ impl State {
             (State::Slot { bid_slot, .. }, Event::GetHeader { res_tx, params, .. }) => {
                 if params.slot == bid_slot.as_u64() {
                     // either not registered or waiting for full data from housekepper
-                    let _ = res_tx.send(Err(ProposerApiError::NoBidPrepared));
+                    res_tx.send(Err(ProposerApiError::NoBidPrepared));
                 } else {
-                    let _ = res_tx.send(Err(ProposerApiError::RequestWrongSlot {
+                    res_tx.send(Err(ProposerApiError::RequestWrongSlot {
                         request_slot: params.slot,
                         bid_slot: bid_slot.as_u64(),
                     }));

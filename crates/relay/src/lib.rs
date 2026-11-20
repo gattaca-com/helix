@@ -31,7 +31,9 @@ pub use crate::{
 };
 pub use crate::{
     api::{
-        Api, BidAdjustor, DefaultBidAdjustor, FutureBidSubmissionResult, builder::TopBidTile,
+        Api, BidAdjustor, DefaultBidAdjustor, FutureBidSubmissionResult,
+        builder::TopBidTile,
+        proposer::{ProposerApi, ProposerApiTile},
         start_admin_service, start_api_service,
     },
     auctioneer::{
@@ -41,7 +43,7 @@ pub use crate::{
     },
     bid_decoder::{DecoderTile, Lane, SubmissionDataWithSpan},
     block_merging::BlockMergingTile,
-    gossip::{BroadcastPayloadParams, GossipedMessage},
+    gossip::{BroadcastPayloadParams, GossipToken, GossipedMessage, GrpcGossiperClientManager},
     housekeeper::{HousekeeperTile, SlotUpdate},
     network::RelayNetworkManager,
     registration::{RegWorkerHandle, RegistrationTile},

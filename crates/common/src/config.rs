@@ -77,6 +77,10 @@ pub struct RelayConfig {
     pub api_port: u16,
     #[serde(default = "default_u16::<4041>")]
     pub tcp_port: u16,
+    /// Port for the routes served from a Flux tile rather than the async runtime. They
+    /// stay on `api_port` too; unset, the tile does not start.
+    #[serde(default)]
+    pub api_tile_port: Option<u16>,
     #[serde(default = "default_bind_ips")]
     pub bind_ips: Vec<IpAddr>,
     #[serde(default = "default_usize::<512>")]
@@ -170,12 +174,15 @@ impl RelayConfig {
                 data_gatherer: 3,
                 block_merging: 0,
                 housekeeper: None,
+                simulator: None,
+                proposer_api: None,
                 busy_spin: true,
             },
             gossip_payload_on_header: false,
             ip_frequency_threshold: default_ip_frequency_threshold(),
             api_port: 4040,
             tcp_port: 4041,
+            api_tile_port: None,
             bind_ips: default_bind_ips(),
             tcp_max_connections: 512,
             udp_top_bid_enabled: false,
@@ -244,6 +251,14 @@ pub struct CoresConfig {
     #[serde(default)]
     pub block_merging: usize,
     pub housekeeper: Option<usize>,
+    /// Core for the tile exchanging requests with the simulators. Unset, it runs unpinned
+    /// and sleeps between turns.
+    #[serde(default)]
+    pub simulator: Option<usize>,
+    /// Core for the tile serving the proposer API on `api_tile_port`. Unset, it runs
+    /// unpinned and sleeps between turns.
+    #[serde(default)]
+    pub proposer_api: Option<usize>,
     #[serde(default = "default_bool::<true>")]
     pub busy_spin: bool,
 }
