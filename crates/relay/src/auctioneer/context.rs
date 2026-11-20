@@ -441,7 +441,11 @@ impl<B: BidAdjustor> Context<B> {
     pub fn handle_merge_response(&mut self, response: &BlockMergeResponse) {
         let block_hash = response.execution_payload.block_hash;
         if let Some(base) = self.gloas_payloads.get(&response.base_block_hash).cloned() {
-            let Some(merged) = self.block_merger.prepare_merged_gloas_payload(response, &base)
+            let max = self.builder_preferences.max_execution_payment(
+                &base.submission.bid_trace().proposer_pubkey,
+                self.bid_slot.as_u64(),
+            );
+            let Some(merged) = self.block_merger.prepare_merged_gloas_payload(response, &base, max)
             else {
                 warn!(%block_hash, "failed to prepare merged gloas payload for storage");
                 return;

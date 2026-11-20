@@ -22,7 +22,7 @@ use tracing::{debug, error, info, trace, warn};
 use crate::{
     auctioneer::{
         BlockMergeResponse,
-        types::{GloasPayload, PayloadEntry},
+        types::{GloasPayload, PayloadEntry, execution_payment_gwei},
     },
     block_merging::{merged_gloas_submission, observe_pipe},
 };
@@ -224,10 +224,17 @@ impl BlockMerger {
         &mut self,
         response: &BlockMergeResponse,
         base: &GloasPayload,
+        max_execution_payment: Option<u64>,
     ) -> Option<GloasBidSubmission> {
         let trace = base.submission.bid_trace();
         if response.proposer_value <= trace.value {
             MERGE_STORE.with_label_values(&["not_valuable"]).inc();
+            return None;
+        }
+        if max_execution_payment
+            .is_some_and(|max| execution_payment_gwei(response.proposer_value) > max)
+        {
+            MERGE_STORE.with_label_values(&["above_max"]).inc();
             return None;
         }
         let payload = &response.execution_payload;

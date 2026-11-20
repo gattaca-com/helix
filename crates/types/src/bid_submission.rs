@@ -1068,6 +1068,9 @@ pub enum BlockValidationError {
     #[error("cannot hydrate: missing transactions or blobs in cache")]
     CannotHydrate,
 
+    #[error("execution payment {got} gwei above proposer's max {max}")]
+    ExecutionPaymentAboveMax { got: u64, max: u64 },
+
     #[error("bid trace does not match the payload stored for block hash {block_hash:?}")]
     BidTraceMismatch { block_hash: B256 },
 
