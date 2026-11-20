@@ -4,13 +4,13 @@ use std::{
     sync::{Arc, Mutex, OnceLock},
 };
 
-use dashmap::{DashMap, DashSet};
 use ethrex_common::{
     Address, H256, U256,
     types::{AccountState, BlockHeader, ChainConfig, Code, CodeMetadata, GenesisAccount},
 };
 use ethrex_levm::{db::Database, errors::DatabaseError};
 use ethrex_rlp::encode::RLPEncode;
+use helix_common::{FxDashMap, FxDashSet};
 use serde::{Deserialize, Serialize};
 
 use crate::spine::EventKind;
@@ -60,11 +60,11 @@ pub struct SlotRecorder {
     relay_signer: Address,
     safes: Vec<Address>,
     events: Mutex<Vec<u8>>,
-    accounts: DashMap<Address, AccountState>,
-    absent: DashSet<Address>,
-    storage: DashMap<(Address, H256), U256>,
-    codes: DashMap<H256, Code>,
-    block_hashes: DashMap<u64, H256>,
+    accounts: FxDashMap<Address, AccountState>,
+    absent: FxDashSet<Address>,
+    storage: FxDashMap<(Address, H256), U256>,
+    codes: FxDashMap<H256, Code>,
+    block_hashes: FxDashMap<u64, H256>,
     pub parent_header: OnceLock<BlockHeader>,
     chain_config: OnceLock<ChainConfig>,
     parent_db: OnceLock<Arc<dyn Database>>,
@@ -84,11 +84,11 @@ impl SlotRecorder {
             relay_signer,
             safes,
             events: Mutex::default(),
-            accounts: DashMap::default(),
-            absent: DashSet::default(),
-            storage: DashMap::default(),
-            codes: DashMap::default(),
-            block_hashes: DashMap::default(),
+            accounts: FxDashMap::default(),
+            absent: FxDashSet::default(),
+            storage: FxDashMap::default(),
+            codes: FxDashMap::default(),
+            block_hashes: FxDashMap::default(),
             parent_header: OnceLock::new(),
             chain_config: OnceLock::new(),
             parent_db: OnceLock::new(),

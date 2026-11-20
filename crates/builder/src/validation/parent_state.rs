@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use dashmap::DashMap;
 use ethrex_blockchain::vm::StoreVmDatabase;
 use ethrex_common::{
     H256,
@@ -9,10 +8,11 @@ use ethrex_common::{
 use ethrex_levm::db::CachingDatabase;
 use ethrex_storage::Store;
 use ethrex_vm::{DynVmDatabase, EvmError};
+use helix_common::FxDashMap;
 
 #[derive(Default)]
 pub struct ParentStateCache {
-    entries: DashMap<(H256, Fork), (u64, StoreVmDatabase, Arc<CachingDatabase>)>,
+    entries: FxDashMap<(H256, Fork), (u64, StoreVmDatabase, Arc<CachingDatabase>)>,
 }
 
 impl ParentStateCache {

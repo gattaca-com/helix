@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use alloy_primitives::B256;
-use dashmap::DashMap;
 use helix_types::BlsPublicKeyBytes;
 use rustc_hash::FxHashMap;
 use teloxide::{
@@ -13,10 +12,10 @@ use teloxide::{
 use tracing::error;
 use uuid::Uuid;
 
-use crate::RelayConfig;
+use crate::{FxDashMap, RelayConfig};
 
 #[derive(Clone, Default)]
-pub struct PromotionTokenCache(Arc<DashMap<String, BlsPublicKeyBytes>>);
+pub struct PromotionTokenCache(Arc<FxDashMap<String, BlsPublicKeyBytes>>);
 
 impl PromotionTokenCache {
     pub fn insert(&self, pubkey: BlsPublicKeyBytes) -> String {

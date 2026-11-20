@@ -285,7 +285,7 @@ async fn blobs_bundle_wire_format() {
 
 #[test]
 fn a_refreshed_list_replaces_the_previous_one() {
-    let disallow = Arc::new(dashmap::DashSet::new());
+    let disallow = Arc::new(helix_common::FxDashSet::default());
     disallow.insert(Address::repeat_byte(0x11));
 
     let hash = crate::validation::server::refresh_disallow(
@@ -300,7 +300,7 @@ fn a_refreshed_list_replaces_the_previous_one() {
 
 #[test]
 fn an_unchanged_list_reports_no_new_digest() {
-    let disallow = Arc::new(dashmap::DashSet::new());
+    let disallow = Arc::new(helix_common::FxDashSet::default());
     let entries = vec!["0x2222222222222222222222222222222222222222".to_string()];
 
     let first = crate::validation::server::refresh_disallow(

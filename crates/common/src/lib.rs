@@ -35,3 +35,6 @@ pub use slot_info::{CurrentSlotInfo, ForkKey, PayloadAttributesUpdate, SlotDutie
 pub use traces::*;
 pub use validator::*;
 pub use validator_preferences::*;
+
+pub type FxDashMap<K, V> = dashmap::DashMap<K, V, rustc_hash::FxBuildHasher>;
+pub type FxDashSet<K> = dashmap::DashSet<K, rustc_hash::FxBuildHasher>;

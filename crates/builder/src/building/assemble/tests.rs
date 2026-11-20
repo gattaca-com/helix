@@ -165,7 +165,7 @@ impl Fixture {
             self.store.clone(),
             head.subscribe(),
             8,
-            Arc::new(dashmap::DashSet::new()),
+            Arc::new(helix_common::FxDashSet::default()),
             1,
             None,
         )

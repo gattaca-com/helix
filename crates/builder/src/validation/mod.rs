@@ -18,7 +18,6 @@ use alloy_rpc_types::{
     beacon::{relay::BidTrace, requests::ExecutionRequestsV4},
     engine::ExecutionPayloadV3,
 };
-use dashmap::DashSet;
 use ethrex_blockchain::{BlockchainType, new_evm, vm::StoreVmDatabase};
 use ethrex_common::{
     Address as EAddress, U256 as EU256,
@@ -35,7 +34,7 @@ use ethrex_crypto::NativeCrypto;
 use ethrex_storage::Store;
 use ethrex_vm::{Evm, EvmError, VmDatabase};
 use helix_common::{
-    PAYMENT_FORWARDER, PAYMENT_FORWARDER_CODE_HASH,
+    FxDashSet, PAYMENT_FORWARDER, PAYMENT_FORWARDER_CODE_HASH,
     payment::multisend_paid_amount,
     payment_forwarder_recipient,
     simulator::TxDetail,
@@ -75,7 +74,7 @@ pub struct BlockValidator {
     store: Store,
     head: watch::Receiver<HeadInfo>,
     validation_window: u64,
-    disallow: Arc<DashSet<alloy_primitives::Address>>,
+    disallow: Arc<FxDashSet<alloy_primitives::Address>>,
     blob_cache: Arc<BlobCache>,
     parent_state: Arc<ParentStateCache>,
     merkle_pools: Arc<MerklePools>,
@@ -87,7 +86,7 @@ impl BlockValidator {
         store: Store,
         head: watch::Receiver<HeadInfo>,
         validation_window: u64,
-        disallow: Arc<DashSet<alloy_primitives::Address>>,
+        disallow: Arc<FxDashSet<alloy_primitives::Address>>,
         merkle_pools: usize,
         tx_sink: Option<Arc<TxSimSink>>,
     ) -> Self {

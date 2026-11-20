@@ -1,9 +1,8 @@
 use std::sync::Arc;
 
-use dashmap::DashMap;
 use futures::{FutureExt, future::Shared};
 use helix_common::{
-    GetPayloadTrace,
+    FxDashMap, GetPayloadTrace,
     api::proposer_api::{GetExecutionPayloadBidParams, GetHeaderParams},
     chain_info::ChainInfo,
     utils::utcnow_ns,
@@ -49,12 +48,12 @@ pub enum GetPayloadKind {
 pub struct AuctioneerHandle {
     auctioneer: crossbeam_channel::Sender<Event>,
     /// Dedup concurrent get_payload calls with the same block signature.
-    inflight_payloads: Arc<DashMap<(ProposerApiVersion, SignatureKey), SharedPayloadFut>>,
+    inflight_payloads: Arc<FxDashMap<(ProposerApiVersion, SignatureKey), SharedPayloadFut>>,
 }
 
 impl AuctioneerHandle {
     pub fn new(auctioneer: crossbeam_channel::Sender<Event>) -> Self {
-        Self { auctioneer, inflight_payloads: Arc::new(DashMap::new()) }
+        Self { auctioneer, inflight_payloads: Arc::new(FxDashMap::default()) }
     }
 
     pub fn get_header(

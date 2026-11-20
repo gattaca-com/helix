@@ -9,8 +9,8 @@ use axum::{
     response::{IntoResponse, Response},
     routing::post,
 };
-use dashmap::DashSet;
 use helix_common::{
+    FxDashSet,
     api::builder_api::MAX_PAYLOAD_LENGTH,
     blacklist::{DisallowListPayload, changed_disallow_hash},
     decoder::{DecoderError, SubmissionDecoder, SubmissionDecoderParams},
@@ -270,7 +270,7 @@ fn bad_request(message: String) -> Response {
 
 /// Replaces the disallow list, returning its new digest when it changed.
 pub fn refresh_disallow(
-    disallow: &DashSet<Address>,
+    disallow: &FxDashSet<Address>,
     payload: DisallowListPayload,
 ) -> Option<String> {
     let previous = changed_disallow_hash(disallow, None);
@@ -284,7 +284,7 @@ pub fn refresh_disallow(
 
 const REFRESH_INTERVAL: time::Duration = time::Duration::from_secs(300);
 
-pub async fn refresh_blacklist(endpoint: String, disallow: Arc<DashSet<Address>>) {
+pub async fn refresh_blacklist(endpoint: String, disallow: Arc<FxDashSet<Address>>) {
     let client = reqwest::Client::new();
     let mut interval = time::interval(REFRESH_INTERVAL);
     let mut loaded = false;

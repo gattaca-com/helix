@@ -1,13 +1,13 @@
 use std::{
     cell::RefCell,
     sync::{
-        Arc, Mutex,
+        Arc,
         atomic::{AtomicU64, Ordering},
     },
 };
 
 use ethrex_common::types::{Blob, BlobsBundle, Commitment, Proof};
-use rustc_hash::FxHashMap;
+use helix_common::FxDashMap;
 use silver_crypto_simd::kzg::{
     BYTES_PER_CELL, CELLS_PER_EXT_BLOB, CellBatchVerifier, CellExtender,
 };
@@ -99,7 +99,7 @@ impl State {
 
 #[derive(Default)]
 pub struct BlobCache {
-    entries: Mutex<FxHashMap<Commitment, Arc<VerifiedBlob>>>,
+    entries: FxDashMap<Commitment, Arc<VerifiedBlob>>,
 }
 
 impl BlobCache {
@@ -113,7 +113,8 @@ impl BlobCache {
     }
 
     fn contains(&self, commitment: &Commitment, blob: &Blob, proofs: &[Proof], head: u64) -> bool {
-        let Some(entry) = self.entries.lock().ok().and_then(|e| e.get(commitment).cloned()) else {
+        // Clone out of the shard guard so it is not held across the comparison.
+        let Some(entry) = self.entries.get(commitment).map(|e| e.clone()) else {
             return false;
         };
         if *entry.proofs != *proofs || *entry.blob != blob[..] {
@@ -129,14 +130,15 @@ impl BlobCache {
             proofs: proofs.into(),
             last_seen: AtomicU64::new(head),
         });
-        let Ok(mut entries) = self.entries.lock() else { return };
-        if entries.len() >= MAX_ENTRIES {
-            entries.retain(|_, e| e.last_seen.load(Ordering::Relaxed) + RETAIN_BLOCKS >= head);
-            if entries.len() >= MAX_ENTRIES {
+        // The length check and the insert are not atomic, so concurrent inserts can overshoot
+        // `MAX_ENTRIES` by a few entries.
+        if self.entries.len() >= MAX_ENTRIES {
+            self.entries.retain(|_, e| e.last_seen.load(Ordering::Relaxed) + RETAIN_BLOCKS >= head);
+            if self.entries.len() >= MAX_ENTRIES {
                 return;
             }
         }
-        entries.insert(commitment, entry);
+        self.entries.insert(commitment, entry);
     }
 }
 
