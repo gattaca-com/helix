@@ -868,40 +868,40 @@ impl BlockMergingTile {
         };
 
         let hydrated;
-        let (message, execution_payload, bundle): (&BidTrace, _, Arc<BlobsBundle>) =
-            match &sub.submission {
-                Submission::Full(SignedBidSubmission::Gloas(signed)) => {
-                    if !is_replay {
-                        self.stats.forwarded_full += 1;
-                    }
-                    (signed.bid_trace(), signed.payload_v3(), Arc::new(signed.bundle()))
+        let signed = match &sub.submission {
+            Submission::Full(signed) => {
+                if !is_replay {
+                    self.stats.forwarded_full += 1;
                 }
-                Submission::Full(SignedBidSubmission::Fulu(signed)) => {
-                    if !is_replay {
-                        self.stats.forwarded_full += 1;
-                    }
-                    let payload = payload_to_v3(&signed.execution_payload);
-                    (&signed.message, payload, signed.blobs_bundle())
-                }
-                // hydrating also feeds this submission's new txs into the cache
-                Submission::Dehydrated(d) => {
-                    let max_blobs = self.chain_info.max_blobs_per_block();
-                    match self.hydration_cache.hydrate(d.clone(), max_blobs) {
-                        Ok(h) => {
-                            if !is_replay {
-                                self.stats.forwarded_hydrated += 1;
-                            }
-                            hydrated = h.submission;
-                            let payload = payload_to_v3(&hydrated.execution_payload);
-                            (&hydrated.message, payload, hydrated.blobs_bundle())
+                signed
+            }
+            // hydrating also feeds this submission's new txs into the cache
+            Submission::Dehydrated(d) => {
+                let max_blobs = self.chain_info.max_blobs_per_block();
+                match self.hydration_cache.hydrate(d.clone(), max_blobs) {
+                    Ok(h) => {
+                        if !is_replay {
+                            self.stats.forwarded_hydrated += 1;
                         }
-                        Err(_) => {
-                            self.stats.hydration_failed += 1;
-                            return;
-                        }
+                        hydrated = h.submission;
+                        &hydrated
+                    }
+                    Err(_) => {
+                        self.stats.hydration_failed += 1;
+                        return;
                     }
                 }
-            };
+            }
+        };
+        let (message, execution_payload, bundle): (&BidTrace, _, Arc<BlobsBundle>) = match signed {
+            SignedBidSubmission::Gloas(signed) => {
+                (signed.bid_trace(), signed.payload_v3(), Arc::new(signed.bundle()))
+            }
+            SignedBidSubmission::Fulu(signed) => {
+                let payload = payload_to_v3(&signed.execution_payload);
+                (&signed.message, payload, signed.blobs_bundle())
+            }
+        };
 
         // Cache this submission's own blob sidecars so any of its blob txs that get merged
         // into another builder's base block can be re-attached from here later.
