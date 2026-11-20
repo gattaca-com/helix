@@ -8,6 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use alloy_primitives::{B256, U256};
 use axum::{
     Extension,
     extract::{ConnectInfo, Path},
@@ -159,6 +160,7 @@ impl<A: Api> ProposerApi<A> {
         user_agent: Option<String>,
         ip_addr: Option<IpAddr>,
         peer: SocketAddr,
+        signed: &mut SignedBidCache,
     ) -> (GetHeaderResponse, ForkName) {
         let now_ns = utcnow_ns();
         trace.best_bid_fetched = now_ns;
@@ -203,8 +205,10 @@ impl<A: Api> ProposerApi<A> {
         let fork = self.chain_info.fork_at_slot(params.slot.into());
         let payload_and_blobs = bid.payload_and_blobs();
         let bid_data = bid.bid_data_ref().to_owned();
-        let bid = bid.into_builder_bid_slow();
-        let signed_bid = resign_builder_bid(bid, &self.signing_context, fork);
+        let key = bid.receive_ns().map(|received| (bid_block_hash, value, received));
+        let signed_bid = signed.get_or_sign(key, || {
+            resign_builder_bid(bid.into_builder_bid_slow(), &self.signing_context, fork)
+        });
 
         if self.relay_config.gossip_payload_on_header && is_mev_boost {
             let ip_gate =
@@ -322,8 +326,17 @@ impl<A: Api> ProposerApi<A> {
             }
         };
 
-        let (signed_bid, fork) =
-            proposer_api.serve_bid(bid, params, trace, is_mev_boost, user_agent, ip_addr, peer);
+        // Signed per request here: requests run in parallel and share no state.
+        let (signed_bid, fork) = proposer_api.serve_bid(
+            bid,
+            params,
+            trace,
+            is_mev_boost,
+            user_agent,
+            ip_addr,
+            peer,
+            &mut SignedBidCache::default(),
+        );
 
         timing_guard.done_fetch = true;
 
@@ -342,6 +355,36 @@ impl<A: Api> ProposerApi<A> {
                 );
 
                 Ok(response)
+            }
+        }
+    }
+}
+
+/// What tells one stored bid from another: its block hash, its value and when its
+/// submission arrived. A builder can send a block hash again with a different body, which
+/// replaces the stored bid; the arrival time tells the two apart.
+type SignedBidKey = (B256, U256, u64);
+
+/// The bid signed last. Callers released together are mostly served the same bid, and
+/// building its header and signing it is most of what an answer costs.
+#[derive(Default)]
+pub(super) struct SignedBidCache(Option<(SignedBidKey, GetHeaderResponse)>);
+
+impl SignedBidCache {
+    /// `key` is `None` for a gossiped or merged bid: a merge can be replaced under its
+    /// block hash and nothing tells the two apart, so those are signed every time.
+    fn get_or_sign(
+        &mut self,
+        key: Option<SignedBidKey>,
+        sign: impl FnOnce() -> GetHeaderResponse,
+    ) -> GetHeaderResponse {
+        let Some(key) = key else { return sign() };
+        match &self.0 {
+            Some((of, signed)) if *of == key => signed.clone(),
+            _ => {
+                let signed = sign();
+                self.0 = Some((key, signed.clone()));
+                signed
             }
         }
     }
@@ -474,6 +517,37 @@ mod tests {
         let root = SigningData { object_root, domain }.tree_hash_root();
         let signature = BlsSignature::deserialize(signed.signature.as_slice()).unwrap();
         assert!(signature.verify(&signing.keypair.pk, root));
+    }
+
+    #[test]
+    fn a_bid_is_signed_again_when_its_hash_value_or_submission_changes() {
+        let mut cache = SignedBidCache::default();
+        let mut signings = 0;
+        let mut serve = |hash: B256, value: u64, received: Option<u64>| {
+            cache.get_or_sign(received.map(|at| (hash, U256::from(value), at)), || {
+                signings += 1;
+                let mut bid = BuilderBid::test_random();
+                bid.value = U256::from(value);
+                GetHeaderResponse {
+                    version: ForkName::Fulu,
+                    metadata: Default::default(),
+                    data: SignedBuilderBid { message: bid, signature: Default::default() },
+                }
+            })
+        };
+        let (a, b) = (B256::repeat_byte(1), B256::repeat_byte(2));
+
+        let first = serve(a, 7, Some(1));
+        assert_eq!(serve(a, 7, Some(1)).data, first.data, "the same bid is served as signed");
+        // The same block hash and value sent again: a body that may differ.
+        assert_ne!(serve(a, 7, Some(2)).data, first.data);
+        assert_eq!(serve(a, 8, Some(2)).data.message.value, U256::from(8));
+        assert_eq!(serve(b, 8, Some(2)).data.message.value, U256::from(8));
+        // No arrival time, nothing to tell a replacement by: signed every time.
+        serve(b, 8, None);
+        serve(b, 8, None);
+        assert_eq!(serve(b, 8, Some(2)).data.message.value, U256::from(8), "and still cached");
+        assert_eq!(signings, 6);
     }
 
     #[test]
