@@ -891,6 +891,8 @@ pub struct OperatorConfig {
     pub operator_group: Option<String>,
     #[serde(default)]
     pub promotion_mode: PromotionMode,
+    #[serde(default)]
+    pub dropped_pool_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

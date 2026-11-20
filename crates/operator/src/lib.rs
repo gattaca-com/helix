@@ -64,7 +64,7 @@ impl Drop for OperatorPubSub {
     }
 }
 
-#[allow(clippy::result_large_err)]
+#[allow(clippy::result_large_err, clippy::too_many_arguments)]
 impl OperatorPubSub {
     pub fn new(
         quic_port: u16,
@@ -73,6 +73,7 @@ impl OperatorPubSub {
         mode: OperatorP2pMode,
         operator_group: Option<Vec<u8>>,
         promotion_mode: PromotionMode,
+        dropped_pool_ids: Vec<String>,
         local_cache: Arc<LocalCache>,
     ) -> Self {
         let (outgoing_msgs, out_recv) = bounded(128);
@@ -88,6 +89,7 @@ impl OperatorPubSub {
             mode,
             operator_group,
             promotion_mode,
+            dropped_pool_ids,
             local_cache,
         ));
 
@@ -141,6 +143,7 @@ where
         config.mode,
         operator_group.clone(),
         promotion_mode,
+        config.dropped_pool_ids,
         local_cache.clone(),
     ));
 
@@ -359,6 +362,7 @@ mod tests {
             helix_common::OperatorP2pMode::On,
             None,
             helix_common::PromotionMode::Observe,
+            Vec::new(),
             Arc::new(LocalCache::new_test()),
         );
         // Ensure A is listening before B initiates its dial.
@@ -370,6 +374,7 @@ mod tests {
             helix_common::OperatorP2pMode::On,
             None,
             helix_common::PromotionMode::Observe,
+            Vec::new(),
             Arc::new(LocalCache::new_test()),
         );
         // Wait for the gossipsub subscription exchange before publishing. Messages are
