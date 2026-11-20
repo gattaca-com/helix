@@ -11,7 +11,7 @@ use helix_types::{
     BlsPublicKeyBytes, BuilderCollateral, CollateralMembership, Demotion, OperatorMessage,
     Promotion,
 };
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// Retained reports per pool. A demotion is a rare, serious event; this only bounds a faulty peer.
 const MAX_REPORTS_PER_POOL: usize = 1024;
@@ -121,11 +121,22 @@ pub(crate) struct PoolState {
     mode: PromotionMode,
     binding: FxHashMap<BlsPublicKeyBytes, CollateralId>,
     pools: FxHashMap<CollateralId, Pool>,
+    dropped: FxHashSet<CollateralId>,
 }
 
 impl PoolState {
-    pub(crate) fn new(local_group: OperatorGroup, mode: PromotionMode) -> Self {
-        Self { local_group, mode, binding: FxHashMap::default(), pools: FxHashMap::default() }
+    pub(crate) fn new(
+        local_group: OperatorGroup,
+        mode: PromotionMode,
+        dropped: FxHashSet<CollateralId>,
+    ) -> Self {
+        Self {
+            local_group,
+            mode,
+            binding: FxHashMap::default(),
+            pools: FxHashMap::default(),
+            dropped,
+        }
     }
 
     /// Pools are never removed, so the map length is the next free index.
@@ -161,6 +172,9 @@ impl PoolState {
         &mut self,
         membership: &CollateralMembership,
     ) -> Result<bool, PoolError> {
+        if self.dropped.contains(&membership.collateral_id) {
+            return Ok(false);
+        }
         // Validate the whole set before mutating anything: two operators accepting different
         // subsets would diverge undetected.
         for pubkey in &membership.builder_pubkeys {
@@ -201,6 +215,9 @@ impl PoolState {
         group: OperatorGroup,
         collateral: &BuilderCollateral,
     ) -> Result<bool, PoolError> {
+        if self.dropped.contains(&collateral.collateral_id) {
+            return Ok(false);
+        }
         // Only membership makes a pool id real, so collateral for an id with no members is
         // either corrupt or ahead of the membership that defines it. Rejecting it keeps a
         // malformed id from taking a slot against MAX_UNBOUND_POOLS; the owner republishes
@@ -226,6 +243,9 @@ impl PoolState {
     pub(crate) fn apply_promotion(&mut self, promotion: &Promotion) -> Result<bool, PoolError> {
         if promotion.collateral_id.is_empty() {
             return Err(PoolError::EmptyPoolId);
+        }
+        if self.dropped.contains(&promotion.collateral_id) {
+            return Ok(false);
         }
         if let Some(existing) = self.binding.get(&promotion.builder_pubkey) &&
             existing != &promotion.collateral_id
@@ -398,7 +418,7 @@ mod tests {
     }
 
     fn state() -> PoolState {
-        PoolState::new(GROUP.to_vec(), PromotionMode::Follow)
+        PoolState::new(GROUP.to_vec(), PromotionMode::Follow, FxHashSet::default())
     }
 
     fn members(ts_ms: u64, id: &[u8], pubkeys: &[BlsPublicKeyBytes]) -> OperatorMessage {
@@ -521,7 +541,7 @@ mod tests {
     fn share_sums_one_contribution_per_operator_group() {
         let k1 = BlsPublicKeyBytes::random();
         let build = |mode| {
-            let mut pool = PoolState::new(GROUP.to_vec(), mode);
+            let mut pool = PoolState::new(GROUP.to_vec(), mode, FxHashSet::default());
             apply(&mut pool, &members(1, C1, &[k1])).unwrap();
             let OperatorMessage::Collateral(local) = backing(1, C1, eth(10)) else {
                 unreachable!()

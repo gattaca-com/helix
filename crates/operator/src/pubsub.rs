@@ -94,6 +94,7 @@ pub(super) async fn run_operator_connection(
     mode: OperatorP2pMode,
     operator_group: Option<Vec<u8>>,
     promotion_mode: PromotionMode,
+    dropped_pool_ids: Vec<String>,
     local_cache: Arc<LocalCache>,
 ) -> Result<(), OperatorError> {
     let local_group = operator_group.unwrap_or_default();
@@ -148,7 +149,11 @@ pub(super) async fn run_operator_connection(
 
     // Pool state: membership, collateral, promotions and retained reports. Replayed when a new
     // operator subscribes.
-    let mut pool = PoolState::new(local_group.clone(), promotion_mode);
+    let mut pool = PoolState::new(
+        local_group.clone(),
+        promotion_mode,
+        dropped_pool_ids.into_iter().map(String::into_bytes).collect(),
+    );
     // Number of connected peers
     let mut connected_peers = FxHashSet::default();
     let mut redial_deadline = Instant::now() + QUIC_REDIAL_INTERVAL;
