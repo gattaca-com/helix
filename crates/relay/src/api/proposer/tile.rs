@@ -18,7 +18,10 @@ use helix_common::{
 use ssz::Encode;
 use tracing::{debug, error, info_span};
 
-use super::{CONSENSUS_VERSION_HEADER, ProposerApi, ProposerApiError, get_header::TimeoutGuard};
+use super::{
+    CONSENSUS_VERSION_HEADER, ProposerApi, ProposerApiError,
+    get_header::{SignedBidCache, TimeoutGuard},
+};
 use crate::{
     HelixSpine,
     api::{
@@ -62,6 +65,7 @@ pub struct ProposerApiTile<A: Api> {
     next_id: u64,
     bids_tx: Sender<(u64, GetHeaderResult)>,
     bids_rx: Receiver<(u64, GetHeaderResult)>,
+    signed: SignedBidCache,
 }
 
 impl<A: Api> ProposerApiTile<A> {
@@ -84,6 +88,7 @@ impl<A: Api> ProposerApiTile<A> {
             next_id: 0,
             bids_tx,
             bids_rx,
+            signed: SignedBidCache::default(),
         }
     }
 
@@ -233,6 +238,7 @@ impl<A: Api> ProposerApiTile<A> {
                 pending.user_agent,
                 pending.ip_addr,
                 pending.peer,
+                &mut self.signed,
             );
             match pending.encoding {
                 Encoding::Json => match serde_json::to_vec(&signed_bid) {
