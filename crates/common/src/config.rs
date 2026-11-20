@@ -229,7 +229,9 @@ pub struct CoresConfig {
     /// Registrations
     pub reg_workers: Vec<usize>,
     pub tcp_bid_submissions_tile: usize,
+    /// Decode HTTP submissions, and TCP ones too when `decoder_tcp_only` is empty
     pub decoder: Vec<usize>,
+    /// Decode TCP submissions only. When set, `decoder` cores take no TCP submissions
     #[serde(default)]
     pub decoder_tcp_only: Vec<usize>,
     #[serde(default)]
