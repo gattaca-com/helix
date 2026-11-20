@@ -59,7 +59,7 @@ fn record_timeout(counts: &mut TimeoutCounts, source_ip: &str, uri: &str) {
     *counts.entry(key).or_default() += 1;
 }
 
-fn count_request_timeout(source_ip: &str, uri: &str) {
+pub(crate) fn count_request_timeout(source_ip: &str, uri: &str) {
     let mut counts = REQUEST_TIMEOUTS.lock().unwrap_or_else(|e| e.into_inner());
     record_timeout(&mut counts, source_ip, uri);
 }

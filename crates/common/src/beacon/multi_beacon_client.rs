@@ -94,22 +94,6 @@ impl MultiBeaconClient {
         )
         .await
     }
-
-    /// Publishes the signed execution payload envelope to all beacon clients; returns on first
-    /// success. Unlike `publish_block`, fans out via plain concurrent futures, not
-    /// `spawn_tracked!`.
-    pub async fn publish_execution_payload_envelope(
-        &self,
-        envelope: Bytes,
-        fork: ForkName,
-    ) -> Result<(), BeaconClientError> {
-        first_success(
-            self.beacon_clients
-                .iter()
-                .map(|client| client.publish_execution_payload_envelope(envelope.clone(), fork)),
-        )
-        .await
-    }
 }
 
 async fn first_success(
@@ -123,62 +107,4 @@ async fn first_success(
         }
     }
     Err(last_error.unwrap_or(BeaconClientError::BeaconNodeUnavailable))
-}
-
-#[cfg(test)]
-mod tests {
-    use httpmock::{Method::POST, MockServer};
-    use reqwest::Url;
-
-    use super::*;
-    use crate::BeaconClientConfig;
-
-    fn envelope() -> Bytes {
-        Bytes::from_static(&[0u8; 12])
-    }
-
-    fn client_for(server: &MockServer) -> Arc<BeaconClient> {
-        let url = Url::parse(&server.url("/")).unwrap();
-        Arc::new(BeaconClient::new(BeaconClientConfig { url }))
-    }
-
-    #[tokio::test]
-    async fn publish_execution_payload_envelope_returns_ok_on_first_success() {
-        crate::utils::install_default_crypto_provider();
-        let failing = MockServer::start();
-        failing.mock(|when, then| {
-            when.method(POST).path("/eth/v1/beacon/execution_payload_envelopes");
-            then.status(500);
-        });
-        let succeeding = MockServer::start();
-        succeeding.mock(|when, then| {
-            when.method(POST).path("/eth/v1/beacon/execution_payload_envelopes");
-            then.status(200);
-        });
-
-        let multi = MultiBeaconClient::new(vec![client_for(&failing), client_for(&succeeding)]);
-        let result = multi.publish_execution_payload_envelope(envelope(), ForkName::Gloas).await;
-
-        assert!(result.is_ok(), "expected Ok, got {result:?}");
-    }
-
-    #[tokio::test]
-    async fn publish_execution_payload_envelope_returns_err_when_all_clients_fail() {
-        crate::utils::install_default_crypto_provider();
-        let a = MockServer::start();
-        a.mock(|when, then| {
-            when.method(POST).path("/eth/v1/beacon/execution_payload_envelopes");
-            then.status(500);
-        });
-        let b = MockServer::start();
-        b.mock(|when, then| {
-            when.method(POST).path("/eth/v1/beacon/execution_payload_envelopes");
-            then.status(500);
-        });
-
-        let multi = MultiBeaconClient::new(vec![client_for(&a), client_for(&b)]);
-        let result = multi.publish_execution_payload_envelope(envelope(), ForkName::Gloas).await;
-
-        assert!(result.is_err(), "expected Err, got {result:?}");
-    }
 }

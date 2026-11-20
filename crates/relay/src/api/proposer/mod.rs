@@ -7,6 +7,7 @@ mod ip_tracker;
 mod register;
 mod submit_builder_preferences;
 mod submit_signed_beacon_block;
+mod tile;
 
 use std::sync::{Arc, atomic::Ordering};
 
@@ -21,6 +22,7 @@ use helix_common::{
 use helix_database::handle::DbHandle;
 use helix_operator::OperatorPubSub;
 use hyper::StatusCode;
+pub use tile::ProposerApiTile;
 
 use crate::{
     api::{Api, proposer::ip_tracker::IpTracker, router::Terminating},

@@ -74,6 +74,28 @@ impl SubmissionRef {
     }
 }
 
+/// Where the auctioneer sends its answer to a proposer request.
+pub enum Reply<T> {
+    /// A handler waiting on the async runtime.
+    Task(oneshot::Sender<T>),
+    /// A tile, which matches the answer to its request by `request`.
+    Tile { request: u64, tx: crossbeam_channel::Sender<(u64, T)> },
+}
+
+impl<T> Reply<T> {
+    /// A caller that has gone away is not an error: it stopped waiting.
+    pub fn send(self, answer: T) {
+        match self {
+            Self::Task(tx) => {
+                let _ = tx.send(answer);
+            }
+            Self::Tile { request, tx } => {
+                let _ = tx.send((request, answer));
+            }
+        }
+    }
+}
+
 pub type GetHeaderResult = Result<PayloadEntry, ProposerApiError>;
 pub type GetPayloadResult = Result<GetPayloadResultData, ProposerApiError>;
 pub type GetExecutionPayloadBidResult = Result<ServedGloasBid, ProposerApiError>;
@@ -562,7 +584,7 @@ pub enum Event {
     /// timing games already done
     GetHeader {
         params: GetHeaderParams,
-        res_tx: oneshot::Sender<GetHeaderResult>,
+        res_tx: Reply<GetHeaderResult>,
         span: tracing::Span,
         is_mev_boost: bool,
     },

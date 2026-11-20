@@ -3,7 +3,6 @@ use std::{sync::atomic::Ordering, time::Instant};
 use alloy_primitives::B256;
 use flux_profiler::timed;
 use helix_common::{api::proposer_api::GetHeaderParams, metrics::BID_ADJUSTMENT_LATENCY};
-use tokio::sync::oneshot;
 use tracing::{error, warn};
 
 use crate::{
@@ -11,7 +10,7 @@ use crate::{
     auctioneer::{
         bid_adjustor::BidAdjustor,
         context::Context,
-        types::{GetHeaderResult, SlotData},
+        types::{GetHeaderResult, Reply, SlotData},
     },
     spine::HelixSpineProducers,
 };
@@ -21,13 +20,12 @@ impl<B: BidAdjustor> Context<B> {
         &mut self,
         params: GetHeaderParams,
         slot_data: &SlotData,
-        res_tx: oneshot::Sender<GetHeaderResult>,
+        res_tx: Reply<GetHeaderResult>,
         producers: &mut HelixSpineProducers,
         is_mev_boost: bool,
     ) {
         assert_eq!(params.slot, self.bid_slot.as_u64(), "params should already be validated!");
-        let _ =
-            res_tx.send(self.get_header(params.parent_hash, slot_data, producers, is_mev_boost));
+        res_tx.send(self.get_header(params.parent_hash, slot_data, producers, is_mev_boost));
     }
 
     #[timed]
