@@ -83,6 +83,8 @@ pub struct BuilderValidatorPreferences {
     pub filtering: Filtering,
     pub trusted_builders: Option<Vec<String>>,
     pub disable_optimistic: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "quoted_u64_opt")]
+    pub max_execution_payment: Option<u64>,
 }
 
 impl From<ValidatorPreferences> for BuilderValidatorPreferences {
@@ -92,7 +94,24 @@ impl From<ValidatorPreferences> for BuilderValidatorPreferences {
             filtering: preferences.filtering,
             trusted_builders: preferences.trusted_builders.clone(),
             disable_optimistic: preferences.disable_optimistic,
+            max_execution_payment: None,
         }
+    }
+}
+
+mod quoted_u64_opt {
+    use serde::{Deserialize, Deserializer, Serializer};
+    use serde_utils::quoted_u64::Quoted;
+
+    pub fn serialize<S: Serializer>(value: &Option<u64>, s: S) -> Result<S::Ok, S::Error> {
+        match value {
+            Some(value) => serde_utils::quoted_u64::serialize(value, s),
+            None => s.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error> {
+        Ok(Option::<Quoted<u64>>::deserialize(d)?.map(|q| q.value))
     }
 }
 
