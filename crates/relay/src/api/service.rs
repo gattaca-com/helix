@@ -30,7 +30,10 @@ use crate::{
     },
     gossip::{GossipToken, GossipedMessage, GrpcGossiperClientManager, process_gossip_messages},
     network::api::RelayNetworkApi,
-    spine::messages::{GetHeaderServed, GetHeaderTimedOut, NewBidSubmission},
+    spine::messages::{
+        GetHeaderServed, GetHeaderTimedOut, GetPayloadAnswered, NewBidSubmission,
+        ProposerRegistered, ProposerRequest, RegistrationsAnswered,
+    },
 };
 
 pub(crate) const API_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
@@ -53,6 +56,10 @@ pub fn start_api_service<A: Api>(
     bid_producer: StandaloneDCacheProducer<NewBidSubmission>,
     header_served: StandaloneProducer<GetHeaderServed>,
     header_timed_out: StandaloneProducer<GetHeaderTimedOut>,
+    proposer_request: StandaloneProducer<ProposerRequest>,
+    payload_answered: StandaloneProducer<GetPayloadAnswered>,
+    registrations_answered: StandaloneProducer<RegistrationsAnswered>,
+    proposer_registered: StandaloneProducer<ProposerRegistered>,
     future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
     web_socket_connections: Sender<(RawWebSocket, TopBidPrecision)>,
     alert_manager: Arc<AlertManager>,
@@ -78,6 +85,10 @@ pub fn start_api_service<A: Api>(
         bid_producer,
         header_served,
         header_timed_out,
+        proposer_request,
+        payload_answered,
+        registrations_answered,
+        proposer_registered,
         future_results,
         web_socket_connections,
         alert_manager,
@@ -105,6 +116,10 @@ pub async fn run_api_service<A: Api>(
     bid_producer: StandaloneDCacheProducer<NewBidSubmission>,
     header_served: StandaloneProducer<GetHeaderServed>,
     header_timed_out: StandaloneProducer<GetHeaderTimedOut>,
+    proposer_request: StandaloneProducer<ProposerRequest>,
+    payload_answered: StandaloneProducer<GetPayloadAnswered>,
+    registrations_answered: StandaloneProducer<RegistrationsAnswered>,
+    proposer_registered: StandaloneProducer<ProposerRegistered>,
     future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
     web_socket_connections: Sender<(RawWebSocket, TopBidPrecision)>,
     alert_manager: Arc<AlertManager>,
@@ -157,6 +172,10 @@ pub async fn run_api_service<A: Api>(
         operator_api,
         header_served,
         header_timed_out,
+        proposer_request,
+        payload_answered,
+        registrations_answered,
+        proposer_registered,
     ));
 
     tokio::spawn(process_gossip_messages(
