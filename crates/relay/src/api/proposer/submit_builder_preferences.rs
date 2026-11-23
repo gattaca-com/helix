@@ -94,10 +94,16 @@ impl<A: Api> ProposerApi<A> {
             return Err(ProposerApiError::InternalServerError);
         };
 
-        // TODO(gloas): honor max_execution_payment when getExecutionPayloadBid serves a real
-        // bid; not consumed anywhere yet.
         match rx.await {
-            Ok(res) => res.map(|()| StatusCode::ACCEPTED),
+            Ok(Ok(())) => {
+                proposer_api.curr_slot_info.set_max_execution_payment(
+                    params.proposer_pubkey,
+                    request.auth.message.slot,
+                    request.preferences.max_execution_payment,
+                );
+                Ok(StatusCode::ACCEPTED)
+            }
+            Ok(Err(err)) => Err(err),
             Err(err) => {
                 warn!(%err, "failed to store builder preferences");
                 Err(ProposerApiError::InternalServerError)
