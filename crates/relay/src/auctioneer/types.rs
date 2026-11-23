@@ -291,6 +291,10 @@ pub struct SubmissionPayload {
 
 const WEI_PER_GWEI: u64 = 1_000_000_000;
 
+pub fn execution_payment_gwei(value: U256) -> u64 {
+    (value / U256::from(WEI_PER_GWEI)).saturating_to::<u64>()
+}
+
 /// The fields of a Gloas block the reveal decision and envelope need.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SeenBlock {
@@ -323,8 +327,7 @@ pub struct GloasPayload {
 impl GloasPayload {
     pub fn new(submission: GloasBidSubmission, fee_recipient: Address, receive_ns: u64) -> Self {
         // The proposer is paid in-block, so the enshrined `value` stays 0.
-        let execution_payment =
-            (submission.bid_trace().value / U256::from(WEI_PER_GWEI)).saturating_to::<u64>();
+        let execution_payment = execution_payment_gwei(submission.bid_trace().value);
         // The proposer's, not the payload's: the builder keeps the coinbase and pays
         // the proposer in-block, and consensus pays any enshrined amount to whatever
         // this names. Announcing the coinbase names the builder.

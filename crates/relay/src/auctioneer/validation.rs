@@ -6,7 +6,7 @@ use helix_types::{BlockValidationError, ForkName, SignedBidSubmission, Submissio
 use crate::auctioneer::{
     bid_adjustor::BidAdjustor,
     context::Context,
-    types::{SlotData, SubmissionData},
+    types::{SlotData, SubmissionData, execution_payment_gwei},
 };
 
 impl<B: BidAdjustor> Context<B> {
@@ -127,6 +127,16 @@ impl<B: BidAdjustor> Context<B> {
                 got: bid_trace.proposer_pubkey,
                 expected: registration.pubkey,
             });
+        }
+
+        if let Some(max) = self
+            .builder_preferences
+            .max_execution_payment(&bid_trace.proposer_pubkey, self.bid_slot.as_u64())
+        {
+            let got = execution_payment_gwei(bid_trace.value);
+            if got > max {
+                return Err(BlockValidationError::ExecutionPaymentAboveMax { got, max });
+            }
         }
 
         if *payload.prev_randao() != payload_attributes.prev_randao {
