@@ -5,8 +5,8 @@ use std::{
 };
 
 use axum::http::HeaderMap;
-use flux::spine::StandaloneProducer;
-use helix_telemetry::GetHeaderServed;
+use flux::{spine::StandaloneProducer, timing::IngestionTime};
+use helix_telemetry::{GetHeaderServed, ProposerRequest};
 use helix_types::SignedValidatorRegistration;
 use tracing::warn;
 pub use uuid::Uuid;
@@ -93,6 +93,18 @@ pub trait ApiProvider: Send + Sync + Clone + 'static {
         _peer: SocketAddr,
         _producer: &StandaloneProducer<GetHeaderServed>,
     ) {
+    }
+
+    /// A `getHeader`, `getPayload` or `registerValidator` request arrived. `request` holds what the
+    /// relay knows itself; a provider behind a load balancer adds what the balancer said in
+    /// `headers` about the client's connection.
+    fn on_proposer_request(
+        &self,
+        request: ProposerRequest,
+        _headers: &HeaderMap,
+        producer: &StandaloneProducer<ProposerRequest>,
+    ) {
+        producer.produce_with_ingestion(request, IngestionTime::now());
     }
 }
 

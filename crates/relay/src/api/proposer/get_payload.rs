@@ -2,6 +2,7 @@ use std::{borrow::Cow, str::FromStr, sync::Arc, time::Duration};
 
 use alloy_primitives::{Address, B256};
 use axum::{Extension, http::HeaderMap, response::IntoResponse};
+use flux::timing::IngestionTime;
 use helix_common::{
     Filtering, GetPayloadTrace, RequestTimings,
     api::HEADER_API_KEY,
@@ -33,6 +34,7 @@ use crate::{
     },
     auctioneer::{GetPayloadKind, GetPayloadResultData},
     gossip::{BroadcastGetPayloadParams, BroadcastPayloadParams},
+    spine::messages::{GetHeaderServed, GetPayloadAnswered, ProposerRequestKind},
 };
 
 const GET_PAYLOAD_REQUEST_CUTOFF_MS: i64 = 4000;
@@ -61,11 +63,14 @@ struct ParsedGetPayload {
     trace: GetPayloadTrace,
     user_agent: Option<String>,
     request_id: Uuid,
+    /// The telemetry record of the answer, less the answer itself.
+    answered: GetPayloadAnswered,
 }
 
 impl<A: Api> ProposerApi<A> {
     fn parse_get_payload_request(
         &self,
+        kind: ProposerRequestKind,
         timings: RequestTimings,
         headers: &HeaderMap,
         body: &bytes::Bytes,
@@ -88,20 +93,28 @@ impl<A: Api> ProposerApi<A> {
         let encoding = Encoding::from_content_type(headers);
 
         // TODO: move decoding to worker
-        let signed_blinded_block: SignedBlindedBeaconBlock = match (fork, encoding) {
+        let decoded: Result<SignedBlindedBeaconBlock, ProposerApiError> = match (fork, encoding) {
             (ForkName::Fulu, Encoding::Json) => {
-                let b: SignedBlindedBeaconBlockFulu = serde_json::from_slice(body)
-                    .inspect_err(|err| warn!(%err, "failed to deserialize signed block"))?;
-                b.into()
+                serde_json::from_slice::<SignedBlindedBeaconBlockFulu>(body)
+                    .inspect_err(|err| warn!(%err, "failed to deserialize signed block"))
+                    .map(Into::into)
+                    .map_err(Into::into)
             }
             (ForkName::Fulu, Encoding::Ssz) => SignedBlindedBeaconBlockFulu::from_ssz_bytes(body)
-                .inspect_err(|err| warn!(?err, "failed to deserialize signed block"))?
-                .into(),
-            (_, _) => return Err(ProposerApiError::InvalidFork),
+                .inspect_err(|err| warn!(?err, "failed to deserialize signed block"))
+                .map(Into::into)
+                .map_err(Into::into),
+            (_, _) => Err(ProposerApiError::InvalidFork),
         };
+        trace.decode = utcnow_ns();
+
+        // A request that does not decode is still reported, with slot 0.
+        let slot = decoded.as_ref().map_or(0, |block| block.slot().as_u64());
+        let proposer_pubkey = self.local_cache.proposer_pubkey(slot.into()).unwrap_or_default();
+        self.report_request(kind, slot, proposer_pubkey, trace.receive, request_id, headers);
+        let signed_blinded_block = decoded?;
 
         tracing::Span::current().record("slot", signed_blinded_block.slot().as_u64());
-        trace.decode = utcnow_ns();
 
         let block_hash = signed_blinded_block
             .message()
@@ -113,6 +126,18 @@ impl<A: Api> ProposerApi<A> {
 
         let slot = signed_blinded_block.message().slot();
 
+        let answered = GetPayloadAnswered {
+            slot: slot.as_u64(),
+            receive_ns: trace.receive,
+            proposer_index: signed_blinded_block.message().proposer_index(),
+            block_hash,
+            proposer_pubkey,
+            proposer_ip: GetHeaderServed::ip_octets(header_ip_addr(headers)),
+            request_id,
+            kind,
+            ..Default::default()
+        };
+
         Ok(ParsedGetPayload {
             signed_blinded_block,
             fork,
@@ -121,6 +146,7 @@ impl<A: Api> ProposerApi<A> {
             trace,
             user_agent,
             request_id,
+            answered,
         })
     }
 
@@ -150,7 +176,13 @@ impl<A: Api> ProposerApi<A> {
             mut trace,
             user_agent,
             request_id,
-        } = proposer_api.parse_get_payload_request(timings, &headers, &body)?;
+            answered,
+        } = proposer_api.parse_get_payload_request(
+            ProposerRequestKind::GetPayload,
+            timings,
+            &headers,
+            &body,
+        )?;
 
         let gossiper = proposer_api.gossiper.clone();
         let params = BroadcastGetPayloadParams {
@@ -167,10 +199,14 @@ impl<A: Api> ProposerApi<A> {
         );
 
         let response_encoding = Encoding::from_accept(&headers);
-        match proposer_api
+        let result = proposer_api
             ._get_payload(signed_blinded_block, &mut trace, user_agent, ProposerApiVersion::V1)
-            .await
-        {
+            .await;
+        proposer_api.report_payload_answered(
+            answered,
+            result.as_ref().map_or_else(ProposerApiError::status_code, |_| StatusCode::OK),
+        );
+        match result {
             Ok(get_payload_response) => {
                 confirm_proposer_ip(&proposer_api, &headers);
                 match response_encoding {
@@ -225,8 +261,14 @@ impl<A: Api> ProposerApi<A> {
             mut trace,
             user_agent,
             request_id,
+            answered,
             ..
-        } = proposer_api.parse_get_payload_request(timings, &headers, &body)?;
+        } = proposer_api.parse_get_payload_request(
+            ProposerRequestKind::GetPayloadV2,
+            timings,
+            &headers,
+            &body,
+        )?;
 
         proposer_api
             .gossiper
@@ -236,10 +278,14 @@ impl<A: Api> ProposerApi<A> {
             })
             .await;
 
-        match proposer_api
+        let result = proposer_api
             ._get_payload(signed_blinded_block, &mut trace, user_agent, ProposerApiVersion::V2)
-            .await
-        {
+            .await;
+        proposer_api.report_payload_answered(
+            answered,
+            result.as_ref().map_or_else(ProposerApiError::status_code, |_| StatusCode::ACCEPTED),
+        );
+        match result {
             Ok(_) => {
                 confirm_proposer_ip(&proposer_api, &headers);
                 Ok(StatusCode::ACCEPTED)
@@ -254,6 +300,12 @@ impl<A: Api> ProposerApi<A> {
                 Err(err)
             }
         }
+    }
+
+    fn report_payload_answered(&self, mut answered: GetPayloadAnswered, status: StatusCode) {
+        answered.answered_ns = utcnow_ns();
+        answered.status = status.as_u16();
+        self.payload_answered.produce_with_ingestion(answered, IngestionTime::now());
     }
 
     pub async fn _get_payload(

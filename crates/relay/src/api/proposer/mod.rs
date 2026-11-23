@@ -10,24 +10,38 @@ mod submit_signed_beacon_block;
 
 use std::sync::{Arc, atomic::Ordering};
 
-use axum::{Extension, response::IntoResponse};
+use axum::{Extension, http::HeaderMap, response::IntoResponse};
 pub use error::*;
-use flux::spine::StandaloneProducer;
+use flux::{spine::StandaloneProducer, utils::ArrayStr};
 use helix_common::{
-    CurrentSlotInfo, RelayConfig, ValidatorPreferences, alerts::AlertManager,
-    beacon::MultiBeaconClient, chain_info::ChainInfo, local_cache::LocalCache,
+    CurrentSlotInfo, RelayConfig, ValidatorPreferences,
+    alerts::AlertManager,
+    api::HEADER_START_TIME_UNIX_MS,
+    api_provider::{ApiProvider, header_ip_addr, header_u64},
+    beacon::MultiBeaconClient,
+    chain_info::ChainInfo,
+    local_cache::LocalCache,
     signing::RelaySigningContext,
 };
 use helix_database::handle::DbHandle;
 use helix_operator::OperatorPubSub;
+use helix_types::BlsPublicKeyBytes;
+use http::{
+    HeaderName,
+    header::{CONTENT_LENGTH, HOST, USER_AGENT},
+};
 use hyper::StatusCode;
+use uuid::Uuid;
 
 use crate::{
     api::{Api, proposer::ip_tracker::IpTracker, router::Terminating},
     auctioneer::AuctioneerHandle,
     gossip::GrpcGossiperClientManager,
     registration::RegWorkerHandle,
-    spine::messages::{GetHeaderServed, GetHeaderTimedOut},
+    spine::messages::{
+        GetHeaderServed, GetHeaderTimedOut, GetPayloadAnswered, ProposerRegistered,
+        ProposerRequest, ProposerRequestKind, RegistrationsAnswered,
+    },
 };
 
 #[derive(Clone)]
@@ -50,6 +64,10 @@ pub struct ProposerApi<A: Api> {
     pub ip_tracker: IpTracker,
     pub header_served: Arc<StandaloneProducer<GetHeaderServed>>,
     pub header_timed_out: Arc<StandaloneProducer<GetHeaderTimedOut>>,
+    pub proposer_request: Arc<StandaloneProducer<ProposerRequest>>,
+    pub payload_answered: Arc<StandaloneProducer<GetPayloadAnswered>>,
+    pub registrations_answered: Arc<StandaloneProducer<RegistrationsAnswered>>,
+    pub proposer_registered: Arc<StandaloneProducer<ProposerRegistered>>,
 }
 
 impl<A: Api> ProposerApi<A> {
@@ -70,6 +88,10 @@ impl<A: Api> ProposerApi<A> {
         operator_api: Option<Arc<OperatorPubSub>>,
         header_served: StandaloneProducer<GetHeaderServed>,
         header_timed_out: StandaloneProducer<GetHeaderTimedOut>,
+        proposer_request: StandaloneProducer<ProposerRequest>,
+        payload_answered: StandaloneProducer<GetPayloadAnswered>,
+        registrations_answered: StandaloneProducer<RegistrationsAnswered>,
+        proposer_registered: StandaloneProducer<ProposerRegistered>,
     ) -> Self {
         Self {
             local_cache,
@@ -89,7 +111,42 @@ impl<A: Api> ProposerApi<A> {
             ip_tracker: IpTracker::default(),
             header_served: Arc::new(header_served),
             header_timed_out: Arc::new(header_timed_out),
+            proposer_request: Arc::new(proposer_request),
+            payload_answered: Arc::new(payload_answered),
+            registrations_answered: Arc::new(registrations_answered),
+            proposer_registered: Arc::new(proposer_registered),
         }
+    }
+
+    fn report_request(
+        &self,
+        kind: ProposerRequestKind,
+        slot: u64,
+        proposer_pubkey: BlsPublicKeyBytes,
+        receive_ns: u64,
+        request_id: Uuid,
+        headers: &HeaderMap,
+    ) {
+        let header_str = |name: HeaderName| headers.get(name).and_then(|value| value.to_str().ok());
+        let request = ProposerRequest {
+            slot,
+            receive_ns,
+            client_send_ms: header_u64(headers, HEADER_START_TIME_UNIX_MS).unwrap_or_default(),
+            header_names_hash: ProposerRequest::hash_header_names(
+                headers.keys().map(HeaderName::as_str),
+            ),
+            proposer_pubkey,
+            proposer_ip: GetHeaderServed::ip_octets(header_ip_addr(headers)),
+            request_id,
+            user_agent: header_str(USER_AGENT).map(ArrayStr::from_str_truncate).unwrap_or_default(),
+            host: header_str(HOST).map(ArrayStr::from_str_truncate).unwrap_or_default(),
+            content_length: header_str(CONTENT_LENGTH)
+                .and_then(|length| length.parse().ok())
+                .unwrap_or_default(),
+            kind,
+            ..Default::default()
+        };
+        self.api_provider.on_proposer_request(request, headers, &self.proposer_request);
     }
 }
 

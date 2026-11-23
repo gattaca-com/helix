@@ -461,6 +461,18 @@ impl LocalCache {
         schedule.iter().find(|(duty, _)| duty.slot == slot).map(|(duty, _)| duty.pubkey)
     }
 
+    /// Scheduled proposers with a proposal after `head_slot`, each with the first such slot.
+    pub fn scheduled_proposers(&self, head_slot: Slot) -> FxHashMap<BlsPublicKeyBytes, Slot> {
+        let mut proposers = FxHashMap::default();
+        for (duty, _) in self.proposer_schedule.read().iter() {
+            if duty.slot > head_slot {
+                let slot: &mut Slot = proposers.entry(duty.pubkey).or_insert(duty.slot);
+                *slot = (*slot).min(duty.slot);
+            }
+        }
+        proposers
+    }
+
     /// Returns the admitted point for `pubkey`, reusing the schedule only when
     /// both slot and compressed key match. Other keys are decoded on demand.
     /// Schedule membership is not an authorization check performed by this method.
