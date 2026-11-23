@@ -5,7 +5,6 @@ use std::{
 
 use alloy_primitives::{Address, B256, U256};
 use bytes::Bytes;
-use flux::timing::Nanos;
 use flux_profiler::timed;
 use helix_common::{
     SimulatorConfig, SubmissionTrace,
@@ -13,36 +12,32 @@ use helix_common::{
     bid_submission::OptimisticVersion,
     decoder::SubmissionDecoderParams,
     metrics::SimulatorMetrics,
-    record_submission_step,
-    simulator::{
-        BlockSimError, JsonValidationRequest, MergedJsonValidationRequest,
-        SszMergedValidationRequestRef, SszValidationRequestRef, TxDetail,
-    },
-    spawn_tracked,
+    simulator::{BlockSimError, SszValidationRequestRef, TxDetail},
     utils::avg_duration,
-    validator_preferences::{Filtering, ValidatorPreferences},
 };
 use helix_tcp_types::merging::builder_to_relay::UnmergedTx;
 use helix_types::{
     BidTrace, BlobsBundle, BlsPublicKeyBytes, BlsSignatureBytes, BuilderDepositRequests,
     BuilderExitRequests, BuilderInclusionResult, ExecutionPayload, ExecutionRequests, ForkName,
-    GloasBidTrace, MergedBlockTrace, SignedBidSubmission, SignedBidSubmissionFulu,
-    SubmissionVersion,
+    MergedBlockTrace, SignedBidSubmission, SignedBidSubmissionFulu, SubmissionVersion,
 };
 use rustc_hash::FxHashMap;
 use ssz::Encode as _;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::{
     SubmissionRef,
     auctioneer::Bid,
-    block_merging::merged_gloas_submission,
     simulator::client::SimulatorClient,
     spine::messages::{SimFinished, SimPreviousSlotDrops, SimStarted, SimTxIncluded},
 };
 
 pub mod client;
+mod tile;
+
+use tile::SimJob;
+pub use tile::SimulatorTile;
 
 /// Dispatch class for a validation request, highest first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -185,7 +180,10 @@ pub struct Simulators {
     local_telemetry: LocalTelemetry,
     /// Per-simulator counters for the current slot, indexed like `simulators`.
     sim_slot_stats: Vec<SimSlotStats>,
-    /// Internal channel: async tasks notify the pool when work completes.
+    /// Work for the `SimulatorTile`, which encodes and sends it.
+    jobs: crossbeam_channel::Sender<SimJob>,
+    /// Answers from the tile. The pool also posts here what it answers itself with a
+    /// simulator slot held, so the slot is released through the one path.
     task_tx: crossbeam_channel::Sender<SimulatorsEvent>,
     rx: crossbeam_channel::Receiver<SimulatorsEvent>,
     /// Sampled-so-far and seen-so-far counts per builder for the current slot.
@@ -234,41 +232,18 @@ impl SimDone {
 }
 
 impl Simulators {
-    pub fn new(configs: Vec<SimulatorConfig>) -> Self {
+    /// The tile does the I/O for this pool and must be attached for anything to run.
+    pub fn new(configs: Vec<SimulatorConfig>) -> (Self, SimulatorTile) {
         let (task_tx, rx) = crossbeam_channel::unbounded();
+        let (jobs, jobs_rx) = crossbeam_channel::unbounded();
+        let tile = SimulatorTile::new(&configs, jobs_rx, task_tx.clone());
 
-        let client =
-            reqwest::ClientBuilder::new().timeout(SIMULATOR_REQUEST_TIMEOUT).build().unwrap();
-
-        let simulators: Vec<_> = configs
-            .into_iter()
-            .map(|config| SimEntry::new(SimulatorClient::new(client.clone(), config)))
-            .collect();
+        let simulators: Vec<_> =
+            configs.into_iter().map(|config| SimEntry::new(SimulatorClient::new(config))).collect();
 
         let requests = PendingRequests::with_capacity(2_000);
         let priority_requests = PendingRequests::with_capacity(30);
         let merge_requests = PendingMergeRequests::with_capacity(30);
-
-        let clients: Vec<SimulatorClient> = simulators.iter().map(|e| e.client.clone()).collect();
-        spawn_tracked!({
-            let sync_tx = task_tx.clone();
-            async move {
-                loop {
-                    for (id, simulator) in clients.iter().enumerate() {
-                        let reported = simulator.is_synced().await.ok();
-                        if sync_tx.send(SimulatorsEvent::SyncStatus { id, reported }).is_err() {
-                            error!("failed to send sync status to sim pool");
-                        }
-                        SimulatorMetrics::simulator_sync(
-                            simulator.endpoint(),
-                            reported.unwrap_or(false),
-                        );
-                    }
-
-                    tokio::time::sleep(Duration::from_secs(1)).await;
-                }
-            }
-        });
 
         let ssz_sim_indices: Vec<usize> = simulators
             .iter()
@@ -279,7 +254,7 @@ impl Simulators {
 
         let sim_slot_stats = vec![SimSlotStats::default(); simulators.len()];
 
-        Self {
+        let pool = Self {
             simulators,
             ssz_sim_indices,
             requests,
@@ -290,13 +265,15 @@ impl Simulators {
             previous_bid_slot: 0,
             local_telemetry: LocalTelemetry::default(),
             sim_slot_stats,
+            jobs,
             task_tx,
             rx,
             sample_state: FxHashMap::default(),
             seen_blocks: FxHashMap::default(),
             accept_optimistic: true,
             answered: Vec::new(),
-        }
+        };
+        (pool, tile)
     }
 
     /// Next finished simulation, if any. Pulled one at a time rather than through a callback
@@ -603,31 +580,15 @@ impl Simulators {
     /// the request died before dispatch without an attributable block, or the
     /// block hash is zero (completion skips those too, keeping the pair).
     fn spawn_sim(&mut self, id: usize, req: ValidationRequest) -> Option<SimStarted> {
-        let submission = req.submission.clone();
-        let tx_root = req.tx_root;
-        let version = req.version;
-        let trace = req.trace;
-        let submission_ref = req.submission_ref;
-        self.seen_blocks
-            .entry(*submission.block_hash())
-            .or_insert_with(|| SeenBlock::InFlight(Vec::new()));
+        let block_hash = *req.submission.block_hash();
+        self.seen_blocks.entry(block_hash).or_insert_with(|| SeenBlock::InFlight(Vec::new()));
 
         let sim = &mut self.simulators[id];
-        let fork = submission.fork_name();
-        let dispatch = match &sim.client.ssz_url {
-            Some(url) => sim.client.ssz_request_builder(fork).map(|to_send| SimDispatch::Ssz {
-                to_send,
-                ssz_url: url.clone(),
-                http: sim.client.client.clone(),
-            }),
-            None => sim
-                .client
-                .sim_request_builder(fork)
-                .map(|(to_send, method)| SimDispatch::Json { to_send, method: method.to_owned() }),
-        };
-        let Some(dispatch) = dispatch else {
+        let fork = req.submission.fork_name();
+        let started = sim_started_event(req.submission_id, block_hash, false, req.is_top_bid);
+        sim.pending += 1;
+        if !sim.client.can_validate(fork) {
             warn!(%fork, "no validation method for fork, dropping submission");
-            sim.pending += 1;
             let result = SimResult::Validate((
                 id,
                 Some(SimulationResultInner {
@@ -636,303 +597,50 @@ impl Simulators {
                     bid: None,
                     result: Err(BlockSimError::UnsupportedFork(fork)),
                     submission_id: req.submission_id,
-                    block_hash: *submission.block_hash(),
+                    block_hash,
                     txs: Vec::new(),
                     retried: false,
                 }),
             ));
-            let started = sim_started_event(
-                req.submission_id,
-                *submission.block_hash(),
-                false,
-                req.is_top_bid,
-            );
             let _ = self.task_tx.send(SimulatorsEvent::TaskDone {
                 id,
                 error: None,
                 result: Box::new(result),
                 elapsed: None,
             });
-            return (*submission.block_hash() != B256::ZERO).then_some(started);
-        };
-        sim.pending += 1;
+            return (block_hash != B256::ZERO).then_some(started);
+        }
 
         self.local_telemetry.max_in_flight = self.local_telemetry.max_in_flight.max(sim.pending);
         let timer = SimulatorMetrics::timer(sim.client.endpoint());
-        let task_tx = self.task_tx.clone();
-        let track = *submission.block_hash() != B256::ZERO;
-        let started =
-            sim_started_event(req.submission_id, *submission.block_hash(), false, req.is_top_bid);
-        spawn_tracked!(async move {
-            let start_sim = Nanos::now();
-            let block_hash = *submission.block_hash();
-            debug!(%block_hash, "sending simulation request");
-
-            let optimistic_version = req.optimistic_version();
-            SimulatorMetrics::sim_count(optimistic_version.is_optimistic());
-            let (mut res, ssz_retry) = match dispatch {
-                SimDispatch::Ssz { to_send, ssz_url, http } => {
-                    let body = ssz_request(
-                        req.apply_blacklist,
-                        req.registered_gas_limit,
-                        req.parent_beacon_block_root,
-                        &req.inclusion_list,
-                        &submission,
-                    );
-                    let res = SimulatorClient::do_sim_request(
-                        body.clone(),
-                        req.is_top_bid,
-                        to_send,
-                        &ssz_url,
-                    )
-                    .await;
-                    (res, Some((body, ssz_url, http)))
-                }
-                SimDispatch::Json { to_send, method } => match &submission {
-                    SignedBidSubmission::Fulu(submission) => {
-                        let filtering = if req.apply_blacklist {
-                            Filtering::Regional
-                        } else {
-                            Filtering::Global
-                        };
-                        let json_req = JsonValidationRequest::new(
-                            req.registered_gas_limit,
-                            submission,
-                            ValidatorPreferences { filtering, ..Default::default() },
-                            req.parent_beacon_block_root,
-                            &req.inclusion_list,
-                        );
-                        let res = SimulatorClient::do_json_sim_request(
-                            &json_req,
-                            req.is_top_bid,
-                            &method,
-                            to_send,
-                        )
-                        .await;
-                        (res.map(|()| Vec::new()), None)
-                    }
-                    SignedBidSubmission::Gloas(_) => {
-                        (Err(BlockSimError::UnsupportedFork(ForkName::Gloas)), None)
-                    }
-                },
-            };
-
-            // On cache miss, retry with full uncompressed SSZ so the simulator
-            // can process the submission without a hydration cache entry.
-            let mut retried = false;
-            if matches!(res, Err(BlockSimError::HydrationMiss)) {
-                debug!(%block_hash, "hydration miss — retrying with full SSZ");
-                if let Some((body, ssz_url, http)) = ssz_retry {
-                    let to_send = http.post(format!("{ssz_url}/validate"));
-                    res = SimulatorClient::do_sim_request(body, req.is_top_bid, to_send, &ssz_url)
-                        .await;
-                    retried = true;
-                } else {
-                    res = Err(BlockSimError::RpcError);
-                }
-            }
-
-            let time = timer.stop_and_record();
-
-            debug!(%block_hash, time_secs = time, ?res, "simulation completed");
-
-            SimulatorMetrics::sim_status(res.is_ok());
-
-            if let (Some(got), SignedBidSubmission::Fulu(submission)) = (tx_root, &submission) {
-                let expected = submission.transactions_root();
-                if expected != got {
-                    res = Err(BlockSimError::InvalidTxRoot { got, expected })
-                }
-            }
-
-            record_submission_step("simulation", start_sim.elapsed());
-
-            let error = res.as_ref().err().cloned();
-            let bid = Bid::new(version, &submission, req.parent_beacon_block_root);
-            SimulatorMetrics::sim_builder_outcome(
-                &bid.builder_pubkey.to_string(),
-                req.priority.label(),
-                sim_outcome(error.as_ref()),
-            );
-            let result = match &res {
-                Ok(_) => Ok(trace),
-                Err(err) => Err(err.clone()),
-            };
-            let inner = SimulationResultInner {
-                submission_ref,
-                result,
-                bid: Some(bid),
-                optimistic_version,
-                submission_id: req.submission_id,
-                block_hash,
-                txs: res.unwrap_or_default(),
-                retried,
-            };
-
-            let _ = task_tx.send(SimulatorsEvent::TaskDone {
-                id,
-                error,
-                result: Box::new(SimResult::Validate((id, Some(inner)))),
-                elapsed: Some(Duration::from_secs_f64(time)),
-            });
-        });
-        track.then_some(started)
+        if self.jobs.send(SimJob::Validate { id, req, timer }).is_err() {
+            error!("simulator tile is gone, dropping simulation");
+        }
+        (block_hash != B256::ZERO).then_some(started)
     }
 
     #[timed]
     /// Returns the `Started` event for the caller to publish, or `None` when
     /// the block hash is zero (completion skips those too, keeping the pair).
-    /// The payload conversion runs inside the spawned task, off the caller's thread.
+    /// The payload conversion runs in the simulator tile, off the caller's thread.
     fn spawn_merge_sim(
         &mut self,
         id: usize,
         req: MergedValidationRequest,
         response: Arc<BlockMergeResponse>,
     ) -> Option<SimStarted> {
-        let submission_id = req.submission_id;
         let block_hash = response.execution_payload.block_hash;
-        let base_payment_tx_index = response.base_payment_tx_index as u64;
+        let started = sim_started_event(req.submission_id, block_hash, true, false);
 
         let sim = &mut self.simulators[id];
-        let dispatch = if let Some(url) = &sim.client.ssz_url {
-            MergedSimDispatch::Ssz(
-                sim.client.client.post(format!("{url}/validate_merged")),
-                url.clone(),
-            )
-        } else {
-            let (builder, method) = sim.client.merged_sim_request_builder();
-            MergedSimDispatch::Json { to_send: builder, method: method.to_owned() }
-        };
         sim.pending += 1;
 
         self.local_telemetry.max_in_flight = self.local_telemetry.max_in_flight.max(sim.pending);
         let timer = SimulatorMetrics::timer(sim.client.endpoint());
-        let task_tx = self.task_tx.clone();
-        let apply_blacklist = req.apply_blacklist;
-        let registered_gas_limit = req.registered_gas_limit;
-        let parent_beacon_block_root = req.parent_beacon_block_root;
-        let track = block_hash != B256::ZERO;
-        let started = sim_started_event(submission_id, block_hash, true, false);
-        spawn_tracked!(async move {
-            let start_sim = Nanos::now();
-            let gloas = !response.block_access_list.is_empty();
-            let submission = merged_block_to_submission(&response, &req);
-            // A Gloas block has only the SSZ route.
-            let gloas_bytes = match (gloas, &dispatch) {
-                (true, MergedSimDispatch::Ssz(..)) => {
-                    let message = GloasBidTrace {
-                        trace: submission.message.clone(),
-                        parent_block_root: B256::ZERO,
-                    };
-                    merged_gloas_submission(&response, message)
-                        .map(|s| s.as_bytes().to_vec())
-                        .ok_or(BlockSimError::UnsupportedFork(ForkName::Gloas))
-                }
-                (true, MergedSimDispatch::Json { .. }) => {
-                    Err(BlockSimError::UnsupportedFork(ForkName::Gloas))
-                }
-                (false, _) => Ok(Vec::new()),
-            };
-            let gloas_bytes = match gloas_bytes {
-                Ok(bytes) => bytes,
-                Err(err) => {
-                    let inner = MergedSimulationResultInner {
-                        result: Err(err),
-                        submission_id: req.submission_id,
-                        block_hash,
-                        txs: Vec::new(),
-                    };
-                    let _ = task_tx.send(SimulatorsEvent::TaskDone {
-                        id,
-                        error: None,
-                        result: Box::new(SimResult::ValidateMerged((id, Some(inner)))),
-                        elapsed: None,
-                    });
-                    return;
-                }
-            };
-            let block_hash = submission.execution_payload.block_hash;
-            debug!(%block_hash, "sending merged block simulation request");
-
-            SimulatorMetrics::sim_count(false);
-            let res = match dispatch {
-                MergedSimDispatch::Ssz(to_send, endpoint) => {
-                    let body = if gloas {
-                        SszMergedValidationRequestRef {
-                            base: SszValidationRequestRef {
-                                apply_blacklist,
-                                registered_gas_limit,
-                                parent_beacon_block_root,
-                                inclusion_list: &req.inclusion_list,
-                                decoder_params: Some(SubmissionDecoderParams::plain(
-                                    ForkName::Gloas,
-                                )),
-                                signed_bid_submission: &gloas_bytes,
-                            },
-                            base_payment_tx_index,
-                        }
-                        .as_ssz_bytes()
-                    } else {
-                        SszMergedValidationRequestRef {
-                            base: SszValidationRequestRef {
-                                apply_blacklist,
-                                registered_gas_limit,
-                                parent_beacon_block_root,
-                                inclusion_list: &req.inclusion_list,
-                                decoder_params: None,
-                                signed_bid_submission: &submission,
-                            },
-                            base_payment_tx_index,
-                        }
-                        .as_ssz_bytes()
-                    };
-                    SimulatorClient::do_sim_request(body.into(), false, to_send, &endpoint).await
-                }
-                MergedSimDispatch::Json { to_send, method } => {
-                    let filtering =
-                        if apply_blacklist { Filtering::Regional } else { Filtering::Global };
-                    let json_req = MergedJsonValidationRequest {
-                        base: JsonValidationRequest::new(
-                            registered_gas_limit,
-                            &submission,
-                            ValidatorPreferences { filtering, ..Default::default() },
-                            parent_beacon_block_root,
-                            &req.inclusion_list,
-                        ),
-                        base_payment_tx_index,
-                    };
-                    SimulatorClient::do_json_sim_request(&json_req, false, &method, to_send)
-                        .await
-                        .map(|()| Vec::new())
-                }
-            };
-
-            let time = timer.stop_and_record();
-            debug!(%block_hash, time_secs = time, ?res, "merged block simulation completed");
-
-            SimulatorMetrics::sim_status(res.is_ok());
-
-            record_submission_step("merge_simulation", start_sim.elapsed());
-
-            let error = res.as_ref().err().cloned();
-            let (result, txs) = match res {
-                Ok(txs) => (Ok(()), txs),
-                Err(err) => (Err(err), Vec::new()),
-            };
-            let inner = MergedSimulationResultInner {
-                result,
-                submission_id: req.submission_id,
-                block_hash,
-                txs,
-            };
-            let _ = task_tx.send(SimulatorsEvent::TaskDone {
-                id,
-                error,
-                result: Box::new(SimResult::ValidateMerged((id, Some(inner)))),
-                elapsed: Some(Duration::from_secs_f64(time)),
-            });
-        });
-        track.then_some(started)
+        if self.jobs.send(SimJob::Merged { id, req, response, timer }).is_err() {
+            error!("simulator tile is gone, dropping merged block simulation");
+        }
+        (block_hash != B256::ZERO).then_some(started)
     }
 
     /// Selection priority:
@@ -1282,19 +990,7 @@ pub struct MergedSimulationResultInner {
     pub txs: Vec<TxDetail>,
 }
 
-enum SimDispatch {
-    Ssz { to_send: reqwest::RequestBuilder, ssz_url: String, http: reqwest::Client },
-    Json { to_send: reqwest::RequestBuilder, method: String },
-}
-
-/// Merged-block counterpart of [`SimDispatch`]: no hydration-miss retry (merged blocks are
-/// always full, never dehydrated), so it doesn't need `SimDispatch::Ssz`'s extra fields.
-enum MergedSimDispatch {
-    Ssz(reqwest::RequestBuilder, String),
-    Json { to_send: reqwest::RequestBuilder, method: String },
-}
-
-/// Internal-only events: async task → pool (not tile-to-tile).
+/// Internal-only events: simulator tile → pool.
 enum SimulatorsEvent {
     /// `elapsed` is `None` for infra errors where no request was actually sent
     /// (e.g. unsupported fork).

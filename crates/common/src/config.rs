@@ -170,6 +170,7 @@ impl RelayConfig {
                 data_gatherer: 3,
                 block_merging: 0,
                 housekeeper: None,
+                simulator: None,
                 busy_spin: true,
             },
             gossip_payload_on_header: false,
@@ -244,6 +245,10 @@ pub struct CoresConfig {
     #[serde(default)]
     pub block_merging: usize,
     pub housekeeper: Option<usize>,
+    /// Core for the tile exchanging requests with the simulators. Unset, it runs unpinned
+    /// and sleeps between turns.
+    #[serde(default)]
+    pub simulator: Option<usize>,
     #[serde(default = "default_bool::<true>")]
     pub busy_spin: bool,
 }

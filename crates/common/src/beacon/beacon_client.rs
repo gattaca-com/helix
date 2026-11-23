@@ -1,4 +1,4 @@
-use std::{sync::Arc, task::Poll, time::Duration};
+use std::{net::SocketAddr, sync::Arc, task::Poll, time::Duration};
 
 use ::ssz::Encode;
 use alloy_primitives::B256;
@@ -16,7 +16,7 @@ use crate::{
         types::{BeaconResponse, BroadcastValidation, SyncStatus},
     },
     chain_info::ChainInfo,
-    http::client::HttpClient,
+    http::client::{HttpClient, PendingResponse},
 };
 
 const CONSENSUS_VERSION_HEADER: &str = "eth-consensus-version";
@@ -132,14 +132,17 @@ impl BeaconClient {
         }
     }
 
-    /// Publishes a signed execution payload envelope SSZ-encoded, so a connected beacon node
-    /// broadcasts it to the `execution_payload` gossip topic on helix's behalf.
+    /// Starts publishing a signed execution payload envelope SSZ-encoded, so a connected
+    /// beacon node broadcasts it to the `execution_payload` gossip topic on helix's behalf.
+    /// The caller polls the response and reads it with [`Self::envelope_outcome`]. `addr` is
+    /// this node's address, resolved beforehand so that no DNS lookup blocks the caller.
     /// <https://github.com/ethereum/beacon-APIs/blob/master/apis/beacon/execution_payload/envelope_post.yaml>
-    pub async fn publish_execution_payload_envelope(
+    pub fn send_execution_payload_envelope(
         &self,
+        addr: SocketAddr,
         envelope: Bytes,
         fork: ForkName,
-    ) -> Result<u16, BeaconClientError> {
+    ) -> Result<PendingResponse, BeaconClientError> {
         let mut target = self.config.url.join("eth/v1/beacon/execution_payload_envelopes")?;
         // Fail closed on an equivocating proposer: the node refuses to broadcast a
         // payload for a block it has seen a competing version of.
@@ -154,14 +157,17 @@ impl BeaconClient {
             .header(BLOB_DATA_INCLUDED_HEADER, "true")
             .header(CONTENT_TYPE, "application/octet-stream")
             .body(Full::new(envelope))?;
-        let (status, body) = self.send(&target, req).await?;
+        Ok(self.http.send_to(&target, addr, req)?.with_timeout(PUBLISH_BLOCK_TIMEOUT))
+    }
+
+    pub fn envelope_outcome(status: u16, body: &[u8]) -> Result<u16, BeaconClientError> {
         match status {
             200 => Ok(200),
             202 => {
-                warn!("Envelope broadcast but not integrated: {}", String::from_utf8_lossy(&body));
+                warn!("Envelope broadcast but not integrated: {}", String::from_utf8_lossy(body));
                 Ok(202)
             }
-            _ => Err(BeaconClientError::Api(serde_json::from_slice(&body)?)),
+            _ => Err(BeaconClientError::Api(serde_json::from_slice(body)?)),
         }
     }
 
@@ -215,8 +221,22 @@ mod tests {
         Bytes::from_static(&[0u8; 12])
     }
 
-    #[tokio::test]
-    async fn publish_execution_payload_envelope_sends_ssz_with_fork_and_blob_headers() {
+    fn publish_envelope(client: &BeaconClient) -> Result<u16, BeaconClientError> {
+        let addr = HttpClient::resolve(&client.config.url).unwrap();
+        let mut pending = client
+            .send_execution_payload_envelope(addr, empty_envelope(), ForkName::Gloas)
+            .unwrap();
+        loop {
+            if let Poll::Ready(res) = pending.poll_bytes() {
+                let (status, body) = res?;
+                return BeaconClient::envelope_outcome(status, &body);
+            }
+            std::thread::yield_now();
+        }
+    }
+
+    #[test]
+    fn publish_execution_payload_envelope_sends_ssz_with_fork_and_blob_headers() {
         let server = MockServer::start();
         let mock = server.mock(|when, then| {
             when.method(POST)
@@ -228,15 +248,14 @@ mod tests {
         });
 
         let client = test_client(Url::parse(&server.url("/")).unwrap());
-        let result =
-            client.publish_execution_payload_envelope(empty_envelope(), ForkName::Gloas).await;
+        let result = publish_envelope(&client);
 
         mock.assert();
         assert_eq!(result.unwrap(), 200);
     }
 
-    #[tokio::test]
-    async fn publish_execution_payload_envelope_asks_for_equivocation_validation() {
+    #[test]
+    fn publish_execution_payload_envelope_asks_for_equivocation_validation() {
         let server = MockServer::start();
         let mock = server.mock(|when, then| {
             when.method(POST)
@@ -246,13 +265,13 @@ mod tests {
         });
 
         let client = test_client(Url::parse(&server.url("/")).unwrap());
-        client.publish_execution_payload_envelope(empty_envelope(), ForkName::Gloas).await.unwrap();
+        publish_envelope(&client).unwrap();
 
         mock.assert();
     }
 
-    #[tokio::test]
-    async fn publish_execution_payload_envelope_202_is_ok() {
+    #[test]
+    fn publish_execution_payload_envelope_202_is_ok() {
         let server = MockServer::start();
         server.mock(|when, then| {
             when.method(POST).path("/eth/v1/beacon/execution_payload_envelopes");
@@ -260,14 +279,13 @@ mod tests {
         });
 
         let client = test_client(Url::parse(&server.url("/")).unwrap());
-        let result =
-            client.publish_execution_payload_envelope(empty_envelope(), ForkName::Gloas).await;
+        let result = publish_envelope(&client);
 
         assert_eq!(result.unwrap(), 202);
     }
 
-    #[tokio::test]
-    async fn publish_execution_payload_envelope_error_response_parses_api_error() {
+    #[test]
+    fn publish_execution_payload_envelope_error_response_parses_api_error() {
         let server = MockServer::start();
         server.mock(|when, then| {
             when.method(POST).path("/eth/v1/beacon/execution_payload_envelopes");
@@ -278,8 +296,7 @@ mod tests {
         });
 
         let client = test_client(Url::parse(&server.url("/")).unwrap());
-        let result =
-            client.publish_execution_payload_envelope(empty_envelope(), ForkName::Gloas).await;
+        let result = publish_envelope(&client);
 
         match result {
             Err(BeaconClientError::Api(ApiError::ErrorMessage { code: 400, .. })) => {}
