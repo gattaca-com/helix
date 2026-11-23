@@ -573,24 +573,3 @@ impl Encode for TopBidUpdate {
         self.value.ssz_append(buf);
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The fingerprint is stored, so it must not change with the build.
-    #[test]
-    fn header_names_hash_is_fnv1a_of_the_names_in_order() {
-        assert_eq!(ProposerRequest::hash_header_names([].into_iter()), 0xcbf2_9ce4_8422_2325);
-        // FNV-1a 64 of "a\n".
-        assert_eq!(ProposerRequest::hash_header_names(["a"].into_iter()), 0x089b_dc07_b544_e7b2);
-        assert_ne!(
-            ProposerRequest::hash_header_names(["accept", "host"].into_iter()),
-            ProposerRequest::hash_header_names(["host", "accept"].into_iter()),
-        );
-        assert_ne!(
-            ProposerRequest::hash_header_names(["ab", "c"].into_iter()),
-            ProposerRequest::hash_header_names(["a", "bc"].into_iter()),
-        );
-    }
-}

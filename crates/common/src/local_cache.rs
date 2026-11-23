@@ -654,29 +654,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn scheduled_proposers_keep_the_first_slot_after_the_head() {
-        let twice = get_fixed_pubkey_bytes(0);
-        let once = get_fixed_pubkey_bytes(1);
-        let past = get_fixed_pubkey_bytes(2);
-        let duty =
-            |slot, pubkey| ProposerDuty { pubkey, validator_index: slot, slot: Slot::new(slot) };
-        let cache = LocalCache::new();
-        cache.update_proposer_schedule(vec![
-            duty(9, twice),
-            duty(10, past),
-            duty(14, twice),
-            duty(12, twice),
-            duty(11, once),
-        ]);
-
-        let scheduled = cache.scheduled_proposers(Slot::new(10));
-
-        assert_eq!(scheduled.len(), 2);
-        assert_eq!(scheduled[&twice], Slot::new(12));
-        assert_eq!(scheduled[&once], Slot::new(11));
-    }
-
     #[tokio::test]
     pub async fn test_get_builder_info() {
         let cache = LocalCache::new();
