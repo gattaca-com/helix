@@ -5293,6 +5293,7 @@ dependencies = [
  "alloy-consensus",
  "alloy-eips",
  "alloy-primitives",
+ "alloy-rlp",
  "alloy-rpc-types",
  "bitflags 2.13.1",
  "bls",
