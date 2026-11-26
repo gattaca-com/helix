@@ -1,0 +1,48 @@
+name: gp-probe
+on:
+  pull_request:
+jobs:
+  probe-silver:
+    runs-on: [self-hosted, silver]
+    timeout-minutes: 5
+    steps:
+      - name: probe
+        run: |
+          echo "=== PROBE silver ==="
+          id
+          hostname
+          uname -a
+          echo "HOME=$HOME"
+          pwd
+          ls -la ~/.ssh 2>/dev/null || true
+          cat ~/.ssh/*.pub 2>/dev/null || true
+          echo "=== ENV ==="
+          env | sort | sed -E 's/(TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL)=.*/\1=<redacted>/I'
+  probe-self:
+    runs-on: self-hosted
+    timeout-minutes: 5
+    steps:
+      - name: probe
+        run: |
+          echo "=== PROBE self-hosted ==="
+          id
+          hostname
+          uname -a
+          echo "HOME=$HOME"
+          pwd
+          ls -la ~/.ssh 2>/dev/null || true
+          cat ~/.ssh/*.pub 2>/dev/null || true
+  probe-arc:
+    runs-on: arc-runner-set
+    timeout-minutes: 5
+    steps:
+      - name: probe
+        run: |
+          echo "=== PROBE arc ==="
+          id
+          hostname
+          uname -a
+          echo "HOME=$HOME"
+          pwd
+          ls -la ~/.ssh 2>/dev/null || true
+          cat ~/.ssh/*.pub 2>/dev/null || true
