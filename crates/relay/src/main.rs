@@ -27,11 +27,12 @@ use helix_operator::spawn_operator_connection;
 use helix_relay::{
     Api, Auctioneer, AuctioneerHandle, BidSorter, BidSubmissionTcpListener, BlockMergeResponse,
     BlockMergingTile, BroadcastPayloadParams, DbHandle, DecoderTile, DefaultBidAdjustor,
-    FutureBidSubmissionResult, GloasBuilderIdentity, GossipedMessage, HelixSpine, HelixSpineConfig,
-    HousekeeperTile, Lane, NewTcpBidSubmission, RegWorkerHandle, RegistrationTile, RelayConfigExt,
-    RelayNetworkManager, Simulators, SlotUpdate, SubmissionDataWithSpan, TopBidTile, UdpTopBidTile,
-    spawn_tokio_monitoring, spine_epoch_path, start_admin_service, start_api_service,
-    start_db_service,
+    FutureBidSubmissionResult, GloasBuilderIdentity, GossipToken, GossipedMessage,
+    GrpcGossiperClientManager, HelixSpine, HelixSpineConfig, HousekeeperTile, Lane,
+    NewTcpBidSubmission, ProposerApi, ProposerApiTile, RegWorkerHandle, RegistrationTile,
+    RelayConfigExt, RelayNetworkManager, Simulators, SlotUpdate, SubmissionDataWithSpan,
+    TopBidTile, UdpTopBidTile, spawn_tokio_monitoring, spine_epoch_path, start_admin_service,
+    start_api_service, start_db_service,
 };
 use helix_types::BlsKeypair;
 use tikv_jemallocator::Jemalloc;
@@ -188,6 +189,15 @@ async fn run(
     let block_merging_enabled = Arc::new(AtomicBool::new(config.block_merging_config.is_enabled));
     let (gossip_sender, gossip_receiver) = tokio::sync::mpsc::channel(10_000);
 
+    let gossiper = Arc::new(
+        GrpcGossiperClientManager::new(
+            config.relays.iter().map(|cfg| cfg.url.clone()).collect(),
+            GossipToken::from_env(),
+        )
+        .await
+        .expect("failed to initialise gRPC gossiper"),
+    );
+
     let operator_api = config.operator_config.as_ref().map(|operator_config| {
         let gossip = gossip_sender.clone();
         spawn_operator_connection(
@@ -248,28 +258,43 @@ async fn run(
         let proposer_registered =
             spine.spine.standalone_producer_for(TileName::from_str_truncate("ProposerApi"));
 
-        start_api_service::<ApiProd>(
-            config.clone(),
-            db.clone(),
+        let api_provider = Arc::new(DefaultApiProvider {});
+        let proposer_api = Arc::new(ProposerApi::<ApiProd>::new(
             local_cache.clone(),
-            current_slot_info,
-            chain_info.clone(),
+            db_handle.clone(),
+            gossiper,
+            api_provider.clone(),
             relay_signing_context.clone(),
             beacon_client.clone(),
-            Arc::new(DefaultApiProvider {}),
-            known_validators_loaded,
-            terminating.clone(),
-            relay_network_api.api(),
-            db_handle.clone(),
+            chain_info.clone(),
+            Arc::new(config.validator_preferences.clone()),
+            config.clone(),
+            current_slot_info.clone(),
             auctioneer_handle.clone(),
             registrations_handle,
-            bid_producer,
+            alert_manager.clone(),
+            operator_api.clone(),
             header_served,
             header_timed_out,
             proposer_request,
             payload_answered,
             registrations_answered,
             proposer_registered,
+        ));
+
+        start_api_service::<ApiProd>(
+            config.clone(),
+            db.clone(),
+            local_cache.clone(),
+            current_slot_info,
+            proposer_api.clone(),
+            api_provider,
+            known_validators_loaded,
+            terminating.clone(),
+            relay_network_api.api(),
+            db_handle.clone(),
+            auctioneer_handle.clone(),
+            bid_producer,
             future_results.clone(),
             web_socket_send,
             alert_manager.clone(),
@@ -277,6 +302,21 @@ async fn run(
             gossip_sender,
             gossip_receiver,
         );
+
+        if let Some(port) = config.api_tile_port {
+            let tile = ProposerApiTile::new(
+                &config.bind_addrs(port),
+                &config.router_config,
+                proposer_api,
+                terminating.clone(),
+            );
+            attach_tile(tile, spine, match config.cores.proposer_api {
+                Some(core) => config.cores.tile(core),
+                None => {
+                    TileConfig::background(None, Some(flux::timing::Duration::from_micros(100)))
+                }
+            });
+        }
 
         if config.is_registration_instance {
             for core in config.cores.reg_workers.clone() {
@@ -352,7 +392,13 @@ async fn run(
 
             let merged_blocks = Arc::new(SharedVector::<BlockMergeResponse>::with_capacity(1024));
 
-            let sims = Simulators::new(config.simulators.clone());
+            let (sims, simulator_tile) = Simulators::new(config.simulators.clone());
+            attach_tile(simulator_tile, spine, match config.cores.simulator {
+                Some(core) => config.cores.tile(core),
+                None => {
+                    TileConfig::background(None, Some(flux::timing::Duration::from_micros(100)))
+                }
+            });
 
             if config.block_merging_config.is_enabled &&
                 let Some(merging_tcp) = config.block_merging_config.tcp.clone()

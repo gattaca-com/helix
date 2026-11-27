@@ -6,12 +6,11 @@ use std::{
 
 use axum::serve::ListenerExt;
 use crossbeam_channel::Sender;
-use flux::spine::{StandaloneDCacheProducer, StandaloneProducer};
+use flux::spine::StandaloneDCacheProducer;
 use flux_utils::SharedVector;
 use helix_common::{
     CurrentSlotInfo, RelayConfig, alerts::AlertManager, api::builder_api::TopBidPrecision,
-    beacon::MultiBeaconClient, chain_info::ChainInfo, local_cache::LocalCache,
-    signing::RelaySigningContext,
+    local_cache::LocalCache,
 };
 use helix_data_api::{
     BidsCache, BidsCacheV2, DataApi, DeliveredPayloadsCache, DeliveredPayloadsCacheV2,
@@ -23,17 +22,14 @@ use tokio::sync::mpsc::{Receiver, Sender as MpscSender};
 use tracing::{error, info};
 
 use crate::{
-    AuctioneerHandle, DbHandle, PostgresDatabaseService, RegWorkerHandle,
+    AuctioneerHandle, DbHandle, PostgresDatabaseService,
     api::{
         Api, FutureBidSubmissionResult, blacklist::BlacklistCache, builder::api::BuilderApi,
         extract::raw_web_socket::RawWebSocket, proposer::ProposerApi, router::build_router,
     },
-    gossip::{GossipToken, GossipedMessage, GrpcGossiperClientManager, process_gossip_messages},
+    gossip::{GossipedMessage, process_gossip_messages},
     network::api::RelayNetworkApi,
-    spine::messages::{
-        GetHeaderServed, GetHeaderTimedOut, GetPayloadAnswered, NewBidSubmission,
-        ProposerRegistered, ProposerRequest, RegistrationsAnswered,
-    },
+    spine::messages::NewBidSubmission,
 };
 
 pub(crate) const API_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
@@ -43,23 +39,14 @@ pub fn start_api_service<A: Api>(
     db: Arc<PostgresDatabaseService>,
     local_cache: Arc<LocalCache>,
     current_slot_info: CurrentSlotInfo,
-    chain_info: Arc<ChainInfo>,
-    relay_signing_context: Arc<RelaySigningContext>,
-    multi_beacon_client: Arc<MultiBeaconClient>,
+    proposer_api: Arc<ProposerApi<A>>,
     api_provider: Arc<A::ApiProvider>,
     known_validators_loaded: Arc<AtomicBool>,
     terminating: Arc<AtomicBool>,
     relay_network_api: RelayNetworkApi,
     db_handle: DbHandle,
     auctioneer_handle: AuctioneerHandle,
-    registrations_handle: RegWorkerHandle,
     bid_producer: StandaloneDCacheProducer<NewBidSubmission>,
-    header_served: StandaloneProducer<GetHeaderServed>,
-    header_timed_out: StandaloneProducer<GetHeaderTimedOut>,
-    proposer_request: StandaloneProducer<ProposerRequest>,
-    payload_answered: StandaloneProducer<GetPayloadAnswered>,
-    registrations_answered: StandaloneProducer<RegistrationsAnswered>,
-    proposer_registered: StandaloneProducer<ProposerRegistered>,
     future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
     web_socket_connections: Sender<(RawWebSocket, TopBidPrecision)>,
     alert_manager: Arc<AlertManager>,
@@ -72,23 +59,14 @@ pub fn start_api_service<A: Api>(
         db.clone(),
         local_cache.clone(),
         current_slot_info,
-        chain_info.clone(),
-        relay_signing_context,
-        multi_beacon_client,
+        proposer_api,
         api_provider,
         known_validators_loaded,
         terminating.clone(),
         relay_network_api,
         db_handle.clone(),
         auctioneer_handle,
-        registrations_handle,
         bid_producer,
-        header_served,
-        header_timed_out,
-        proposer_request,
-        payload_answered,
-        registrations_answered,
-        proposer_registered,
         future_results,
         web_socket_connections,
         alert_manager,
@@ -103,23 +81,14 @@ pub async fn run_api_service<A: Api>(
     db: Arc<PostgresDatabaseService>,
     local_cache: Arc<LocalCache>,
     current_slot_info: CurrentSlotInfo,
-    chain_info: Arc<ChainInfo>,
-    relay_signing_context: Arc<RelaySigningContext>,
-    multi_beacon_client: Arc<MultiBeaconClient>,
+    proposer_api: Arc<ProposerApi<A>>,
     api_provider: Arc<A::ApiProvider>,
     known_validators_loaded: Arc<AtomicBool>,
     terminating: Arc<AtomicBool>,
     relay_network_api: RelayNetworkApi,
     db_handle: DbHandle,
     auctioneer_handle: AuctioneerHandle,
-    registrations_handle: RegWorkerHandle,
     bid_producer: StandaloneDCacheProducer<NewBidSubmission>,
-    header_served: StandaloneProducer<GetHeaderServed>,
-    header_timed_out: StandaloneProducer<GetHeaderTimedOut>,
-    proposer_request: StandaloneProducer<ProposerRequest>,
-    payload_answered: StandaloneProducer<GetPayloadAnswered>,
-    registrations_answered: StandaloneProducer<RegistrationsAnswered>,
-    proposer_registered: StandaloneProducer<ProposerRegistered>,
     future_results: Arc<SharedVector<FutureBidSubmissionResult>>,
     web_socket_connections: Sender<(RawWebSocket, TopBidPrecision)>,
     alert_manager: Arc<AlertManager>,
@@ -127,16 +96,7 @@ pub async fn run_api_service<A: Api>(
     gossip_sender: MpscSender<GossipedMessage>,
     gossip_receiver: Receiver<GossipedMessage>,
 ) {
-    let gossiper = Arc::new(
-        GrpcGossiperClientManager::new(
-            config.relays.iter().map(|cfg| cfg.url.clone()).collect(),
-            GossipToken::from_env(),
-        )
-        .await
-        .expect("failed to initialise gRPC gossiper"),
-    );
-
-    let validator_preferences = Arc::new(config.validator_preferences.clone());
+    let validator_preferences = proposer_api.validator_preferences.clone();
 
     let builder_api = BuilderApi::<A>::new(
         local_cache.clone(),
@@ -153,30 +113,7 @@ pub async fn run_api_service<A: Api>(
     );
     let builder_api = Arc::new(builder_api);
 
-    gossiper.start_server(gossip_sender).await;
-
-    let proposer_api = Arc::new(ProposerApi::<A>::new(
-        local_cache,
-        db_handle.clone(),
-        gossiper.clone(),
-        api_provider.clone(),
-        relay_signing_context,
-        multi_beacon_client,
-        chain_info.clone(),
-        validator_preferences.clone(),
-        config.clone(),
-        current_slot_info,
-        auctioneer_handle,
-        registrations_handle,
-        alert_manager,
-        operator_api,
-        header_served,
-        header_timed_out,
-        proposer_request,
-        payload_answered,
-        registrations_answered,
-        proposer_registered,
-    ));
+    proposer_api.gossiper.start_server(gossip_sender).await;
 
     tokio::spawn(process_gossip_messages(
         builder_api.clone(),

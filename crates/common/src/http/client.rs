@@ -95,6 +95,17 @@ impl HttpClient {
         Ok(Self::pending(transport, mio, req))
     }
 
+    /// `send` to an address already resolved with `resolve`, so no DNS lookup blocks.
+    pub fn send_to(
+        &self,
+        url: &Url,
+        addr: SocketAddr,
+        req: Request<Full<Bytes>>,
+    ) -> Result<PendingResponse, HttpClientError> {
+        let (transport, mio) = self.connect_to(url, addr)?;
+        Ok(Self::pending(transport, mio, req))
+    }
+
     fn pending(transport: Transport, mio: MioPoll, req: Request<Full<Bytes>>) -> PendingResponse {
         let handshake = Box::pin(http1::handshake::<_, Full<Bytes>>(transport));
         PendingResponse::new(State::Handshaking { handshake, req }, mio, Events::with_capacity(8))
