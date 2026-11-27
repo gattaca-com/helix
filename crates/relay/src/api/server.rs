@@ -274,7 +274,24 @@ fn client_ip(headers: &HeaderMap, peer: SocketAddr) -> IpAddr {
     named("x-forwarded-for")
         .and_then(|list| list.split(',').find_map(|ip| ip.trim().parse().ok()))
         .or_else(|| named("x-real-ip")?.trim().parse().ok())
+        .or_else(|| {
+            let lines = headers.get_all("forwarded").iter().filter_map(|line| line.to_str().ok());
+            lines.flat_map(|line| line.split([',', ';'])).find_map(forwarded_for)
+        })
         .unwrap_or(peer.ip())
+}
+
+/// The address in one `for=` part of a `Forwarded` header, with or without a port.
+fn forwarded_for(part: &str) -> Option<IpAddr> {
+    let (name, node) = part.trim().split_once('=')?;
+    if !name.eq_ignore_ascii_case("for") {
+        return None;
+    }
+    let node = node.trim_matches('"');
+    node.parse::<SocketAddr>()
+        .map(|addr| addr.ip())
+        .or_else(|_| node.trim_matches(['[', ']']).parse())
+        .ok()
 }
 
 #[cfg(test)]
@@ -309,6 +326,9 @@ mod tests {
             assert!(Instant::now() < deadline, "no response to {raw:?}");
             server.poll(&mut requests, &mut Vec::new());
             for request in requests.drain(..) {
+                // Handlers read the id from the headers, as behind axum.
+                assert_eq!(request.headers.get(X_REQUEST_ID), Some(&request.responder.request_id));
+                assert_eq!(request.headers.keys().last().unwrap(), X_REQUEST_ID);
                 server.respond(request.responder, 200, &[], &[]);
             }
             let mut chunk = [0; 1024];
@@ -358,6 +378,28 @@ mod tests {
         let limited = exchange(&mut server, addr, &from("9.9.9.9"));
         assert!(limited.starts_with("HTTP/1.1 429"), "{limited}");
         assert!(exchange(&mut server, addr, &from("8.8.8.8")).starts_with("HTTP/1.1 200"));
+    }
+
+    #[test]
+    fn the_caller_is_the_one_a_proxy_names() {
+        let peer: SocketAddr = "10.0.0.1:5000".parse().unwrap();
+        let ip = |name: &'static str, value: &'static str| {
+            let mut headers = HeaderMap::new();
+            headers.insert(name, HeaderValue::from_static(value));
+            client_ip(&headers, peer).to_string()
+        };
+        assert_eq!(ip("x-forwarded-for", "unknown, 9.9.9.9, 8.8.8.8"), "9.9.9.9");
+        assert_eq!(ip("x-real-ip", "9.9.9.9"), "9.9.9.9");
+        assert_eq!(ip("forwarded", "by=1.1.1.1;For=9.9.9.9;proto=https, for=8.8.8.8"), "9.9.9.9");
+        assert_eq!(ip("forwarded", "for=\"9.9.9.9:4711\""), "9.9.9.9");
+        assert_eq!(ip("forwarded", "for=\"[2001:db8::1]:4711\""), "2001:db8::1");
+        assert_eq!(ip("forwarded", "for=\"[2001:db8::1]\""), "2001:db8::1");
+        assert_eq!(ip("forwarded", "for=_hidden"), "10.0.0.1");
+
+        let mut two_lines = HeaderMap::new();
+        two_lines.append("forwarded", HeaderValue::from_static("for=unknown"));
+        two_lines.append("forwarded", HeaderValue::from_static("for=9.9.9.9"));
+        assert_eq!(client_ip(&two_lines, peer).to_string(), "9.9.9.9");
     }
 
     #[test]
