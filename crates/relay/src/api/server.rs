@@ -158,7 +158,7 @@ impl ApiServer {
             HttpEvent::Request { token, request } => {
                 let received_ns = utcnow_ns();
                 let Some(peer) = peers.get(&token).copied() else { return };
-                let headers = header_map(&request);
+                let mut headers = header_map(&request);
                 let request_id = headers
                     .get(X_REQUEST_ID)
                     .filter(|id| id.to_str().is_ok())
@@ -168,6 +168,8 @@ impl ApiServer {
                         let id = Uuid::new_v4().as_hyphenated().encode_lower(&mut id);
                         HeaderValue::from_str(id).expect("a uuid is a valid header value")
                     });
+                // Handlers see the id among the headers, as behind axum's request-id layer.
+                headers.insert(X_REQUEST_ID, request_id.clone());
                 let path = request.path.split('?').next().unwrap_or_default();
 
                 let mut status = 404;

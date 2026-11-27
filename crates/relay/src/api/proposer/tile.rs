@@ -14,6 +14,7 @@ use helix_common::{
     GetHeaderTrace, Route, RouterConfig,
     api::proposer_api::GetHeaderParams,
     decoder::{Encoding, HEADER_SSZ},
+    utils::extract_request_id,
 };
 use ssz::Encode;
 use tracing::{debug, error, info_span};
@@ -31,6 +32,7 @@ use crate::{
         service::API_REQUEST_TIMEOUT,
     },
     auctioneer::{GetHeaderResult, Reply},
+    spine::messages::ProposerRequestKind,
 };
 
 const JSON: (&str, &str) = ("content-type", "application/json");
@@ -114,6 +116,15 @@ impl<A: Api> ProposerApiTile<A> {
             parent_hash = ?params.parent_hash,
         );
         let _entered = span.enter();
+
+        self.api.report_request(
+            ProposerRequestKind::GetHeader,
+            params.slot,
+            params.pubkey,
+            request.received_ns,
+            extract_request_id(&request.headers),
+            &request.headers,
+        );
 
         let validated =
             match self.api.validate_header_request(&params, &request.headers, &self.terminating) {
